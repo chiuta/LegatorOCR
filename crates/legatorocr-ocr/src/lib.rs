@@ -137,7 +137,7 @@ pub fn canonical_lang(l: &str) -> String {
 /// How to get a missing recognition model, for the current system.
 pub fn install_hint(tess_code: &str) -> String {
     if cfg!(target_os = "macos") {
-        "brew install tesseract-lang".to_string()
+        format!("brew install tesseract-lang   (provides {tess_code}.traineddata)")
     } else if cfg!(windows) {
         format!(
             "re-run the Tesseract installer and tick the language, or put {tess_code}.traineddata \
