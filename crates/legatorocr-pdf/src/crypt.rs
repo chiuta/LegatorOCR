@@ -486,7 +486,7 @@ pub fn aes_cbc_decrypt(key: &[u8], iv: Option<[u8; 16]>, data: &[u8]) -> Option<
         }
     };
     let mut out = Vec::with_capacity(body.len());
-    for c in body.chunks_exact(16) {
+    for c in body.as_chunks::<16>().0 {
         let mut b = [0u8; 16];
         b.copy_from_slice(c);
         let ct = b;
@@ -512,7 +512,7 @@ pub fn aes_cbc_encrypt_nopad(key: &[u8], iv: [u8; 16], data: &[u8]) -> Option<Ve
     let aes = Aes::new(key)?;
     let mut prev = iv;
     let mut out = Vec::with_capacity(data.len());
-    for c in data.chunks_exact(16) {
+    for c in data.as_chunks::<16>().0 {
         let mut b = [0u8; 16];
         for i in 0..16 {
             b[i] = c[i] ^ prev[i];
