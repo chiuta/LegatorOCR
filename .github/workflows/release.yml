@@ -76,6 +76,8 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - name: Release notes
@@ -88,12 +90,27 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
-          target_commitish: ${{ github.sha }}
-          files: dist/LegatorOCR-*
-          draft: true
-          prerelease: ${{ inputs.prerelease != false }}
-          body_path: ${{ steps.notes.outputs.path }}
-          generate_release_notes: ${{ steps.notes.outputs.path == '' }}
+      - name: Create (or refresh) the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+          PRE: ${{ inputs.prerelease != false }}
+          NOTES: ${{ steps.notes.outputs.path }}
+        run: |
+          set -euo pipefail
+          # A draft with the same tag (left by an earlier run) is replaced; a PUBLISHED release is never touched.
+          gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
+            --jq ".[] | select(.tag_name==\"$TAG\") | \"\(.id) \(.draft)\"" > existing.txt
+          while read -r id draft; do
+            [ -z "$id" ] && continue
+            if [ "$draft" = true ]; then
+              echo "removing old draft $id"; gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+            else
+              echo "release $TAG is already published; refusing to overwrite it"; exit 1
+            fi
+          done < existing.txt
+          args=(--draft --target "$GITHUB_SHA" --title "LegatorOCR ${TAG#v}")
+          [ "$PRE" = true ] && args+=(--prerelease)
+          if [ -n "$NOTES" ]; then args+=(--notes-file "$NOTES"); else args+=(--generate-notes); fi
+          gh release create "$TAG" "${args[@]}" dist/LegatorOCR-*
+          gh release view "$TAG" --json assets --jq '.assets|length' || true
