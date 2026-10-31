@@ -4,7 +4,6 @@
 use legatorocr_core::{PageImage, Word};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Debug, thiserror::Error)]
 pub enum OcrError {
@@ -100,51 +99,50 @@ pub fn detect_rotation(img: &image::DynamicImage, o: &OcrOptions) -> Result<Opti
     } else {
         img.clone()
     };
-    let tmp = std::env::temp_dir().join(format!(
-        "legatorocr-osd-{}-{}.png",
-        std::process::id(),
-        COUNTER.fetch_add(1, Ordering::Relaxed)
-    ));
-    small.to_luma8().save(&tmp)?;
-    let out = base_cmd(o)
-        .arg(&tmp)
-        .arg("stdout")
-        .args(["--psm", "0", "-l", "osd"])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| OcrError::NotFound(e.to_string()));
-    let _ = std::fs::remove_file(&tmp);
-    let out = out?;
+    let png = png_bytes(&image::DynamicImage::ImageLuma8(small.to_luma8()))?;
+    let mut cmd = base_cmd(o);
+    cmd.args(["stdin", "stdout", "--psm", "0", "-l", "osd"]);
+    let out = run_stdin(cmd, png)?;
     if !out.status.success() {
         return Ok(None);
     }
     Ok(parse_osd(&String::from_utf8_lossy(&out.stdout)))
 }
 
-static COUNTER: AtomicU64 = AtomicU64::new(0);
+/// Encode as PNG in memory (no temp files: nothing to clean up, and no trouble
+/// with non-ASCII user-profile paths that Tesseract on Windows cannot open).
+fn png_bytes(img: &image::DynamicImage) -> Result<Vec<u8>, OcrError> {
+    let mut buf = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut buf, image::ImageFormat::Png)?;
+    Ok(buf.into_inner())
+}
+
+/// Run Tesseract reading the image from stdin; returns its output.
+fn run_stdin(mut cmd: Command, png: Vec<u8>) -> Result<std::process::Output, OcrError> {
+    use std::io::Write;
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| OcrError::NotFound(e.to_string()))?;
+    let mut stdin = child.stdin.take().expect("piped");
+    // Feed from a thread so a full output pipe can never deadlock us; a write
+    // error just means Tesseract stopped reading (its exit status tells why).
+    let feeder = std::thread::spawn(move || {
+        let _ = stdin.write_all(&png);
+    });
+    let out = child.wait_with_output()?;
+    let _ = feeder.join();
+    Ok(out)
+}
 
 /// Recognise one processed page.
 pub fn recognize(page: &PageImage, dpi: u32, o: &OcrOptions) -> Result<Vec<Word>, OcrError> {
-    let tmp = std::env::temp_dir().join(format!(
-        "legatorocr-ocr-{}-{}.png",
-        std::process::id(),
-        COUNTER.fetch_add(1, Ordering::Relaxed)
-    ));
-    page.to_dynamic().save(&tmp)?;
-    let res = run(&tmp, dpi, o);
-    let _ = std::fs::remove_file(&tmp);
-    res
-}
-
-fn run(png: &std::path::Path, dpi: u32, o: &OcrOptions) -> Result<Vec<Word>, OcrError> {
-    let out = base_cmd(o)
-        .arg(png)
-        .arg("stdout")
-        .args(["-l", &o.lang, "--psm", &o.psm.to_string(), "--dpi", &dpi.to_string()])
-        .arg("tsv")
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| OcrError::NotFound(e.to_string()))?;
+    let png = png_bytes(&page.to_dynamic())?;
+    let mut cmd = base_cmd(o);
+    cmd.args(["stdin", "stdout", "-l", &o.lang, "--psm", &o.psm.to_string(), "--dpi", &dpi.to_string(), "tsv"]);
+    let out = run_stdin(cmd, png)?;
     if !out.status.success() {
         return Err(OcrError::Failed(String::from_utf8_lossy(&out.stderr).trim().to_string()));
     }

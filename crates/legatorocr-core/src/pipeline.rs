@@ -219,33 +219,45 @@ fn finish_page(mut img: RgbImage, split_index: Option<u8>, s: &Settings) -> Page
     if s.mode != OutputMode::Color {
         bg = Rgb([255, 255, 255]);
     }
-    let cropped = match content {
-        None => img,
-        Some(r) => {
-            // Only the content box (plus a hair of safety) is taken from the scan;
-            // everything else — margins, scanner bed, edge shadows — is paper colour.
-            let pad = (s.dpi / 100).max(2) as i64;
-            let (wx, wy) = (r.x as i64 - pad, r.y as i64 - pad);
-            let (ww, wh) = (r.w + 2 * pad as u32, r.h + 2 * pad as u32);
-            let window = transform::crop_pad(&img, wx, wy, ww, wh, bg);
-            let mut canvas = RgbImage::from_pixel(cw, ch, bg);
-            imageops::replace(&mut canvas, &window, wx - canvas_x, wy - canvas_y);
-            canvas
-        }
-    };
+    // Only the content box (plus a hair of safety) is taken from the scan;
+    // everything else — margins, scanner bed, edge shadows — is paper colour.
+    let pad = (s.dpi / 100).max(2) as i64;
+    let window = content.map(|r| (r.x as i64 - pad, r.y as i64 - pad, r.w + 2 * pad as u32, r.h + 2 * pad as u32));
 
-    // --- output mode --------------------------------------------------
     let image = match s.mode {
-        OutputMode::Color => PageImage::Rgb(cropped),
-        OutputMode::Gray => PageImage::Gray(imageops::grayscale(&cropped)),
         OutputMode::BlackWhite => {
-            let g = imageops::grayscale(&cropped);
+            // Binarise the whole (deskewed) scan first, then cut: a window cut out of
+            // uneven paper and thresholded on a flat canvas gets a black frame.
+            let g = imageops::grayscale(&img);
             let mut bw = binarize::sauvola(&g, (s.dpi / 3) | 1, s.sauvola_k);
             if s.despeckle {
                 let min_px = ((s.dpi as f32 / 300.0).powi(2) * 6.0).round() as u32;
                 bw.despeckle(min_px.max(2));
             }
-            PageImage::Bw(bw)
+            match window {
+                None => PageImage::Bw(bw),
+                Some((wx, wy, ww, wh)) => {
+                    let mut canvas = BitImage::new(cw, ch);
+                    canvas.paste_region(&bw, wx, wy, ww, wh, wx - canvas_x, wy - canvas_y);
+                    PageImage::Bw(canvas)
+                }
+            }
+        }
+        mode => {
+            let cropped = match window {
+                None => img,
+                Some((wx, wy, ww, wh)) => {
+                    let w = transform::crop_pad(&img, wx, wy, ww, wh, bg);
+                    let mut canvas = RgbImage::from_pixel(cw, ch, bg);
+                    imageops::replace(&mut canvas, &w, wx - canvas_x, wy - canvas_y);
+                    canvas
+                }
+            };
+            if mode == OutputMode::Gray {
+                PageImage::Gray(imageops::grayscale(&cropped))
+            } else {
+                PageImage::Rgb(cropped)
+            }
         }
     };
     Page { image, dpi: s.dpi, skew_deg, blank, split_index }
@@ -479,5 +491,40 @@ mod tests {
         let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(900, 1200, Rgb([0, 0, 0])));
         let pages = process_page(&img, &Settings { dpi: 150, split: SplitMode::Off, auto_orient: false, ..Settings::default() });
         assert_eq!(pages[0].skew_deg, 0.0);
+    }
+
+    #[test]
+    fn uneven_illumination_gives_no_black_frame_in_bw() {
+        // Text on paper that darkens strongly toward one corner.
+        let (w, h) = (900u32, 1200u32);
+        let mut img = RgbImage::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let f = 1.0 - 0.55 * (y as f32 / h as f32) - 0.25 * (x as f32 / w as f32);
+                let line = (y % 40) < 12 && (120..780).contains(&x) && (150..1050).contains(&y) && (x / 22) % 3 != 0;
+                let v = if line { 60.0 * f } else { 235.0 * f };
+                img.put_pixel(x, y, Rgb([v as u8, v as u8, (v * 0.95) as u8]));
+            }
+        }
+        let st = Settings {
+            dpi: 150,
+            mode: OutputMode::BlackWhite,
+            split: SplitMode::Off,
+            auto_orient: false,
+            deskew: false,
+            ..Settings::default()
+        };
+        let pages = process_page(&DynamicImage::ImageRgb8(img), &st);
+        let PageImage::Bw(bw) = &pages[0].image else { panic!("bw expected") };
+        let (bw_w, bw_h) = (bw.w, bw.h);
+        // Outer ring (margins) must be paper.
+        let ring_ink: u64 = (0..bw_h)
+            .flat_map(|y| (0..bw_w).map(move |x| (x, y)))
+            .filter(|&(x, y)| x < 10 || y < 10 || x + 10 >= bw_w || y + 10 >= bw_h)
+            .map(|(x, y)| bw.get(x, y) as u64)
+            .sum();
+        assert_eq!(ring_ink, 0, "black frame around the page");
+        let ink_frac = bw.count_ink() as f64 / (bw_w as f64 * bw_h as f64);
+        assert!((0.03..0.5).contains(&ink_frac), "ink fraction {ink_frac}");
     }
 }

@@ -66,7 +66,14 @@ pub struct ExportResult {
 /// camera JPEGs), transparency flattened onto white.
 pub fn load_image(path: &Path) -> Result<DynamicImage> {
     use image::{ImageDecoder, ImageReader};
-    let mut dec = ImageReader::open(path)?.with_guessed_format()?.into_decoder()?;
+    let mut reader = ImageReader::open(path)?.with_guessed_format()?;
+    // Bounded, so a hostile or corrupt header cannot request tens of gigabytes.
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(3 << 30);
+    limits.max_image_width = Some(60_000);
+    limits.max_image_height = Some(60_000);
+    reader.limits(limits);
+    let mut dec = reader.into_decoder()?;
     let orientation = dec.orientation().unwrap_or(image::metadata::Orientation::NoTransforms);
     let mut img = DynamicImage::from_decoder(dec)?;
     img.apply_orientation(orientation);
