@@ -40,7 +40,7 @@ fn luma(p: &[u8]) -> u32 {
 
 fn luma_hist(img: &RgbImage) -> [u64; 256] {
     let mut h = [0u64; 256];
-    for p in img.as_raw().chunks_exact(3) {
+    for p in img.as_raw().as_chunks::<3>().0 {
         h[luma(p) as usize] += 1;
     }
     h
@@ -222,7 +222,9 @@ pub fn descreen(img: &mut RgbImage, dpi: u32) -> usize {
     }
     let g: Vec<u8> = img
         .as_raw()
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|p| luma(p) as u8)
         .collect();
     let (tw, th) = (w / tile, h / tile);
@@ -320,7 +322,13 @@ fn label(mask: &[u8], w: usize, h: usize) -> (Vec<u32>, Vec<Comp>) {
 fn small_gray(img: &RgbImage, f: u32) -> (Vec<u8>, usize, usize) {
     let s = crate::transform::downscale_rgb(img, f);
     let (w, h) = (s.width() as usize, s.height() as usize);
-    let g = s.as_raw().chunks_exact(3).map(|p| luma(p) as u8).collect();
+    let g = s
+        .as_raw()
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|p| luma(p) as u8)
+        .collect();
     (g, w, h)
 }
 
