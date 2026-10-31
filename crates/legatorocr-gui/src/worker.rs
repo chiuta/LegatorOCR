@@ -56,7 +56,11 @@ pub fn to_thumb(img: &RgbaImage, max: u32) -> Thumb {
     } else {
         img
     };
-    Thumb { w: src.width() as usize, h: src.height() as usize, rgba: src.as_raw().clone() }
+    Thumb {
+        w: src.width() as usize,
+        h: src.height() as usize,
+        rgba: src.as_raw().clone(),
+    }
 }
 
 fn page_rgba(p: &PageImage) -> RgbaImage {
@@ -67,18 +71,28 @@ fn page_rgba(p: &PageImage) -> RgbaImage {
 }
 
 pub fn render(req: &PreviewRequest) -> Result<Preview, String> {
-    let img = legatorocr_engine::load_image(&req.path).map_err(|e| format!("{}: {e}", req.path.display()))?;
+    let img = legatorocr_engine::load_image(&req.path)
+        .map_err(|e| format!("{}: {e}", req.path.display()))?;
     let original_size = (img.width(), img.height());
     let original = to_thumb(&img.to_rgba8(), PREVIEW_MAX);
     let (img, settings) = legatorocr_engine::orient_with_osd(img, &req.settings, req.osd.as_ref());
     let pages = process_page(&img, &settings)
         .into_iter()
         .map(|p| {
-            let info = PageInfo { w: p.image.width(), h: p.image.height(), skew_deg: p.skew_deg, blank: p.blank };
+            let info = PageInfo {
+                w: p.image.width(),
+                h: p.image.height(),
+                skew_deg: p.skew_deg,
+                blank: p.blank,
+            };
             (to_thumb(&page_rgba(&p.image), PREVIEW_MAX), info)
         })
         .collect();
-    Ok(Preview { original, original_size, pages })
+    Ok(Preview {
+        original,
+        original_size,
+        pages,
+    })
 }
 
 #[cfg(test)]
@@ -117,14 +131,23 @@ mod tests {
             id: 1,
             key: 7,
             path,
-            settings: Settings { dpi: 150, auto_orient: false, deskew: false, ..Default::default() },
+            settings: Settings {
+                dpi: 150,
+                auto_orient: false,
+                deskew: false,
+                ..Default::default()
+            },
             osd: None,
         };
         let pv = render(&req).unwrap();
         assert_eq!(pv.original_size, (600, 800));
         assert_eq!(pv.pages.len(), 1);
         assert!(pv.pages[0].1.w < 600, "cropped to content");
-        assert!(render(&PreviewRequest { path: "/nope.png".into(), ..req }).is_err());
+        assert!(render(&PreviewRequest {
+            path: "/nope.png".into(),
+            ..req
+        })
+        .is_err());
         let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -1,4 +1,8 @@
-#![allow(clippy::manual_is_multiple_of, clippy::field_reassign_with_default, clippy::type_complexity)]
+#![allow(
+    clippy::manual_is_multiple_of,
+    clippy::field_reassign_with_default,
+    clippy::type_complexity
+)]
 //! Extreme-variety fuzzing of the whole core pipeline and every building block.
 //!
 //! Deterministic (seeded) so failures reproduce. Scale with
@@ -35,11 +39,22 @@ fn trace(s: &str) {
 
 fn iters(default: u64) -> u64 {
     // debug builds (the CI default) are ~10x slower: fewer iterations, same code paths
-    let d = if cfg!(debug_assertions) { (default / 4).max(10) } else { default };
-    std::env::var("LEGATOROCR_FUZZ_ITERS").ok().and_then(|v| v.parse().ok()).unwrap_or(d)
+    let d = if cfg!(debug_assertions) {
+        (default / 4).max(10)
+    } else {
+        default
+    };
+    std::env::var("LEGATOROCR_FUZZ_ITERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(d)
 }
 fn seed() -> u64 {
-    std::env::var("LEGATOROCR_FUZZ_SEED").ok().and_then(|v| v.parse().ok()).unwrap_or(0x5EED_1234_ABCD_EF01) | 1
+    std::env::var("LEGATOROCR_FUZZ_SEED")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0x5EED_1234_ABCD_EF01)
+        | 1
 }
 
 /// One of many hostile image kinds.
@@ -49,13 +64,26 @@ fn gen_image(r: &mut Rng, max_side: u32) -> (RgbImage, &'static str) {
         0 => (1 + r.below(8) as u32, 1 + r.below(8) as u32),
         1 => (1, 1 + r.below(max_side as u64) as u32),
         2 => (1 + r.below(max_side as u64) as u32, 1),
-        3 => (2 + r.below(5) as u32, 200 + r.below(max_side as u64 * 2) as u32),
-        4 => (200 + r.below(max_side as u64 * 2) as u32, 2 + r.below(5) as u32),
-        _ => (16 + r.below(max_side as u64) as u32, 16 + r.below(max_side as u64) as u32),
+        3 => (
+            2 + r.below(5) as u32,
+            200 + r.below(max_side as u64 * 2) as u32,
+        ),
+        4 => (
+            200 + r.below(max_side as u64 * 2) as u32,
+            2 + r.below(5) as u32,
+        ),
+        _ => (
+            16 + r.below(max_side as u64) as u32,
+            16 + r.below(max_side as u64) as u32,
+        ),
     };
     let paper = r.pick(&[255u8, 240, 200, 128, 30, 0]);
     let ink = r.pick(&[0u8, 20, 60, 255, 128]);
-    let mut img = RgbImage::from_pixel(w, h, Rgb([paper, paper, paper.saturating_sub(r.below(30) as u8)]));
+    let mut img = RgbImage::from_pixel(
+        w,
+        h,
+        Rgb([paper, paper, paper.saturating_sub(r.below(30) as u8)]),
+    );
     let kind = r.below(16);
     let name = match kind {
         0 => "paper",
@@ -97,23 +125,36 @@ fn gen_image(r: &mut Rng, max_side: u32) -> (RgbImage, &'static str) {
                     if (x / (3 + r.below(5) as u32)) % 2 == 0 {
                         let yy = y as f32 + skew * (x as f32 - w as f32 / 2.0);
                         for dy in 0..bar {
-                            put(&mut img, x, (yy as i64 + dy as i64).max(0) as u32, [ink, ink, ink]);
+                            put(
+                                &mut img,
+                                x,
+                                (yy as i64 + dy as i64).max(0) as u32,
+                                [ink, ink, ink],
+                            );
                         }
                     }
                 }
                 y += pitch;
             }
         }
-        3 => (0..h).filter(|y| (y / (1 + r.below(6) as u32)) % 2 == 0).collect::<Vec<_>>().iter().for_each(|&y| {
-            for x in 0..w {
-                put(&mut img, x, y, [ink; 3]);
-            }
-        }),
-        4 => (0..w).filter(|x| x % (2 + r.below(9) as u32) == 0).collect::<Vec<_>>().iter().for_each(|&x| {
-            for y in 0..h {
-                put(&mut img, x, y, [ink; 3]);
-            }
-        }),
+        3 => (0..h)
+            .filter(|y| (y / (1 + r.below(6) as u32)) % 2 == 0)
+            .collect::<Vec<_>>()
+            .iter()
+            .for_each(|&y| {
+                for x in 0..w {
+                    put(&mut img, x, y, [ink; 3]);
+                }
+            }),
+        4 => (0..w)
+            .filter(|x| x % (2 + r.below(9) as u32) == 0)
+            .collect::<Vec<_>>()
+            .iter()
+            .for_each(|&x| {
+                for y in 0..h {
+                    put(&mut img, x, y, [ink; 3]);
+                }
+            }),
         5 => {
             let c = 1 + r.below(30) as u32;
             for y in 0..h {
@@ -176,7 +217,11 @@ fn gen_image(r: &mut Rng, max_side: u32) -> (RgbImage, &'static str) {
         }
         12 => {
             for _ in 0..1 + r.below(8) {
-                let (cx, cy, rad) = (r.below(w as u64) as i64, r.below(h as u64) as i64, 1 + r.below(60) as i64);
+                let (cx, cy, rad) = (
+                    r.below(w as u64) as i64,
+                    r.below(h as u64) as i64,
+                    1 + r.below(60) as i64,
+                );
                 for y in (cy - rad).max(0)..(cy + rad).min(h as i64) {
                     for x in (cx - rad).max(0)..(cx + rad).min(w as i64) {
                         if (x - cx).pow(2) + (y - cy).pow(2) <= rad * rad {
@@ -186,7 +231,12 @@ fn gen_image(r: &mut Rng, max_side: u32) -> (RgbImage, &'static str) {
                 }
             }
         }
-        13 => put(&mut img, r.below(w as u64) as u32, r.below(h as u64) as u32, [ink; 3]),
+        13 => put(
+            &mut img,
+            r.below(w as u64) as u32,
+            r.below(h as u64) as u32,
+            [ink; 3],
+        ),
         14 => {
             for p in img.pixels_mut() {
                 let v = if r.chance(50) { 0 } else { 255 };
@@ -196,7 +246,10 @@ fn gen_image(r: &mut Rng, max_side: u32) -> (RgbImage, &'static str) {
         15 => {
             for _ in 0..1 + r.below(30) {
                 let (x0, y0) = (r.below(w as u64) as u32, r.below(h as u64) as u32);
-                let (bw, bh) = (1 + r.below(w as u64 / 2 + 1) as u32, 1 + r.below(h as u64 / 2 + 1) as u32);
+                let (bw, bh) = (
+                    1 + r.below(w as u64 / 2 + 1) as u32,
+                    1 + r.below(h as u64 / 2 + 1) as u32,
+                );
                 let c = [r.below(256) as u8, r.below(256) as u8, r.below(256) as u8];
                 for y in y0..(y0 + bh).min(h) {
                     for x in x0..(x0 + bw).min(w) {
@@ -244,16 +297,37 @@ fn gen_settings(r: &mut Rng) -> Settings {
     for a in s.content_adjust_mm.iter_mut() {
         *a = wild_f(r, -60.0, 60.0);
     }
-    s.page_size_mm = r.chance(40).then(|| (wild_f(r, 0.0, 500.0), wild_f(r, 0.0, 500.0)));
-    s.align = (r.pick(&[HAlign::Left, HAlign::Center, HAlign::Right]), r.pick(&[VAlign::Top, VAlign::Center, VAlign::Bottom]));
-    s.mode = r.pick(&[OutputMode::Color, OutputMode::Gray, OutputMode::BlackWhite, OutputMode::Mixed, OutputMode::Hybrid]);
+    s.page_size_mm = r
+        .chance(40)
+        .then(|| (wild_f(r, 0.0, 500.0), wild_f(r, 0.0, 500.0)));
+    s.align = (
+        r.pick(&[HAlign::Left, HAlign::Center, HAlign::Right]),
+        r.pick(&[VAlign::Top, VAlign::Center, VAlign::Bottom]),
+    );
+    s.mode = r.pick(&[
+        OutputMode::Color,
+        OutputMode::Gray,
+        OutputMode::BlackWhite,
+        OutputMode::Mixed,
+        OutputMode::Hybrid,
+    ]);
     s.threshold = r.pick(&Threshold::ALL);
     s.sauvola_k = wild_f(r, 0.0, 1.0);
     s.despeckle = r.chance(50);
     s.normalize_bg = r.chance(50);
-    s.output_dpi = r.chance(40).then(|| r.pick(&[0, 1, 35, 36, 50, 150, 300, 5000, u32::MAX]));
+    s.output_dpi = r
+        .chance(40)
+        .then(|| r.pick(&[0, 1, 35, 36, 50, 150, 300, 5000, u32::MAX]));
     s.picture_sensitivity = wild_f(r, 0.0, 1.0);
     s.hybrid_bg_dpi = r.pick(&[0, 1, 36, 100, 300, 100_000, u32::MAX]);
+    s.auto_invert = r.chance(40);
+    s.auto_levels = r.chance(40);
+    s.sharpen = wild_f(r, -1.0, 3.0);
+    s.punch_holes = r.chance(40);
+    s.fingers = r.chance(40);
+    s.remove_lines = r.chance(40);
+    s.dropout = r.pick(&legatorocr_core::Dropout::ALL);
+    s.despeckle_strength = wild_f(r, 0.0, 6.0);
     s
 }
 
@@ -271,7 +345,10 @@ fn check_page(p: &Page, ctx: &str) {
     if let Some(l) = &p.layers {
         assert_eq!((l.mask.w, l.mask.h), (w, h), "{ctx}: mask size");
         for pa in &l.patches {
-            assert!(pa.x + pa.img.width() <= w && pa.y + pa.img.height() <= h, "{ctx}: patch outside page");
+            assert!(
+                pa.x + pa.img.width() <= w && pa.y + pa.img.height() <= h,
+                "{ctx}: patch outside page"
+            );
         }
         let flat = l.compose();
         assert_eq!(flat.dimensions(), (w, h), "{ctx}: compose size");
@@ -302,7 +379,14 @@ fn pipeline_survives_everything_and_is_deterministic() {
     for it in 0..n {
         let (img, name) = gen_image(&mut r, 700);
         let s = gen_settings(&mut r);
-        let ctx = format!("iter {it} image={name} {}x{} mode={:?} dpi={} thr={:?}", img.width(), img.height(), s.mode, s.dpi, s.threshold);
+        let ctx = format!(
+            "iter {it} image={name} {}x{} mode={:?} dpi={} thr={:?}",
+            img.width(),
+            img.height(),
+            s.mode,
+            s.dpi,
+            s.threshold
+        );
         // Convert to a few input representations the loaders can produce.
         let dynimg = match r.below(4) {
             0 => DynamicImage::ImageRgb8(img.clone()),
@@ -311,15 +395,21 @@ fn pipeline_survives_everything_and_is_deterministic() {
                 let p = img.get_pixel(x, y);
                 Rgba([p[0], p[1], p[2], 255])
             })),
-            _ => DynamicImage::ImageLuma16(image::ImageBuffer::from_fn(img.width(), img.height(), |x, y| {
-                Luma([(img.get_pixel(x, y)[0] as u16) << 8])
-            })),
+            _ => DynamicImage::ImageLuma16(image::ImageBuffer::from_fn(
+                img.width(),
+                img.height(),
+                |x, y| Luma([(img.get_pixel(x, y)[0] as u16) << 8]),
+            )),
         };
         if std::env::var_os("LEGATOROCR_FUZZ_VERBOSE").is_some() {
             eprintln!("{ctx} settings={s:?}");
         }
         let pages = process_page(&dynimg, &s);
-        assert!(!pages.is_empty() && pages.len() <= 2, "{ctx}: {} pages", pages.len());
+        assert!(
+            !pages.is_empty() && pages.len() <= 2,
+            "{ctx}: {} pages",
+            pages.len()
+        );
         for p in &pages {
             check_page(p, &ctx);
         }
@@ -327,7 +417,10 @@ fn pipeline_survives_everything_and_is_deterministic() {
         let m = measure_page(&dynimg, &s);
         assert_eq!(m.len(), pages.len(), "{ctx}: measure/process page count");
         for sz in m.into_iter().flatten() {
-            assert!(sz.0.is_finite() && sz.1.is_finite() && sz.0 > 0.0 && sz.1 > 0.0, "{ctx}: size {sz:?}");
+            assert!(
+                sz.0.is_finite() && sz.1.is_finite() && sz.0 > 0.0 && sz.1 > 0.0,
+                "{ctx}: size {sz:?}"
+            );
         }
         // determinism (rayon must not introduce ordering effects)
         if it % 5 == 0 {
@@ -361,17 +454,39 @@ fn building_blocks_survive_hostile_input() {
         }
         let b = binarize::sauvola(&gray, win, k);
         trace("let b = binarize::sauvola(&gray, win, k);");
-        let _ = (content::detect_content(&b, dpi), split::find_gutter(&b), deskew::detect_skew(&b, r.pick(&[0.0, 1.0, 7.0, 90.0, f32::NAN])), orient::needs_quarter_turn(&b, dpi));
+        let _ = (
+            content::detect_content(&b, dpi),
+            split::find_gutter(&b),
+            deskew::detect_skew(&b, r.pick(&[0.0, 1.0, 7.0, 90.0, f32::NAN])),
+            orient::needs_quarter_turn(&b, dpi),
+        );
         trace("let _ = (content::detect_content(&b, dpi), split::find_gutte");
         // geometry helpers
-        let ang = r.pick(&[0.0f32, 0.01, 1.2, -44.0, 89.0, 180.0, f32::NAN, f32::INFINITY, 1e20]);
+        let ang = r.pick(&[
+            0.0f32,
+            0.01,
+            1.2,
+            -44.0,
+            89.0,
+            180.0,
+            f32::NAN,
+            f32::INFINITY,
+            1e20,
+        ]);
         let _ = transform::rotate_cw(&img, ang, Rgb([255; 3]));
         trace("let _ = transform::rotate_cw(&img, ang, Rgb([255; 3]));");
         let _ = transform::rot90(&img, r.below(300) as u8);
         trace("let _ = transform::rot90(&img, r.below(300) as u8);");
         let _ = transform::estimate_background(&img);
         trace("let _ = transform::estimate_background(&img);");
-        let _ = transform::crop_pad(&img, r.below(2000) as i64 - 1000, r.below(2000) as i64 - 1000, r.below(1500) as u32, r.below(1500) as u32, Rgb([9; 3]));
+        let _ = transform::crop_pad(
+            &img,
+            r.below(2000) as i64 - 1000,
+            r.below(2000) as i64 - 1000,
+            r.below(1500) as u32,
+            r.below(1500) as u32,
+            Rgb([9; 3]),
+        );
         trace("let _ = transform::crop_pad(&img, r.below(2000) as i64 - 100");
         let _ = transform::downscale_gray(&gray, r.pick(&[0u32, 1, 2, 7, 1000, u32::MAX]));
         trace("let _ = transform::downscale_gray(&gray, r.pick(&[0u32, 1, 2");
@@ -385,16 +500,32 @@ fn building_blocks_survive_hostile_input() {
         // bit-image ops with out-of-range arguments
         let mut b2 = BitImage::new(img.width(), img.height());
         let mut dst = BitImage::new(1 + r.below(300) as u32, 1 + r.below(300) as u32);
-        dst.paste_region(&b, (r.below(2000) as i64 - 1000, r.below(2000) as i64 - 1000, r.below(3000) as u32, r.below(3000) as u32), (r.below(2000) as i64 - 1000, r.below(2000) as i64 - 1000));
+        dst.paste_region(
+            &b,
+            (
+                r.below(2000) as i64 - 1000,
+                r.below(2000) as i64 - 1000,
+                r.below(3000) as u32,
+                r.below(3000) as u32,
+            ),
+            (r.below(2000) as i64 - 1000, r.below(2000) as i64 - 1000),
+        );
         b2.despeckle(r.pick(&[0u32, 1, 5, 1000, u32::MAX]));
         let w = b.w;
         let (a, c) = (r.below(w as u64 + 5) as u32, r.below(w as u64 + 5) as u32);
         let _ = b.crop_x(a.min(w), c.min(w).max(a.min(w)));
         trace("let _ = b.crop_x(a.min(w), c.min(w).max(a.min(w)));");
         // layers with random content
-        let layers = layers::build_background(&img, &layers::dilate(&b), r.pick(&[1u32, 2, 3, 7, 50, 5000]));
+        let layers = layers::build_background(
+            &img,
+            &layers::dilate(&b),
+            r.pick(&[1u32, 2, 3, 7, 50, 5000]),
+        );
         trace("let layers = layers::build_background(&img, &layers::dilate(");
-        assert!(layers.width() >= 1 && layers.height() >= 1, "{ctx}: bg empty");
+        assert!(
+            layers.width() >= 1 && layers.height() >= 1,
+            "{ctx}: bg empty"
+        );
         let _ = layers::ink_colour(&img, &b);
         trace("let _ = layers::ink_colour(&img, &b);");
     }

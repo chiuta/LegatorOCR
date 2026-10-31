@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 
-pub const IMAGE_EXT: &[&str] = &["png", "jpg", "jpeg", "tif", "tiff", "bmp"];
+pub const IMAGE_EXT: &[&str] = &["png", "jpg", "jpeg", "tif", "tiff", "bmp", "pdf"];
 
 pub fn is_image(p: &Path) -> bool {
     p.extension()
@@ -69,13 +69,19 @@ pub fn split_frame(path: &Path) -> (PathBuf, Option<u32>) {
 }
 
 fn is_tiff(p: &Path) -> bool {
-    p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("tif") || e.eq_ignore_ascii_case("tiff"))
+    p.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("tif") || e.eq_ignore_ascii_case("tiff"))
 }
 
 /// Number of pages (IFDs) in a TIFF; 1 when it cannot be read as one.
 pub fn tiff_frame_count(path: &Path) -> u32 {
-    let Ok(f) = std::fs::File::open(path) else { return 1 };
-    let Ok(mut d) = tiff::decoder::Decoder::new(std::io::BufReader::new(f)) else { return 1 };
+    let Ok(f) = std::fs::File::open(path) else {
+        return 1;
+    };
+    let Ok(mut d) = tiff::decoder::Decoder::new(std::io::BufReader::new(f)) else {
+        return 1;
+    };
     let mut n = 1;
     while d.more_images() && n < 100_000 {
         if d.next_image().is_err() {
@@ -86,11 +92,26 @@ pub fn tiff_frame_count(path: &Path) -> u32 {
     n
 }
 
-/// A multi-page TIFF becomes one entry per page (`scan.tif#1`, `scan.tif#2`, …).
+pub fn is_pdf(p: &Path) -> bool {
+    p.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
+}
+
+/// A multi-page TIFF or a PDF becomes one entry per page (`scan.tif#1`, `book.pdf#2`, …).
 fn expand(p: &Path, out: &mut Vec<PathBuf>) {
-    let n = if is_tiff(p) { tiff_frame_count(p) } else { 1 };
+    let n = if is_tiff(p) {
+        tiff_frame_count(p)
+    } else if is_pdf(p) {
+        crate::pdf_page_count(p)
+    } else {
+        1
+    };
     if n > 1 {
-        let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = p
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         out.extend((1..=n).map(|i| p.with_file_name(format!("{name}#{i}"))));
     } else {
         out.push(p.to_path_buf());
@@ -102,14 +123,18 @@ pub fn collect_images(paths: &[PathBuf]) -> Vec<PathBuf> {
     for p in paths {
         if p.is_dir() {
             let mut v: Vec<PathBuf> = std::fs::read_dir(p)
-                .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| is_image(p)).collect())
+                .map(|rd| {
+                    rd.filter_map(|e| e.ok().map(|e| e.path()))
+                        .filter(|p| is_image(p))
+                        .collect()
+                })
                 .unwrap_or_default();
             v.sort_by(|a, b| natural_cmp(&a.to_string_lossy(), &b.to_string_lossy()));
             for f in v {
                 expand(&f, &mut out);
             }
         } else if split_frame(p).1.is_some() {
-            out.push(p.clone()); // an explicit page of a multi-page TIFF
+            out.push(p.clone()); // an explicit page of a multi-page TIFF or PDF
         } else if is_image(p) {
             expand(p, &mut out);
         }
@@ -122,9 +147,18 @@ pub fn collect_images(paths: &[PathBuf]) -> Vec<PathBuf> {
 /// what screenshots and many editors write by default and would be wrong here.
 pub fn detect_dpi(path: &Path) -> Option<u32> {
     use std::io::Read;
-    let path = &split_frame(path).0;
+    let (path, frame) = &split_frame(path);
+    if is_pdf(path) {
+        let doc = crate::pdf_doc(path).ok()?;
+        let dpi = doc.page_info(frame.unwrap_or(1) as usize - 1).ok()?.dpi?;
+        return (150..=1200).contains(&dpi).then_some(dpi);
+    }
     let mut head = Vec::new();
-    std::fs::File::open(path).ok()?.take(64 * 1024).read_to_end(&mut head).ok()?;
+    std::fs::File::open(path)
+        .ok()?
+        .take(64 * 1024)
+        .read_to_end(&mut head)
+        .ok()?;
     let dpi = dpi_from_header(&head)?;
     (150..=1200).contains(&dpi).then_some(dpi)
 }

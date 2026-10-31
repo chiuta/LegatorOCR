@@ -1,6 +1,9 @@
 use crate::binarize::Threshold;
+use crate::cleanup::{self, Dropout};
 use crate::layers::{self, Layers, Patch};
-use crate::{binarize, content, deskew, dewarp, orient, pictures, split, transform, BitImage, Rect};
+use crate::{
+    binarize, content, deskew, dewarp, orient, pictures, split, transform, BitImage, Rect,
+};
 use image::{imageops, DynamicImage, GrayImage, Rgb, RgbImage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +81,22 @@ pub struct Settings {
     pub picture_sensitivity: f32,
     /// Resolution of the `Hybrid` background layer.
     pub hybrid_bg_dpi: u32,
+    /// Invert negative scans (light text on dark paper).
+    pub auto_invert: bool,
+    /// Stretch contrast so paper becomes white and ink black.
+    pub auto_levels: bool,
+    /// Unsharp-mask amount 0–2 (0 = off) for colour / gray / hybrid output.
+    pub sharpen: f32,
+    /// Erase binder / punch holes near the page edge.
+    pub punch_holes: bool,
+    /// Erase fingers holding the page at the border (skin-coloured regions).
+    pub fingers: bool,
+    /// Erase ruled lines (1-bit output only).
+    pub remove_lines: bool,
+    /// Drop one printed colour (form rules, stamps).
+    pub dropout: Dropout,
+    /// Despeckle strength 0.25–4 (1 = default speck size).
+    pub despeckle_strength: f32,
 }
 
 impl Default for Settings {
@@ -103,6 +122,14 @@ impl Default for Settings {
             output_dpi: None,
             picture_sensitivity: 0.5,
             hybrid_bg_dpi: 100,
+            auto_invert: false,
+            auto_levels: false,
+            sharpen: 0.0,
+            punch_holes: false,
+            fingers: false,
+            remove_lines: false,
+            dropout: Dropout::Off,
+            despeckle_strength: 1.0,
         }
     }
 }
@@ -177,7 +204,11 @@ fn analyse(gray: &GrayImage, dpi: u32) -> Analysis {
     let factor = (dpi / 150).max(1);
     let small = transform::downscale_gray(gray, factor);
     let eff = (dpi / factor).max(1);
-    Analysis { ink: binarize::sauvola(&small, (eff / 8).max(15), 0.3), factor, dpi: eff }
+    Analysis {
+        ink: binarize::sauvola(&small, (eff / 8).max(15), 0.3),
+        factor,
+        dpi: eff,
+    }
 }
 
 /// Largest output canvas side and area the pipeline will build.
@@ -190,11 +221,20 @@ impl Settings {
     /// typo (`--margin 100000`) cannot request a multi-gigabyte canvas.
     pub fn sanitized(&self) -> Settings {
         let d = Settings::default();
-        let fin = |v: f32, lo: f32, hi: f32, dflt: f32| if v.is_finite() { v.clamp(lo, hi) } else { dflt };
+        let fin = |v: f32, lo: f32, hi: f32, dflt: f32| {
+            if v.is_finite() {
+                v.clamp(lo, hi)
+            } else {
+                dflt
+            }
+        };
         let mut s = self.clone();
         s.dpi = s.dpi.clamp(36, 2400);
         s.rotate_quarters %= 4;
-        s.manual_skew_deg = s.manual_skew_deg.filter(|v| v.is_finite()).map(|v| v.clamp(-45.0, 45.0));
+        s.manual_skew_deg = s
+            .manual_skew_deg
+            .filter(|v| v.is_finite())
+            .map(|v| v.clamp(-45.0, 45.0));
         s.max_skew_deg = fin(s.max_skew_deg, 0.0, 15.0, d.max_skew_deg);
         // No canvas side may exceed MAX_SIDE_PX and the area is capped, whatever the
         // dpi: a typo like `--page-size 2000x2000 --dpi 2400` must not ask for 35 gigapixels.
@@ -220,6 +260,8 @@ impl Settings {
         s.sauvola_k = fin(s.sauvola_k, 0.0, 1.0, d.sauvola_k);
         s.picture_sensitivity = fin(s.picture_sensitivity, 0.0, 1.0, d.picture_sensitivity);
         s.hybrid_bg_dpi = s.hybrid_bg_dpi.clamp(36, 300);
+        s.sharpen = fin(s.sharpen, 0.0, 2.0, 0.0);
+        s.despeckle_strength = fin(s.despeckle_strength, 0.25, 4.0, 1.0);
         s.output_dpi = s.output_dpi.filter(|&o| o >= 36).map(|o| o.min(s.dpi));
         s
     }
@@ -239,10 +281,13 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<(RgbImage, Option<u8>)> 
     let mut parts: Vec<(RgbImage, Option<u8>)> = vec![(rgb.clone(), None)];
     if s.split != SplitMode::Off {
         let cut = match s.split {
-            SplitMode::Middle => (rgb.width() as f32 >= 1.15 * rgb.height() as f32).then_some(rgb.width() / 2),
+            SplitMode::Middle => {
+                (rgb.width() as f32 >= 1.15 * rgb.height() as f32).then_some(rgb.width() / 2)
+            }
             _ => {
                 let a = analyse(&imageops::grayscale(&rgb), s.dpi);
-                split::find_gutter(&a.ink).map(|x| (x * a.factor).min(rgb.width().saturating_sub(1)))
+                split::find_gutter(&a.ink)
+                    .map(|x| (x * a.factor).min(rgb.width().saturating_sub(1)))
             }
         };
         if let Some(x) = cut.filter(|&x| x > 0 && x < rgb.width()) {
@@ -292,6 +337,24 @@ struct Prepared {
 }
 
 fn prepare(mut img: RgbImage, s: &Settings) -> Prepared {
+    // --- clean-up: fixes that make every later stage's job easier ----------
+    if s.auto_invert {
+        cleanup::invert_if_negative(&mut img);
+    }
+    if s.auto_levels {
+        cleanup::auto_levels(&mut img);
+    }
+    if s.dropout != Dropout::Off {
+        let paper = transform::estimate_background(&img);
+        cleanup::dropout(&mut img, s.dropout, paper);
+    }
+    if s.punch_holes {
+        cleanup::remove_punch_holes(&mut img, s.dpi);
+    }
+    if s.fingers {
+        let paper = transform::estimate_background(&img);
+        cleanup::remove_fingers(&mut img, s.dpi, paper);
+    }
     let bg = transform::estimate_background(&img);
     let mut skew_deg = 0.0;
 
@@ -324,18 +387,38 @@ fn prepare(mut img: RgbImage, s: &Settings) -> Prepared {
         // back to full resolution, grown by the analysis step so no ink is shaved
         let f = a.factor;
         let (x0, y0) = ((r.x * f).saturating_sub(f), (r.y * f).saturating_sub(f));
-        let (x1, y1) = (((r.x + r.w) * f + f).min(img.width()), ((r.y + r.h) * f + f).min(img.height()));
-        let mut rect = Rect { x: x0, y: y0, w: x1.saturating_sub(x0).max(1), h: y1.saturating_sub(y0).max(1) };
+        let (x1, y1) = (
+            ((r.x + r.w) * f + f).min(img.width()),
+            ((r.y + r.h) * f + f).min(img.height()),
+        );
+        let mut rect = Rect {
+            x: x0,
+            y: y0,
+            w: x1.saturating_sub(x0).max(1),
+            h: y1.saturating_sub(y0).max(1),
+        };
         // per-page manual correction
-        let [al, at, ar, ab] = s.content_adjust_mm.map(|mm| (mm / 25.4 * s.dpi as f32).round() as i64);
+        let [al, at, ar, ab] = s
+            .content_adjust_mm
+            .map(|mm| (mm / 25.4 * s.dpi as f32).round() as i64);
         let nx0 = (rect.x as i64 - al).clamp(0, img.width() as i64 - 1);
         let ny0 = (rect.y as i64 - at).clamp(0, img.height() as i64 - 1);
         let nx1 = ((rect.x + rect.w) as i64 + ar).clamp(nx0 + 1, img.width() as i64);
         let ny1 = ((rect.y + rect.h) as i64 + ab).clamp(ny0 + 1, img.height() as i64);
-        rect = Rect { x: nx0 as u32, y: ny0 as u32, w: (nx1 - nx0) as u32, h: (ny1 - ny0) as u32 };
+        rect = Rect {
+            x: nx0 as u32,
+            y: ny0 as u32,
+            w: (nx1 - nx0) as u32,
+            h: (ny1 - ny0) as u32,
+        };
         rect
     });
-    Prepared { img, bg, skew_deg, content }
+    Prepared {
+        img,
+        bg,
+        skew_deg,
+        content,
+    }
 }
 
 /// Where the content window lands on the output canvas (all in source pixels).
@@ -369,25 +452,49 @@ fn layout(r: Rect, s: &Settings) -> Layout {
         VAlign::Center => extra_h / 2,
         VAlign::Bottom => extra_h,
     };
-    Layout { cw, ch, cx: r.x as i64 - ml as i64 - dx as i64, cy: r.y as i64 - mt as i64 - dy as i64 }
+    Layout {
+        cw,
+        ch,
+        cx: r.x as i64 - ml as i64 - dx as i64,
+        cy: r.y as i64 - mt as i64 - dy as i64,
+    }
 }
 
 /// Scale a 1-bit image by `f` (< 1) the way a scanner driver would: average, then re-threshold.
 fn scale_bw(b: &BitImage, nw: u32, nh: u32) -> BitImage {
-    let g = imageops::resize(&b.to_gray(), nw.max(1), nh.max(1), imageops::FilterType::Triangle);
+    let g = imageops::resize(
+        &b.to_gray(),
+        nw.max(1),
+        nh.max(1),
+        imageops::FilterType::Triangle,
+    );
     binarize::global(&g, 127)
 }
 
 fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
-    let Prepared { img, bg, skew_deg, content } = p;
+    let Prepared {
+        img,
+        bg,
+        skew_deg,
+        content,
+    } = p;
     let blank = content.is_none();
     // Output resolution: only ever *down*-sampled.
     let (out_dpi, f) = match s.output_dpi {
         Some(o) if o < s.dpi => (o, o as f32 / s.dpi as f32),
         _ => (s.dpi, 1.0),
     };
-    let scaled = |v: u32| if f == 1.0 { v } else { ((v as f32 * f).round() as u32).max(1) };
-    let paper = if matches!(s.mode, OutputMode::Gray | OutputMode::BlackWhite | OutputMode::Mixed) {
+    let scaled = |v: u32| {
+        if f == 1.0 {
+            v
+        } else {
+            ((v as f32 * f).round() as u32).max(1)
+        }
+    };
+    let paper = if matches!(
+        s.mode,
+        OutputMode::Gray | OutputMode::BlackWhite | OutputMode::Mixed
+    ) {
         Rgb([255, 255, 255])
     } else {
         bg
@@ -397,25 +504,48 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
     // else — margins, scanner bed, edge shadows — becomes paper.
     let pad = (s.dpi / 100).max(2) as i64;
     let (lay, win) = match content {
-        None => (Layout { cw: img.width(), ch: img.height(), cx: 0, cy: 0 }, (0i64, 0i64, img.width(), img.height())),
+        None => (
+            Layout {
+                cw: img.width(),
+                ch: img.height(),
+                cx: 0,
+                cy: 0,
+            },
+            (0i64, 0i64, img.width(), img.height()),
+        ),
         Some(r) => (
             layout(r, s),
-            (r.x as i64 - pad, r.y as i64 - pad, r.w + 2 * pad as u32, r.h + 2 * pad as u32),
+            (
+                r.x as i64 - pad,
+                r.y as i64 - pad,
+                r.w + 2 * pad as u32,
+                r.h + 2 * pad as u32,
+            ),
         ),
     };
     let (cw, ch) = (scaled(lay.cw), scaled(lay.ch));
-    let (wx_out, wy_out) = (((win.0 - lay.cx) as f32 * f).round() as i64, ((win.1 - lay.cy) as f32 * f).round() as i64);
+    let (wx_out, wy_out) = (
+        ((win.0 - lay.cx) as f32 * f).round() as i64,
+        ((win.1 - lay.cy) as f32 * f).round() as i64,
+    );
     let (ww_out, wh_out) = (scaled(win.2), scaled(win.3));
 
     // 1-bit ink layer for BW / Mixed / Hybrid: binarise the WHOLE deskewed scan first,
     // then cut (a window thresholded on a flat canvas gets a black frame on uneven paper).
-    let wants_mask = matches!(s.mode, OutputMode::BlackWhite | OutputMode::Mixed | OutputMode::Hybrid);
+    let wants_mask = matches!(
+        s.mode,
+        OutputMode::BlackWhite | OutputMode::Mixed | OutputMode::Hybrid
+    );
     let mask: Option<BitImage> = wants_mask.then(|| {
         let g = imageops::grayscale(&img);
         let mut bw = binarize::threshold(&g, s.threshold, (s.dpi / 3) | 1, s.sauvola_k);
         if s.despeckle {
-            let min_px = ((s.dpi as f32 / 300.0).powi(2) * 6.0).round() as u32;
+            let min_px =
+                ((s.dpi as f32 / 300.0).powi(2) * 6.0 * s.despeckle_strength).round() as u32;
             bw.despeckle(min_px.max(2));
+        }
+        if s.remove_lines {
+            cleanup::remove_lines(&mut bw, s.dpi);
         }
         let mut canvas = BitImage::new(cw, ch);
         if blank {
@@ -423,7 +553,11 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
         }
         let mut window = BitImage::new(win.2, win.3);
         window.paste_region(&bw, (win.0, win.1, win.2, win.3), (0, 0));
-        let window = if f == 1.0 { window } else { scale_bw(&window, ww_out, wh_out) };
+        let window = if f == 1.0 {
+            window
+        } else {
+            scale_bw(&window, ww_out, wh_out)
+        };
         canvas.paste_region(&window, (0, 0, window.w, window.h), (wx_out, wy_out));
         canvas
     });
@@ -433,8 +567,15 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
     let canvas_rgb: Option<RgbImage> = wants_colour.then(|| {
         let mut window = transform::crop_pad(&img, win.0, win.1, win.2, win.3, bg);
         if s.normalize_bg && window.width() > 8 && window.height() > 8 {
-            let target = if s.mode == OutputMode::Gray { Rgb([255, 255, 255]) } else { bg };
+            let target = if s.mode == OutputMode::Gray {
+                Rgb([255, 255, 255])
+            } else {
+                bg
+            };
             window = transform::normalize_background(&window, s.dpi, target);
+        }
+        if s.sharpen > 0.0 {
+            window = cleanup::sharpen(&window, s.dpi, s.sharpen);
         }
         if f != 1.0 {
             window = imageops::resize(&window, ww_out, wh_out, imageops::FilterType::Triangle);
@@ -447,7 +588,10 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
     let (image, layers) = match s.mode {
         OutputMode::BlackWhite => (PageImage::Bw(mask.expect("mask")), None),
         OutputMode::Color => (PageImage::Rgb(canvas_rgb.expect("rgb")), None),
-        OutputMode::Gray => (PageImage::Gray(imageops::grayscale(&canvas_rgb.expect("rgb"))), None),
+        OutputMode::Gray => (
+            PageImage::Gray(imageops::grayscale(&canvas_rgb.expect("rgb"))),
+            None,
+        ),
         OutputMode::Mixed | OutputMode::Hybrid => {
             let (rgb, mut mask) = (canvas_rgb.expect("rgb"), mask.expect("mask"));
             if blank {
@@ -458,7 +602,11 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
                 let mut patches = Vec::new();
                 for z in &zones {
                     let r = z.rect;
-                    patches.push(Patch { x: r.x, y: r.y, img: imageops::crop_imm(&rgb, r.x, r.y, r.w, r.h).to_image() });
+                    patches.push(Patch {
+                        x: r.x,
+                        y: r.y,
+                        img: imageops::crop_imm(&rgb, r.x, r.y, r.w, r.h).to_image(),
+                    });
                     for y in r.y..(r.y + r.h).min(mask.h) {
                         for x in r.x..(r.x + r.w).min(mask.w) {
                             mask.set(x, y, false); // the picture patch already shows these pixels
@@ -469,7 +617,12 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
                     if patches.is_empty() {
                         (PageImage::Bw(mask), None)
                     } else {
-                        let l = Layers { mask, fg: [0, 0, 0], bg: None, patches };
+                        let l = Layers {
+                            mask,
+                            fg: [0, 0, 0],
+                            bg: None,
+                            patches,
+                        };
                         (PageImage::Rgb(l.compose()), Some(l))
                     }
                 } else {
@@ -479,7 +632,10 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
                     let l = Layers {
                         mask,
                         fg,
-                        bg: Some(layers::Background { img: bg_img, dpi: out_dpi / down }),
+                        bg: Some(layers::Background {
+                            img: bg_img,
+                            dpi: out_dpi / down,
+                        }),
                         patches,
                     };
                     (PageImage::Rgb(l.compose()), Some(l))
@@ -487,7 +643,14 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
             }
         }
     };
-    Page { image, dpi: out_dpi, skew_deg, blank, split_index, layers }
+    Page {
+        image,
+        dpi: out_dpi,
+        skew_deg,
+        blank,
+        split_index,
+        layers,
+    }
 }
 
 #[cfg(test)]
@@ -632,7 +795,10 @@ mod tests {
         let up = binarize::sauvola(&g, 41, 0.3);
         assert!(!orient::needs_quarter_turn(&up, DPI));
         let side = imageops::rotate90(&g);
-        assert!(orient::needs_quarter_turn(&binarize::sauvola(&side, 41, 0.3), DPI));
+        assert!(orient::needs_quarter_turn(
+            &binarize::sauvola(&side, 41, 0.3),
+            DPI
+        ));
     }
 
     #[test]
@@ -645,9 +811,15 @@ mod tests {
             }
         }
         let upright = binarize::sauvola(&spread, 41, 0.3);
-        assert!(!orient::needs_quarter_turn(&upright, DPI), "upright spread flagged sideways");
+        assert!(
+            !orient::needs_quarter_turn(&upright, DPI),
+            "upright spread flagged sideways"
+        );
         for side in [imageops::rotate90(&spread), imageops::rotate270(&spread)] {
-            assert!(orient::needs_quarter_turn(&binarize::sauvola(&side, 41, 0.3), DPI), "sideways spread missed");
+            assert!(
+                orient::needs_quarter_turn(&binarize::sauvola(&side, 41, 0.3), DPI),
+                "sideways spread missed"
+            );
         }
     }
 
@@ -669,9 +841,16 @@ mod tests {
         let g = text_page(1500, 2000, 250, 1250);
         let rot = transform::rotate_cw(&to_rgb(&g), 2.0f32.to_radians(), Rgb([235; 3]));
         let src = image::DynamicImage::ImageRgb8(rot);
-        let off = Settings { deskew: false, ..Default::default() };
+        let off = Settings {
+            deskew: false,
+            ..Default::default()
+        };
         assert_eq!(process_page(&src, &off)[0].skew_deg, 0.0);
-        let manual = Settings { deskew: false, manual_skew_deg: Some(-2.0), ..Default::default() };
+        let manual = Settings {
+            deskew: false,
+            manual_skew_deg: Some(-2.0),
+            ..Default::default()
+        };
         let p = &process_page(&src, &manual)[0];
         assert!((p.skew_deg + 2.0).abs() < 1e-3);
         // a correct manual angle must give the same geometry as auto-deskew
@@ -683,13 +862,21 @@ mod tests {
     fn end_to_end_page_geometry() {
         let g = text_page(1500, 2000, 250, 1250);
         let rot = transform::rotate_cw(&to_rgb(&g), 2.0f32.to_radians(), Rgb([235; 3]));
-        let s = Settings { margins_mm: [10.0; 4], mode: OutputMode::BlackWhite, ..Default::default() };
+        let s = Settings {
+            margins_mm: [10.0; 4],
+            mode: OutputMode::BlackWhite,
+            ..Default::default()
+        };
         let pages = process_page(&image::DynamicImage::ImageRgb8(rot), &s);
         assert_eq!(pages.len(), 1);
         let p = &pages[0];
         assert!((p.skew_deg + 2.0).abs() < 0.2, "skew {}", p.skew_deg);
         // content (~1000 px wide) + 2×10 mm margin (118 px each) = ≈ 1236
-        assert!((p.image.width() as i32 - 1236).abs() < 40, "w {}", p.image.width());
+        assert!(
+            (p.image.width() as i32 - 1236).abs() < 40,
+            "w {}",
+            p.image.width()
+        );
         assert!(matches!(p.image, PageImage::Bw(_)));
     }
 
@@ -709,14 +896,29 @@ mod tests {
         assert_eq!(wild.dpi, 36);
         assert_eq!(wild.margins_mm, [200.0, 5.0, 0.0, 5.0]);
         assert_eq!(wild.page_size_mm, None);
-        assert_eq!((wild.max_skew_deg, wild.manual_skew_deg, wild.rotate_quarters), (15.0, Some(45.0), 3));
+        assert_eq!(
+            (
+                wild.max_skew_deg,
+                wild.manual_skew_deg,
+                wild.rotate_quarters
+            ),
+            (15.0, Some(45.0), 3)
+        );
         assert!(wild.sauvola_k.is_finite());
     }
 
     #[test]
     fn solid_black_page_is_not_deskewed() {
         let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(900, 1200, Rgb([0, 0, 0])));
-        let pages = process_page(&img, &Settings { dpi: 150, split: SplitMode::Off, auto_orient: false, ..Settings::default() });
+        let pages = process_page(
+            &img,
+            &Settings {
+                dpi: 150,
+                split: SplitMode::Off,
+                auto_orient: false,
+                ..Settings::default()
+            },
+        );
         assert_eq!(pages[0].skew_deg, 0.0);
     }
 
@@ -728,7 +930,10 @@ mod tests {
         for y in 0..h {
             for x in 0..w {
                 let f = 1.0 - 0.55 * (y as f32 / h as f32) - 0.25 * (x as f32 / w as f32);
-                let line = (y % 40) < 12 && (120..780).contains(&x) && (150..1050).contains(&y) && (x / 22) % 3 != 0;
+                let line = (y % 40) < 12
+                    && (120..780).contains(&x)
+                    && (150..1050).contains(&y)
+                    && (x / 22) % 3 != 0;
                 let v = if line { 60.0 * f } else { 235.0 * f };
                 img.put_pixel(x, y, Rgb([v as u8, v as u8, (v * 0.95) as u8]));
             }
@@ -742,7 +947,9 @@ mod tests {
             ..Settings::default()
         };
         let pages = process_page(&DynamicImage::ImageRgb8(img), &st);
-        let PageImage::Bw(bw) = &pages[0].image else { panic!("bw expected") };
+        let PageImage::Bw(bw) = &pages[0].image else {
+            panic!("bw expected")
+        };
         let (bw_w, bw_h) = (bw.w, bw.h);
         // Outer ring (margins) must be paper.
         let ring_ink: u64 = (0..bw_h)
@@ -760,7 +967,9 @@ mod tests {
     fn fuzz_no_panics() {
         let mut seed = 0x9E3779B97F4A7C15u64;
         let mut rnd = move |n: u64| {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (seed >> 33) % n
         };
         for it in 0..220 {
@@ -771,8 +980,20 @@ mod tests {
                 let v = match kind {
                     0 => 255,
                     1 => rnd(256) as u8,
-                    2 => if (y / 7) % 3 == 0 && (x / 5) % 2 == 0 { 20 } else { 235 },
-                    _ => if rnd(50) == 0 { 0 } else { 250 },
+                    2 => {
+                        if (y / 7) % 3 == 0 && (x / 5) % 2 == 0 {
+                            20
+                        } else {
+                            235
+                        }
+                    }
+                    _ => {
+                        if rnd(50) == 0 {
+                            0
+                        } else {
+                            250
+                        }
+                    }
                 };
                 *p = Rgb([v, v, v]);
             }
@@ -786,7 +1007,13 @@ mod tests {
                 max_skew_deg: rnd(20) as f32,
                 margins_mm: [rnd(30) as f32; 4],
                 page_size_mm: (rnd(2) == 0).then(|| (rnd(300) as f32, rnd(300) as f32)),
-                mode: [OutputMode::Color, OutputMode::Gray, OutputMode::BlackWhite, OutputMode::Mixed, OutputMode::Hybrid][rnd(5) as usize],
+                mode: [
+                    OutputMode::Color,
+                    OutputMode::Gray,
+                    OutputMode::BlackWhite,
+                    OutputMode::Mixed,
+                    OutputMode::Hybrid,
+                ][rnd(5) as usize],
                 sauvola_k: rnd(100) as f32 / 100.0,
                 despeckle: rnd(2) == 0,
                 dewarp: rnd(2) == 0,
@@ -800,12 +1027,25 @@ mod tests {
                 output_dpi: (rnd(2) == 0).then(|| [10, 36, 72, 150][rnd(4) as usize]),
                 picture_sensitivity: rnd(100) as f32 / 100.0,
                 hybrid_bg_dpi: rnd(400) as u32,
+                auto_invert: rnd(2) == 0,
+                auto_levels: rnd(2) == 0,
+                sharpen: rnd(300) as f32 / 100.0 - 0.5,
+                punch_holes: rnd(2) == 0,
+                fingers: rnd(2) == 0,
+                remove_lines: rnd(2) == 0,
+                dropout: Dropout::ALL[rnd(4) as usize],
+                despeckle_strength: rnd(500) as f32 / 100.0,
             };
             let pages = process_page(&DynamicImage::ImageRgb8(img), &s);
             assert!(!pages.is_empty() && pages.len() <= 2, "iteration {it}");
             for p in pages {
                 assert!(p.image.width() >= 1 && p.image.height() >= 1);
-                assert!(p.image.width() < 12_000 && p.image.height() < 12_000, "iteration {it}: {}x{}", p.image.width(), p.image.height());
+                assert!(
+                    p.image.width() < 12_000 && p.image.height() < 12_000,
+                    "iteration {it}: {}x{}",
+                    p.image.width(),
+                    p.image.height()
+                );
             }
         }
     }

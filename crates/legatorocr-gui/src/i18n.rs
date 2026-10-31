@@ -31,24 +31,36 @@ impl Lang {
     }
 
     fn index(self) -> usize {
-        Self::ALL.iter().position(|(l, _, _)| *l == self).unwrap_or(1)
+        Self::ALL
+            .iter()
+            .position(|(l, _, _)| *l == self)
+            .unwrap_or(1)
     }
 
     /// `ro`, `pt-BR`, `de_AT.UTF-8` … → the matching language.
     pub fn from_code(code: &str) -> Option<Lang> {
         let c = code.trim().to_ascii_lowercase();
         let primary = c.split(['-', '_', '.']).next().unwrap_or("");
-        Self::ALL.iter().find(|(_, k, _)| *k == primary).map(|(l, _, _)| *l)
+        Self::ALL
+            .iter()
+            .find(|(_, k, _)| *k == primary)
+            .map(|(l, _, _)| *l)
     }
 
     /// System language, English when unsupported.
     pub fn detect() -> Self {
-        sys_locale::get_locale().and_then(|l| Lang::from_code(&l)).unwrap_or(Lang::En)
+        sys_locale::get_locale()
+            .and_then(|l| Lang::from_code(&l))
+            .unwrap_or(Lang::En)
     }
 }
 
 pub fn t(lang: Lang, key: &'static str) -> &'static str {
-    TABLE.iter().find(|(k, _)| *k == key).map(|(_, v)| v[lang.index()]).unwrap_or(key)
+    TABLE
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, v)| v[lang.index()])
+        .unwrap_or(key)
 }
 
 const TABLE: &[(&str, [&str; 8])] = &[
@@ -110,6 +122,28 @@ const TABLE: &[(&str, [&str; 8])] = &[
     ("mode.hybrid", ["Hibrid", "Hybrid", "Hybride", "Ibrido", "Híbrido", "Híbrido", "Hybrid", "Hibrid"]),
     ("set.threshold", ["Metodă prag", "Threshold", "Méthode de seuil", "Metodo di soglia", "Método de umbral", "Método de limiar", "Schwellwert-Verfahren", "Küszöbölési módszer"]),
     ("set.picture_sens", ["Sensib. imagini", "Picture sensitivity", "Sensibilité images", "Sensibilità immagini", "Sensibilidad de imágenes", "Sensibilidade das imagens", "Bildempfindlichkeit", "Képérzékenység"]),
+    ("set.cleanup", ["Curățare", "Clean-up", "Nettoyage", "Pulizia", "Limpieza", "Limpeza", "Bereinigung", "Tisztítás"]),
+    ("set.invert", ["Inversează scanările negative", "Invert negative scans", "Inverser les scans négatifs", "Inverti le scansioni negative", "Invertir escaneos en negativo", "Inverter digitalizações em negativo", "Negativ-Scans invertieren", "Negatív szkennelések invertálása"]),
+    ("set.levels", ["Contrast automat (niveluri)", "Auto contrast (levels)", "Contraste auto (niveaux)", "Contrasto auto (livelli)", "Contraste auto (niveles)", "Contraste auto (níveis)", "Auto-Kontrast (Tonwerte)", "Automatikus kontraszt (szintek)"]),
+    ("set.sharpen", ["Claritate", "Sharpen", "Netteté", "Nitidezza", "Nitidez", "Nitidez", "Schärfen", "Élesítés"]),
+    ("set.punch", ["Șterge găurile de perforare", "Remove punch holes", "Supprimer les trous de perforation", "Rimuovi i fori di perforazione", "Quitar agujeros de perforación", "Remover furos de perfuração", "Lochungen entfernen", "Lyukasztások eltávolítása"]),
+    ("set.fingers", ["Șterge degetele de pe margine", "Remove fingers at the edge", "Supprimer les doigts au bord", "Rimuovi le dita sul bordo", "Quitar dedos en el borde", "Remover dedos na borda", "Finger am Rand entfernen", "Ujjak eltávolítása a szélről"]),
+    ("set.lines", ["Șterge liniile de tabel/rigle", "Remove ruled lines", "Supprimer les lignes de tableau", "Rimuovi le linee di tabella", "Quitar líneas de tabla", "Remover linhas de tabela", "Linien entfernen", "Vonalak eltávolítása"]),
+    ("set.dropout", ["Elimină culoarea", "Drop colour", "Éliminer la couleur", "Elimina colore", "Eliminar color", "Eliminar cor", "Farbe ausblenden", "Szín eltávolítása"]),
+    ("set.despeckle_strength", ["Putere eliminare pete", "Despeckle strength", "Force du dépoussiérage", "Intensità antipuntini", "Intensidad antimotas", "Força anti-pontos", "Staubfilter-Stärke", "Pontszűrés erőssége"]),
+    ("dropout.off", ["nimic", "none", "aucune", "nessuno", "ninguno", "nenhum", "keine", "nincs"]),
+    ("dropout.red", ["roșu", "red", "rouge", "rosso", "rojo", "vermelho", "rot", "piros"]),
+    ("dropout.green", ["verde", "green", "vert", "verde", "verde", "verde", "grün", "zöld"]),
+    ("dropout.blue", ["albastru", "blue", "bleu", "blu", "azul", "azul", "blau", "kék"]),
+    ("set.author", ["Autor PDF", "PDF author", "Auteur du PDF", "Autore PDF", "Autor del PDF", "Autor do PDF", "PDF-Autor", "PDF szerzője"]),
+    ("set.sidecar_txt", ["Salvează și text .txt", "Also save text (.txt)", "Enregistrer aussi le texte (.txt)", "Salva anche il testo (.txt)", "Guardar también texto (.txt)", "Guardar também texto (.txt)", "Text zusätzlich speichern (.txt)", "Szöveg mentése is (.txt)"]),
+    ("set.sidecar_hocr", ["Salvează și hOCR", "Also save hOCR", "Enregistrer aussi l’hOCR", "Salva anche hOCR", "Guardar también hOCR", "Guardar também hOCR", "hOCR zusätzlich speichern", "hOCR mentése is"]),
+    ("set.profile", ["Profil", "Profile", "Profil", "Profilo", "Perfil", "Perfil", "Profil", "Profil"]),
+    ("set.profile_pick", ["alege…", "choose…", "choisir…", "scegli…", "elegir…", "escolher…", "wählen…", "válassz…"]),
+    ("set.profile_name", ["nume profil nou", "new profile name", "nom du profil", "nome profilo", "nombre del perfil", "nome do perfil", "Profilname", "profil neve"]),
+    ("btn.save_profile", ["Salvează profil", "Save profile", "Enregistrer", "Salva profilo", "Guardar perfil", "Guardar perfil", "Profil speichern", "Profil mentése"]),
+    ("status.profile_applied", ["Profil aplicat", "Profile applied", "Profil appliqué", "Profilo applicato", "Perfil aplicado", "Perfil aplicado", "Profil angewendet", "Profil alkalmazva"]),
+    ("status.profile_saved", ["Profil salvat", "Profile saved", "Profil enregistré", "Profilo salvato", "Perfil guardado", "Perfil guardado", "Profil gespeichert", "Profil elmentve"]),
     ("set.hybrid_dpi", ["DPI fundal", "Background dpi", "dpi du fond", "dpi dello sfondo", "ppp del fondo", "dpi do fundo", "Hintergrund-dpi", "Háttér dpi"]),
     ("set.normalize", ["Uniformizează iluminarea", "Even out lighting", "Uniformiser l’éclairage", "Uniforma l’illuminazione", "Uniformar la iluminación", "Uniformizar a iluminação", "Beleuchtung angleichen", "Megvilágítás kiegyenlítése"]),
     ("set.dewarp", ["Îndreaptă rândurile curbate", "Straighten curved lines", "Redresser les lignes courbes", "Raddrizza le righe curve", "Enderezar líneas curvas", "Endireitar linhas curvas", "Gekrümmte Zeilen begradigen", "Görbe sorok kiegyenesítése"]),
@@ -179,20 +213,34 @@ mod tests {
                 assert!(v.iter().all(|s| s.starts_with("0 =")), "{k}");
             }
             if *k == "adj.content_hint" {
-                assert!(v.iter().all(|s| s.contains("(+)") && s.contains("(−)")), "{k}");
+                assert!(
+                    v.iter().all(|s| s.contains("(+)") && s.contains("(−)")),
+                    "{k}"
+                );
             }
         }
     }
 
     #[test]
     fn every_key_used_in_the_app_exists() {
-        const GROUPS: &[&str] = &["about", "adj", "align", "btn", "drop", "list", "menu", "mode", "preview", "set", "size", "split", "status", "view"];
+        const GROUPS: &[&str] = &[
+            "about", "adj", "align", "btn", "drop", "list", "menu", "mode", "preview", "set",
+            "size", "split", "status", "view",
+        ];
         let src = include_str!("app.rs");
         let mut checked = 0;
         for lit in src.split('"').skip(1).step_by(2) {
-            let Some((g, rest)) = lit.split_once('.') else { continue };
-            if GROUPS.contains(&g) && !rest.is_empty() && rest.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
-                assert!(TABLE.iter().any(|(k, _)| *k == lit), "app.rs uses unknown i18n key {lit}");
+            let Some((g, rest)) = lit.split_once('.') else {
+                continue;
+            };
+            if GROUPS.contains(&g)
+                && !rest.is_empty()
+                && rest.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+            {
+                assert!(
+                    TABLE.iter().any(|(k, _)| *k == lit),
+                    "app.rs uses unknown i18n key {lit}"
+                );
                 checked += 1;
             }
         }

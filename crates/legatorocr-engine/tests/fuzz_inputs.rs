@@ -1,4 +1,8 @@
-#![allow(clippy::manual_is_multiple_of, clippy::field_reassign_with_default, clippy::type_complexity)]
+#![allow(
+    clippy::manual_is_multiple_of,
+    clippy::field_reassign_with_default,
+    clippy::type_complexity
+)]
 //! Fuzzing of everything that reads untrusted bytes: image files (valid ones mutated
 //! byte by byte, truncated, extended), project files, Tesseract output, file names.
 //! Scale: `LEGATOROCR_FUZZ_ITERS=5000 LEGATOROCR_FUZZ_SEED=3 cargo test --release -p legatorocr-engine --test fuzz_inputs`
@@ -19,10 +23,17 @@ impl Rng {
     }
 }
 fn iters(d: u64) -> u64 {
-    std::env::var("LEGATOROCR_FUZZ_ITERS").ok().and_then(|v| v.parse().ok()).unwrap_or(d)
+    std::env::var("LEGATOROCR_FUZZ_ITERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(d)
 }
 fn seed() -> u64 {
-    std::env::var("LEGATOROCR_FUZZ_SEED").ok().and_then(|v| v.parse().ok()).unwrap_or(0xFEED_FACE_1234_5678) | 1
+    std::env::var("LEGATOROCR_FUZZ_SEED")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0xFEED_FACE_1234_5678)
+        | 1
 }
 fn tmp(tag: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("lgr-fuzz-{tag}-{}-{}", std::process::id(), seed()));
@@ -69,7 +80,8 @@ fn mutate(src: &[u8], r: &mut Rng) -> Vec<u8> {
             _ => {
                 // write an extreme 32-bit value (sizes, offsets, counts)
                 if i + 4 <= v.len() {
-                    let x = [0u32, 1, 0x7FFF_FFFF, 0xFFFF_FFFF, 0x0100_0000, 65_536][r.below(6) as usize];
+                    let x = [0u32, 1, 0x7FFF_FFFF, 0xFFFF_FFFF, 0x0100_0000, 65_536]
+                        [r.below(6) as usize];
                     v[i..i + 4].copy_from_slice(&x.to_le_bytes());
                 }
             }
@@ -80,23 +92,35 @@ fn mutate(src: &[u8], r: &mut Rng) -> Vec<u8> {
 
 fn seeds_images(dir: &std::path::Path) -> Vec<(String, Vec<u8>)> {
     use image::{codecs::jpeg::JpegEncoder, ImageFormat, RgbImage};
-    let img = RgbImage::from_fn(97, 61, |x, y| image::Rgb([(x * 2) as u8, (y * 4) as u8, ((x ^ y) * 3) as u8]));
+    let img = RgbImage::from_fn(97, 61, |x, y| {
+        image::Rgb([(x * 2) as u8, (y * 4) as u8, ((x ^ y) * 3) as u8])
+    });
     let mut out = Vec::new();
-    for (name, fmt) in [("png", ImageFormat::Png), ("bmp", ImageFormat::Bmp), ("tif", ImageFormat::Tiff)] {
+    for (name, fmt) in [
+        ("png", ImageFormat::Png),
+        ("bmp", ImageFormat::Bmp),
+        ("tif", ImageFormat::Tiff),
+    ] {
         let mut c = std::io::Cursor::new(Vec::new());
-        image::DynamicImage::ImageRgb8(img.clone()).write_to(&mut c, fmt).unwrap();
+        image::DynamicImage::ImageRgb8(img.clone())
+            .write_to(&mut c, fmt)
+            .unwrap();
         out.push((name.to_string(), c.into_inner()));
     }
     let mut j = Vec::new();
-    JpegEncoder::new_with_quality(&mut j, 80).encode(img.as_raw(), 97, 61, image::ExtendedColorType::Rgb8).unwrap();
+    JpegEncoder::new_with_quality(&mut j, 80)
+        .encode(img.as_raw(), 97, 61, image::ExtendedColorType::Rgb8)
+        .unwrap();
     out.push(("jpg".into(), j));
     // multi-page TIFF (gray + rgb) and a G4 TIFF
     {
         use tiff::encoder::{colortype, TiffEncoder};
         let p = dir.join("seed_multi.tif");
         let mut e = TiffEncoder::new(std::fs::File::create(&p).unwrap()).unwrap();
-        e.write_image::<colortype::Gray8>(30, 20, &vec![99u8; 600]).unwrap();
-        e.write_image::<colortype::RGB8>(11, 9, &vec![7u8; 297]).unwrap();
+        e.write_image::<colortype::Gray8>(30, 20, &vec![99u8; 600])
+            .unwrap();
+        e.write_image::<colortype::RGB8>(11, 9, &vec![7u8; 297])
+            .unwrap();
         drop(e);
         out.push(("tif".into(), std::fs::read(&p).unwrap()));
     }
@@ -119,7 +143,11 @@ fn corrupted_image_files_never_panic_or_explode() {
         let (ext, src) = &seeds[r.below(seeds.len() as u64) as usize];
         let data = mutate(src, &mut r);
         // sometimes lie about the extension
-        let ext = if r.below(5) == 0 { ["png", "jpg", "tif", "bmp", "gif", "webp", "dat"][r.below(7) as usize] } else { ext.as_str() };
+        let ext = if r.below(5) == 0 {
+            ["png", "jpg", "tif", "bmp", "gif", "webp", "dat"][r.below(7) as usize]
+        } else {
+            ext.as_str()
+        };
         let p = dir.join(format!("f{}.{ext}", it % 8));
         std::fs::write(&p, &data).unwrap();
         // The call must return (Ok or Err) without panicking, hanging or allocating absurdly.
@@ -127,7 +155,12 @@ fn corrupted_image_files_never_panic_or_explode() {
             Ok(img) => {
                 ok += 1;
                 assert!(img.width() >= 1 && img.height() >= 1);
-                assert!((img.width() as u64) * (img.height() as u64) <= 400_000_000, "it {it}: {}x{}", img.width(), img.height());
+                assert!(
+                    (img.width() as u64) * (img.height() as u64) <= 400_000_000,
+                    "it {it}: {}x{}",
+                    img.width(),
+                    img.height()
+                );
             }
             Err(_) => err += 1,
         }
@@ -162,9 +195,13 @@ fn project_parser_survives_mutations_and_noise() {
             // Whatever was accepted must be fully sanitised and re-serialisable.
             let s = &p.settings;
             assert!((36..=2400).contains(&s.dpi), "it {it}");
-            assert!(s.margins_mm.iter().all(|m| m.is_finite() && *m >= 0.0), "it {it}");
+            assert!(
+                s.margins_mm.iter().all(|m| m.is_finite() && *m >= 0.0),
+                "it {it}"
+            );
             assert!(s.sauvola_k.is_finite() && (0.0..=1.0).contains(&s.sauvola_k));
-            let again = Project::parse(&p.to_text(None), None).unwrap_or_else(|e| panic!("it {it}: re-parse failed: {e:#}\n{}", p.to_text(None)));
+            let again = Project::parse(&p.to_text(None), None)
+                .unwrap_or_else(|e| panic!("it {it}: re-parse failed: {e:#}\n{}", p.to_text(None)));
             assert_eq!(again.sheets.len(), p.sheets.len(), "it {it}");
         }
     }
@@ -186,11 +223,15 @@ fn tesseract_output_parsers_survive_garbage() {
         if let Some(d) = ocr::parse_osd(&o) {
             assert!(matches!(d, 0 | 90 | 180 | 270));
         }
-        let lang: String = (0..r.below(12)).map(|_| char::from_u32(r.below(0x250) as u32).unwrap_or('x')).collect();
+        let lang: String = (0..r.below(12))
+            .map(|_| char::from_u32(r.below(0x250) as u32).unwrap_or('x'))
+            .collect();
         let _ = ocr::valid_lang(&lang);
     }
     // known bad language strings must stay rejected
-    for bad in ["", "--psm", "a;b", "a b", "$(x)", "ron+", "+", "../x", "a\nb", "a\0b"] {
+    for bad in [
+        "", "--psm", "a;b", "a b", "$(x)", "ron+", "+", "../x", "a\nb", "a\0b",
+    ] {
         assert!(!ocr::valid_lang(bad), "{bad:?}");
     }
 }
@@ -200,18 +241,35 @@ fn file_name_helpers_survive_weird_names() {
     let mut r = Rng(seed() ^ 0x55);
     let alphabet: Vec<char> = "ab01#.-_ /\\é日\u{0}\n tif png%".chars().collect();
     for _ in 0..iters(30_000) {
-        let a: String = (0..r.below(24)).map(|_| alphabet[r.below(alphabet.len() as u64) as usize]).collect();
-        let b: String = (0..r.below(24)).map(|_| alphabet[r.below(alphabet.len() as u64) as usize]).collect();
+        let a: String = (0..r.below(24))
+            .map(|_| alphabet[r.below(alphabet.len() as u64) as usize])
+            .collect();
+        let b: String = (0..r.below(24))
+            .map(|_| alphabet[r.below(alphabet.len() as u64) as usize])
+            .collect();
         let (x, y) = (files::natural_cmp(&a, &b), files::natural_cmp(&b, &a));
-        assert_eq!(x, y.reverse(), "natural_cmp must be antisymmetric: {a:?} {b:?}");
+        assert_eq!(
+            x,
+            y.reverse(),
+            "natural_cmp must be antisymmetric: {a:?} {b:?}"
+        );
         assert_eq!(files::natural_cmp(&a, &a), std::cmp::Ordering::Equal);
         let _ = files::is_image(std::path::Path::new(&a));
         let _ = files::split_frame(std::path::Path::new(&a));
     }
     // transitivity on a sample
-    let mut v: Vec<String> = (0..200).map(|_| (0..r.below(10)).map(|_| alphabet[r.below(12) as usize]).collect()).collect();
+    let mut v: Vec<String> = (0..200)
+        .map(|_| {
+            (0..r.below(10))
+                .map(|_| alphabet[r.below(12) as usize])
+                .collect()
+        })
+        .collect();
     v.sort_by(|a, b| files::natural_cmp(a, b));
     for w in v.windows(2) {
-        assert_ne!(files::natural_cmp(&w[0], &w[1]), std::cmp::Ordering::Greater);
+        assert_ne!(
+            files::natural_cmp(&w[0], &w[1]),
+            std::cmp::Ordering::Greater
+        );
     }
 }

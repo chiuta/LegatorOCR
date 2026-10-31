@@ -12,8 +12,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 pub mod files;
+pub mod profiles;
 pub mod project;
 pub use legatorocr_ocr as ocr;
+
+pub use legatorocr_pdf::Meta as PdfMeta;
 
 #[derive(Debug, Clone)]
 pub struct PdfExport {
@@ -22,12 +25,31 @@ pub struct PdfExport {
     /// `Some` → run OCR and embed an invisible text layer.
     pub ocr: Option<OcrOptions>,
     pub title: Option<String>,
+    /// Author / subject / keywords / creation time for the document information.
+    pub meta: PdfMeta,
 }
 
 impl Default for PdfExport {
     fn default() -> Self {
-        Self { quality: 80, ocr: None, title: None }
+        Self {
+            quality: 80,
+            ocr: None,
+            title: None,
+            meta: PdfMeta::default(),
+        }
     }
+}
+
+/// Seconds since the Unix epoch now (honours `SOURCE_DATE_EPOCH` for reproducible builds).
+pub fn now_unix() -> u64 {
+    std::env::var("SOURCE_DATE_EPOCH")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs())
+        })
 }
 
 /// Pages kept from one sheet (each with its OCR words) and how many blank ones were skipped.
@@ -54,20 +76,31 @@ pub struct ExportJob<'a> {
     /// `true` → give every page the same size (the largest ordinary page; outliers
     /// still grow rather than get cropped). Costs a measuring pass over all sheets.
     pub uniform_size: bool,
+    /// `Some` → run OCR for [`ExportResult::text`] / [`ExportResult::hocr`] even when no PDF
+    /// text layer is wanted (the PDF's own OCR options win when both are set).
+    pub text_ocr: Option<OcrOptions>,
 }
 
 /// Pass 1 of uniform sizing: the common page size in mm, from the pages' natural sizes.
 /// Pages more than 25 % larger than the median are treated as outliers.
-pub fn measure_uniform_size(sheets: &[SheetInput], osd: Option<&OcrOptions>, cancel: &AtomicBool) -> Result<Option<(f32, f32)>> {
+pub fn measure_uniform_size(
+    sheets: &[SheetInput],
+    osd: Option<&OcrOptions>,
+    cancel: &AtomicBool,
+) -> Result<Option<(f32, f32)>> {
     let sizes: Vec<Vec<(f32, f32)>> = sheets
         .par_iter()
         .map(|sheet| {
             if cancel.load(Ordering::Relaxed) {
                 bail!("cancelled");
             }
-            let img = load_image(&sheet.path).with_context(|| format!("reading {}", sheet.path.display()))?;
+            let img = load_image(&sheet.path)
+                .with_context(|| format!("reading {}", sheet.path.display()))?;
             let (img, settings) = orient_with_osd(img, &sheet.settings, osd);
-            Ok(legatorocr_core::measure_page(&img, &settings).into_iter().flatten().collect())
+            Ok(legatorocr_core::measure_page(&img, &settings)
+                .into_iter()
+                .flatten()
+                .collect())
         })
         .collect::<Result<_>>()?;
     let all: Vec<(f32, f32)> = sizes.into_iter().flatten().collect();
@@ -78,9 +111,14 @@ pub fn measure_uniform_size(sheets: &[SheetInput], osd: Option<&OcrOptions>, can
         v.sort_by(|a, b| a.total_cmp(b));
         v[v.len() / 2]
     };
-    let (mw, mh) = (median(all.iter().map(|s| s.0).collect()), median(all.iter().map(|s| s.1).collect()));
+    let (mw, mh) = (
+        median(all.iter().map(|s| s.0).collect()),
+        median(all.iter().map(|s| s.1).collect()),
+    );
     let fit = all.iter().filter(|s| s.0 <= mw * 1.25 && s.1 <= mh * 1.25);
-    Ok(Some(fit.fold((mw, mh), |(w, h), s| (w.max(s.0), h.max(s.1)))))
+    Ok(Some(
+        fit.fold((mw, mh), |(w, h), s| (w.max(s.0), h.max(s.1))),
+    ))
 }
 
 #[derive(Debug, Default)]
@@ -91,19 +129,123 @@ pub struct ExportResult {
     pub pages: usize,
     pub words: usize,
     pub skipped_blank: usize,
+    /// Plain text of all pages (pages separated by form feed) when OCR ran.
+    pub text: Option<String>,
+    /// hOCR document when OCR ran.
+    pub hocr: Option<String>,
+}
+
+/// Sheets whose natural page size differs clearly from the book's typical size:
+/// width or height further than `max(6 %, 3·MAD, 5 mm)` from the median. Needs at
+/// least 5 measured pages; returns indices into `sizes` (None entries are ignored).
+pub fn outlier_indices(sizes: &[Option<(f32, f32)>]) -> Vec<usize> {
+    let known: Vec<(usize, (f32, f32))> = sizes
+        .iter()
+        .enumerate()
+        .filter_map(|(i, s)| {
+            s.filter(|(w, h)| w.is_finite() && h.is_finite())
+                .map(|s| (i, s))
+        })
+        .collect();
+    if known.len() < 5 {
+        return Vec::new();
+    }
+    let median = |mut v: Vec<f32>| {
+        v.sort_by(|a, b| a.total_cmp(b));
+        v[v.len() / 2]
+    };
+    let spread = |vals: Vec<f32>| {
+        let m = median(vals.clone());
+        let mad = median(vals.iter().map(|v| (v - m).abs()).collect());
+        (m, (0.06 * m).max(3.0 * 1.4826 * mad).max(5.0))
+    };
+    let (mw, tw) = spread(known.iter().map(|k| k.1 .0).collect());
+    let (mh, th) = spread(known.iter().map(|k| k.1 .1).collect());
+    known
+        .into_iter()
+        .filter(|(_, (w, h))| (w - mw).abs() > tw || (h - mh).abs() > th)
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Measure every sheet and report the outliers as `(sheet index, (width_mm, height_mm))`.
+/// Unreadable sheets are skipped (they show up when exporting).
+pub fn find_outliers(
+    sheets: &[SheetInput],
+    osd: Option<&OcrOptions>,
+    cancel: &AtomicBool,
+) -> Result<Vec<(usize, (f32, f32))>> {
+    let sizes: Vec<Option<(f32, f32)>> = sheets
+        .par_iter()
+        .map(|sheet| {
+            if cancel.load(Ordering::Relaxed) {
+                bail!("cancelled");
+            }
+            let Ok(img) = load_image(&sheet.path) else {
+                return Ok(None);
+            };
+            let (img, settings) = orient_with_osd(img, &sheet.settings, osd);
+            // a split sheet is judged by its larger half
+            Ok(legatorocr_core::measure_page(&img, &settings)
+                .into_iter()
+                .flatten()
+                .max_by(|a, b| (a.0 * a.1).total_cmp(&(b.0 * b.1))))
+        })
+        .collect::<Result<_>>()?;
+    Ok(outlier_indices(&sizes)
+        .into_iter()
+        .filter_map(|i| sizes[i].map(|s| (i, s)))
+        .collect())
 }
 
 /// Save a processed page as an image file. PNG gets its resolution (`pHYs`);
 /// black & white TIFF is written Group 4 compressed (a typical page is ~30 KB);
 /// everything else goes through the `image` crate.
 pub fn save_page_image(pg: &Page, path: &Path) -> Result<()> {
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    save_page_image_q(pg, path, 90)
+}
+
+/// Like [`save_page_image`], with the JPEG quality (1–100) used for `.jpg` / `.jpeg`.
+/// JPEG files carry the page's resolution in their JFIF header.
+pub fn save_page_image_q(pg: &Page, path: &Path, jpeg_quality: u8) -> Result<()> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
     let bytes = match (&pg.image, ext.as_str()) {
-        (legatorocr_core::PageImage::Bw(b), "tif" | "tiff") => legatorocr_pdf::g4::tiff_g4(b, pg.dpi),
+        (legatorocr_core::PageImage::Bw(b), "tif" | "tiff") => {
+            legatorocr_pdf::g4::tiff_g4(b, pg.dpi)
+        }
         (img, "png") => {
             let mut buf = std::io::Cursor::new(Vec::new());
-            img.to_dynamic().write_to(&mut buf, image::ImageFormat::Png)?;
+            img.to_dynamic()
+                .write_to(&mut buf, image::ImageFormat::Png)?;
             png_with_dpi(buf.into_inner(), pg.dpi)
+        }
+        (img, "jpg" | "jpeg") => {
+            use image::codecs::jpeg::{JpegEncoder, PixelDensity};
+            let mut buf = Vec::new();
+            let mut enc = JpegEncoder::new_with_quality(&mut buf, jpeg_quality.clamp(1, 100));
+            enc.set_pixel_density(PixelDensity::dpi(pg.dpi.min(u16::MAX as u32) as u16));
+            match img {
+                legatorocr_core::PageImage::Rgb(i) => enc.encode(
+                    i.as_raw(),
+                    i.width(),
+                    i.height(),
+                    image::ExtendedColorType::Rgb8,
+                )?,
+                other => {
+                    let g = other.to_gray();
+                    enc.encode(
+                        g.as_raw(),
+                        g.width(),
+                        g.height(),
+                        image::ExtendedColorType::L8,
+                    )?
+                }
+            }
+            buf
         }
         (img, _) => {
             img.to_dynamic().save(path)?;
@@ -144,7 +286,8 @@ fn load_tiff_frame(path: &Path, index: u32) -> Result<DynamicImage> {
     use tiff::ColorType;
     let f = std::fs::File::open(path)?;
     let mut d = Decoder::new(std::io::BufReader::new(f))?.with_limits(Limits::default());
-    d.seek_to_image(index as usize).with_context(|| format!("page {} not found", index + 1))?;
+    d.seek_to_image(index as usize)
+        .with_context(|| format!("page {} not found", index + 1))?;
     let (w, h) = d.dimensions()?;
     if (w as u64) * (h as u64) > 400_000_000 {
         bail!("page is too large ({w}×{h})");
@@ -171,7 +314,11 @@ fn load_tiff_frame(path: &Path, index: u32) -> Result<DynamicImage> {
             for y in 0..h as usize {
                 for x in 0..w as usize {
                     let bit = raw[y * rb + x / 8] >> (7 - x % 8) & 1;
-                    g.put_pixel(x as u32, y as u32, image::Luma([if bit == 1 { 255 } else { 0 }]));
+                    g.put_pixel(
+                        x as u32,
+                        y as u32,
+                        image::Luma([if bit == 1 { 255 } else { 0 }]),
+                    );
                 }
             }
             DynamicImage::ImageLuma8(g)
@@ -198,10 +345,81 @@ fn load_tiff_frame(path: &Path, index: u32) -> Result<DynamicImage> {
     })
 }
 
+/// Parsed PDFs, kept for the pages of one book (a few at a time).
+type CachedPdf = (
+    PathBuf,
+    u64,
+    u64,
+    std::sync::Arc<legatorocr_pdf::reader::PdfDoc>,
+);
+static PDF_CACHE: std::sync::Mutex<Vec<CachedPdf>> = std::sync::Mutex::new(Vec::new());
+
+/// The parsed PDF at `path` (cached by path, size and modification time).
+pub fn pdf_doc(path: &Path) -> Result<std::sync::Arc<legatorocr_pdf::reader::PdfDoc>> {
+    let meta = std::fs::metadata(path).with_context(|| path.display().to_string())?;
+    let stamp = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_nanos() as u64);
+    if let Some((_, _, _, d)) = PDF_CACHE
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(p, l, m, _)| p == path && *l == meta.len() && *m == stamp)
+    {
+        return Ok(d.clone());
+    }
+    let data = std::fs::read(path).with_context(|| path.display().to_string())?;
+    let doc = std::sync::Arc::new(
+        legatorocr_pdf::reader::PdfDoc::open(data)
+            .map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?,
+    );
+    let mut c = PDF_CACHE.lock().unwrap();
+    c.retain(|(p, ..)| p != path);
+    if c.len() >= 3 {
+        c.remove(0);
+    }
+    c.push((path.to_path_buf(), meta.len(), stamp, doc.clone()));
+    Ok(doc)
+}
+
+/// Pages in a PDF; 1 when it cannot be read (the error then shows up when the page is loaded).
+pub fn pdf_page_count(path: &Path) -> u32 {
+    pdf_doc(path).map_or(1, |d| d.page_count().max(1) as u32)
+}
+
+fn load_pdf_page(path: &Path, index: u32) -> Result<DynamicImage> {
+    let doc = pdf_doc(path)?;
+    if (index as usize) >= doc.page_count() {
+        bail!(
+            "{}: the PDF has {} page(s), page {} was requested",
+            path.display(),
+            doc.page_count(),
+            index + 1
+        );
+    }
+    let page = doc
+        .page_image(index as usize)
+        .map_err(|e| anyhow::anyhow!("{} page {}: {e}", path.display(), index + 1))?;
+    if page.info.layered {
+        bail!(
+            "{} page {}: the page is built from several images (layered / MRC PDF); only single-scan pages are supported",
+            path.display(),
+            index + 1
+        );
+    }
+    Ok(page.image)
+}
+
 /// Open an image the way a person sees it: EXIF orientation applied (phone and
 /// camera JPEGs), transparency flattened onto white.
 pub fn load_image(path: &Path) -> Result<DynamicImage> {
-    if let (base, Some(n)) = files::split_frame(path) {
+    let (base, frame) = files::split_frame(path);
+    if files::is_pdf(&base) {
+        return load_pdf_page(&base, frame.unwrap_or(1) - 1);
+    }
+    if let Some(n) = frame {
         return load_tiff_frame(&base, n - 1);
     }
     use image::{ImageDecoder, ImageReader};
@@ -213,7 +431,9 @@ pub fn load_image(path: &Path) -> Result<DynamicImage> {
     limits.max_image_height = Some(60_000);
     reader.limits(limits);
     let mut dec = reader.into_decoder()?;
-    let orientation = dec.orientation().unwrap_or(image::metadata::Orientation::NoTransforms);
+    let orientation = dec
+        .orientation()
+        .unwrap_or(image::metadata::Orientation::NoTransforms);
     let mut img = DynamicImage::from_decoder(dec)?;
     img.apply_orientation(orientation);
     if img.color().has_alpha() {
@@ -232,7 +452,11 @@ pub fn load_image(path: &Path) -> Result<DynamicImage> {
 /// Apply OSD-detected rotation to a freshly loaded sheet. Returns the (possibly
 /// rotated) image and the settings to use for it (built-in orientation guess
 /// is switched off once OSD has decided).
-pub fn orient_with_osd(img: DynamicImage, settings: &Settings, osd: Option<&OcrOptions>) -> (DynamicImage, Settings) {
+pub fn orient_with_osd(
+    img: DynamicImage,
+    settings: &Settings,
+    osd: Option<&OcrOptions>,
+) -> (DynamicImage, Settings) {
     let mut s = settings.clone();
     let Some(o) = osd else { return (img, s) };
     match legatorocr_ocr::detect_rotation(&img, o) {
@@ -250,13 +474,19 @@ pub fn orient_with_osd(img: DynamicImage, settings: &Settings, osd: Option<&OcrO
 /// Returns the engine's version string.
 pub fn check_ocr(o: &OcrOptions) -> Result<String> {
     if !legatorocr_ocr::valid_lang(&o.lang) {
-        bail!("invalid OCR language list '{}' (expected e.g. 'eng' or 'ron+eng')", o.lang);
+        bail!(
+            "invalid OCR language list '{}' (expected e.g. 'eng' or 'ron+eng')",
+            o.lang
+        );
     }
     let v = legatorocr_ocr::check_engine(o)?;
     let installed = legatorocr_ocr::list_languages(o)?;
     for l in o.lang.split('+') {
         if !installed.iter().any(|i| i == l) {
-            bail!("OCR language '{l}' is not installed for {v} (installed: {})", installed.join(", "));
+            bail!(
+                "OCR language '{l}' is not installed for {v} (installed: {})",
+                installed.join(", ")
+            );
         }
     }
     Ok(v)
@@ -279,15 +509,30 @@ pub fn run_export(
         bail!("no pages to export");
     }
     let mut writer = job.pdf.as_ref().map(|p| {
-        let mut w = PdfWriter::new(if p.quality == 0 { Compress::Flate } else { Compress::Jpeg(p.quality.min(100)) });
+        let mut w = PdfWriter::new(if p.quality == 0 {
+            Compress::Flate
+        } else {
+            Compress::Jpeg(p.quality.min(100))
+        });
         if let Some(t) = &p.title {
             w.set_title(t);
         }
+        w.set_meta(p.meta.clone());
         w
     });
-    let ocr_opts = job.pdf.as_ref().and_then(|p| p.ocr.as_ref());
+    let ocr_opts = job
+        .pdf
+        .as_ref()
+        .and_then(|p| p.ocr.as_ref())
+        .or(job.text_ocr.as_ref());
+    let mut texts: Vec<String> = Vec::new();
+    let mut hocr_pages: Vec<String> = Vec::new();
     // Pass 1 (optional): a common page size for the whole book.
-    let uniform = if job.uniform_size { measure_uniform_size(job.sheets, job.osd.as_ref(), cancel)? } else { None };
+    let uniform = if job.uniform_size {
+        measure_uniform_size(job.sheets, job.osd.as_ref(), cancel)?
+    } else {
+        None
+    };
     let done = AtomicUsize::new(0);
     let batch = rayon::current_num_threads().max(2);
     let mut res = ExportResult::default();
@@ -301,7 +546,8 @@ pub fn run_export(
                 if cancel.load(Ordering::Relaxed) {
                     bail!("cancelled");
                 }
-                let img = load_image(&sheet.path).with_context(|| format!("reading {}", sheet.path.display()))?;
+                let img = load_image(&sheet.path)
+                    .with_context(|| format!("reading {}", sheet.path.display()))?;
                 let (img, mut settings) = orient_with_osd(img, &sheet.settings, job.osd.as_ref());
                 if settings.page_size_mm.is_none() {
                     settings.page_size_mm = uniform;
@@ -344,6 +590,16 @@ pub fn run_export(
             for (pg, words) in pages {
                 res.pages += 1;
                 res.words += words.len();
+                if ocr_opts.is_some() {
+                    texts.push(legatorocr_ocr::words_to_text(&words));
+                    hocr_pages.push(legatorocr_ocr::hocr_page(
+                        &words,
+                        pg.image.width(),
+                        pg.image.height(),
+                        pg.dpi,
+                        res.pages,
+                    ));
+                }
                 if let Some(w) = writer.as_mut() {
                     w.add_page(&pg, &words);
                 }
@@ -356,6 +612,10 @@ pub fn run_export(
             None => bail!("no pages produced"),
         }
     }
+    if ocr_opts.is_some() {
+        res.text = Some(texts.join("\n\x0c"));
+        res.hocr = Some(legatorocr_ocr::hocr_document(&hocr_pages));
+    }
     res.pdf = writer.map(PdfWriter::finish);
     Ok(res)
 }
@@ -366,7 +626,10 @@ fn short_chain(e: &anyhow::Error) -> String {
     let mut parts: Vec<String> = Vec::new();
     for c in e.chain() {
         let c = c.to_string();
-        if parts.last().is_none_or(|p| !p.contains(c.trim_end_matches('.'))) {
+        if parts
+            .last()
+            .is_none_or(|p| !p.contains(c.trim_end_matches('.')))
+        {
             parts.push(c);
         }
     }
@@ -438,7 +701,53 @@ mod tests {
     }
 
     fn st() -> Settings {
-        Settings { dpi: 150, split: legatorocr_core::SplitMode::Off, deskew: false, auto_orient: false, ..Default::default() }
+        Settings {
+            dpi: 150,
+            split: legatorocr_core::SplitMode::Off,
+            deskew: false,
+            auto_orient: false,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn outliers_are_the_pages_that_differ_clearly() {
+        let mut v: Vec<Option<(f32, f32)>> = (0..20)
+            .map(|i| Some((148.0 + (i % 3) as f32, 210.0 - (i % 2) as f32)))
+            .collect();
+        v[7] = Some((300.0, 210.0));
+        v[12] = None;
+        v[15] = Some((148.0, 120.0));
+        assert_eq!(outlier_indices(&v), vec![7, 15]);
+        assert!(
+            outlier_indices(&v[..4]).is_empty(),
+            "too few pages to judge"
+        );
+        assert!(outlier_indices(&[Some((f32::NAN, 1.0)); 9]).is_empty());
+    }
+
+    #[test]
+    fn jpeg_output_is_a_jpeg_with_resolution() {
+        let pg = Page {
+            image: legatorocr_core::PageImage::Rgb(image::RgbImage::from_pixel(
+                40,
+                30,
+                image::Rgb([120, 80, 40]),
+            )),
+            dpi: 300,
+            skew_deg: 0.0,
+            blank: false,
+            split_index: None,
+            layers: None,
+        };
+        let p = std::env::temp_dir().join(format!("lgr-jpeg-{}.jpg", std::process::id()));
+        save_page_image_q(&pg, &p, 70).unwrap();
+        let b = std::fs::read(&p).unwrap();
+        let _ = std::fs::remove_file(&p);
+        assert_eq!(&b[..3], &[0xFF, 0xD8, 0xFF]);
+        // JFIF APP0: units=1 (dpi), Xdensity=300
+        assert_eq!(&b[13..18], &[1, 0x01, 0x2C, 0x01, 0x2C]);
+        assert_eq!(image::load_from_memory(&b).unwrap().width(), 40);
     }
 
     #[test]
@@ -446,15 +755,31 @@ mod tests {
         let d = tmpdir("a");
         let sheets: Vec<SheetInput> = [("1.png", false), ("2.png", true), ("3.png", false)]
             .iter()
-            .map(|(n, b)| SheetInput { path: sheet(&d, n, *b), settings: st() })
+            .map(|(n, b)| SheetInput {
+                path: sheet(&d, n, *b),
+                settings: st(),
+            })
             .collect();
         let seen = Mutex::new(Vec::new());
         let ticks = AtomicUsize::new(0);
-        let job = ExportJob { sheets: &sheets, pdf: Some(PdfExport::default()), skip_blank: true, keep_going: false, osd: None, uniform_size: false };
-        let r = run_export(&job, &AtomicBool::new(false), &|i, _| seen.lock().unwrap().push(i), &|_, t| {
-            assert_eq!(t, 3);
-            ticks.fetch_add(1, Ordering::Relaxed);
-        })
+        let job = ExportJob {
+            sheets: &sheets,
+            pdf: Some(PdfExport::default()),
+            skip_blank: true,
+            keep_going: false,
+            osd: None,
+            uniform_size: false,
+            text_ocr: None,
+        };
+        let r = run_export(
+            &job,
+            &AtomicBool::new(false),
+            &|i, _| seen.lock().unwrap().push(i),
+            &|_, t| {
+                assert_eq!(t, 3);
+                ticks.fetch_add(1, Ordering::Relaxed);
+            },
+        )
         .unwrap();
         assert_eq!((r.pages, r.skipped_blank, r.words), (2, 1, 0));
         let mut s = seen.into_inner().unwrap();
@@ -469,8 +794,19 @@ mod tests {
     #[test]
     fn images_only_job_has_no_pdf() {
         let d = tmpdir("b");
-        let sheets = vec![SheetInput { path: sheet(&d, "1.png", false), settings: st() }];
-        let job = ExportJob { sheets: &sheets, pdf: None, skip_blank: false, keep_going: false, osd: None, uniform_size: false };
+        let sheets = vec![SheetInput {
+            path: sheet(&d, "1.png", false),
+            settings: st(),
+        }];
+        let job = ExportJob {
+            sheets: &sheets,
+            pdf: None,
+            skip_blank: false,
+            keep_going: false,
+            osd: None,
+            uniform_size: false,
+            text_ocr: None,
+        };
         let r = run_export(&job, &AtomicBool::new(false), &|_, _| {}, &|_, _| {}).unwrap();
         assert!(r.pdf.is_none() && r.pages == 1);
         let _ = std::fs::remove_dir_all(d);
@@ -478,15 +814,45 @@ mod tests {
 
     #[test]
     fn errors_are_reported_with_context() {
-        let none = ExportJob { sheets: &[], pdf: None, skip_blank: false, keep_going: false, osd: None, uniform_size: false };
+        let none = ExportJob {
+            sheets: &[],
+            pdf: None,
+            skip_blank: false,
+            keep_going: false,
+            osd: None,
+            uniform_size: false,
+            text_ocr: None,
+        };
         assert!(run_export(&none, &AtomicBool::new(false), &|_, _| {}, &|_, _| {}).is_err());
-        let bad = [SheetInput { path: "/no/such/file.png".into(), settings: st() }];
-        let job = ExportJob { sheets: &bad, pdf: None, skip_blank: false, keep_going: false, osd: None, uniform_size: false };
+        let bad = [SheetInput {
+            path: "/no/such/file.png".into(),
+            settings: st(),
+        }];
+        let job = ExportJob {
+            sheets: &bad,
+            pdf: None,
+            skip_blank: false,
+            keep_going: false,
+            osd: None,
+            uniform_size: false,
+            text_ocr: None,
+        };
         let e = run_export(&job, &AtomicBool::new(false), &|_, _| {}, &|_, _| {}).unwrap_err();
         assert!(format!("{e:#}").contains("file.png"), "{e:#}");
         let d = tmpdir("c");
-        let ok = [SheetInput { path: sheet(&d, "1.png", false), settings: st() }];
-        let job = ExportJob { sheets: &ok, pdf: None, skip_blank: false, keep_going: false, osd: None, uniform_size: false };
+        let ok = [SheetInput {
+            path: sheet(&d, "1.png", false),
+            settings: st(),
+        }];
+        let job = ExportJob {
+            sheets: &ok,
+            pdf: None,
+            skip_blank: false,
+            keep_going: false,
+            osd: None,
+            uniform_size: false,
+            text_ocr: None,
+        };
         let e = run_export(&job, &AtomicBool::new(true), &|_, _| {}, &|_, _| {}).unwrap_err();
         assert!(e.to_string().contains("cancelled"));
         let _ = std::fs::remove_dir_all(d);
@@ -539,11 +905,28 @@ mod tests {
         let d = tmpdir("f");
         std::fs::write(d.join("bad.png"), b"not an image").unwrap();
         let sheets = vec![
-            SheetInput { path: sheet(&d, "1.png", false), settings: st() },
-            SheetInput { path: d.join("bad.png"), settings: st() },
-            SheetInput { path: sheet(&d, "3.png", false), settings: st() },
+            SheetInput {
+                path: sheet(&d, "1.png", false),
+                settings: st(),
+            },
+            SheetInput {
+                path: d.join("bad.png"),
+                settings: st(),
+            },
+            SheetInput {
+                path: sheet(&d, "3.png", false),
+                settings: st(),
+            },
         ];
-        let mut job = ExportJob { sheets: &sheets, pdf: Some(PdfExport::default()), skip_blank: false, keep_going: true, osd: None, uniform_size: false };
+        let mut job = ExportJob {
+            sheets: &sheets,
+            pdf: Some(PdfExport::default()),
+            skip_blank: false,
+            keep_going: true,
+            osd: None,
+            uniform_size: false,
+            text_ocr: None,
+        };
         let ticks = AtomicUsize::new(0);
         let r = run_export(&job, &AtomicBool::new(false), &|_, _| {}, &|_, _| {
             ticks.fetch_add(1, Ordering::Relaxed);
@@ -551,11 +934,26 @@ mod tests {
         .unwrap();
         assert_eq!((r.pages, r.failed.len()), (2, 1));
         assert!(r.failed[0].0.ends_with("bad.png"));
-        assert_eq!(ticks.load(Ordering::Relaxed), 3, "progress still reaches 100 %");
+        assert_eq!(
+            ticks.load(Ordering::Relaxed),
+            3,
+            "progress still reaches 100 %"
+        );
         job.keep_going = false;
         assert!(run_export(&job, &AtomicBool::new(false), &|_, _| {}, &|_, _| {}).is_err());
-        let only_bad = [SheetInput { path: d.join("bad.png"), settings: st() }];
-        job = ExportJob { sheets: &only_bad, pdf: None, skip_blank: false, keep_going: true, osd: None, uniform_size: false };
+        let only_bad = [SheetInput {
+            path: d.join("bad.png"),
+            settings: st(),
+        }];
+        job = ExportJob {
+            sheets: &only_bad,
+            pdf: None,
+            skip_blank: false,
+            keep_going: true,
+            osd: None,
+            uniform_size: false,
+            text_ocr: None,
+        };
         let e = run_export(&job, &AtomicBool::new(false), &|_, _| {}, &|_, _| {}).unwrap_err();
         assert!(e.to_string().contains("bad.png"), "{e}");
         let _ = std::fs::remove_dir_all(d);
@@ -573,9 +971,26 @@ mod tests {
             sauvola_k: f32::NAN,
             ..st()
         };
-        let sheets = [SheetInput { path: sheet(&d, "1.png", false), settings: wild }];
-        let job = ExportJob { sheets: &sheets, pdf: Some(PdfExport::default()), skip_blank: false, keep_going: false, osd: None, uniform_size: false };
-        let r = run_export(&job, &AtomicBool::new(false), &|_, pg| assert!(pg.image.width() < 20_000), &|_, _| {}).unwrap();
+        let sheets = [SheetInput {
+            path: sheet(&d, "1.png", false),
+            settings: wild,
+        }];
+        let job = ExportJob {
+            sheets: &sheets,
+            pdf: Some(PdfExport::default()),
+            skip_blank: false,
+            keep_going: false,
+            osd: None,
+            uniform_size: false,
+            text_ocr: None,
+        };
+        let r = run_export(
+            &job,
+            &AtomicBool::new(false),
+            &|_, pg| assert!(pg.image.width() < 20_000),
+            &|_, _| {},
+        )
+        .unwrap();
         assert_eq!(r.pages, 1);
         let _ = std::fs::remove_dir_all(d);
     }
@@ -607,14 +1022,38 @@ mod tests {
             p
         };
         let sheets = vec![
-            SheetInput { path: sheet(&d, "big.png", false), settings: st() },
-            SheetInput { path: small, settings: st() },
+            SheetInput {
+                path: sheet(&d, "big.png", false),
+                settings: st(),
+            },
+            SheetInput {
+                path: small,
+                settings: st(),
+            },
         ];
         let dims = Mutex::new(Vec::new());
         for uniform in [false, true] {
             dims.lock().unwrap().clear();
-            let job = ExportJob { sheets: &sheets, pdf: None, skip_blank: false, keep_going: false, osd: None, uniform_size: uniform };
-            run_export(&job, &AtomicBool::new(false), &|i, pg| dims.lock().unwrap().push((i, pg.image.width(), pg.image.height())), &|_, _| {}).unwrap();
+            let job = ExportJob {
+                sheets: &sheets,
+                pdf: None,
+                skip_blank: false,
+                keep_going: false,
+                osd: None,
+                uniform_size: uniform,
+                text_ocr: None,
+            };
+            run_export(
+                &job,
+                &AtomicBool::new(false),
+                &|i, pg| {
+                    dims.lock()
+                        .unwrap()
+                        .push((i, pg.image.width(), pg.image.height()))
+                },
+                &|_, _| {},
+            )
+            .unwrap();
             let mut v = dims.lock().unwrap().clone();
             v.sort();
             if uniform {
@@ -633,18 +1072,28 @@ mod tests {
         let path = d.join("book.tif");
         {
             let mut enc = TiffEncoder::new(std::fs::File::create(&path).unwrap()).unwrap();
-            enc.write_image::<colortype::Gray8>(30, 20, &vec![200u8; 600]).unwrap();
-            enc.write_image::<colortype::Gray8>(40, 25, &vec![100u8; 1000]).unwrap();
-            enc.write_image::<colortype::RGB8>(10, 10, &vec![7u8; 300]).unwrap();
+            enc.write_image::<colortype::Gray8>(30, 20, &vec![200u8; 600])
+                .unwrap();
+            enc.write_image::<colortype::Gray8>(40, 25, &vec![100u8; 1000])
+                .unwrap();
+            enc.write_image::<colortype::RGB8>(10, 10, &vec![7u8; 300])
+                .unwrap();
         }
         assert_eq!(files::tiff_frame_count(&path), 3);
         let pages = files::collect_images(std::slice::from_ref(&path));
         assert_eq!(pages.len(), 3);
         assert!(pages[1].to_string_lossy().ends_with("book.tif#2"));
-        let dims: Vec<(u32, u32)> = pages.iter().map(|p| load_image(p).unwrap()).map(|i| (i.width(), i.height())).collect();
+        let dims: Vec<(u32, u32)> = pages
+            .iter()
+            .map(|p| load_image(p).unwrap())
+            .map(|i| (i.width(), i.height()))
+            .collect();
         assert_eq!(dims, vec![(30, 20), (40, 25), (10, 10)]);
         // an explicit page, a missing page, and a real file whose name contains '#'
-        assert_eq!(files::collect_images(std::slice::from_ref(&pages[2])), vec![pages[2].clone()]);
+        assert_eq!(
+            files::collect_images(std::slice::from_ref(&pages[2])),
+            vec![pages[2].clone()]
+        );
         assert!(load_image(&d.join("book.tif#7")).is_err());
         let odd = d.join("odd#1.png");
         GrayImage::from_pixel(5, 5, Luma([9])).save(&odd).unwrap();
@@ -662,10 +1111,20 @@ mod tests {
                 b.set(x, y, (x * 7 + y * 13) % 11 < 3 || (60..90).contains(&x));
             }
         }
-        let pg = Page { image: PageImage::Bw(b.clone()), dpi: 300, skew_deg: 0.0, blank: false, split_index: None, layers: None };
+        let pg = Page {
+            image: PageImage::Bw(b.clone()),
+            dpi: 300,
+            skew_deg: 0.0,
+            blank: false,
+            split_index: None,
+            layers: None,
+        };
         let tif = d.join("p.tif");
         save_page_image(&pg, &tif).unwrap();
-        let mut dec = tiff::decoder::Decoder::new(std::io::BufReader::new(std::fs::File::open(&tif).unwrap())).unwrap();
+        let mut dec = tiff::decoder::Decoder::new(std::io::BufReader::new(
+            std::fs::File::open(&tif).unwrap(),
+        ))
+        .unwrap();
         assert_eq!(dec.dimensions().unwrap(), (203, 67));
         let back = load_image(&tif).unwrap().to_luma8();
         for y in 0..67 {
@@ -680,5 +1139,48 @@ mod tests {
         assert_eq!(image::open(&png).unwrap().width(), 203); // still a valid PNG
         assert_eq!(files::detect_dpi(&png), Some(300));
         let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+#[cfg(test)]
+mod pdf_input_tests {
+    use super::*;
+    use legatorocr_pdf::{Compress, PdfWriter};
+
+    fn make_pdf(path: &Path, pages: usize) {
+        let mut w = PdfWriter::new(Compress::Flate);
+        for i in 0..pages {
+            let img = image::RgbImage::from_pixel(120, 160, image::Rgb([250 - i as u8, 250, 250]));
+            w.add_page(
+                &Page {
+                    image: legatorocr_core::PageImage::Rgb(img),
+                    dpi: 200,
+                    skew_deg: 0.0,
+                    blank: false,
+                    split_index: None,
+                    layers: None,
+                },
+                &[],
+            );
+        }
+        std::fs::write(path, w.finish()).unwrap();
+    }
+
+    #[test]
+    fn pdf_pages_expand_load_and_report_dpi() {
+        let dir = std::env::temp_dir().join(format!("lgr-pdfin-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("book.pdf");
+        make_pdf(&f, 3);
+        let pages = files::collect_images(std::slice::from_ref(&dir));
+        assert_eq!(pages.len(), 3);
+        assert!(pages[2].to_string_lossy().ends_with("book.pdf#3"));
+        let img = load_image(&pages[1]).unwrap();
+        assert_eq!((img.width(), img.height()), (120, 160));
+        assert_eq!(files::detect_dpi(&pages[0]), Some(200));
+        assert!(load_image(&dir.join("book.pdf#9")).is_err());
+        std::fs::write(dir.join("bad.pdf"), b"%PDF-1.4 nonsense").unwrap();
+        assert!(load_image(&dir.join("bad.pdf")).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

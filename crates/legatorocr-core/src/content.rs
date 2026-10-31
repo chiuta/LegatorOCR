@@ -38,14 +38,28 @@ pub fn detect_content(ink: &BitImage, dpi: u32) -> Option<Rect> {
     }
     // Label 8-connected components of the dilated grid.
     let mut label = vec![u32::MAX; gw * gh];
-    struct Comp { blocks: Vec<usize>, mass: u64, x0: usize, y0: usize, x1: usize, y1: usize }
+    struct Comp {
+        blocks: Vec<usize>,
+        mass: u64,
+        x0: usize,
+        y0: usize,
+        x1: usize,
+        y1: usize,
+    }
     let mut comps: Vec<Comp> = Vec::new();
     for s in 0..gw * gh {
         if !dil[s] || label[s] != u32::MAX {
             continue;
         }
         let id = comps.len() as u32;
-        let mut c = Comp { blocks: vec![], mass: 0, x0: usize::MAX, y0: usize::MAX, x1: 0, y1: 0 };
+        let mut c = Comp {
+            blocks: vec![],
+            mass: 0,
+            x0: usize::MAX,
+            y0: usize::MAX,
+            x1: 0,
+            y1: 0,
+        };
         let mut st = vec![s];
         label[s] = id;
         while let Some(p) = st.pop() {
@@ -109,7 +123,11 @@ pub fn detect_content(ink: &BitImage, dpi: u32) -> Option<Rect> {
             continue;
         }
         // The four wedges around a deskewed page form an almost empty frame.
-        if near && cw * 20 >= gw * 17 && ch * 20 >= gh * 17 && (c.blocks.len() as f64) < 0.12 * (cw * ch) as f64 {
+        if near
+            && cw * 20 >= gw * 17
+            && ch * 20 >= gh * 17
+            && (c.blocks.len() as f64) < 0.12 * (cw * ch) as f64
+        {
             continue;
         }
         for &p in &c.blocks {
@@ -169,7 +187,10 @@ mod tests {
             }
         }
         let r = detect_content(&img, 300).expect("text found");
-        assert!(r.x >= 290 && r.y >= 390 && r.x + r.w <= 910 && r.y + r.h <= 1210, "{r:?}");
+        assert!(
+            r.x >= 290 && r.y >= 390 && r.x + r.w <= 910 && r.y + r.h <= 1210,
+            "{r:?}"
+        );
     }
 
     #[test]

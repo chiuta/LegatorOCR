@@ -28,3 +28,12 @@ python3 scripts/fuzz_cli.py --runs 400 --seed 1
 Defects this suite has found so far (all fixed, each with a regression test or a permanent fuzz case):
 unbounded skew search (`tan` → 37 GB table), unbounded output canvas (margins/page size × dpi),
 absurd coordinates in the OCR text layer.
+
+## Added with the clean-up / PDF-input release
+
+- `core/tests/fuzz_extreme.rs` now randomises every clean-up field (invert, levels, sharpen, punch holes, fingers,
+  lines, drop-out, despeckle strength) and the `auto` threshold.
+- `core/tests/cleanup_e2e.rs`: end-to-end behaviour of each clean-up stage through `process_page`.
+- `pdf` reader: byte-level mutation of valid PDFs plus random bodies (`reader::tests::garbage_never_panics`);
+  production CCITT G4 decoder checked against the encoder (300 random pages, damaged streams) and against the independent test decoder.
+- `engine/tests/pdf_qpdf.rs`: reads files rewritten by qpdf (`--object-streams=generate`, `--qdf`, `--linearize`).

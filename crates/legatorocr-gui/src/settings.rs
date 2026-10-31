@@ -73,10 +73,22 @@ pub struct UiSettings {
     pub output_dpi: u32,
     pub picture_sensitivity: f32,
     pub hybrid_dpi: u32,
+    pub auto_invert: bool,
+    pub auto_levels: bool,
+    pub sharpen: f32,
+    pub punch_holes: bool,
+    pub fingers: bool,
+    pub remove_lines: bool,
+    pub dropout: legatorocr_core::Dropout,
+    pub despeckle_strength: f32,
     pub align: (HAlign, VAlign),
     pub pdf_quality: u8,
     pub skip_blank: bool,
     pub uniform_size: bool,
+    /// Write `<pdf>.txt` / `<pdf>.hocr` next to the PDF when OCR is on.
+    pub sidecar_txt: bool,
+    pub sidecar_hocr: bool,
+    pub pdf_author: String,
     pub ocr: bool,
     pub ocr_langs: Vec<String>,
     pub psm: u32,
@@ -106,10 +118,21 @@ impl Default for UiSettings {
             output_dpi: 0,
             picture_sensitivity: 0.5,
             hybrid_dpi: 100,
+            auto_invert: false,
+            auto_levels: false,
+            sharpen: 0.0,
+            punch_holes: false,
+            fingers: false,
+            remove_lines: false,
+            dropout: legatorocr_core::Dropout::Off,
+            despeckle_strength: 1.0,
             align: (HAlign::Center, VAlign::Center),
             pdf_quality: 80,
             skip_blank: false,
             uniform_size: false,
+            sidecar_txt: false,
+            sidecar_hocr: false,
+            pdf_author: String::new(),
             ocr: false,
             ocr_langs: vec!["eng".into()],
             psm: 3,
@@ -169,16 +192,31 @@ impl UiSettings {
             output_dpi: (self.output_dpi >= 36).then_some(self.output_dpi),
             picture_sensitivity: self.picture_sensitivity,
             hybrid_bg_dpi: self.hybrid_dpi,
+            auto_invert: self.auto_invert,
+            auto_levels: self.auto_levels,
+            sharpen: self.sharpen,
+            punch_holes: self.punch_holes,
+            fingers: self.fingers,
+            remove_lines: self.remove_lines,
+            dropout: self.dropout,
+            despeckle_strength: self.despeckle_strength,
         }
     }
 
     /// Everything as a project (global settings + extras); `sheets` as given.
     pub fn to_project(&self, sheets: Vec<(PathBuf, SheetAdj)>) -> Project {
-        let mut p = Project { settings: self.to_core(&SheetAdjust::default()), extra: Vec::new(), sheets };
+        let mut p = Project {
+            settings: self.to_core(&SheetAdjust::default()),
+            extra: Vec::new(),
+            sheets,
+        };
         let e = &mut p.extra;
         e.push(("pdf_quality".into(), self.pdf_quality.to_string()));
         e.push(("skip_blank".into(), self.skip_blank.to_string()));
         e.push(("uniform_size".into(), self.uniform_size.to_string()));
+        e.push(("sidecar_txt".into(), self.sidecar_txt.to_string()));
+        e.push(("sidecar_hocr".into(), self.sidecar_hocr.to_string()));
+        e.push(("pdf_author".into(), self.pdf_author.clone()));
         e.push(("use_osd".into(), self.use_osd.to_string()));
         e.push(("ocr".into(), self.ocr.to_string()));
         e.push(("ocr_langs".into(), self.ocr_langs.join("+")));
@@ -234,21 +272,46 @@ impl UiSettings {
         self.output_dpi = c.output_dpi.unwrap_or(0);
         self.picture_sensitivity = c.picture_sensitivity;
         self.hybrid_dpi = c.hybrid_bg_dpi;
+        self.auto_invert = c.auto_invert;
+        self.auto_levels = c.auto_levels;
+        self.sharpen = c.sharpen;
+        self.punch_holes = c.punch_holes;
+        self.fingers = c.fingers;
+        self.remove_lines = c.remove_lines;
+        self.dropout = c.dropout;
+        self.despeckle_strength = c.despeckle_strength;
         if let Some(v) = p.get("pdf_quality").and_then(|v| v.parse::<u8>().ok()) {
             self.pdf_quality = v.min(100);
         }
         let flag = |k: &str| p.get(k).map(|v| matches!(v, "true" | "yes" | "on" | "1"));
         self.skip_blank = flag("skip_blank").unwrap_or(self.skip_blank);
         self.uniform_size = flag("uniform_size").unwrap_or(self.uniform_size);
+        self.sidecar_txt = flag("sidecar_txt").unwrap_or(self.sidecar_txt);
+        self.sidecar_hocr = flag("sidecar_hocr").unwrap_or(self.sidecar_hocr);
+        if let Some(a) = p.get("pdf_author") {
+            self.pdf_author = a.chars().take(200).collect();
+        }
         self.use_osd = flag("use_osd").unwrap_or(self.use_osd);
         self.ocr = flag("ocr").unwrap_or(self.ocr);
         if let Some(l) = p.get("ocr_langs") {
-            self.ocr_langs = l.split('+').filter(|x| legatorocr_engine::ocr::valid_lang(x)).map(str::to_string).collect();
+            self.ocr_langs = l
+                .split('+')
+                .filter(|x| legatorocr_engine::ocr::valid_lang(x))
+                .map(str::to_string)
+                .collect();
         }
-        if let Some(v) = p.get("psm").and_then(|v| v.parse::<u32>().ok()).filter(|v| (1..=13).contains(v)) {
+        if let Some(v) = p
+            .get("psm")
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|v| (1..=13).contains(v))
+        {
             self.psm = v;
         }
-        if let Some(v) = p.get("min_conf").and_then(|v| v.parse::<f32>().ok()).filter(|v| v.is_finite()) {
+        if let Some(v) = p
+            .get("min_conf")
+            .and_then(|v| v.parse::<f32>().ok())
+            .filter(|v| v.is_finite())
+        {
             self.min_conf = v.clamp(0.0, 100.0);
         }
         if let Some(v) = p.get("tesseract").filter(|v| !v.is_empty()) {
@@ -313,6 +376,14 @@ mod tests {
             psm: 6,
             pdf_quality: 55,
             uniform_size: true,
+            sidecar_hocr: true,
+            pdf_author: "Ana".into(),
+            auto_invert: true,
+            sharpen: 0.8,
+            punch_holes: true,
+            remove_lines: true,
+            dropout: legatorocr_core::Dropout::Blue,
+            despeckle_strength: 2.5,
             ..Default::default()
         };
         let text = s.to_project(vec![]).to_text(None);
@@ -321,11 +392,41 @@ mod tests {
         assert_eq!(back.to_core(&SheetAdjust::default()).dpi, 450);
         assert_eq!(back.mode, ModeChoice::Hybrid);
         assert_eq!(back.threshold, legatorocr_core::Threshold::Nick);
-        assert_eq!((back.page_size, back.custom_w, back.custom_h), (PageSizeChoice::Custom, 123.0, 234.0));
+        assert_eq!(
+            (back.page_size, back.custom_w, back.custom_h),
+            (PageSizeChoice::Custom, 123.0, 234.0)
+        );
         assert_eq!(back.align, (HAlign::Left, VAlign::Bottom));
-        assert_eq!((back.output_dpi, back.dewarp, back.normalize_bg), (200, true, true));
-        assert_eq!((back.ocr, back.ocr_langs.clone(), back.psm), (true, vec!["ron".into(), "eng".into()], 6));
+        assert_eq!(
+            (back.output_dpi, back.dewarp, back.normalize_bg),
+            (200, true, true)
+        );
+        assert_eq!(
+            (back.ocr, back.ocr_langs.clone(), back.psm),
+            (true, vec!["ron".into(), "eng".into()], 6)
+        );
         assert_eq!((back.pdf_quality, back.uniform_size), (55, true));
+        assert_eq!(
+            (
+                back.sidecar_txt,
+                back.sidecar_hocr,
+                back.pdf_author.as_str()
+            ),
+            (false, true, "Ana")
+        );
+        assert_eq!(
+            (
+                back.auto_invert,
+                back.punch_holes,
+                back.remove_lines,
+                back.fingers
+            ),
+            (true, true, true, false)
+        );
+        assert_eq!(
+            (back.sharpen, back.despeckle_strength, back.dropout),
+            (0.8, 2.5, legatorocr_core::Dropout::Blue)
+        );
     }
 
     #[test]
@@ -333,7 +434,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("lgr-cfg-{}", std::process::id()));
         let path = dir.join("nested").join("settings.lgr");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let s = UiSettings { mode: ModeChoice::Mixed, margin_mm: 7.5, ..Default::default() };
+        let s = UiSettings {
+            mode: ModeChoice::Mixed,
+            margin_mm: 7.5,
+            ..Default::default()
+        };
         let mut p = s.to_project(Vec::new());
         p.extra.push(("lang".into(), "hu".into()));
         p.save(&path).unwrap();
@@ -358,8 +463,17 @@ mod tests {
 
     #[test]
     fn per_sheet_overrides_win() {
-        let s = UiSettings { split: SplitChoice::Auto, deskew: true, ..Default::default() };
-        let c = s.to_core(&SheetAdjust { rotate_quarters: 5, split: Some(SplitChoice::Off), skew_deg: Some(-1.5), ..Default::default() });
+        let s = UiSettings {
+            split: SplitChoice::Auto,
+            deskew: true,
+            ..Default::default()
+        };
+        let c = s.to_core(&SheetAdjust {
+            rotate_quarters: 5,
+            split: Some(SplitChoice::Off),
+            skew_deg: Some(-1.5),
+            ..Default::default()
+        });
         assert_eq!(c.split, SplitMode::Off);
         assert_eq!(c.rotate_quarters, 1); // 5 mod 4
         assert_eq!(c.manual_skew_deg, Some(-1.5));
@@ -378,7 +492,10 @@ mod tests {
         s.custom_w = 3.0; // clamped to a sane minimum
         assert_eq!(s.page_size_mm().unwrap().0, 10.0);
         s.mode = ModeChoice::Bw;
-        assert_eq!(s.to_core(&SheetAdjust::default()).mode, OutputMode::BlackWhite);
+        assert_eq!(
+            s.to_core(&SheetAdjust::default()).mode,
+            OutputMode::BlackWhite
+        );
     }
 
     #[test]

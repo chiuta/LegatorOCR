@@ -66,13 +66,20 @@ pub fn find_gutter(ink: &BitImage) -> Option<u32> {
         // One half is (almost) blank — a chapter end, a verso. Still a spread when the
         // other half holds a page-sized body and the sparse half holds only a small mark.
         let extent = |c: &[f32]| -> usize {
-            match (c.iter().position(|&v| v > 0.0), c.iter().rposition(|&v| v > 0.0)) {
+            match (
+                c.iter().position(|&v| v > 0.0),
+                c.iter().rposition(|&v| v > 0.0),
+            ) {
                 (Some(a), Some(b)) => b - a + 1,
                 _ => 0,
             }
         };
         let (ext_l, ext_r) = (extent(&col[..cut as usize]), extent(&col[cut as usize..]));
-        let (big, small) = if left > right { (ext_l, ext_r) } else { (ext_r, ext_l) };
+        let (big, small) = if left > right {
+            (ext_l, ext_r)
+        } else {
+            (ext_r, ext_l)
+        };
         if big * 100 < w * 30 || small * 100 > w * 20 {
             return None;
         }

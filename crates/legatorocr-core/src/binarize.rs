@@ -8,7 +8,11 @@ pub fn otsu_threshold(g: &GrayImage) -> u8 {
         hist[*p as usize] += 1;
     }
     let total: u64 = hist.iter().sum();
-    let sum_all: f64 = hist.iter().enumerate().map(|(i, &c)| i as f64 * c as f64).sum();
+    let sum_all: f64 = hist
+        .iter()
+        .enumerate()
+        .map(|(i, &c)| i as f64 * c as f64)
+        .sum();
     let (mut w_b, mut sum_b) = (0u64, 0f64);
     let (mut best, mut best_t) = (-1.0f64, 128u8);
     for t in 0..256usize {
@@ -57,11 +61,21 @@ pub enum Threshold {
     Bradley,
     /// One global Otsu threshold (clean, evenly lit scans).
     Otsu,
+    /// Per page: try the local methods on a small copy and keep the one that leaves
+    /// the fewest isolated specks while giving a plausible amount of ink.
+    Auto,
 }
 
 impl Threshold {
-    pub const ALL: [Threshold; 6] =
-        [Threshold::Sauvola, Threshold::Wolf, Threshold::Niblack, Threshold::Nick, Threshold::Bradley, Threshold::Otsu];
+    pub const ALL: [Threshold; 7] = [
+        Threshold::Sauvola,
+        Threshold::Wolf,
+        Threshold::Niblack,
+        Threshold::Nick,
+        Threshold::Bradley,
+        Threshold::Otsu,
+        Threshold::Auto,
+    ];
     pub fn name(self) -> &'static str {
         match self {
             Threshold::Sauvola => "sauvola",
@@ -70,10 +84,13 @@ impl Threshold {
             Threshold::Nick => "nick",
             Threshold::Bradley => "bradley",
             Threshold::Otsu => "otsu",
+            Threshold::Auto => "auto",
         }
     }
     pub fn from_name(s: &str) -> Option<Threshold> {
-        Threshold::ALL.into_iter().find(|t| t.name().eq_ignore_ascii_case(s))
+        Threshold::ALL
+            .into_iter()
+            .find(|t| t.name().eq_ignore_ascii_case(s))
     }
 }
 
@@ -83,7 +100,13 @@ const FLAT_SD: f64 = 7.0;
 /// Mean and standard deviation of every pixel's `(2r+1)²` neighbourhood for the
 /// rows `y0..y1`, via sliding column sums: O(1) per pixel and O(width) memory (an
 /// integral image of a 35-megapixel scan would need over half a gigabyte).
-fn band_stats(g: &GrayImage, r: usize, y0: usize, y1: usize, mut f: impl FnMut(usize, &[f32], &[f32])) {
+fn band_stats(
+    g: &GrayImage,
+    r: usize,
+    y0: usize,
+    y1: usize,
+    mut f: impl FnMut(usize, &[f32], &[f32]),
+) {
     let (w, h) = (g.width() as usize, g.height() as usize);
     let raw = g.as_raw();
     let mut cs = vec![0u32; w];
@@ -143,6 +166,47 @@ fn band_stats(g: &GrayImage, r: usize, y0: usize, y1: usize, mut f: impl FnMut(u
     }
 }
 
+/// Pick the local method for [`Threshold::Auto`]. Candidates are run on a copy of at
+/// most ≈150 dpi (`window` ≈ dpi/3). Score = share of ink that is isolated specks
+/// (noise) plus a penalty when the ink share leaves the 1–30 % band typical of print.
+fn choose_auto(g: &GrayImage, window: u32, k: f32) -> Threshold {
+    let factor = (window.min(30_000) * 3 / 150).max(1);
+    let small = crate::transform::downscale_gray(g, factor);
+    let win = ((window / factor) | 1).max(9);
+    let mut best = (f64::MAX, Threshold::Sauvola);
+    for m in [
+        Threshold::Sauvola,
+        Threshold::Wolf,
+        Threshold::Nick,
+        Threshold::Bradley,
+    ] {
+        let mut bw = threshold(&small, m, win, k);
+        let total = bw.count_ink() as f64;
+        let area = (bw.w as f64 * bw.h as f64).max(1.0);
+        if total == 0.0 {
+            continue;
+        }
+        let removed = bw.despeckle(3) as f64;
+        let _ = removed;
+        let kept = bw.count_ink() as f64;
+        let noise = (total - kept) / total;
+        let frac = total / area;
+        let penalty = if frac < 0.01 {
+            (0.01 - frac) * 20.0
+        } else if frac > 0.30 {
+            (frac - 0.30) * 4.0
+        } else {
+            0.0
+        };
+        let score = noise + penalty;
+        // ties (and near ties) keep Sauvola, the safest default
+        if score < best.0 - 0.01 {
+            best = (score, m);
+        }
+    }
+    best.1
+}
+
 /// Binarise with the chosen local method. `window` ≈ one third of an inch is a good size.
 /// Ink = 1. Rows are processed in parallel bands.
 pub fn threshold(g: &GrayImage, method: Threshold, window: u32, k: f32) -> BitImage {
@@ -154,6 +218,9 @@ pub fn threshold(g: &GrayImage, method: Threshold, window: u32, k: f32) -> BitIm
     }
     if method == Threshold::Otsu {
         return global(g, otsu_threshold(g));
+    }
+    if method == Threshold::Auto {
+        return threshold(g, choose_auto(g, window, k), window, k);
     }
     let r = ((window | 1) / 2) as usize;
     let area_px = ((2 * r + 1) * (2 * r + 1)) as f64;
@@ -167,7 +234,9 @@ pub fn threshold(g: &GrayImage, method: Threshold, window: u32, k: f32) -> BitIm
             .map(|b| {
                 let (y0, y1) = (b * band, ((b + 1) * band).min(h));
                 let mut smax = 0f32;
-                band_stats(g, r, y0, y1, |_, _, sd| smax = sd.iter().fold(smax, |a, &v| a.max(v)));
+                band_stats(g, r, y0, y1, |_, _, sd| {
+                    smax = sd.iter().fold(smax, |a, &v| a.max(v))
+                });
                 let gmin = raw[y0 * w..y1 * w].iter().copied().min().unwrap_or(255) as f32;
                 (gmin, smax)
             })
@@ -175,33 +244,38 @@ pub fn threshold(g: &GrayImage, method: Threshold, window: u32, k: f32) -> BitIm
     } else {
         (0.0, 1.0)
     };
-    out.data.par_chunks_mut(band * w).enumerate().for_each(|(b, chunk)| {
-        let y0 = b * band;
-        let y1 = (y0 + chunk.len() / w).min(h);
-        band_stats(g, r, y0, y1, |y, mean, sd| {
-            let row = &raw[y * w..(y + 1) * w];
-            let o = &mut chunk[(y - y0) * w..(y - y0 + 1) * w];
-            for x in 0..w {
-                let (m, s) = (mean[x] as f64, sd[x] as f64);
-                let t = match method {
-                    Threshold::Sauvola => m * (1.0 + k * (s / 128.0 - 1.0)),
-                    Threshold::Wolf => {
-                        let a = k.max(0.05);
-                        (1.0 - a) * m + a * gmin as f64 + a * (s / (smax as f64).max(1.0)) * (m - gmin as f64)
-                    }
-                    // Niblack and NICK have no notion of "empty paper": with their plain
-                    // formulas sensor noise turns into specks. Flat neighbourhoods are paper.
-                    Threshold::Niblack if s < FLAT_SD => 0.0,
-                    Threshold::Nick if s < FLAT_SD => 0.0,
-                    Threshold::Niblack => m - 0.67 * k * s,
-                    Threshold::Nick => m - 0.67 * k * (s * s + m * m / area_px).sqrt(),
-                    Threshold::Bradley => m * (1.0 - 0.5 * k),
-                    Threshold::Otsu => unreachable!(),
-                };
-                o[x] = (row[x] as f64 <= t) as u8;
-            }
+    out.data
+        .par_chunks_mut(band * w)
+        .enumerate()
+        .for_each(|(b, chunk)| {
+            let y0 = b * band;
+            let y1 = (y0 + chunk.len() / w).min(h);
+            band_stats(g, r, y0, y1, |y, mean, sd| {
+                let row = &raw[y * w..(y + 1) * w];
+                let o = &mut chunk[(y - y0) * w..(y - y0 + 1) * w];
+                for x in 0..w {
+                    let (m, s) = (mean[x] as f64, sd[x] as f64);
+                    let t = match method {
+                        Threshold::Sauvola => m * (1.0 + k * (s / 128.0 - 1.0)),
+                        Threshold::Wolf => {
+                            let a = k.max(0.05);
+                            (1.0 - a) * m
+                                + a * gmin as f64
+                                + a * (s / (smax as f64).max(1.0)) * (m - gmin as f64)
+                        }
+                        // Niblack and NICK have no notion of "empty paper": with their plain
+                        // formulas sensor noise turns into specks. Flat neighbourhoods are paper.
+                        Threshold::Niblack if s < FLAT_SD => 0.0,
+                        Threshold::Nick if s < FLAT_SD => 0.0,
+                        Threshold::Niblack => m - 0.67 * k * s,
+                        Threshold::Nick => m - 0.67 * k * (s * s + m * m / area_px).sqrt(),
+                        Threshold::Bradley => m * (1.0 - 0.5 * k),
+                        Threshold::Otsu | Threshold::Auto => unreachable!(),
+                    };
+                    o[x] = (row[x] as f64 <= t) as u8;
+                }
+            });
         });
-    });
     out
 }
 
@@ -216,51 +290,50 @@ mod tests {
     use image::Luma;
 
     #[allow(dead_code)]
-/// Straightforward integral-image Sauvola, kept as the correctness reference.
-/// `window` is forced odd; `k` ≈ 0.2–0.5; dynamic range R = 128.
-pub fn sauvola_reference(g: &GrayImage, window: u32, k: f32) -> BitImage {
-    let (w, h) = (g.width() as usize, g.height() as usize);
-    let mut out = BitImage::new(w as u32, h as u32);
-    if w == 0 || h == 0 {
-        return out;
-    }
-    let stride = w + 1;
-    let mut sum = vec![0u64; stride * (h + 1)];
-    let mut sq = vec![0u64; stride * (h + 1)];
-    let raw = g.as_raw();
-    for y in 0..h {
-        let (mut rs, mut rq) = (0u64, 0u64);
-        for x in 0..w {
-            let v = raw[y * w + x] as u64;
-            rs += v;
-            rq += v * v;
-            sum[(y + 1) * stride + x + 1] = sum[y * stride + x + 1] + rs;
-            sq[(y + 1) * stride + x + 1] = sq[y * stride + x + 1] + rq;
+    /// Straightforward integral-image Sauvola, kept as the correctness reference.
+    /// `window` is forced odd; `k` ≈ 0.2–0.5; dynamic range R = 128.
+    pub fn sauvola_reference(g: &GrayImage, window: u32, k: f32) -> BitImage {
+        let (w, h) = (g.width() as usize, g.height() as usize);
+        let mut out = BitImage::new(w as u32, h as u32);
+        if w == 0 || h == 0 {
+            return out;
         }
-    }
-    let r = ((window | 1) / 2) as usize;
-    for y in 0..h {
-        let y0 = y.saturating_sub(r);
-        let y1 = (y + r + 1).min(h);
-        for x in 0..w {
-            let x0 = x.saturating_sub(r);
-            let x1 = (x + r + 1).min(w);
-            let area = ((y1 - y0) * (x1 - x0)) as f64;
-            let s = sum[y1 * stride + x1] + sum[y0 * stride + x0]
-                - sum[y0 * stride + x1]
-                - sum[y1 * stride + x0];
-            let q = sq[y1 * stride + x1] + sq[y0 * stride + x0]
-                - sq[y0 * stride + x1]
-                - sq[y1 * stride + x0];
-            let mean = s as f64 / area;
-            let var = (q as f64 / area - mean * mean).max(0.0);
-            let t = mean * (1.0 + k as f64 * (var.sqrt() / 128.0 - 1.0));
-            out.data[y * w + x] = (raw[y * w + x] as f64 <= t) as u8;
+        let stride = w + 1;
+        let mut sum = vec![0u64; stride * (h + 1)];
+        let mut sq = vec![0u64; stride * (h + 1)];
+        let raw = g.as_raw();
+        for y in 0..h {
+            let (mut rs, mut rq) = (0u64, 0u64);
+            for x in 0..w {
+                let v = raw[y * w + x] as u64;
+                rs += v;
+                rq += v * v;
+                sum[(y + 1) * stride + x + 1] = sum[y * stride + x + 1] + rs;
+                sq[(y + 1) * stride + x + 1] = sq[y * stride + x + 1] + rq;
+            }
         }
+        let r = ((window | 1) / 2) as usize;
+        for y in 0..h {
+            let y0 = y.saturating_sub(r);
+            let y1 = (y + r + 1).min(h);
+            for x in 0..w {
+                let x0 = x.saturating_sub(r);
+                let x1 = (x + r + 1).min(w);
+                let area = ((y1 - y0) * (x1 - x0)) as f64;
+                let s = sum[y1 * stride + x1] + sum[y0 * stride + x0]
+                    - sum[y0 * stride + x1]
+                    - sum[y1 * stride + x0];
+                let q = sq[y1 * stride + x1] + sq[y0 * stride + x0]
+                    - sq[y0 * stride + x1]
+                    - sq[y1 * stride + x0];
+                let mean = s as f64 / area;
+                let var = (q as f64 / area - mean * mean).max(0.0);
+                let t = mean * (1.0 + k as f64 * (var.sqrt() / 128.0 - 1.0));
+                out.data[y * w + x] = (raw[y * w + x] as f64 <= t) as u8;
+            }
+        }
+        out
     }
-    out
-}
-
 
     fn page() -> GrayImage {
         let (w, h) = (300u32, 220u32);
@@ -270,9 +343,14 @@ pub fn sauvola_reference(g: &GrayImage, window: u32, k: f32) -> BitImage {
             for x in 0..w {
                 seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
                 let noise = (seed >> 24) as f32 / 255.0 * 10.0;
-                let light = 120.0 + 110.0 * (x as f32 / w as f32) * (0.6 + 0.4 * y as f32 / h as f32);
+                let light =
+                    120.0 + 110.0 * (x as f32 / w as f32) * (0.6 + 0.4 * y as f32 / h as f32);
                 let ink = (y / 9) % 3 == 0 && (x / 4) % 3 != 0 && (20..h - 20).contains(&y);
-                g.put_pixel(x, y, Luma([(if ink { light * 0.3 } else { light } + noise).min(255.0) as u8]));
+                g.put_pixel(
+                    x,
+                    y,
+                    Luma([(if ink { light * 0.3 } else { light } + noise).min(255.0) as u8]),
+                );
             }
         }
         g
@@ -286,7 +364,10 @@ pub fn sauvola_reference(g: &GrayImage, window: u32, k: f32) -> BitImage {
             let b = sauvola_reference(&g, window, 0.3);
             let diff = a.data.iter().zip(&b.data).filter(|(x, y)| x != y).count();
             // floating-point summation order may flip a handful of borderline pixels
-            assert!(diff * 5000 < a.data.len(), "window {window}: {diff} pixels differ");
+            assert!(
+                diff * 5000 < a.data.len(),
+                "window {window}: {diff} pixels differ"
+            );
         }
     }
 
@@ -298,7 +379,10 @@ pub fn sauvola_reference(g: &GrayImage, window: u32, k: f32) -> BitImage {
             let ink = b.count_ink() as f64 / b.data.len() as f64;
             assert!((0.04..0.45).contains(&ink), "{m:?}: ink fraction {ink}");
             // a paper-only row band (top margin) must stay almost empty
-            let top: u64 = (0..8).flat_map(|y| (0..300).map(move |x| (x, y))).map(|(x, y)| b.get(x, y) as u64).sum();
+            let top: u64 = (0..8)
+                .flat_map(|y| (0..300).map(move |x| (x, y)))
+                .map(|(x, y)| b.get(x, y) as u64)
+                .sum();
             assert!(top < 8 * 300 / 8, "{m:?}: {top} specks in blank rows");
         }
     }

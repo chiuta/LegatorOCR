@@ -18,7 +18,7 @@ Sources read for this comparison:
 | Deskew | ✔ auto + manual | – | ✔ auto + manual |
 | Content box | ✔ auto + hand-edit | thresholds tuned ("Select content") | ✔ auto, shadow/edge rejection; per-page numeric nudge; ✘ drag-editing |
 | Margins / page size / alignment | ✔ | manual scaling, "Sub" layout mode | ✔ margins, fixed size, alignment, **book-wide uniform size** |
-| Binarisation methods | Otsu / Sauvola / Wolf | many: Niblack, Sauvola, Wolf, N.I.C.K., Gatos, Singh, Fox, Dynamic Window, OBBPM, LAAB, LCaM … | ◐ six: Sauvola, Wolf, Niblack, NICK, Bradley, Otsu |
+| Binarisation methods | Otsu / Sauvola / Wolf | many: Niblack, Sauvola, Wolf, N.I.C.K., Gatos, Singh, Fox, Dynamic Window, OBBPM, LAAB, LCaM … | ◐ six + **auto per page** |
 | Despeckle | ✔ | synced with original | ✔ |
 | Picture zones (mixed output) | ✔ hand-drawn zones | – | ◐ **automatic** detection (mid-tone share), no hand-drawn zones |
 | Fill / erase zones | ✔ | – | ✘ |
@@ -29,6 +29,11 @@ Sources read for this comparison:
 | PDF with text layer | ✘ (images only) | ✘ | ✔ own writer + Tesseract OCR layer |
 | Compact PDF | – | – | ✔ CCITT G4, **hybrid** layered pages (mask + low-res background + patches) |
 | Multi-page TIFF input | ✔ | – | ✔ |
+| PDF input | – | – | ✔ single-scan pages (no JBIG2 / layered) |
+| Punch holes, fingers, ruled lines, colour drop-out, negatives, levels, sharpen | partial (fill zones) | partial | ✔ automatic, off by default |
+| Profiles | – | – | ✔ built-in + user, CLI and GUI |
+| Text / hOCR sidecar, PDF metadata | ✘ | ✘ | ✔ |
+| Outlier page report | – | – | ✔ `--report-outliers` |
 | GUI languages | many | many | 8 (ro en fr it es pt de hu) |
 | Platforms | Win / macOS / Linux | same | same (Windows/macOS from CI, unverified here) |
 
@@ -44,5 +49,5 @@ Sources read for this comparison:
 
 ## Not done (honest list)
 
-Hand-drawn picture / fill zones, dewarp control points, perspective correction, the extra binarisers of the Experimental
+Hand-drawn picture / fill zones, dewarp control points, perspective correction (phone photos), JBIG2, PDF/A, the extra binarisers of the Experimental
 fork, EM denoise / deblur filters, and any verification on Windows or macOS.

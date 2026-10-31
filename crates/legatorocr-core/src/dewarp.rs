@@ -23,7 +23,11 @@ fn peaks(profile: &[f32], min_gap: usize, floor: f32) -> Vec<(f32, f32)> {
         if v >= floor && v > profile[y - 1] && v >= profile[y + 1] {
             let (a, b, c) = (profile[y - 1], v, profile[y + 1]);
             let d = a - 2.0 * b + c;
-            let off = if d.abs() > 1e-6 { 0.5 * (a - c) / d } else { 0.0 };
+            let off = if d.abs() > 1e-6 {
+                0.5 * (a - c) / d
+            } else {
+                0.0
+            };
             let yy = y as f32 + off.clamp(-0.5, 0.5);
             match out.last_mut() {
                 Some(last) if yy - last.0 < min_gap as f32 => {
@@ -95,7 +99,9 @@ pub fn dewarp(img: &RgbImage, dpi: u32, fill: Rgb<u8>) -> Option<RgbImage> {
         }
         for (i, p) in pk.iter().enumerate() {
             if !used[i] {
-                chains.push(Chain { pts: vec![(s, p.0)] });
+                chains.push(Chain {
+                    pts: vec![(s, p.0)],
+                });
                 next_active.push(chains.len() - 1);
             }
         }
@@ -154,8 +160,13 @@ pub fn dewarp(img: &RgbImage, dpi: u32, fill: Rgb<u8>) -> Option<RgbImage> {
     lines.dedup_by(|b, a| b.0 - a.0 < min_gap as f32);
 
     // Plausibility: a real bend is smooth and moderate.
-    let max_off = lines.iter().flat_map(|l| l.1.iter()).fold(0f32, |m, v| m.max(v.abs()));
-    let range = |l: &(f32, Vec<f32>)| l.1.iter().cloned().fold(f32::MIN, f32::max) - l.1.iter().cloned().fold(f32::MAX, f32::min);
+    let max_off = lines
+        .iter()
+        .flat_map(|l| l.1.iter())
+        .fold(0f32, |m, v| m.max(v.abs()));
+    let range = |l: &(f32, Vec<f32>)| {
+        l.1.iter().cloned().fold(f32::MIN, f32::max) - l.1.iter().cloned().fold(f32::MAX, f32::min)
+    };
     let bent = lines.iter().filter(|l| range(l) >= 1.5).count();
     if max_off < 1.5 || max_off > 0.05 * h as f32 || bent * 3 < lines.len() || lines.len() < 5 {
         return None;
@@ -194,7 +205,11 @@ pub fn dewarp(img: &RgbImage, dpi: u32, fill: Rgb<u8>) -> Option<RgbImage> {
             } else if k >= table.len() {
                 (table.len() - 1, table.len() - 1, 0.0)
             } else {
-                (k - 1, k, (yf - table[k - 1].0) / (table[k].0 - table[k - 1].0))
+                (
+                    k - 1,
+                    k,
+                    (yf - table[k - 1].0) / (table[k].0 - table[k - 1].0),
+                )
             };
             for x in 0..fw {
                 let off = table[a].1[x] * (1.0 - t) + table[b].1[x] * t;
@@ -243,7 +258,11 @@ mod tests {
     fn sharp(img: &RgbImage) -> f64 {
         let g = imageops::grayscale(img);
         let rows: Vec<f64> = (0..g.height())
-            .map(|y| (0..g.width()).filter(|&x| g.get_pixel(x, y)[0] < 100).count() as f64)
+            .map(|y| {
+                (0..g.width())
+                    .filter(|&x| g.get_pixel(x, y)[0] < 100)
+                    .count() as f64
+            })
             .collect();
         rows.windows(2).map(|p| (p[1] - p[0]).powi(2)).sum()
     }
@@ -255,7 +274,9 @@ mod tests {
 
     #[test]
     fn curved_lines_become_straight() {
-        let img = page(900, 1200, |u| 26.0 * (u - 0.5) * (u - 0.5) * 4.0 - 8.0 * (u - 0.5));
+        let img = page(900, 1200, |u| {
+            26.0 * (u - 0.5) * (u - 0.5) * 4.0 - 8.0 * (u - 0.5)
+        });
         let before = sharp(&img);
         let flat = dewarp(&img, 150, Rgb([238; 3])).expect("bend detected");
         assert_eq!(flat.dimensions(), img.dimensions());

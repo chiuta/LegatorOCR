@@ -3,27 +3,153 @@
 //! Ink = black. Tables are from ITU-T T.4 / T.6.
 
 const WHITE_TERM: [&str; 64] = [
-    "00110101","000111","0111","1000","1011","1100","1110","1111","10011","10100","00111","01000","001000","000011","110100","110101",
-    "101010","101011","0100111","0001100","0001000","0010111","0000011","0000100","0101000","0101011","0010011","0100100","0011000","00000010","00000011","00011010",
-    "00011011","00010010","00010011","00010100","00010101","00010110","00010111","00101000","00101001","00101010","00101011","00101100","00101101","00000100","00000101","00001010",
-    "00001011","01010010","01010011","01010100","01010101","00100100","00100101","01011000","01011001","01011010","01011011","01001010","01001011","00110010","00110011","00110100",
+    "00110101", "000111", "0111", "1000", "1011", "1100", "1110", "1111", "10011", "10100",
+    "00111", "01000", "001000", "000011", "110100", "110101", "101010", "101011", "0100111",
+    "0001100", "0001000", "0010111", "0000011", "0000100", "0101000", "0101011", "0010011",
+    "0100100", "0011000", "00000010", "00000011", "00011010", "00011011", "00010010", "00010011",
+    "00010100", "00010101", "00010110", "00010111", "00101000", "00101001", "00101010", "00101011",
+    "00101100", "00101101", "00000100", "00000101", "00001010", "00001011", "01010010", "01010011",
+    "01010100", "01010101", "00100100", "00100101", "01011000", "01011001", "01011010", "01011011",
+    "01001010", "01001011", "00110010", "00110011", "00110100",
 ];
 const WHITE_MAKEUP: [&str; 27] = [
-    "11011","10010","010111","0110111","00110110","00110111","01100100","01100101","01101000","01100111","011001100","011001101","011010010","011010011",
-    "011010100","011010101","011010110","011010111","011011000","011011001","011011010","011011011","010011000","010011001","010011010","011000","010011011",
+    "11011",
+    "10010",
+    "010111",
+    "0110111",
+    "00110110",
+    "00110111",
+    "01100100",
+    "01100101",
+    "01101000",
+    "01100111",
+    "011001100",
+    "011001101",
+    "011010010",
+    "011010011",
+    "011010100",
+    "011010101",
+    "011010110",
+    "011010111",
+    "011011000",
+    "011011001",
+    "011011010",
+    "011011011",
+    "010011000",
+    "010011001",
+    "010011010",
+    "011000",
+    "010011011",
 ];
 const BLACK_TERM: [&str; 64] = [
-    "0000110111","010","11","10","011","0011","0010","00011","000101","000100","0000100","0000101","0000111","00000100","00000111","000011000",
-    "0000010111","0000011000","0000001000","00001100111","00001101000","00001101100","00000110111","00000101000","00000010111","00000011000","000011001010","000011001011","000011001100","000011001101","000001101000","000001101001",
-    "000001101010","000001101011","000011010010","000011010011","000011010100","000011010101","000011010110","000011010111","000001101100","000001101101","000011011010","000011011011","000001010100","000001010101","000001010110","000001010111",
-    "000001100100","000001100101","000001010010","000001010011","000000100100","000000110111","000000111000","000000100111","000000101000","000001011000","000001011001","000000101011","000000101100","000001011010","000001100110","000001100111",
+    "0000110111",
+    "010",
+    "11",
+    "10",
+    "011",
+    "0011",
+    "0010",
+    "00011",
+    "000101",
+    "000100",
+    "0000100",
+    "0000101",
+    "0000111",
+    "00000100",
+    "00000111",
+    "000011000",
+    "0000010111",
+    "0000011000",
+    "0000001000",
+    "00001100111",
+    "00001101000",
+    "00001101100",
+    "00000110111",
+    "00000101000",
+    "00000010111",
+    "00000011000",
+    "000011001010",
+    "000011001011",
+    "000011001100",
+    "000011001101",
+    "000001101000",
+    "000001101001",
+    "000001101010",
+    "000001101011",
+    "000011010010",
+    "000011010011",
+    "000011010100",
+    "000011010101",
+    "000011010110",
+    "000011010111",
+    "000001101100",
+    "000001101101",
+    "000011011010",
+    "000011011011",
+    "000001010100",
+    "000001010101",
+    "000001010110",
+    "000001010111",
+    "000001100100",
+    "000001100101",
+    "000001010010",
+    "000001010011",
+    "000000100100",
+    "000000110111",
+    "000000111000",
+    "000000100111",
+    "000000101000",
+    "000001011000",
+    "000001011001",
+    "000000101011",
+    "000000101100",
+    "000001011010",
+    "000001100110",
+    "000001100111",
 ];
 const BLACK_MAKEUP: [&str; 27] = [
-    "0000001111","000011001000","000011001001","000001011011","000000110011","000000110100","000000110101","0000001101100","0000001101101","0000001001010","0000001001011","0000001001100","0000001001101","0000001110010",
-    "0000001110011","0000001110100","0000001110101","0000001110110","0000001110111","0000001010010","0000001010011","0000001010100","0000001010101","0000001011010","0000001011011","0000001100100","0000001100101",
+    "0000001111",
+    "000011001000",
+    "000011001001",
+    "000001011011",
+    "000000110011",
+    "000000110100",
+    "000000110101",
+    "0000001101100",
+    "0000001101101",
+    "0000001001010",
+    "0000001001011",
+    "0000001001100",
+    "0000001001101",
+    "0000001110010",
+    "0000001110011",
+    "0000001110100",
+    "0000001110101",
+    "0000001110110",
+    "0000001110111",
+    "0000001010010",
+    "0000001010011",
+    "0000001010100",
+    "0000001010101",
+    "0000001011010",
+    "0000001011011",
+    "0000001100100",
+    "0000001100101",
 ];
 const EXT_MAKEUP: [&str; 13] = [
-    "00000001000","00000001100","00000001101","000000010010","000000010011","000000010100","000000010101","000000010110","000000010111","000000011100","000000011101","000000011110","000000011111",
+    "00000001000",
+    "00000001100",
+    "00000001101",
+    "000000010010",
+    "000000010011",
+    "000000010100",
+    "000000010101",
+    "000000010110",
+    "000000010111",
+    "000000011100",
+    "000000011101",
+    "000000011110",
+    "000000011111",
 ];
 
 struct Bits {
@@ -63,10 +189,18 @@ fn put_run(b: &mut Bits, mut len: usize, black: bool) {
         len -= 1792 + i * 64;
     } else if len >= 64 {
         let i = len / 64 - 1;
-        b.put(if black { BLACK_MAKEUP[i] } else { WHITE_MAKEUP[i] });
+        b.put(if black {
+            BLACK_MAKEUP[i]
+        } else {
+            WHITE_MAKEUP[i]
+        });
         len %= 64;
     }
-    b.put(if black { BLACK_TERM[len] } else { WHITE_TERM[len] });
+    b.put(if black {
+        BLACK_TERM[len]
+    } else {
+        WHITE_TERM[len]
+    });
 }
 
 /// First changing element strictly right of `from` with colour opposite to `colour`
@@ -88,7 +222,11 @@ fn next_change(row: &[bool], from: isize, colour: bool) -> usize {
 /// Encode `rows` (each `true` = ink) of equal width. No EOFB is needed in PDF
 /// (`/EndOfBlock true` default tolerates it); one is appended for standalone TIFF use.
 pub fn encode(width: usize, rows: impl Iterator<Item = Vec<bool>>) -> Vec<u8> {
-    let mut bits = Bits { out: Vec::new(), acc: 0, n: 0 };
+    let mut bits = Bits {
+        out: Vec::new(),
+        acc: 0,
+        n: 0,
+    };
     let mut reference = vec![false; width];
     for cur in rows {
         let mut a0: isize = -1;
@@ -155,7 +293,10 @@ pub fn encode(width: usize, rows: impl Iterator<Item = Vec<bool>>) -> Vec<u8> {
 /// Encode a [`legatorocr_core::BitImage`] page.
 pub fn encode_bitimage(b: &legatorocr_core::BitImage) -> Vec<u8> {
     let w = b.w as usize;
-    encode(w, (0..b.h as usize).map(|y| b.data[y * w..(y + 1) * w].iter().map(|&v| v != 0).collect()))
+    encode(
+        w,
+        (0..b.h as usize).map(|y| b.data[y * w..(y + 1) * w].iter().map(|&v| v != 0).collect()),
+    )
 }
 
 /// A complete single-strip, Group 4 compressed TIFF (readable by every TIFF tool).
@@ -176,11 +317,11 @@ pub fn tiff_g4(b: &legatorocr_core::BitImage, dpi: u32) -> Vec<u8> {
         (256, 4, 1, b.w),
         (257, 4, 1, b.h),
         (258, 3, 1, 1),
-        (259, 3, 1, 4),    // CCITT Group 4
-        (262, 3, 1, 0),    // WhiteIsZero
-        (273, 4, 1, 8),    // strip offset
-        (277, 3, 1, 1),    // samples per pixel
-        (278, 4, 1, b.h),  // rows per strip
+        (259, 3, 1, 4),   // CCITT Group 4
+        (262, 3, 1, 0),   // WhiteIsZero
+        (273, 4, 1, 8),   // strip offset
+        (277, 3, 1, 1),   // samples per pixel
+        (278, 4, 1, b.h), // rows per strip
         (279, 4, 1, strip.len() as u32),
         (282, 5, 1, res_off),
         (283, 5, 1, res_off + 8),
@@ -199,6 +340,181 @@ pub fn tiff_g4(b: &legatorocr_core::BitImage, dpi: u32) -> Vec<u8> {
         out.extend_from_slice(&1u32.to_le_bytes());
     }
     out
+}
+
+// ---------------------------------------------------------------------------
+// Decoder (T.6 / Group 4), tolerant: a damaged stream yields white rows for the
+// rest of the image instead of an error, like a viewer would show it.
+
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
+type RunTable = HashMap<(u8, u16), usize>;
+
+fn run_tables() -> &'static (RunTable, RunTable) {
+    static T: OnceLock<(RunTable, RunTable)> = OnceLock::new();
+    T.get_or_init(|| {
+        let build = |term: &[&str; 64], makeup: &[&str; 27]| {
+            let mut m = RunTable::new();
+            let mut add = |code: &str, v: usize| {
+                m.insert((code.len() as u8, u16::from_str_radix(code, 2).unwrap()), v);
+            };
+            for (i, c) in term.iter().enumerate() {
+                add(c, i);
+            }
+            for (i, c) in makeup.iter().enumerate() {
+                add(c, 64 * (i + 1));
+            }
+            for (i, c) in EXT_MAKEUP.iter().enumerate() {
+                add(c, 1792 + 64 * i);
+            }
+            m
+        };
+        (
+            build(&WHITE_TERM, &WHITE_MAKEUP),
+            build(&BLACK_TERM, &BLACK_MAKEUP),
+        )
+    })
+}
+
+struct BitReader<'a> {
+    d: &'a [u8],
+    pos: usize,
+}
+
+impl BitReader<'_> {
+    fn bit(&mut self) -> Option<u16> {
+        let b = *self.d.get(self.pos / 8)?;
+        let v = (b >> (7 - self.pos % 8)) & 1;
+        self.pos += 1;
+        Some(v as u16)
+    }
+    fn align(&mut self) {
+        self.pos = self.pos.div_ceil(8) * 8;
+    }
+}
+
+fn read_run(r: &mut BitReader, table: &RunTable) -> Option<usize> {
+    let mut total = 0;
+    loop {
+        let (mut code, mut len) = (0u16, 0u8);
+        let v = loop {
+            code = (code << 1) | r.bit()?;
+            len += 1;
+            if let Some(&v) = table.get(&(len, code)) {
+                break v;
+            }
+            if len > 13 {
+                return None;
+            }
+        };
+        total += v;
+        if v < 64 {
+            return Some(total);
+        }
+    }
+}
+
+/// Decode a Group 4 stream into `rows` rows of `width` pixels (`true` = black run).
+/// Returns the rows and how many were decoded before an error (the rest are white).
+/// `byte_align` = the PDF `EncodedByteAlign` flag.
+pub fn decode(data: &[u8], width: usize, rows: usize, byte_align: bool) -> (Vec<Vec<bool>>, usize) {
+    let (white, black) = run_tables();
+    let mut r = BitReader { d: data, pos: 0 };
+    let mut reference = vec![false; width];
+    let mut out: Vec<Vec<bool>> = Vec::with_capacity(rows.min(1 << 16));
+    let mut ok = 0;
+    'rows: while out.len() < rows {
+        if byte_align {
+            r.align();
+        }
+        let mut cur = vec![false; width];
+        let mut a0: isize = -1;
+        let mut colour = false;
+        while a0 < width as isize {
+            let mut x = (a0 + 1).max(0) as usize;
+            let b1 = loop {
+                if x >= width {
+                    break width;
+                }
+                let prev = if x == 0 { false } else { reference[x - 1] };
+                if reference[x] != prev && reference[x] != colour {
+                    break x;
+                }
+                x += 1;
+            };
+            let b2 = if b1 >= width {
+                width
+            } else {
+                let mut x = b1 + 1;
+                while x < width && reference[x] != colour {
+                    x += 1;
+                }
+                x
+            };
+            // mode code (prefix-free, at most 7 bits)
+            let (mut code, mut len) = (0u16, 0u8);
+            let mode = loop {
+                let Some(b) = r.bit() else { break 'rows };
+                code = (code << 1) | b;
+                len += 1;
+                match (len, code) {
+                    (1, 1) => break 0i32,
+                    (3, 0b011) => break 1,
+                    (3, 0b010) => break -1,
+                    (3, 0b001) => break 100,
+                    (4, 0b0001) => break 200,
+                    (6, 0b000011) => break 2,
+                    (6, 0b000010) => break -2,
+                    (7, 0b0000011) => break 3,
+                    (7, 0b0000010) => break -3,
+                    (7.., _) => break 'rows, // EOFB, extension codes or garbage
+                    _ => {}
+                }
+            };
+            let fill = |cur: &mut Vec<bool>, from: usize, to: usize, c: bool| {
+                if c {
+                    for v in cur.iter_mut().take(to.min(width)).skip(from) {
+                        *v = true;
+                    }
+                }
+            };
+            match mode {
+                200 => {
+                    fill(&mut cur, a0.max(0) as usize, b2, colour);
+                    a0 = b2 as isize;
+                }
+                100 => {
+                    let (t1, t2) = if colour {
+                        (black, white)
+                    } else {
+                        (white, black)
+                    };
+                    let (Some(r1), Some(r2)) = (read_run(&mut r, t1), read_run(&mut r, t2)) else {
+                        break 'rows;
+                    };
+                    let s = a0.max(0) as usize;
+                    fill(&mut cur, s, s + r1, colour);
+                    fill(&mut cur, s + r1, s + r1 + r2, !colour);
+                    a0 = (s + r1 + r2) as isize;
+                }
+                d => {
+                    let a1 = b1 as isize + d as isize;
+                    if a1 < a0.max(0) || a1 as usize > width {
+                        break 'rows;
+                    }
+                    fill(&mut cur, a0.max(0) as usize, a1 as usize, colour);
+                    a0 = a1;
+                    colour = !colour;
+                }
+            }
+        }
+        reference = cur.clone();
+        out.push(cur);
+        ok += 1;
+    }
+    out.resize(rows, vec![false; width]);
+    (out, ok)
 }
 
 #[cfg(test)]
@@ -221,7 +537,11 @@ mod tests {
     }
 
     fn run_table(black: bool) -> HashMap<String, usize> {
-        let (term, makeup) = if black { (&BLACK_TERM, &BLACK_MAKEUP) } else { (&WHITE_TERM, &WHITE_MAKEUP) };
+        let (term, makeup) = if black {
+            (&BLACK_TERM, &BLACK_MAKEUP)
+        } else {
+            (&WHITE_TERM, &WHITE_MAKEUP)
+        };
         let mut m = HashMap::new();
         for (i, c) in term.iter().enumerate() {
             m.insert(c.to_string(), i);
@@ -296,7 +616,7 @@ mod tests {
                         "1" => break 0i32,
                         "011" => break 1,
                         "010" => break -1,
-                        "001" => break 100, // horizontal
+                        "001" => break 100,  // horizontal
                         "0001" => break 200, // pass
                         "000011" => break 2,
                         "000010" => break -2,
@@ -378,7 +698,10 @@ mod tests {
     #[test]
     fn independent_decoder_agrees_on_extreme_pages() {
         let mut s = 0x1234_5678_9ABC_DEF1u64;
-        let n: u64 = std::env::var("LEGATOROCR_FUZZ_ITERS").ok().and_then(|v| v.parse().ok()).unwrap_or(600);
+        let n: u64 = std::env::var("LEGATOROCR_FUZZ_ITERS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(600);
         for it in 0..n {
             let kind = it % 12;
             let w = match rnd(&mut s) % 7 {
@@ -393,9 +716,35 @@ mod tests {
             let h = 1 + (rnd(&mut s) % 40) as usize;
             let img = make(kind, w, h, &mut s);
             let enc = encode(w, img.iter().cloned());
-            let dec = decode(&enc, w, h).unwrap_or_else(|| panic!("decode failed: it={it} kind={kind} {w}x{h}"));
+            let dec = decode(&enc, w, h)
+                .unwrap_or_else(|| panic!("decode failed: it={it} kind={kind} {w}x{h}"));
             assert_eq!(dec, img, "mismatch it={it} kind={kind} {w}x{h}");
         }
+    }
+
+    #[test]
+    fn production_decoder_round_trips_and_survives_damage() {
+        let mut seed = 0x1234_5678_9abc_def0u64;
+        for it in 0..300u64 {
+            let w = 1 + (rnd(&mut seed) % 400) as usize;
+            let h = 1 + (rnd(&mut seed) % 60) as usize;
+            let img = make(it % 6, w, h, &mut seed);
+            let enc = encode(w, img.iter().cloned());
+            let (back, ok) = super::decode(&enc, w, h, false);
+            assert_eq!(ok, h, "iteration {it}");
+            assert_eq!(back, img, "iteration {it} {w}x{h}");
+            // damaged / truncated streams must not panic and must keep the shape
+            let mut bad = enc.clone();
+            if !bad.is_empty() {
+                let i = (rnd(&mut seed) as usize) % bad.len();
+                bad[i] ^= 0xFF;
+                bad.truncate(1 + (rnd(&mut seed) as usize) % bad.len());
+            }
+            let (b2, _) = super::decode(&bad, w, h, false);
+            assert_eq!((b2.len(), b2[0].len()), (h, w));
+        }
+        assert_eq!(super::decode(&[], 5, 3, true).0, vec![vec![false; 5]; 3]);
+        assert_eq!(super::decode(&[0xFF], 0, 4, false).0.len(), 4);
     }
 
     #[test]
@@ -413,7 +762,9 @@ mod tests {
         let end = ifd + 2 + n * 12 + 4 + 16;
         assert_eq!(t.len(), end, "no trailing garbage");
         // tags strictly ascending (a TIFF requirement)
-        let tags: Vec<u16> = (0..n).map(|i| u16::from_le_bytes(t[ifd + 2 + i * 12..ifd + 4 + i * 12].try_into().unwrap())).collect();
+        let tags: Vec<u16> = (0..n)
+            .map(|i| u16::from_le_bytes(t[ifd + 2 + i * 12..ifd + 4 + i * 12].try_into().unwrap()))
+            .collect();
         assert!(tags.windows(2).all(|w| w[0] < w[1]), "{tags:?}");
     }
 }

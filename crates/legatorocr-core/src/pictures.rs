@@ -69,7 +69,8 @@ pub fn detect(gray: &GrayImage, dpi: u32, sensitivity: f32) -> Vec<Zone> {
             // Mostly mid-tone, or dark-and-grainy with little paper: a picture tile.
             // (A solid dark tile — the black part of a photo — also counts; the blob-size
             // test below keeps rules and bold headings from becoming pictures.)
-            pic[gy * gw + gx] = (mid as f32 / n >= mid_needed && (paperish as f32 / n) < 0.55) || dark as f32 / n >= 0.7;
+            pic[gy * gw + gx] = (mid as f32 / n >= mid_needed && (paperish as f32 / n) < 0.55)
+                || dark as f32 / n >= 0.7;
         }
     }
     // Close gaps (radius 1 tile) so a picture with bright patches stays one blob.
@@ -102,7 +103,8 @@ pub fn detect(gray: &GrayImage, dpi: u32, sensitivity: f32) -> Vec<Zone> {
         if !closed[s] || label[s] {
             continue;
         }
-        let (mut x0, mut y0, mut x1, mut y1, mut count) = (usize::MAX, usize::MAX, 0usize, 0usize, 0usize);
+        let (mut x0, mut y0, mut x1, mut y1, mut count) =
+            (usize::MAX, usize::MAX, 0usize, 0usize, 0usize);
         let mut st = vec![s];
         label[s] = true;
         while let Some(p) = st.pop() {
@@ -118,10 +120,18 @@ pub fn detect(gray: &GrayImage, dpi: u32, sensitivity: f32) -> Vec<Zone> {
                     st.push(q);
                 }
             };
-            if px > 0 { push(p - 1) }
-            if px + 1 < gw { push(p + 1) }
-            if py > 0 { push(p - gw) }
-            if py + 1 < gh { push(p + gw) }
+            if px > 0 {
+                push(p - 1)
+            }
+            if px + 1 < gw {
+                push(p + 1)
+            }
+            if py > 0 {
+                push(p - gw)
+            }
+            if py + 1 < gh {
+                push(p + gw)
+            }
         }
         let (bw, bh) = (x1 - x0 + 1, y1 - y0 + 1);
         // Big enough, reasonably filled (not a thin frame/rule), not a whole-page smear.
@@ -132,7 +142,14 @@ pub fn detect(gray: &GrayImage, dpi: u32, sensitivity: f32) -> Vec<Zone> {
             let rx1 = ((x1 + 1) * scale).min(w);
             let ry1 = ((y1 + 1) * scale).min(h);
             if rx1 > rx0 && ry1 > ry0 {
-                zones.push(Zone { rect: Rect { x: rx0 as u32, y: ry0 as u32, w: (rx1 - rx0) as u32, h: (ry1 - ry0) as u32 } });
+                zones.push(Zone {
+                    rect: Rect {
+                        x: rx0 as u32,
+                        y: ry0 as u32,
+                        w: (rx1 - rx0) as u32,
+                        h: (ry1 - ry0) as u32,
+                    },
+                });
             }
         }
     }
@@ -147,11 +164,19 @@ mod tests {
     /// Text lines on paper with one smooth "photo" block.
     fn page() -> (GrayImage, Rect) {
         let (w, h) = (900u32, 1200u32);
-        let photo = Rect { x: 450, y: 300, w: 330, h: 380 };
+        let photo = Rect {
+            x: 450,
+            y: 300,
+            w: 330,
+            h: 380,
+        };
         let mut g = GrayImage::from_pixel(w, h, Luma([236]));
         for y in (100..1100).step_by(34) {
             for x in 100..800u32 {
-                if (x / 14) % 2 == 0 && (y + x / 7) % 34 < 12 && !(photo.y - 10..photo.y + photo.h + 10).contains(&y) {
+                if (x / 14) % 2 == 0
+                    && (y + x / 7) % 34 < 12
+                    && !(photo.y - 10..photo.y + photo.h + 10).contains(&y)
+                {
                     g.put_pixel(x, y, Luma([30]));
                     g.put_pixel(x, y + 1, Luma([30]));
                 }
@@ -159,7 +184,10 @@ mod tests {
         }
         for y in photo.y..photo.y + photo.h {
             for x in photo.x..photo.x + photo.w {
-                let v = 40.0 + 150.0 * (((x - photo.x) as f32 / 40.0).sin() * 0.5 + 0.5) * ((y - photo.y) as f32 / photo.h as f32);
+                let v = 40.0
+                    + 150.0
+                        * (((x - photo.x) as f32 / 40.0).sin() * 0.5 + 0.5)
+                        * ((y - photo.y) as f32 / photo.h as f32);
                 g.put_pixel(x, y, Luma([v as u8]));
             }
         }
@@ -173,10 +201,19 @@ mod tests {
         assert_eq!(z.len(), 1, "{z:?}");
         let r = z[0].rect;
         let (ix0, iy0) = (r.x.max(photo.x), r.y.max(photo.y));
-        let (ix1, iy1) = ((r.x + r.w).min(photo.x + photo.w), (r.y + r.h).min(photo.y + photo.h));
+        let (ix1, iy1) = (
+            (r.x + r.w).min(photo.x + photo.w),
+            (r.y + r.h).min(photo.y + photo.h),
+        );
         let inter = ((ix1.saturating_sub(ix0)) * (iy1.saturating_sub(iy0))) as f32;
-        assert!(inter / (photo.w * photo.h) as f32 > 0.85, "photo coverage {r:?}");
-        assert!(r.w < photo.w + 120 && r.h < photo.h + 120, "zone too large: {r:?}");
+        assert!(
+            inter / (photo.w * photo.h) as f32 > 0.85,
+            "photo coverage {r:?}"
+        );
+        assert!(
+            r.w < photo.w + 120 && r.h < photo.h + 120,
+            "zone too large: {r:?}"
+        );
     }
 
     #[test]
@@ -198,7 +235,11 @@ mod tests {
         let mut g = GrayImage::from_pixel(w, h, image::Luma([235]));
         for y in 500..800 {
             for x in 200..700 {
-                g.put_pixel(x, y, image::Luma([if (x * 31 + y * 17) % 97 == 0 { 200 } else { 8 }]));
+                g.put_pixel(
+                    x,
+                    y,
+                    image::Luma([if (x * 31 + y * 17) % 97 == 0 { 200 } else { 8 }]),
+                );
             }
         }
         for line in 0..8 {
@@ -213,7 +254,10 @@ mod tests {
         let zones = detect(&g, 150, 0.5);
         assert_eq!(zones.len(), 1, "{zones:?}");
         let r = zones[0].rect;
-        assert!(r.x <= 260 && r.y <= 560 && r.x + r.w >= 640 && r.y + r.h >= 740, "{r:?}");
+        assert!(
+            r.x <= 260 && r.y <= 560 && r.x + r.w >= 640 && r.y + r.h >= 740,
+            "{r:?}"
+        );
         assert!(r.y > 300, "text lines must not be swallowed: {r:?}");
     }
 }

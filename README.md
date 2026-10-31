@@ -72,11 +72,16 @@ Without Tesseract everything else works; the OCR switch is disabled and says why
 | Analysis | everything is measured on a ≈150 dpi copy (a 600 dpi scan is analysed on 1/16 of the pixels); the result is mapped back to full resolution |
 | Dewarp | text lines are followed across narrow vertical strips (row-profile peaks chained strip to strip); each line's wobble around its own mean height becomes a vertical resampling field, interpolated between lines; skipped unless several long lines show a clear bend |
 | Lighting | `--normalize`: paper colour per channel from a max-filtered, blurred ≈60 dpi copy, then a per-pixel gain |
-| Binarisation | Sauvola (default), Wolf, Niblack, NICK, Bradley, Otsu, all from sliding column sums in O(width) memory |
+| Binarisation | Sauvola (default), Wolf, Niblack, NICK, Bradley, Otsu, **auto** (per page: tries the local methods on a ≈150 dpi copy, keeps the one with the fewest isolated specks and a plausible ink share), all from sliding column sums in O(width) memory |
+| Clean-up | `--invert` (negatives: dark median + bright tail), `--auto-levels` (0.5 %/99.5 % stretch, one gain for all channels), `--dropout red|green|blue`, `--punch-holes` (dark round blobs 3–10 mm near the edge, filled with the surrounding paper colour), `--fingers` (skin-coloured regions touching the border, judged relative to the paper colour), `--remove-lines` (runs ≥ 25 mm and ≤ 1.2 mm thick; glyph stems crossing a rule survive), `--sharpen` (unsharp mask ≈0.3 mm), `--despeckle-strength` |
 | Pictures | tiles with a high share of mid-tones (text is bimodal, photos are continuous) or solid dark areas, closed and size-filtered → colour patches |
 | Output | colour, gray, B/W, **mixed** (1-bit text + colour patches) or **hybrid** (+ low-res background layer); optional down-sampling to `--output-dpi`; fixed or book-wide uniform page size with alignment |
 | PDF | own writer: JPEG (colour/gray), CCITT Group 4 for 1-bit (falls back to Flate when smaller), layered pages (stencil mask + background + patches); true page size from DPI |
 | Images | PNG with resolution, TIFF Group 4 for black & white |
+| Text output | `--txt` (plain text), `--hocr` (word boxes + confidences), PDF author/subject/keywords/dates |
+| PDF input | own tolerant reader: pages of scanned PDFs become `book.pdf#N` (Flate/LZW/ASCII85/RunLength, PNG/TIFF predictors, JPEG, CCITT G4, Gray/RGB/CMYK/Indexed, /Rotate, DPI from the page size); object streams and damaged cross-reference tables are fine; encrypted, JBIG2, JPEG 2000 and layered (multi-image) pages are refused with a clear message |
+| Profiles | `--profile NAME` / `--list-profiles` / `--save-profile NAME` (8 built in: book-bw, book-small-color, document-text, photo-archive, newspaper, form-dropout-red, negatives, phone-photos; user profiles in the config folder) and a GUI selector |
+| Page-size check | `--report-outliers` lists pages whose size differs clearly from the rest (median/MAD) |
 | OCR | Tesseract word boxes → invisible text layer (render mode 3, glyph-less Type0 font + ToUnicode, so ăâîșț and any Unicode copy/search correctly) |
 
 Export streams in bounded batches (process → OCR → write), so a several-hundred-page colour book
@@ -98,6 +103,8 @@ See `COMPARISON.md` for what other tools do that this one does not. In short:
 - No drawing of picture zones, fill (erase) zones or dewarp control points by hand: pictures are
   detected automatically (sensitivity adjustable) and the content box can be nudged per page.
 - Dewarp corrects vertical bending of text lines only (no perspective / horizontal stretch).
+- PDF input handles one scan image per page; PDF/A output is deliberately not claimed (the glyph-less, non-embedded text font would violate it); JBIG2 is not implemented.
+- Skin/hole/finger removal are heuristics: `--fingers` is off by default and can eat skin-toned photographs at the page edge.
 - DPI is not read from TIFF headers (set it by hand); 16-bit TIFF is reduced to 8 bit.
 - A dark scanner-bed border *touching* the text can still enlarge the detected content box
   (borders and corner shadows separated from the text are removed).

@@ -10,7 +10,11 @@ pub struct BitImage {
 
 impl BitImage {
     pub fn new(w: u32, h: u32) -> Self {
-        Self { w, h, data: vec![0; (w as usize) * (h as usize)] }
+        Self {
+            w,
+            h,
+            data: vec![0; (w as usize) * (h as usize)],
+        }
     }
     #[inline]
     pub fn get(&self, x: u32, y: u32) -> bool {
@@ -25,7 +29,11 @@ impl BitImage {
     }
     /// Paper = 255, ink = 0.
     pub fn to_gray(&self) -> GrayImage {
-        let raw: Vec<u8> = self.data.iter().map(|&b| if b != 0 { 0 } else { 255 }).collect();
+        let raw: Vec<u8> = self
+            .data
+            .iter()
+            .map(|&b| if b != 0 { 0 } else { 255 })
+            .collect();
         GrayImage::from_raw(self.w, self.h, raw).expect("size matches")
     }
     /// Copy the `w`×`h` region of `src` starting at (`sx`,`sy`) to (`dx`,`dy`) in

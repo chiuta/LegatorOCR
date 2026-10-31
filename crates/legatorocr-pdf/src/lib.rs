@@ -7,10 +7,11 @@
 //!   Romanian ăâîșț) is searchable and copy-able.
 
 pub mod g4;
+pub mod reader;
 
-use legatorocr_core::{BitImage, Page, PageImage, Word};
 use flate2::{write::ZlibEncoder, Compression};
 use image::{codecs::jpeg::JpegEncoder, ExtendedColorType};
+use legatorocr_core::{BitImage, Page, PageImage, Word};
 use std::collections::BTreeMap;
 use std::io::Write;
 
@@ -29,6 +30,39 @@ pub struct PdfWriter {
     chars: BTreeMap<char, u16>, // char -> CID
     compress: Compress,
     title: Option<String>,
+    meta: Meta,
+}
+
+/// Optional document-information entries.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Meta {
+    pub author: Option<String>,
+    pub subject: Option<String>,
+    pub keywords: Option<String>,
+    /// Seconds since the Unix epoch; written as CreationDate / ModDate (UTC).
+    pub created_unix: Option<u64>,
+}
+
+/// `D:YYYYMMDDHHmmSSZ` for a Unix time (UTC, proleptic Gregorian).
+pub fn pdf_date(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    // civil-from-days (Howard Hinnant's public-domain algorithm)
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + (m <= 2) as i64;
+    format!(
+        "D:{y:04}{m:02}{d:02}{:02}{:02}{:02}Z",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
 }
 
 const CATALOG: u32 = 1;
@@ -48,6 +82,7 @@ impl PdfWriter {
             chars: BTreeMap::new(),
             compress,
             title: None,
+            meta: Meta::default(),
         };
         w.buf.extend_from_slice(b"%PDF-1.5\n%\xE2\xE3\xCF\xD3\n");
         w
@@ -55,6 +90,10 @@ impl PdfWriter {
 
     pub fn set_title(&mut self, t: &str) {
         self.title = Some(t.to_string());
+    }
+
+    pub fn set_meta(&mut self, m: Meta) {
+        self.meta = m;
     }
 
     fn alloc(&mut self) -> u32 {
@@ -69,7 +108,12 @@ impl PdfWriter {
 
     fn stream_obj(&mut self, id: u32, dict_extra: &str, data: &[u8]) {
         self.begin(id);
-        write!(self.buf, "<< {dict_extra} /Length {} >>\nstream\n", data.len()).unwrap();
+        write!(
+            self.buf,
+            "<< {dict_extra} /Length {} >>\nstream\n",
+            data.len()
+        )
+        .unwrap();
         self.buf.extend_from_slice(data);
         self.buf.extend_from_slice(b"\nendstream\nendobj\n");
     }
@@ -84,7 +128,9 @@ impl PdfWriter {
         if let Some(&id) = self.chars.get(&c) {
             return Some(id);
         }
-        let next = u16::try_from(self.chars.len() + 1).ok().filter(|&n| n < u16::MAX)?;
+        let next = u16::try_from(self.chars.len() + 1)
+            .ok()
+            .filter(|&n| n < u16::MAX)?;
         self.chars.insert(c, next);
         Some(next)
     }
@@ -103,7 +149,11 @@ impl PdfWriter {
         // --- image XObject -------------------------------------------
         let img_id = self.alloc();
         // JPEG cannot exceed 65535 px per side; such pages stay lossless.
-        let compress = if pw > 65_000 || ph > 65_000 { Compress::Flate } else { self.compress };
+        let compress = if pw > 65_000 || ph > 65_000 {
+            Compress::Flate
+        } else {
+            self.compress
+        };
         match &page.image {
             PageImage::Bw(b) => {
                 let (filter, z) = encode_1bit(b);
@@ -164,7 +214,11 @@ impl PdfWriter {
             let (x, top) = (w.x as f32 * 72.0 / dpi, w.y as f32 * 72.0 / dpi);
             // Words outside the page or taller than it are garbage (a PDF reader may choke on
             // 10-digit coordinates): drop them rather than write absurd numbers.
-            if !(x.is_finite() && top.is_finite() && size.is_finite()) || x >= wpt || top >= hpt || size > hpt {
+            if !(x.is_finite() && top.is_finite() && size.is_finite())
+                || x >= wpt
+                || top >= hpt
+                || size > hpt
+            {
                 continue;
             }
             // Glyph advance is 0.5 em; scale horizontally to the word box (kept within sane bounds).
@@ -183,7 +237,9 @@ impl PdfWriter {
             if hex.is_empty() {
                 continue;
             }
-            cs.push_str(&format!("/F1 {size:.2} Tf {tz:.1} Tz 1 0 0 1 {x:.2} {y:.2} Tm <{hex}> Tj\n"));
+            cs.push_str(&format!(
+                "/F1 {size:.2} Tf {tz:.1} Tz 1 0 0 1 {x:.2} {y:.2} Tm <{hex}> Tj\n"
+            ));
         }
         cs.push_str("ET\n");
     }
@@ -225,7 +281,14 @@ impl PdfWriter {
 
     /// Layered page: optional low-res background, picture patches, then the
     /// 1-bit text mask painted as a stencil in the ink colour.
-    fn add_layered(&mut self, l: &legatorocr_core::layers::Layers, dpi: f32, wpt: f32, hpt: f32, words: &[Word]) {
+    fn add_layered(
+        &mut self,
+        l: &legatorocr_core::layers::Layers,
+        dpi: f32,
+        wpt: f32,
+        hpt: f32,
+        words: &[Word],
+    ) {
         let (pw, ph) = (l.mask.w, l.mask.h);
         let mut xo = String::new();
         let mut cs = String::new();
@@ -240,9 +303,14 @@ impl PdfWriter {
         for (i, p) in l.patches.iter().enumerate() {
             let id = self.rgb_xobject(&p.img);
             xo.push_str(&format!("/P{i} {id} 0 R "));
-            let (w, h) = (p.img.width() as f32 * 72.0 / dpi, p.img.height() as f32 * 72.0 / dpi);
+            let (w, h) = (
+                p.img.width() as f32 * 72.0 / dpi,
+                p.img.height() as f32 * 72.0 / dpi,
+            );
             let (x, y) = (p.x as f32 * 72.0 / dpi, hpt - (p.y as f32 * 72.0 / dpi) - h);
-            cs.push_str(&format!("q {w:.3} 0 0 {h:.3} {x:.3} {y:.3} cm /P{i} Do Q\n"));
+            cs.push_str(&format!(
+                "q {w:.3} 0 0 {h:.3} {x:.3} {y:.3} cm /P{i} Do Q\n"
+            ));
         }
         let mask_id = self.alloc();
         let (filter, z) = encode_1bit(&l.mask);
@@ -253,7 +321,9 @@ impl PdfWriter {
         );
         xo.push_str(&format!("/Mk {mask_id} 0 R"));
         let [r, g, b] = l.fg.map(|c| c as f32 / 255.0);
-        cs.push_str(&format!("q {r:.3} {g:.3} {b:.3} rg {wpt:.3} 0 0 {hpt:.3} 0 0 cm /Mk Do Q\n"));
+        cs.push_str(&format!(
+            "q {r:.3} {g:.3} {b:.3} rg {wpt:.3} 0 0 {hpt:.3} 0 0 cm /Mk Do Q\n"
+        ));
         self.text_ops(&mut cs, words, dpi, wpt, hpt);
         self.finish_page(cs, &xo, wpt, hpt);
     }
@@ -290,10 +360,17 @@ impl PdfWriter {
         let z = deflate(cmap.as_bytes());
         self.stream_obj(TOUNICODE, "/Filter /FlateDecode", &z);
 
-        let kids: String = self.page_ids.iter().map(|id| format!("{id} 0 R ")).collect();
+        let kids: String = self
+            .page_ids
+            .iter()
+            .map(|id| format!("{id} 0 R "))
+            .collect();
         self.plain_obj(
             PAGES,
-            &format!("<< /Type /Pages /Kids [{kids}] /Count {} >>", self.page_ids.len()),
+            &format!(
+                "<< /Type /Pages /Kids [{kids}] /Count {} >>",
+                self.page_ids.len()
+            ),
         );
         self.plain_obj(CATALOG, &format!("<< /Type /Catalog /Pages {PAGES} 0 R >>"));
         let info_id = self.alloc();
@@ -302,7 +379,27 @@ impl PdfWriter {
             .as_deref()
             .map(|t| format!(" /Title {}", pdf_text_string(t)))
             .unwrap_or_default();
-        self.plain_obj(info_id, &format!("<< /Producer (LegatorOCR {}){title} >>", env!("CARGO_PKG_VERSION")));
+        let mut extra = String::new();
+        for (key, v) in [
+            ("Author", &self.meta.author),
+            ("Subject", &self.meta.subject),
+            ("Keywords", &self.meta.keywords),
+        ] {
+            if let Some(v) = v.as_deref().filter(|v| !v.trim().is_empty()) {
+                extra.push_str(&format!(" /{key} {}", pdf_text_string(v)));
+            }
+        }
+        if let Some(t) = self.meta.created_unix {
+            let d = pdf_date(t);
+            extra.push_str(&format!(" /CreationDate ({d}) /ModDate ({d})"));
+        }
+        self.plain_obj(
+            info_id,
+            &format!(
+                "<< /Producer (LegatorOCR {}){title}{extra} >>",
+                env!("CARGO_PKG_VERSION")
+            ),
+        );
 
         let xref_pos = self.buf.len();
         let n = self.offsets.len();
@@ -331,7 +428,11 @@ impl PdfWriter {
             s.push_str(&format!("{} beginbfchar\n", chunk.len()));
             for (c, cid) in chunk {
                 let mut u = [0u16; 2];
-                let hex: String = c.encode_utf16(&mut u).iter().map(|x| format!("{x:04X}")).collect();
+                let hex: String = c
+                    .encode_utf16(&mut u)
+                    .iter()
+                    .map(|x| format!("{x:04X}"))
+                    .collect();
                 s.push_str(&format!("<{cid:04X}> <{hex}>\n"));
             }
             s.push_str("endbfchar\n");
@@ -357,7 +458,10 @@ fn deflate(data: &[u8]) -> Vec<u8> {
 /// Best encoding of a 1-bit page: (extra image-dict entries, bytes).
 fn encode_1bit(b: &BitImage) -> (String, Vec<u8>) {
     let w = b.w as usize;
-    let g4 = g4::encode(w, (0..b.h as usize).map(|y| b.data[y * w..(y + 1) * w].iter().map(|&v| v != 0).collect()));
+    let g4 = g4::encode(
+        w,
+        (0..b.h as usize).map(|y| b.data[y * w..(y + 1) * w].iter().map(|&v| v != 0).collect()),
+    );
     let flate = deflate(&pack_1bit_up_predicted(b));
     if g4.len() <= flate.len() {
         (
@@ -397,7 +501,7 @@ fn pack_1bit_up_predicted(b: &BitImage) -> Vec<u8> {
 
 /// PDF text string: PDFDocEncoding if ASCII, else UTF-16BE hex string.
 fn pdf_text_string(s: &str) -> String {
-    if s.is_ascii() && !s.contains(['(', ')', '\\']) {
+    if s.chars().all(|c| (' '..='~').contains(&c)) && !s.contains(['(', ')', '\\']) {
         format!("({s})")
     } else {
         let mut h = String::from("<FEFF");
@@ -415,18 +519,70 @@ mod tests {
     use image::RgbImage;
 
     fn page(img: PageImage) -> Page {
-        Page { image: img, dpi: 300, skew_deg: 0.0, blank: false, split_index: None, layers: None }
+        Page {
+            image: img,
+            dpi: 300,
+            skew_deg: 0.0,
+            blank: false,
+            split_index: None,
+            layers: None,
+        }
+    }
+
+    #[test]
+    fn pdf_dates_are_correct() {
+        assert_eq!(pdf_date(0), "D:19700101000000Z");
+        assert_eq!(pdf_date(951_782_400), "D:20000229000000Z"); // leap day
+        assert_eq!(pdf_date(1_782_864_000 + 3_661), "D:20260701010101Z");
+    }
+
+    #[test]
+    fn metadata_lands_in_the_info_dictionary() {
+        let mut w = PdfWriter::new(Compress::Flate);
+        w.set_meta(Meta {
+            author: Some("Ana".into()),
+            subject: Some("Să\nvăd".into()),
+            keywords: None,
+            created_unix: Some(0),
+        });
+        w.add_page(
+            &page(PageImage::Rgb(RgbImage::from_pixel(
+                8,
+                8,
+                image::Rgb([9, 9, 9]),
+            ))),
+            &[],
+        );
+        let pdf = String::from_utf8_lossy(&w.finish()).to_string();
+        assert!(pdf.contains("/Author (Ana)") && pdf.contains("/Subject <FEFF"));
+        assert!(pdf.contains("/CreationDate (D:19700101000000Z)"));
+        assert!(!pdf.contains("/Keywords"));
     }
 
     #[test]
     fn writes_valid_structure() {
         let mut w = PdfWriter::new(Compress::Jpeg(80));
-        w.add_page(&page(PageImage::Rgb(RgbImage::from_pixel(30, 40, image::Rgb([200, 10, 10])))), &[]);
+        w.add_page(
+            &page(PageImage::Rgb(RgbImage::from_pixel(
+                30,
+                40,
+                image::Rgb([200, 10, 10]),
+            ))),
+            &[],
+        );
         let mut bw = BitImage::new(17, 9);
         bw.set(3, 3, true);
         w.add_page(
             &page(PageImage::Bw(bw)),
-            &[Word { text: "șțăîâ".into(), x: 1, y: 1, w: 10, h: 5, conf: 90.0, line: 0 }],
+            &[Word {
+                text: "șțăîâ".into(),
+                x: 1,
+                y: 1,
+                w: 10,
+                h: 5,
+                conf: 90.0,
+                line: 0,
+            }],
         );
         let pdf = w.finish();
         let s = String::from_utf8_lossy(&pdf);
@@ -444,8 +600,19 @@ mod tests {
             }
         }
         assert!(w.chars.len() < 65_535 && w.cid('\u{1F600}').is_none());
-        let words = [Word { text: "😀😀".into(), x: 1, y: 1, w: 10, h: 5, conf: 90.0, line: 0 }];
-        w.add_page(&page(PageImage::Gray(image::GrayImage::new(20, 20))), &words);
+        let words = [Word {
+            text: "😀😀".into(),
+            x: 1,
+            y: 1,
+            w: 10,
+            h: 5,
+            conf: 90.0,
+            line: 0,
+        }];
+        w.add_page(
+            &page(PageImage::Gray(image::GrayImage::new(20, 20))),
+            &words,
+        );
         assert!(w.finish().ends_with(b"%%EOF\n"));
     }
 
@@ -473,11 +640,26 @@ mod unicode_file {
         let mut w = PdfWriter::new(Compress::Flate);
         let mut bw = BitImage::new(600, 300);
         bw.set(1, 1, true);
-        let page = Page { image: PageImage::Bw(bw), dpi: 150, skew_deg: 0.0, blank: false, split_index: None, layers: None };
+        let page = Page {
+            image: PageImage::Bw(bw),
+            dpi: 150,
+            skew_deg: 0.0,
+            blank: false,
+            split_index: None,
+            layers: None,
+        };
         let words: Vec<Word> = ["Școala", "țăranului", "înființată", "Âțâră", "e", "😀ok"]
             .iter()
             .enumerate()
-            .map(|(i, t)| Word { text: t.to_string(), x: 20 + (i as u32) * 90, y: 40, w: 80, h: 24, conf: 99.0, line: 0 })
+            .map(|(i, t)| Word {
+                text: t.to_string(),
+                x: 20 + (i as u32) * 90,
+                y: 40,
+                w: 80,
+                h: 24,
+                conf: 99.0,
+                line: 0,
+            })
             .collect();
         w.add_page(&page, &words);
         std::fs::write(path, w.finish()).unwrap();
@@ -499,15 +681,29 @@ mod g4_roundtrip {
     /// Needs `pdfimages` (poppler); the test is skipped when it is not installed.
     #[test]
     fn g4_decodes_exactly() {
-        if std::process::Command::new("pdfimages").arg("-v").output().is_err() {
+        if std::process::Command::new("pdfimages")
+            .arg("-v")
+            .output()
+            .is_err()
+        {
             eprintln!("pdfimages not installed: skipping");
             return;
         }
         let dir = std::env::temp_dir().join(format!("locr-g4-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut seed = 0x9E37_79B9_7F4A_7C15u64;
-        let cases: [(u32, u32, u8); 10] =
-            [(1, 1, 0), (7, 5, 1), (64, 40, 2), (300, 200, 3), (3000, 8, 4), (5000, 6, 3), (640, 480, 5), (100, 100, 6), (129, 77, 1), (2600, 3, 7)];
+        let cases: [(u32, u32, u8); 10] = [
+            (1, 1, 0),
+            (7, 5, 1),
+            (64, 40, 2),
+            (300, 200, 3),
+            (3000, 8, 4),
+            (5000, 6, 3),
+            (640, 480, 5),
+            (100, 100, 6),
+            (129, 77, 1),
+            (2600, 3, 7),
+        ];
         for (i, &(w, h, kind)) in cases.iter().enumerate() {
             let mut b = BitImage::new(w, h);
             for y in 0..h {
@@ -525,15 +721,29 @@ mod g4_roundtrip {
                     b.set(x, y, ink);
                 }
             }
-            let page = Page { image: PageImage::Bw(b.clone()), dpi: 300, skew_deg: 0.0, blank: false, split_index: None, layers: None };
+            let page = Page {
+                image: PageImage::Bw(b.clone()),
+                dpi: 300,
+                skew_deg: 0.0,
+                blank: false,
+                split_index: None,
+                layers: None,
+            };
             let mut wr = PdfWriter::new(Compress::Flate);
             wr.add_page(&page, &[]);
             let pdf = dir.join(format!("c{i}.pdf"));
             std::fs::write(&pdf, wr.finish()).unwrap();
             let prefix = dir.join(format!("c{i}"));
-            let st = std::process::Command::new("pdfimages").arg("-png").arg(&pdf).arg(&prefix).status().unwrap();
+            let st = std::process::Command::new("pdfimages")
+                .arg("-png")
+                .arg(&pdf)
+                .arg(&prefix)
+                .status()
+                .unwrap();
             assert!(st.success(), "case {i}");
-            let img = image::open(dir.join(format!("c{i}-000.png"))).unwrap().to_luma8();
+            let img = image::open(dir.join(format!("c{i}-000.png")))
+                .unwrap()
+                .to_luma8();
             assert_eq!(img.dimensions(), (w, h), "case {i}");
             for y in 0..h {
                 for x in 0..w {

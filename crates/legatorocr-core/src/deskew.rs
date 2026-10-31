@@ -8,7 +8,11 @@ use crate::BitImage;
 pub fn detect_skew(ink: &BitImage, max_deg: f32) -> Option<f32> {
     // tan() explodes towards 90°: bound the search (and survive NaN) so the
     // profile table can never be absurdly large.
-    let max_deg = if max_deg.is_finite() { max_deg.clamp(0.0, 30.0) } else { 0.0 };
+    let max_deg = if max_deg.is_finite() {
+        max_deg.clamp(0.0, 30.0)
+    } else {
+        0.0
+    };
     let total = ink.count_ink();
     // Too little ink to judge, or so much that the page is a solid area (a
     // black scan, a photo) rather than text lines.
@@ -40,10 +44,12 @@ pub fn detect_skew(ink: &BitImage, max_deg: f32) -> Option<f32> {
             let b = (y + x * t).round() as i64 + off;
             prof[b as usize] += 1;
         }
-        prof.windows(2).map(|p| {
-            let d = p[1] as f64 - p[0] as f64;
-            d * d
-        }).sum()
+        prof.windows(2)
+            .map(|p| {
+                let d = p[1] as f64 - p[0] as f64;
+                d * d
+            })
+            .sum()
     };
     let search = |lo: f32, hi: f32, step: f32| -> (f32, f64) {
         let mut best = (0.0f32, f64::MIN);
@@ -61,7 +67,11 @@ pub fn detect_skew(ink: &BitImage, max_deg: f32) -> Option<f32> {
     let (f, best) = search(c - 0.5, c + 0.5, 0.05);
     let (f, best) = {
         let (g, s) = search(f - 0.05, f + 0.05, 0.01);
-        if s >= best { (g, s) } else { (f, best) }
+        if s >= best {
+            (g, s)
+        } else {
+            (f, best)
+        }
     };
     // Require a real gain over the unrotated profile, otherwise stay put.
     let base = score(0.0);

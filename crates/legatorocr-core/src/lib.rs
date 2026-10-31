@@ -7,6 +7,7 @@
 
 pub mod binarize;
 pub mod bitimage;
+pub mod cleanup;
 pub mod content;
 pub mod deskew;
 pub mod dewarp;
@@ -18,9 +19,12 @@ pub mod split;
 pub mod text;
 pub mod transform;
 
-pub use bitimage::BitImage;
 pub use binarize::Threshold;
-pub use pipeline::{measure_page, process_page, HAlign, OutputMode, Page, PageImage, Settings, SplitMode, VAlign};
+pub use bitimage::BitImage;
+pub use cleanup::Dropout;
+pub use pipeline::{
+    measure_page, process_page, HAlign, OutputMode, Page, PageImage, Settings, SplitMode, VAlign,
+};
 pub use text::Word;
 
 /// Axis-aligned integer rectangle.

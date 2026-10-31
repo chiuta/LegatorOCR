@@ -106,7 +106,15 @@ pub fn build_background(img: &RgbImage, ink: &BitImage, f: u32) -> RgbImage {
         }
     }
     let mut val: Vec<Option<[f32; 3]>> = (0..nw * nh)
-        .map(|i| (cnt[i] > 0).then(|| [sum[i][0] as f32 / cnt[i] as f32, sum[i][1] as f32 / cnt[i] as f32, sum[i][2] as f32 / cnt[i] as f32]))
+        .map(|i| {
+            (cnt[i] > 0).then(|| {
+                [
+                    sum[i][0] as f32 / cnt[i] as f32,
+                    sum[i][1] as f32 / cnt[i] as f32,
+                    sum[i][2] as f32 / cnt[i] as f32,
+                ]
+            })
+        })
         .collect();
     // Fill empty cells from filled neighbours (bounded number of sweeps).
     for _ in 0..64 {
@@ -151,7 +159,10 @@ pub fn ink_colour(img: &RgbImage, mask: &BitImage) -> [u8; 3] {
         if m == 0 {
             continue;
         }
-        let p = img.as_raw()[i * 3..i * 3 + 3].iter().map(|&v| v as u32).collect::<Vec<_>>();
+        let p = img.as_raw()[i * 3..i * 3 + 3]
+            .iter()
+            .map(|&v| v as u32)
+            .collect::<Vec<_>>();
         if (p[0] * 299 + p[1] * 587 + p[2] * 114) / 1000 <= 110 {
             for k in 0..3 {
                 acc[k] += p[k] as u64;
@@ -177,8 +188,15 @@ mod tests {
         let l = Layers {
             mask,
             fg: [10, 20, 30],
-            bg: Some(Background { img: RgbImage::from_pixel(4, 4, Rgb([200, 210, 220])), dpi: 50 }),
-            patches: vec![Patch { x: 5, y: 5, img: RgbImage::from_pixel(3, 3, Rgb([1, 2, 3])) }],
+            bg: Some(Background {
+                img: RgbImage::from_pixel(4, 4, Rgb([200, 210, 220])),
+                dpi: 50,
+            }),
+            patches: vec![Patch {
+                x: 5,
+                y: 5,
+                img: RgbImage::from_pixel(3, 3, Rgb([1, 2, 3])),
+            }],
         };
         let c = l.compose();
         assert_eq!(c.dimensions(), (8, 8));

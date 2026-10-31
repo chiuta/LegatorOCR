@@ -115,7 +115,10 @@ fn parse_align(v: &str) -> Option<(HAlign, VAlign)> {
     ))
 }
 fn four(v: &str) -> Option<[f32; 4]> {
-    let p: Vec<f32> = v.split(',').map(|x| x.trim().parse::<f32>().ok().filter(|f| f.is_finite())).collect::<Option<_>>()?;
+    let p: Vec<f32> = v
+        .split(',')
+        .map(|x| x.trim().parse::<f32>().ok().filter(|f| f.is_finite()))
+        .collect::<Option<_>>()?;
     <[f32; 4]>::try_from(p).ok()
 }
 fn b(v: &str) -> Option<bool> {
@@ -139,16 +142,31 @@ pub fn settings_to_pairs(s: &Settings) -> Vec<(&'static str, String)> {
         ("dewarp", s.dewarp.to_string()),
         ("margins", format!("{a},{b},{c},{d}")),
         ("content_adjust", format!("{e},{f},{g},{h}")),
-        ("page_size", s.page_size_mm.map_or("free".into(), |(w, h)| format!("{w},{h}"))),
+        (
+            "page_size",
+            s.page_size_mm
+                .map_or("free".into(), |(w, h)| format!("{w},{h}")),
+        ),
         ("align", align_name(s.align)),
         ("mode", mode_name(s.mode).into()),
         ("threshold", s.threshold.name().to_ascii_lowercase()),
         ("sensitivity", s.sauvola_k.to_string()),
         ("despeckle", s.despeckle.to_string()),
         ("normalize", s.normalize_bg.to_string()),
-        ("output_dpi", s.output_dpi.map_or("0".into(), |v| v.to_string())),
+        (
+            "output_dpi",
+            s.output_dpi.map_or("0".into(), |v| v.to_string()),
+        ),
         ("picture_sensitivity", s.picture_sensitivity.to_string()),
         ("hybrid_dpi", s.hybrid_bg_dpi.to_string()),
+        ("auto_invert", s.auto_invert.to_string()),
+        ("auto_levels", s.auto_levels.to_string()),
+        ("sharpen", s.sharpen.to_string()),
+        ("punch_holes", s.punch_holes.to_string()),
+        ("fingers", s.fingers.to_string()),
+        ("remove_lines", s.remove_lines.to_string()),
+        ("dropout", s.dropout.name().into()),
+        ("despeckle_strength", s.despeckle_strength.to_string()),
     ]
 }
 
@@ -169,7 +187,10 @@ pub fn apply_pair(s: &mut Settings, k: &str, v: &str) -> Result<bool> {
                 None
             } else {
                 let (w, h) = v.split_once(',').ok_or_else(bad)?;
-                Some((w.trim().parse().map_err(|_| bad())?, h.trim().parse().map_err(|_| bad())?))
+                Some((
+                    w.trim().parse().map_err(|_| bad())?,
+                    h.trim().parse().map_err(|_| bad())?,
+                ))
             }
         }
         "align" => s.align = parse_align(v).ok_or_else(bad)?,
@@ -184,6 +205,14 @@ pub fn apply_pair(s: &mut Settings, k: &str, v: &str) -> Result<bool> {
         }
         "picture_sensitivity" => s.picture_sensitivity = v.parse().map_err(|_| bad())?,
         "hybrid_dpi" => s.hybrid_bg_dpi = v.parse().map_err(|_| bad())?,
+        "auto_invert" => s.auto_invert = b(v).ok_or_else(bad)?,
+        "auto_levels" => s.auto_levels = b(v).ok_or_else(bad)?,
+        "sharpen" => s.sharpen = v.parse().map_err(|_| bad())?,
+        "punch_holes" => s.punch_holes = b(v).ok_or_else(bad)?,
+        "fingers" => s.fingers = b(v).ok_or_else(bad)?,
+        "remove_lines" => s.remove_lines = b(v).ok_or_else(bad)?,
+        "dropout" => s.dropout = legatorocr_core::Dropout::from_name(v).ok_or_else(bad)?,
+        "despeckle_strength" => s.despeckle_strength = v.parse().map_err(|_| bad())?,
         _ => return Ok(false),
     }
     Ok(true)
@@ -222,7 +251,9 @@ impl Project {
         let mut lines = text.lines().enumerate();
         match lines.next() {
             Some((_, l)) if l.trim_start_matches('\u{feff}').trim() == HEADER => {}
-            Some((_, l)) if l.trim().starts_with("legatorocr-project") => bail!("unsupported project version: {}", l.trim()),
+            Some((_, l)) if l.trim().starts_with("legatorocr-project") => {
+                bail!("unsupported project version: {}", l.trim())
+            }
             _ => bail!("not a LegatorOCR project (missing '{HEADER}' line)"),
         }
         let mut p = Project::default();
@@ -248,12 +279,31 @@ impl Project {
                 Some((path, adj)) => match k {
                     "path" => {
                         let pb = PathBuf::from(v);
-                        *path = if pb.is_absolute() { pb } else { base.map_or(pb.clone(), |b| b.join(&pb)) };
+                        *path = if pb.is_absolute() {
+                            pb
+                        } else {
+                            base.map_or(pb.clone(), |b| b.join(&pb))
+                        };
                     }
-                    "rotate" => adj.rotate_quarters = v.parse::<u8>().map_err(|e| at(e.into()))? % 4,
-                    "split" => adj.split = Some(parse_split(v).ok_or_else(|| at(anyhow::anyhow!("invalid split '{v}'")))?),
-                    "skew" => adj.skew_deg = Some(v.parse().map_err(|e: std::num::ParseFloatError| at(e.into()))?),
-                    "adjust" => adj.content_adjust_mm = four(v).ok_or_else(|| at(anyhow::anyhow!("invalid adjust '{v}'")))?,
+                    "rotate" => {
+                        adj.rotate_quarters = v.parse::<u8>().map_err(|e| at(e.into()))? % 4
+                    }
+                    "split" => {
+                        adj.split = Some(
+                            parse_split(v)
+                                .ok_or_else(|| at(anyhow::anyhow!("invalid split '{v}'")))?,
+                        )
+                    }
+                    "skew" => {
+                        adj.skew_deg = Some(
+                            v.parse()
+                                .map_err(|e: std::num::ParseFloatError| at(e.into()))?,
+                        )
+                    }
+                    "adjust" => {
+                        adj.content_adjust_mm =
+                            four(v).ok_or_else(|| at(anyhow::anyhow!("invalid adjust '{v}'")))?
+                    }
                     _ => {}
                 },
                 None => {
@@ -266,7 +316,12 @@ impl Project {
         if let Some(s) = cur.take() {
             p.sheets.push(s);
         }
-        if let Some((i, _)) = p.sheets.iter().enumerate().find(|(_, s)| s.0.as_os_str().is_empty()) {
+        if let Some((i, _)) = p
+            .sheets
+            .iter()
+            .enumerate()
+            .find(|(_, s)| s.0.as_os_str().is_empty())
+        {
             bail!("sheet #{} has no path", i + 1);
         }
         p.settings = p.settings.sanitized();
@@ -274,7 +329,8 @@ impl Project {
     }
 
     pub fn load(path: &Path) -> Result<Project> {
-        let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         Project::parse(&text, path.parent()).with_context(|| path.display().to_string())
     }
 
@@ -283,7 +339,10 @@ impl Project {
     }
 
     pub fn get(&self, key: &str) -> Option<&str> {
-        self.extra.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+        self.extra
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
     }
 }
 
@@ -302,8 +361,17 @@ mod tests {
         p.settings.dewarp = true;
         p.settings.margins_mm = [1.0, 2.0, 3.0, 4.5];
         p.extra.push(("pdf_quality".into(), "70".into()));
-        p.sheets.push((PathBuf::from("/scans/a b.png"), SheetAdj { rotate_quarters: 3, split: Some(SplitMode::Off), skew_deg: Some(-1.25), content_adjust_mm: [0.0, 1.0, 2.0, -3.0] }));
-        p.sheets.push((PathBuf::from("/scans/c.png"), SheetAdj::default()));
+        p.sheets.push((
+            PathBuf::from("/scans/a b.png"),
+            SheetAdj {
+                rotate_quarters: 3,
+                split: Some(SplitMode::Off),
+                skew_deg: Some(-1.25),
+                content_adjust_mm: [0.0, 1.0, 2.0, -3.0],
+            },
+        ));
+        p.sheets
+            .push((PathBuf::from("/scans/c.png"), SheetAdj::default()));
         let q = Project::parse(&p.to_text(None), None).unwrap();
         assert_eq!(q.sheets, p.sheets);
         assert_eq!(q.settings.mode, OutputMode::Hybrid);
@@ -323,7 +391,10 @@ mod tests {
         assert_eq!(q.sheets[0].0, Path::new("/proj/x/1.png"));
         assert_eq!(q.sheets[1].0, Path::new("/abs/2.png"));
         assert!(Project::parse("hello", None).is_err());
-        assert!(Project::parse("legatorocr-project 9\n", None).unwrap_err().to_string().contains("version"));
+        assert!(Project::parse("legatorocr-project 9\n", None)
+            .unwrap_err()
+            .to_string()
+            .contains("version"));
         let e = Project::parse(&format!("{HEADER}\nmode = purple\n"), None).unwrap_err();
         assert!(format!("{e:#}").contains("line 2"), "{e:#}");
         assert!(Project::parse(&format!("{HEADER}\n[sheet]\nrotate = 1\n"), None).is_err());
@@ -333,9 +404,13 @@ mod tests {
 
     #[test]
     fn hostile_values_are_sanitised() {
-        let q = Project::parse(&format!("{HEADER}\ndpi = 999999\nmargins = nan,1,1,1\n"), None);
+        let q = Project::parse(
+            &format!("{HEADER}\ndpi = 999999\nmargins = nan,1,1,1\n"),
+            None,
+        );
         assert!(q.is_err());
-        let q = Project::parse(&format!("{HEADER}\ndpi = 999999\nsensitivity = 9\n"), None).unwrap();
+        let q =
+            Project::parse(&format!("{HEADER}\ndpi = 999999\nsensitivity = 9\n"), None).unwrap();
         assert_eq!(q.settings.dpi, 2400);
         assert!(q.settings.sauvola_k <= 1.0);
     }

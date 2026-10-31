@@ -26,7 +26,11 @@ fn box_smooth(p: &[f64], r: usize) -> Vec<f64> {
 fn band_energy(profile: &[f64], dpi: u32) -> f64 {
     let fine = box_smooth(profile, (dpi / 60).max(2) as usize);
     let coarse = box_smooth(profile, (dpi / 4).max(8) as usize);
-    fine.iter().zip(&coarse).map(|(a, b)| (a - b) * (a - b)).sum::<f64>() / profile.len().max(1) as f64
+    fine.iter()
+        .zip(&coarse)
+        .map(|(a, b)| (a - b) * (a - b))
+        .sum::<f64>()
+        / profile.len().max(1) as f64
 }
 
 /// `true` when text lines run vertically (page lies on its side).

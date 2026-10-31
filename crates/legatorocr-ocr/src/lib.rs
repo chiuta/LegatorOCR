@@ -32,7 +32,13 @@ pub struct OcrOptions {
 
 impl Default for OcrOptions {
     fn default() -> Self {
-        Self { lang: "eng".into(), psm: 3, min_conf: 0.0, tesseract: "tesseract".into(), tessdata: None }
+        Self {
+            lang: "eng".into(),
+            psm: 3,
+            min_conf: 0.0,
+            tesseract: "tesseract".into(),
+            tessdata: None,
+        }
     }
 }
 
@@ -64,14 +70,18 @@ pub fn resolve_tesseract(configured: &std::path::Path) -> PathBuf {
     }
     let on_path = std::env::var_os("PATH").is_some_and(|p| {
         std::env::split_paths(&p).any(|d| {
-            d.join(configured).is_file() || d.join(format!("{}.exe", configured.display())).is_file()
+            d.join(configured).is_file()
+                || d.join(format!("{}.exe", configured.display())).is_file()
         })
     });
     if on_path {
         return configured.to_path_buf();
     }
     for d in well_known_dirs() {
-        for name in [configured.to_path_buf(), PathBuf::from(format!("{}.exe", configured.display()))] {
+        for name in [
+            configured.to_path_buf(),
+            PathBuf::from(format!("{}.exe", configured.display())),
+        ] {
             let cand = d.join(name);
             if cand.is_file() {
                 return cand;
@@ -100,7 +110,10 @@ fn base_cmd(o: &OcrOptions) -> Command {
 pub fn valid_lang(l: &str) -> bool {
     !l.is_empty()
         && l.split('+').all(|p| {
-            !p.is_empty() && !p.starts_with('-') && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '/' || c == '-')
+            !p.is_empty()
+                && !p.starts_with('-')
+                && p.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '/' || c == '-')
         })
 }
 
@@ -110,7 +123,11 @@ pub fn check_engine(o: &OcrOptions) -> Result<String, OcrError> {
         .arg("--version")
         .output()
         .map_err(|e| OcrError::NotFound(e.to_string()))?;
-    let txt = String::from_utf8_lossy(if out.stdout.is_empty() { &out.stderr } else { &out.stdout });
+    let txt = String::from_utf8_lossy(if out.stdout.is_empty() {
+        &out.stderr
+    } else {
+        &out.stdout
+    });
     Ok(txt.lines().next().unwrap_or("tesseract").to_string())
 }
 
@@ -121,14 +138,21 @@ pub fn list_languages(o: &OcrOptions) -> Result<Vec<String>, OcrError> {
         .output()
         .map_err(|e| OcrError::NotFound(e.to_string()))?;
     let txt = String::from_utf8_lossy(&out.stdout);
-    Ok(txt.lines().skip(1).map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+    Ok(txt
+        .lines()
+        .skip(1)
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect())
 }
 
 /// Parse Tesseract OSD output (`Rotate: 90`, `Orientation confidence: 5.2`) into the
 /// clockwise rotation (0/90/180/270) that makes the text upright. Low confidence → `None`.
 pub fn parse_osd(out: &str) -> Option<u16> {
     let val = |key: &str| -> Option<f32> {
-        out.lines().find_map(|l| l.trim().strip_prefix(key)).and_then(|v| v.trim().parse().ok())
+        out.lines()
+            .find_map(|l| l.trim().strip_prefix(key))
+            .and_then(|v| v.trim().parse().ok())
     };
     let rot = val("Rotate:")? as i32;
     let conf = val("Orientation confidence:")?;
@@ -186,10 +210,22 @@ fn run_stdin(mut cmd: Command, png: Vec<u8>) -> Result<std::process::Output, Ocr
 pub fn recognize(page: &PageImage, dpi: u32, o: &OcrOptions) -> Result<Vec<Word>, OcrError> {
     let png = png_bytes(&page.to_dynamic())?;
     let mut cmd = base_cmd(o);
-    cmd.args(["stdin", "stdout", "-l", &o.lang, "--psm", &o.psm.to_string(), "--dpi", &dpi.to_string(), "tsv"]);
+    cmd.args([
+        "stdin",
+        "stdout",
+        "-l",
+        &o.lang,
+        "--psm",
+        &o.psm.to_string(),
+        "--dpi",
+        &dpi.to_string(),
+        "tsv",
+    ]);
     let out = run_stdin(cmd, png)?;
     if !out.status.success() {
-        return Err(OcrError::Failed(String::from_utf8_lossy(&out.stderr).trim().to_string()));
+        return Err(OcrError::Failed(
+            String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        ));
     }
     Ok(parse_tsv(&String::from_utf8_lossy(&out.stdout), o.min_conf))
 }
@@ -217,9 +253,115 @@ pub fn parse_tsv(tsv: &str, min_conf: f32) -> Vec<Word> {
                 line_ids.len() - 1
             }
         } as u32;
-        words.push(Word { text: text.to_string(), x: n(6), y: n(7), w: n(8), h: n(9), conf, line });
+        words.push(Word {
+            text: text.to_string(),
+            x: n(6),
+            y: n(7),
+            w: n(8),
+            h: n(9),
+            conf,
+            line,
+        });
     }
     words
+}
+
+/// Words grouped into lines (in the order the engine produced them), joined by
+/// spaces; lines by `\n`. Empty input → empty string.
+pub fn words_to_text(words: &[Word]) -> String {
+    let mut out = String::new();
+    let mut cur: Option<u32> = None;
+    for w in words {
+        match cur {
+            Some(l) if l == w.line => out.push(' '),
+            Some(_) => out.push('\n'),
+            None => {}
+        }
+        cur = Some(w.line);
+        out.push_str(&w.text);
+    }
+    out
+}
+
+fn xml_escape(s: &str) -> String {
+    let mut o = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => o.push_str("&amp;"),
+            '<' => o.push_str("&lt;"),
+            '>' => o.push_str("&gt;"),
+            '"' => o.push_str("&quot;"),
+            '\'' => o.push_str("&#39;"),
+            c if (c as u32) < 0x20 && c != '\t' => {} // not allowed in XML 1.0
+            c => o.push(c),
+        }
+    }
+    o
+}
+
+/// One hOCR `ocr_page` block (`page_no` starts at 1).
+pub fn hocr_page(words: &[Word], width: u32, height: u32, dpi: u32, page_no: usize) -> String {
+    let mut o = format!(
+        "<div class='ocr_page' id='page_{page_no}' title='bbox 0 0 {width} {height}; ppageno {}; scan_res {dpi} {dpi}'>\n",
+        page_no - 1
+    );
+    let mut i = 0;
+    let mut line_no = 0;
+    while i < words.len() {
+        let l = words[i].line;
+        let mut j = i;
+        while j < words.len() && words[j].line == l {
+            j += 1;
+        }
+        line_no += 1;
+        let (x0, y0) = (
+            words[i..j].iter().map(|w| w.x).min().unwrap_or(0),
+            words[i..j].iter().map(|w| w.y).min().unwrap_or(0),
+        );
+        let x1 = words[i..j]
+            .iter()
+            .map(|w| w.x.saturating_add(w.w))
+            .max()
+            .unwrap_or(0);
+        let y1 = words[i..j]
+            .iter()
+            .map(|w| w.y.saturating_add(w.h))
+            .max()
+            .unwrap_or(0);
+        o.push_str(&format!("  <span class='ocr_line' id='line_{page_no}_{line_no}' title='bbox {x0} {y0} {x1} {y1}'>"));
+        for (k, w) in words[i..j].iter().enumerate() {
+            o.push_str(&format!(
+                "<span class='ocrx_word' id='word_{page_no}_{line_no}_{}' title='bbox {} {} {} {}; x_wconf {}'>{}</span> ",
+                k + 1,
+                w.x,
+                w.y,
+                w.x.saturating_add(w.w),
+                w.y.saturating_add(w.h),
+                w.conf.round().clamp(0.0, 100.0) as u32,
+                xml_escape(&w.text)
+            ));
+        }
+        o.push_str("</span>\n");
+        i = j;
+    }
+    o.push_str("</div>\n");
+    o
+}
+
+/// Wrap hOCR pages into a complete document.
+pub fn hocr_document(pages: &[String]) -> String {
+    let mut o = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">\n\
+         <html xmlns=\"http://www.w3.org/1999/xhtml\" xml:lang=\"en\" lang=\"en\">\n<head>\n<title></title>\n\
+         <meta http-equiv=\"Content-Type\" content=\"text/html;charset=utf-8\" />\n\
+         <meta name='ocr-system' content='LegatorOCR (Tesseract engine)' />\n\
+         <meta name='ocr-capabilities' content='ocr_page ocr_line ocrx_word' />\n</head>\n<body>\n",
+    );
+    for p in pages {
+        o.push_str(p);
+    }
+    o.push_str("</body>\n</html>\n");
+    o
 }
 
 #[cfg(test)]
@@ -251,6 +393,30 @@ mod tests {
         for bad in ["", "+", "eng+", "--psm", "-l", "a b", "en;g", "ron+-x"] {
             assert!(!valid_lang(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn text_and_hocr_output() {
+        let w = |t: &str, x, line| Word {
+            text: t.into(),
+            x,
+            y: 10,
+            w: 20,
+            h: 8,
+            conf: 91.4,
+            line,
+        };
+        let words = vec![w("Hello", 5, 0), w("<&>", 40, 0), w("next", 5, 1)];
+        assert_eq!(words_to_text(&words), "Hello <&>\nnext");
+        assert_eq!(words_to_text(&[]), "");
+        let page = hocr_page(&words, 100, 50, 300, 1);
+        assert!(page.contains("bbox 0 0 100 50; ppageno 0; scan_res 300 300"));
+        assert!(page.contains("id='line_1_2'") && page.contains("x_wconf 91"));
+        assert!(page.contains("&lt;&amp;&gt;") && !page.contains("<&>"));
+        let doc = hocr_document(&[page]);
+        assert!(
+            doc.starts_with("<?xml") && doc.ends_with("</html>\n") && doc.contains("ocrx_word")
+        );
     }
 
     #[test]
