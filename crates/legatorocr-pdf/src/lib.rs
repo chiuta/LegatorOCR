@@ -6,6 +6,8 @@
 //!   glyph-less Type0 font with a ToUnicode CMap so any Unicode text (e.g.
 //!   Romanian ăâîșț) is searchable and copy-able.
 
+pub mod g4;
+
 use legatorocr_core::{BitImage, Page, PageImage, Word};
 use flate2::{write::ZlibEncoder, Compression};
 use image::{codecs::jpeg::JpegEncoder, ExtendedColorType};
@@ -104,14 +106,12 @@ impl PdfWriter {
         let compress = if pw > 65_000 || ph > 65_000 { Compress::Flate } else { self.compress };
         match &page.image {
             PageImage::Bw(b) => {
-                let data = pack_1bit_up_predicted(b);
-                let z = deflate(&data);
+                let (filter, z) = encode_1bit(b);
                 self.stream_obj(
                     img_id,
                     &format!(
                         "/Type /XObject /Subtype /Image /Width {pw} /Height {ph} \
-                         /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /FlateDecode \
-                         /DecodeParms << /Predictor 15 /Colors 1 /BitsPerComponent 1 /Columns {pw} >>"
+                         /ColorSpace /DeviceGray /BitsPerComponent 1 {filter}"
                     ),
                     &z,
                 );
@@ -240,14 +240,10 @@ impl PdfWriter {
             cs.push_str(&format!("q {w:.3} 0 0 {h:.3} {x:.3} {y:.3} cm /P{i} Do Q\n"));
         }
         let mask_id = self.alloc();
-        let z = deflate(&pack_1bit_up_predicted(&l.mask));
+        let (filter, z) = encode_1bit(&l.mask);
         self.stream_obj(
             mask_id,
-            &format!(
-                "/Type /XObject /Subtype /Image /Width {pw} /Height {ph} /ImageMask true \
-                 /BitsPerComponent 1 /Filter /FlateDecode \
-                 /DecodeParms << /Predictor 15 /Colors 1 /BitsPerComponent 1 /Columns {pw} >>"
-            ),
+            &format!("/Type /XObject /Subtype /Image /Width {pw} /Height {ph} /ImageMask true /BitsPerComponent 1 {filter}"),
             &z,
         );
         xo.push_str(&format!("/Mk {mask_id} 0 R"));
@@ -351,6 +347,27 @@ fn deflate(data: &[u8]) -> Vec<u8> {
     let mut e = ZlibEncoder::new(Vec::new(), Compression::best());
     e.write_all(data).unwrap();
     e.finish().unwrap()
+}
+
+/// Best encoding of a 1-bit page: (extra image-dict entries, bytes).
+fn encode_1bit(b: &BitImage) -> (String, Vec<u8>) {
+    let w = b.w as usize;
+    let g4 = g4::encode(w, (0..b.h as usize).map(|y| b.data[y * w..(y + 1) * w].iter().map(|&v| v != 0).collect()));
+    let flate = deflate(&pack_1bit_up_predicted(b));
+    if g4.len() <= flate.len() {
+        (
+            format!("/Filter /CCITTFaxDecode /DecodeParms << /K -1 /Columns {} /Rows {} /BlackIs1 false >>", b.w, b.h),
+            g4,
+        )
+    } else {
+        (
+            format!(
+                "/Filter /FlateDecode /DecodeParms << /Predictor 15 /Colors 1 /BitsPerComponent 1 /Columns {} >>",
+                b.w
+            ),
+            flate,
+        )
+    }
 }
 
 /// 1-bit DeviceGray rows (0 = black = ink), each prefixed with PNG filter
@@ -459,5 +476,67 @@ mod unicode_file {
             .collect();
         w.add_page(&page, &words);
         std::fs::write(path, w.finish()).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod g4_roundtrip {
+    use super::*;
+
+    fn xorshift(s: &mut u64) -> u64 {
+        *s ^= *s << 13;
+        *s ^= *s >> 7;
+        *s ^= *s << 17;
+        *s
+    }
+
+    /// Random, striped, blank, solid and very wide pages must decode exactly.
+    /// Needs `pdfimages` (poppler); the test is skipped when it is not installed.
+    #[test]
+    fn g4_decodes_exactly() {
+        if std::process::Command::new("pdfimages").arg("-v").output().is_err() {
+            eprintln!("pdfimages not installed: skipping");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("locr-g4-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let cases: [(u32, u32, u8); 10] =
+            [(1, 1, 0), (7, 5, 1), (64, 40, 2), (300, 200, 3), (3000, 8, 4), (5000, 6, 3), (640, 480, 5), (100, 100, 6), (129, 77, 1), (2600, 3, 7)];
+        for (i, &(w, h, kind)) in cases.iter().enumerate() {
+            let mut b = BitImage::new(w, h);
+            for y in 0..h {
+                for x in 0..w {
+                    let ink = match kind {
+                        0 => true,
+                        1 => xorshift(&mut seed) % 2 == 0,
+                        2 => (x / 3 + y / 5) % 2 == 0,
+                        3 => xorshift(&mut seed) % 40 == 0,
+                        4 => (x / 1100) % 2 == 1, // runs longer than 2560
+                        5 => (x * x + y * y) % 97 < 20,
+                        6 => false,
+                        _ => x >= 2562 || (x / 2).is_multiple_of(7),
+                    };
+                    b.set(x, y, ink);
+                }
+            }
+            let page = Page { image: PageImage::Bw(b.clone()), dpi: 300, skew_deg: 0.0, blank: false, split_index: None, layers: None };
+            let mut wr = PdfWriter::new(Compress::Flate);
+            wr.add_page(&page, &[]);
+            let pdf = dir.join(format!("c{i}.pdf"));
+            std::fs::write(&pdf, wr.finish()).unwrap();
+            let prefix = dir.join(format!("c{i}"));
+            let st = std::process::Command::new("pdfimages").arg("-png").arg(&pdf).arg(&prefix).status().unwrap();
+            assert!(st.success(), "case {i}");
+            let img = image::open(dir.join(format!("c{i}-000.png"))).unwrap().to_luma8();
+            assert_eq!(img.dimensions(), (w, h), "case {i}");
+            for y in 0..h {
+                for x in 0..w {
+                    let ink = img.get_pixel(x, y)[0] < 128;
+                    assert_eq!(ink, b.get(x, y), "case {i} ({w}x{h}) at {x},{y}");
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

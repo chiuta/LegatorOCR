@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, ValueEnum};
 use legatorocr_core::{HAlign, OutputMode, Settings, SplitMode, Threshold, VAlign};
+use legatorocr_engine::project::{Project, SheetAdj};
 use legatorocr_engine::{
     check_ocr, files::{collect_images, detect_dpi}, ocr::OcrOptions, run_export, write_atomic, ExportJob, PdfExport, SheetInput,
 };
@@ -38,8 +39,18 @@ enum Fmt {
 #[command(version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP), in reading order.
-    #[arg(required = true)]
+    #[arg(required_unless_present = "project")]
     inputs: Vec<PathBuf>,
+
+    /// Load settings and page list (with per-page adjustments) from a `.lgr` project
+    /// saved by the GUI or `--save-project`. Its processing settings replace the
+    /// command-line ones; output options (`--pdf`, `--ocr`, …) still apply.
+    #[arg(long)]
+    project: Option<PathBuf>,
+
+    /// Write the effective settings and page list to a `.lgr` project file.
+    #[arg(long)]
+    save_project: Option<PathBuf>,
 
     /// Directory for processed page images.
     #[arg(short = 'o', long, default_value = "legatorocr-out")]
@@ -157,6 +168,10 @@ struct Cli {
     #[arg(long, default_value = "center")]
     align: String,
 
+    /// Give every page the same size (the largest ordinary page of the book).
+    #[arg(long)]
+    uniform_size: bool,
+
     /// Keep tiny specks in black & white output.
     #[arg(long)]
     no_despeckle: bool,
@@ -270,6 +285,9 @@ fn main() -> Result<()> {
         hybrid_bg_dpi: cli.hybrid_dpi,
     };
 
+    let project = cli.project.as_deref().map(Project::load).transpose()?;
+    let settings = project.as_ref().map_or(settings, |p| p.settings.clone());
+
     let ocr_opts = OcrOptions {
         lang: cli.lang.clone(),
         psm: cli.psm,
@@ -295,6 +313,13 @@ fn main() -> Result<()> {
         legatorocr_engine::check_writable(pdf)?;
     }
     let mut inputs: Vec<PathBuf> = Vec::new();
+    let mut adjusts: Vec<SheetAdj> = Vec::new();
+    if let Some(pr) = &project {
+        for (p, a) in &pr.sheets {
+            inputs.push(p.clone());
+            adjusts.push(a.clone());
+        }
+    }
     for p in &cli.inputs {
         if p.is_dir() {
             let found = collect_images(std::slice::from_ref(p));
@@ -303,18 +328,41 @@ fn main() -> Result<()> {
             }
             inputs.extend(found);
         } else {
-            inputs.push(p.clone());
+            // multi-page TIFFs become one sheet per page; anything else is passed on as is
+            let pages = collect_images(std::slice::from_ref(p));
+            if pages.is_empty() {
+                inputs.push(p.clone());
+            } else {
+                inputs.extend(pages);
+            }
         }
     }
+    adjusts.resize(inputs.len(), SheetAdj::default());
+    if inputs.is_empty() {
+        bail!("the project lists no pages");
+    }
+    if let Some(path) = &cli.save_project {
+        let mut pr = Project { settings: settings.clone(), extra: Vec::new(), sheets: Vec::new() };
+        pr.extra.push(("pdf_quality".into(), cli.pdf_quality.to_string()));
+        pr.extra.push(("skip_blank".into(), cli.skip_blank.to_string()));
+        pr.extra.push(("uniform_size".into(), cli.uniform_size.to_string()));
+        for (p, a) in inputs.iter().zip(&adjusts) {
+            pr.sheets.push((std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()), a.clone()));
+        }
+        pr.save(path)?;
+        eprintln!("project saved: {}", path.display());
+    }
     let stems = output_stems(&inputs);
-    let sheets: Vec<SheetInput> =
-        inputs
-            .iter()
-            .map(|p| SheetInput {
-                path: p.clone(),
-                settings: Settings { dpi: cli.dpi.or_else(|| detect_dpi(p)).unwrap_or(300), ..settings.clone() },
-            })
-            .collect();
+    let from_project = project.is_some();
+    let sheets: Vec<SheetInput> = inputs
+        .iter()
+        .zip(&adjusts)
+        .map(|(p, a)| {
+            // a project fixes the resolution; otherwise read it from the image header
+            let dpi = cli.dpi.or_else(|| if from_project { None } else { detect_dpi(p) }).unwrap_or(settings.dpi);
+            SheetInput { path: p.clone(), settings: a.apply(&Settings { dpi, ..settings.clone() }) }
+        })
+        .collect();
     let save_images = !matches!(cli.format, Fmt::None);
     if save_images {
         std::fs::create_dir_all(&cli.out_dir)?;
@@ -331,6 +379,7 @@ fn main() -> Result<()> {
         skip_blank: cli.skip_blank,
         keep_going: cli.keep_going,
         osd: cli.auto_rotate.then(|| ocr_opts.clone()),
+        uniform_size: cli.uniform_size,
     };
     let res = run_export(
         &job,
@@ -352,7 +401,7 @@ fn main() -> Result<()> {
             );
             if save_images {
                 let path = cli.out_dir.join(format!("{name}.{ext}"));
-                if let Err(e) = pg.image.to_dynamic().save(&path) {
+                if let Err(e) = legatorocr_engine::save_page_image(pg, &path) {
                     first_err.lock().unwrap().get_or_insert(format!("{}: {e}", path.display()));
                 }
             }

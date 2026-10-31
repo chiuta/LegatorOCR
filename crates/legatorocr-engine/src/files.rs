@@ -50,6 +50,53 @@ pub fn natural_cmp(a: &str, b: &str) -> Ordering {
 }
 
 /// Image files from a mix of files and folders (folders are not recursed), natural order.
+/// `scan.tif#3` names page 3 (1-based) of a multi-page TIFF. A real file with that exact
+/// name always wins, so odd file names keep working.
+pub fn split_frame(path: &Path) -> (PathBuf, Option<u32>) {
+    if !path.exists() {
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            if let Some((base, n)) = name.rsplit_once('#') {
+                if let Ok(n) = n.parse::<u32>() {
+                    let b = path.with_file_name(base);
+                    if n >= 1 && b.is_file() {
+                        return (b, Some(n));
+                    }
+                }
+            }
+        }
+    }
+    (path.to_path_buf(), None)
+}
+
+fn is_tiff(p: &Path) -> bool {
+    p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("tif") || e.eq_ignore_ascii_case("tiff"))
+}
+
+/// Number of pages (IFDs) in a TIFF; 1 when it cannot be read as one.
+pub fn tiff_frame_count(path: &Path) -> u32 {
+    let Ok(f) = std::fs::File::open(path) else { return 1 };
+    let Ok(mut d) = tiff::decoder::Decoder::new(std::io::BufReader::new(f)) else { return 1 };
+    let mut n = 1;
+    while d.more_images() && n < 100_000 {
+        if d.next_image().is_err() {
+            break;
+        }
+        n += 1;
+    }
+    n
+}
+
+/// A multi-page TIFF becomes one entry per page (`scan.tif#1`, `scan.tif#2`, …).
+fn expand(p: &Path, out: &mut Vec<PathBuf>) {
+    let n = if is_tiff(p) { tiff_frame_count(p) } else { 1 };
+    if n > 1 {
+        let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        out.extend((1..=n).map(|i| p.with_file_name(format!("{name}#{i}"))));
+    } else {
+        out.push(p.to_path_buf());
+    }
+}
+
 pub fn collect_images(paths: &[PathBuf]) -> Vec<PathBuf> {
     let mut out = Vec::new();
     for p in paths {
@@ -58,9 +105,13 @@ pub fn collect_images(paths: &[PathBuf]) -> Vec<PathBuf> {
                 .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| is_image(p)).collect())
                 .unwrap_or_default();
             v.sort_by(|a, b| natural_cmp(&a.to_string_lossy(), &b.to_string_lossy()));
-            out.extend(v);
+            for f in v {
+                expand(&f, &mut out);
+            }
+        } else if split_frame(p).1.is_some() {
+            out.push(p.clone()); // an explicit page of a multi-page TIFF
         } else if is_image(p) {
-            out.push(p.clone());
+            expand(p, &mut out);
         }
     }
     out
@@ -71,6 +122,7 @@ pub fn collect_images(paths: &[PathBuf]) -> Vec<PathBuf> {
 /// what screenshots and many editors write by default and would be wrong here.
 pub fn detect_dpi(path: &Path) -> Option<u32> {
     use std::io::Read;
+    let path = &split_frame(path).0;
     let mut head = Vec::new();
     std::fs::File::open(path).ok()?.take(64 * 1024).read_to_end(&mut head).ok()?;
     let dpi = dpi_from_header(&head)?;

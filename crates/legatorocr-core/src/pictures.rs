@@ -51,7 +51,7 @@ pub fn detect(gray: &GrayImage, dpi: u32, sensitivity: f32) -> Vec<Zone> {
         for gx in 0..gw {
             let (x0, y0) = (gx * tile, gy * tile);
             let (x1, y1) = ((x0 + tile).min(sw), (y0 + tile).min(sh));
-            let (mut mid, mut n, mut paperish) = (0u32, 0u32, 0u32);
+            let (mut mid, mut n, mut paperish, mut dark) = (0u32, 0u32, 0u32, 0u32);
             for y in y0..y1 {
                 for &p in &raw[y * sw + x0..y * sw + x1] {
                     let r = p as f32 / paper;
@@ -59,13 +59,17 @@ pub fn detect(gray: &GrayImage, dpi: u32, sensitivity: f32) -> Vec<Zone> {
                         paperish += 1;
                     } else if r > 0.18 {
                         mid += 1;
+                    } else {
+                        dark += 1;
                     }
                     n += 1;
                 }
             }
             let n = n.max(1) as f32;
             // Mostly mid-tone, or dark-and-grainy with little paper: a picture tile.
-            pic[gy * gw + gx] = mid as f32 / n >= mid_needed && (paperish as f32 / n) < 0.55;
+            // (A solid dark tile — the black part of a photo — also counts; the blob-size
+            // test below keeps rules and bold headings from becoming pictures.)
+            pic[gy * gw + gx] = (mid as f32 / n >= mid_needed && (paperish as f32 / n) < 0.55) || dark as f32 / n >= 0.7;
         }
     }
     // Close gaps (radius 1 tile) so a picture with bright patches stays one blob.
@@ -185,5 +189,31 @@ mod tests {
         }
         assert!(detect(&g, 150, 0.5).is_empty());
         assert!(detect(&GrayImage::from_pixel(10, 10, Luma([200])), 300, 0.5).is_empty());
+    }
+
+    #[test]
+    fn mostly_black_photo_is_still_a_picture() {
+        // A dark photo: solid black with a few bright specks, under lines of text.
+        let (w, h) = (900u32, 1200u32);
+        let mut g = GrayImage::from_pixel(w, h, image::Luma([235]));
+        for y in 500..800 {
+            for x in 200..700 {
+                g.put_pixel(x, y, image::Luma([if (x * 31 + y * 17) % 97 == 0 { 200 } else { 8 }]));
+            }
+        }
+        for line in 0..8 {
+            for x in (100..800).step_by(17) {
+                for yy in 0..10 {
+                    for xx in 0..9 {
+                        g.put_pixel(x + xx, 100 + line * 40 + yy, image::Luma([30]));
+                    }
+                }
+            }
+        }
+        let zones = detect(&g, 150, 0.5);
+        assert_eq!(zones.len(), 1, "{zones:?}");
+        let r = zones[0].rect;
+        assert!(r.x <= 260 && r.y <= 560 && r.x + r.w >= 640 && r.y + r.h >= 740, "{r:?}");
+        assert!(r.y > 300, "text lines must not be swallowed: {r:?}");
     }
 }

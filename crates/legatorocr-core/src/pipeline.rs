@@ -337,8 +337,10 @@ fn layout(r: Rect, s: &Settings) -> Layout {
     let (inner_w, inner_h) = (r.w + ml + mr, r.h + mt + mb);
     let (mut cw, mut ch) = (inner_w, inner_h);
     if let Some((pw, ph)) = s.page_size_mm {
-        cw = cw.max(mm_to_px(pw, s.dpi));
-        ch = ch.max(mm_to_px(ph, s.dpi));
+        // ceil with a tiny tolerance: a size measured in mm must come back as the same pixels
+        let px = |mm: f32| ((mm as f64 / 25.4 * s.dpi as f64) - 0.01).ceil().max(0.0) as u32;
+        cw = cw.max(px(pw));
+        ch = ch.max(px(ph));
     }
     let (extra_w, extra_h) = (cw - inner_w, ch - inner_h);
     let dx = match s.align.0 {

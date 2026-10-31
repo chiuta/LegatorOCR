@@ -1203,11 +1203,13 @@ name = "legatorocr-engine"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "flate2",
  "image",
  "legatorocr-core",
  "legatorocr-ocr",
  "legatorocr-pdf",
  "rayon",
+ "tiff",
 ]
 
 [[package]]

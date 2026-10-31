@@ -124,6 +124,10 @@ pub struct App {
     auto_export: Option<(PathBuf, bool)>,
     /// Test hook: after the first preview, apply per-page adjustments (env LEGATOROCR_GUI_TEST_ADJUST).
     adjust_test: Option<bool>,
+    /// Settings or language changed and not yet written to the user's config file.
+    config_dirty: bool,
+    /// Last language written to config (so a menu change marks it dirty once).
+    saved_lang: Lang,
 }
 
 impl App {
@@ -151,6 +155,8 @@ impl App {
             show_about: false,
             auto_export: std::env::var_os("LEGATOROCR_GUI_AUTOEXPORT_PDF").map(|p| (PathBuf::from(p), false)),
             adjust_test: std::env::var_os("LEGATOROCR_GUI_TEST_ADJUST").map(|_| false),
+            config_dirty: false,
+            saved_lang: Lang::En,
             shot: std::env::var_os("LEGATOROCR_GUI_SCREENSHOT").map(|p| Shot {
                 path: p.into(),
                 ready_frames: 0,
@@ -158,8 +164,10 @@ impl App {
                 saved: Arc::new(AtomicBool::new(false)),
             }),
         };
+        app.load_config();
+        app.saved_lang = app.lang;
         if let Ok(v) = std::env::var("LEGATOROCR_GUI_LANG") {
-            app.lang = if v == "ro" { Lang::Ro } else { Lang::En };
+            app.lang = Lang::from_code(&v).unwrap_or(Lang::En);
         }
         if let Ok(v) = std::env::var("LEGATOROCR_GUI_MODE") {
             app.s.mode = match v.as_str() {
@@ -179,11 +187,88 @@ impl App {
         t(self.lang, key)
     }
 
+    /// Restore the previous session's settings and language (silently ignores a missing or bad file).
+    fn load_config(&mut self) {
+        let Some(path) = crate::settings::config_path() else { return };
+        let Ok(text) = std::fs::read_to_string(&path) else { return };
+        if let Ok(p) = legatorocr_engine::project::Project::parse(&text, None) {
+            self.s.apply_project(&p);
+            self.s.ocr = false; // OCR is slow: always opt in per session
+            if let Some(l) = p.get("lang").and_then(Lang::from_code) {
+                self.lang = l;
+            }
+        }
+    }
+
+    fn save_config(&mut self) {
+        let Some(path) = crate::settings::config_path() else { return };
+        let mut p = self.s.to_project(Vec::new());
+        p.extra.push(("lang".into(), self.lang.code().into()));
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = write_atomic(&path, p.to_text(None).as_bytes()); // best effort
+        self.config_dirty = false;
+    }
+
+    fn project_sheets(&self) -> Vec<(PathBuf, legatorocr_engine::project::SheetAdj)> {
+        self.sheets
+            .iter()
+            .map(|s| {
+                let a = &s.adj;
+                (
+                    std::fs::canonicalize(&s.path).unwrap_or_else(|_| s.path.clone()),
+                    legatorocr_engine::project::SheetAdj {
+                        rotate_quarters: a.rotate_quarters,
+                        split: a.split.map(Into::into),
+                        skew_deg: a.skew_deg,
+                        content_adjust_mm: a.content_adjust_mm,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    fn save_project(&mut self) {
+        let Some(path) = rfd::FileDialog::new().add_filter("LegatorOCR", &["lgr"]).set_file_name("project.lgr").save_file() else { return };
+        let r = self.s.to_project(self.project_sheets()).save(&path);
+        match r {
+            Ok(()) => self.say(format!("{}: {}", self.tr("status.project_saved"), path.display()), false),
+            Err(e) => self.say(format!("{}: {e:#}", self.tr("status.error")), true),
+        }
+    }
+
+    fn open_project(&mut self) {
+        let Some(path) = rfd::FileDialog::new().add_filter("LegatorOCR", &["lgr"]).pick_file() else { return };
+        match legatorocr_engine::project::Project::load(&path) {
+            Ok(p) => {
+                self.s.apply_project(&p);
+                self.sheets.clear();
+                self.selected = None;
+                let files: Vec<PathBuf> = p.sheets.iter().map(|(f, _)| f.clone()).collect();
+                self.add_files(&files);
+                for (sh, (_, a)) in self.sheets.iter_mut().zip(&p.sheets) {
+                    sh.adj = SheetAdjust {
+                        rotate_quarters: a.rotate_quarters,
+                        split: a.split.map(Into::into),
+                        skew_deg: a.skew_deg,
+                        content_adjust_mm: a.content_adjust_mm,
+                    };
+                }
+                self.settings_gen += 1;
+                self.config_dirty = true;
+                self.say(format!("{}: {}", self.tr("status.project_loaded"), path.display()), false);
+            }
+            Err(e) => self.say(format!("{}: {e:#}", self.tr("status.error")), true),
+        }
+    }
+
     fn say(&mut self, text: String, error: bool) {
         self.status = Some((text, error));
     }
 
     fn add_files(&mut self, files: &[PathBuf]) {
+        let files = &collect_images(files);
         // First files of a session: adopt the resolution stored in the scan, if any.
         if self.sheets.is_empty() {
             if let Some(d) = files.first().and_then(|f| legatorocr_engine::files::detect_dpi(f)) {
@@ -469,6 +554,7 @@ impl App {
             title: target.file_stem().map(|s| s.to_string_lossy().into_owned()),
         });
         let skip_blank = self.s.skip_blank;
+        let uniform_size = self.s.uniform_size;
         let osd = self.osd_options();
         let (cancel, done) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicUsize::new(0)));
         let (tx, rx) = mpsc::channel();
@@ -485,7 +571,7 @@ impl App {
                     check_ocr(o).map_err(|e| e.to_string())?;
                 }
                 let first_err: Mutex<Option<String>> = Mutex::new(None);
-                let job = ExportJob { sheets: &sheets, pdf, skip_blank, keep_going: true, osd };
+                let job = ExportJob { sheets: &sheets, pdf, skip_blank, keep_going: true, osd, uniform_size };
                 let res = run_export(
                     &job,
                     &c2,
@@ -497,7 +583,7 @@ impl App {
                                 None => "",
                             };
                             let path = target2.join(format!("{:04}_{}{}.png", i + 1, names[i], suffix));
-                            if let Err(e) = pg.image.to_dynamic().save(&path) {
+                            if let Err(e) = legatorocr_engine::save_page_image(pg, &path) {
                                 first_err.lock().unwrap().get_or_insert(format!("{}: {e}", path.display()));
                             }
                         }
@@ -553,6 +639,15 @@ impl App {
                     ui.close();
                 }
                 ui.separator();
+                if ui.button(self.tr("menu.open_project")).clicked() {
+                    self.open_project();
+                    ui.close();
+                }
+                if ui.add_enabled(!self.sheets.is_empty(), egui::Button::new(self.tr("menu.save_project"))).clicked() {
+                    self.save_project();
+                    ui.close();
+                }
+                ui.separator();
                 let idle = self.job.is_none() && !self.sheets.is_empty();
                 if ui.add_enabled(idle, egui::Button::new(self.tr("menu.export_pdf"))).clicked() {
                     self.start_export(&ctx, JobKind::Pdf);
@@ -568,7 +663,7 @@ impl App {
                 }
             });
             ui.menu_button(self.tr("menu.language"), |ui| {
-                for (l, name) in [(Lang::Ro, "Română"), (Lang::En, "English")] {
+                for (l, _, name) in Lang::ALL {
                     if ui.selectable_label(self.lang == l, name).clicked() {
                         self.lang = l;
                         ui.close();
@@ -706,6 +801,24 @@ impl App {
                         }
                     });
                 });
+                if self.s.page_size != PageSizeChoice::Free || self.s.uniform_size {
+                    ui.horizontal(|ui| {
+                        ui.label(tr("set.align"));
+                        use legatorocr_core::{HAlign, VAlign};
+                        let hn = |h: HAlign| tr(match h { HAlign::Left => "align.left", HAlign::Center => "align.center", HAlign::Right => "align.right" });
+                        let vn = |v: VAlign| tr(match v { VAlign::Top => "align.top", VAlign::Center => "align.center", VAlign::Bottom => "align.bottom" });
+                        egui::ComboBox::from_id_salt("alignh").selected_text(hn(self.s.align.0)).width(80.0).show_ui(ui, |ui| {
+                            for h in [HAlign::Left, HAlign::Center, HAlign::Right] {
+                                ch |= ui.selectable_value(&mut self.s.align.0, h, hn(h)).changed();
+                            }
+                        });
+                        egui::ComboBox::from_id_salt("alignv").selected_text(vn(self.s.align.1)).width(80.0).show_ui(ui, |ui| {
+                            for v in [VAlign::Top, VAlign::Center, VAlign::Bottom] {
+                                ch |= ui.selectable_value(&mut self.s.align.1, v, vn(v)).changed();
+                            }
+                        });
+                    });
+                }
                 if self.s.page_size == PageSizeChoice::Custom {
                     ui.horizontal(|ui| {
                         ch |= ui.add(egui::DragValue::new(&mut self.s.custom_w).range(10.0..=1000.0).suffix(" mm")).changed();
@@ -759,10 +872,11 @@ impl App {
             egui::CollapsingHeader::new(tr("set.pdf")).default_open(true).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(tr("set.quality"));
-                    ui.add(egui::Slider::new(&mut self.s.pdf_quality, 0..=100));
+                    self.config_dirty |= ui.add(egui::Slider::new(&mut self.s.pdf_quality, 0..=100)).changed();
                 });
                 ui.label(RichText::new(tr("set.quality_hint")).small().weak());
-                ui.checkbox(&mut self.s.skip_blank, tr("set.skip_blank"));
+                self.config_dirty |= ui.checkbox(&mut self.s.skip_blank, tr("set.skip_blank")).changed();
+                self.config_dirty |= ui.checkbox(&mut self.s.uniform_size, tr("set.uniform")).changed();
             });
             egui::CollapsingHeader::new(tr("set.ocr")).default_open(true).show(ui, |ui| {
                 let can_ocr = !self.installed.is_empty();
@@ -809,6 +923,7 @@ impl App {
         });
         if ch {
             self.settings_gen += 1;
+            self.config_dirty = true;
         }
     }
 
@@ -874,6 +989,14 @@ impl App {
             if ui.button(tr("adj.reset")).clicked() {
                 *adj = SheetAdjust::default();
                 adj_changed = true;
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.label(tr("adj.content")).on_hover_text(tr("adj.content_hint"));
+            let a = &mut self.sheets[i].adj.content_adjust_mm;
+            for (v, k) in a.iter_mut().zip(["adj.left", "adj.top", "adj.right", "adj.bottom"]) {
+                ui.label(tr(k));
+                adj_changed |= ui.add(egui::DragValue::new(v).range(-100.0..=100.0).speed(0.2).fixed_decimals(1)).changed();
             }
         });
         if adj_changed {
@@ -944,6 +1067,14 @@ impl eframe::App for App {
         egui::Panel::right("settings").default_size(310.0).min_size(250.0).show(ui, |ui| self.settings_panel(ui));
         egui::CentralPanel::default().show(ui, |ui| self.preview(ui));
         self.request_preview(&ctx);
+        if self.lang != self.saved_lang {
+            self.saved_lang = self.lang;
+            self.config_dirty = true;
+        }
+        // Write the config once a slider drag has ended, not on every frame of it.
+        if self.config_dirty && !ctx.input(|i| i.pointer.any_down()) {
+            self.save_config();
+        }
         if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
             egui::Area::new(egui::Id::unique("drop_hint")).anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO).show(&ctx, |ui| {
                 ui.label(RichText::new(self.tr("drop.hint")).size(28.0).strong());
