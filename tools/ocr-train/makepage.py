@@ -10,7 +10,8 @@ rng = random.Random(int(sys.argv[6]) if len(sys.argv) > 6 else 3)
 W, H = int(8.27 * dpi), int(11.69 * dpi)
 im = Image.new("L", (W, H), 245)
 d = ImageDraw.Draw(im)
-fp = "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf"
+import os
+fp = os.environ.get("FONT", "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf")
 size = round(11 * dpi / 72)
 f = ImageFont.truetype(fp, size)
 lines_out = []
@@ -38,4 +39,14 @@ for c in range(cols):
         if rng.random() < 0.08: y += size
     lines_out += col_lines
 open(txt, "w").write("\n".join(lines_out) + "\n")
+if os.environ.get("DEGRADE"):
+    import numpy as np
+    from PIL import ImageFilter
+    im = im.rotate(rng.uniform(-0.4, 0.4), resample=Image.BILINEAR, fillcolor=245)
+    im = im.filter(ImageFilter.GaussianBlur(0.8))
+    a = np.asarray(im).astype(np.float32)
+    g = np.random.default_rng(1)
+    a = a + g.normal(0, 9, a.shape)
+    a[g.random(a.shape) < 0.0008] = 0
+    im = Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
 im.save(out, dpi=(dpi, dpi))

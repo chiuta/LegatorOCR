@@ -12,7 +12,12 @@ fn main() {
         let (_, ink) = legatorocr_nocr::layout::to_ink(&PageImage::Gray(img.clone()), dpi);
         let med = legatorocr_nocr::layout::median_component_height(&ink);
         let lines = legatorocr_nocr::layout::find_lines(&ink, med);
-        eprintln!("median component height {med}, {} lines; first: {:?}", lines.len(), lines.first());
+        eprintln!("median component height {med}, {} lines", lines.len());
+        for l in lines.iter().take(12) {
+            let mut n = 0u32;
+            for y in l.y..l.y + l.h { for x in l.x..l.x + l.w { n += ink.get(x, y) as u32; } }
+            eprintln!("  line x{} y{} w{} h{} ink{}", l.x, l.y, l.w, l.h, n);
+        }
     }
     let t = std::time::Instant::now();
     let words = recognize(&PageImage::Gray(img), dpi, &model, &NativeOptions { lang: std::env::var("NOCR_LANG").unwrap_or_default(), ..Default::default() });

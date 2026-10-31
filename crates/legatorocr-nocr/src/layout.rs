@@ -20,11 +20,34 @@ pub fn to_ink(page: &PageImage, dpi: u32) -> (GrayImage, BitImage) {
         PageImage::Bw(b) => (b.to_gray(), b.clone()),
         _ => {
             let g = page.to_gray();
+            let smooth = median3(&g);
             let win = ((dpi.max(72) / 6) | 1).clamp(15, 151);
-            let ink = binarize::sauvola(&g, win, 0.25);
+            let ink = binarize::sauvola(&smooth, win, 0.25);
             (g, ink)
         }
     }
+}
+
+/// 3×3 median filter: removes single-pixel scanner noise before thresholding, keeps edges.
+fn median3(g: &GrayImage) -> GrayImage {
+    let (w, h) = (g.width() as usize, g.height() as usize);
+    let src = g.as_raw();
+    let mut out = src.clone();
+    for y in 1..h.saturating_sub(1) {
+        for x in 1..w.saturating_sub(1) {
+            let mut v = [0u8; 9];
+            let mut k = 0;
+            for dy in 0..3 {
+                for dx in 0..3 {
+                    v[k] = src[(y + dy - 1) * w + x + dx - 1];
+                    k += 1;
+                }
+            }
+            v.select_nth_unstable(4);
+            out[y * w + x] = v[4];
+        }
+    }
+    GrayImage::from_raw(g.width(), g.height(), out).expect("same size")
 }
 
 /// Median height of the connected components that look like letters (8-connectivity).
@@ -173,7 +196,61 @@ pub fn find_lines(ink: &BitImage, med_h: u32) -> Vec<Line> {
     let mut out = Vec::new();
     let root = (0, 0, ink.w, ink.h);
     cut(&p, root, med, 0, &mut out);
+    attach_floating_marks(&mut out, med);
+    // speckle: boxes that hold almost no ink are scanner dust, not text
+    out.retain(|l| {
+        let (x1, y1) = (l.x + l.w, l.y + l.h);
+        let n: u32 = p.rows((l.x, l.y, x1, y1)).iter().sum();
+        n * 12 > med * med
+    });
     out
+}
+
+/// Accents over capitals, dots and the like float above the line body with a blank row between
+/// them; the X-Y cut then makes them separate "lines". Glue each such thin piece to the line it
+/// belongs to (close vertically, overlapping horizontally) and drop leftovers that are mere specks.
+fn attach_floating_marks(lines: &mut Vec<Line>, med: u32) {
+    let thin = |l: &Line| l.h * 2 < med;
+    let mut i = 0;
+    while i < lines.len() {
+        if !thin(&lines[i]) {
+            i += 1;
+            continue;
+        }
+        let t = lines[i].clone();
+        let mut target = None;
+        for (j, l) in lines.iter().enumerate() {
+            if j == i || thin(l) {
+                continue;
+            }
+            let (t_end, l_end) = (t.y + t.h, l.y + l.h);
+            let vgap = if t_end <= l.y {
+                l.y - t_end
+            } else if l_end <= t.y {
+                t.y - l_end
+            } else {
+                0
+            };
+            let ox = (t.x + t.w).min(l.x + l.w).saturating_sub(t.x.max(l.x));
+            if vgap * 5 <= med * 2 && ox * 2 >= t.w && target.is_none_or(|(_, g)| vgap < g) {
+                target = Some((j, vgap));
+            }
+        }
+        if let Some((j, _)) = target {
+            let l = &mut lines[j];
+            let (x0, y0) = (l.x.min(t.x), l.y.min(t.y));
+            let (x1, y1) = ((l.x + l.w).max(t.x + t.w), (l.y + l.h).max(t.y + t.h));
+            *l = Line { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+            lines.remove(i);
+            if j < i {
+                i -= 1;
+            }
+        } else if t.w < med * 3 {
+            lines.remove(i); // an isolated speck
+        } else {
+            i += 1;
+        }
+    }
 }
 
 fn cut(p: &Prof, r: (u32, u32, u32, u32), med: u32, depth: u32, out: &mut Vec<Line>) {
@@ -201,7 +278,9 @@ fn cut(p: &Prof, r: (u32, u32, u32, u32), med: u32, depth: u32, out: &mut Vec<Li
         (None, Some((s, l))) => split_v(p, r, s, l, med, depth, out),
         (Some((hs, hl)), Some((vs, vl))) => {
             // prefer the cut that separates more (relative to the letter size)
-            if vl as u32 * 3 > hl as u32 * 8 && h > med * 3 {
+            // a whitespace column running through several lines is a gutter: read it column by
+            // column unless the blank row band is clearly bigger (a heading above two columns)
+            if h > med * 3 && vl as u32 * 2 >= hl as u32 {
                 split_v(p, r, vs, vl, med, depth, out);
             } else {
                 split_h(p, r, hs, med, depth, out);
