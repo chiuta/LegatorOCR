@@ -1,15 +1,16 @@
 name: PDF/A validation
 # Runs the veraPDF validator over PDFs that LegatorOCR writes with --pdfa.
-# Not part of the release gate yet: it reports, so we learn what is non-conformant before claiming PDF/A.
+# PDF/A-2b is what --pdfa declares; any file that veraPDF rejects fails this job.
 on:
   workflow_dispatch:
+  push:
+    paths: ["crates/legatorocr-pdf/**", ".github/workflows/pdfa.yml"]
   schedule:
     - cron: "41 4 * * 2"
 
 jobs:
   verapdf:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -39,6 +40,9 @@ jobs:
           $B bw.png    --mode bw    --pdfa --ocr --lang eng --pdf bw_ocr.pdf -o o2
           $B color.png --mode mixed --pdfa --pdf color_mixed.pdf -o o3
           $B color.png --mode color --pdfa --ocr --lang eng --pdf color_ocr.pdf -o o4
+          $B color.png --mode hybrid --pdfa --pdf color_hybrid.pdf -o o5
+          $B bw.png color.png --mode bw --pdfa --ocr --lang eng --pdf two_pages.pdf -o o6
+          $B bw.png color.png --mode gray --pdfa --pdf gray_two.pdf -o o7
           ls -la *.pdf
       - name: Install veraPDF
         run: |
@@ -67,18 +71,14 @@ jobs:
           sed -i 's/^          //' auto.xml
           java -jar "$d"/verapdf-izpack-installer-*.jar auto.xml
           /opt/verapdf/verapdf --version
-      - name: Validate (PDF/A-2b and 1b)
+      - name: Validate against PDF/A-2b
         run: |
           cd pdfa
-          for f in *.pdf; do
-            for fl in 2b 1b; do
-              echo "=== $f against PDF/A-$fl"
-              /opt/verapdf/verapdf --flavour $fl --format text "$f" || true
-            done
-          done
-          /opt/verapdf/verapdf --flavour 2b --format text *.pdf > ../verapdf-report.txt || true
+          /opt/verapdf/verapdf --flavour 2b --format text *.pdf | tee ../verapdf-report.txt
           /opt/verapdf/verapdf --flavour 2b --format xml  *.pdf > ../verapdf-report.xml || true
+          ! grep -q '^FAIL' ../verapdf-report.txt
       - uses: actions/upload-artifact@v7
+        if: always()
         with:
           name: verapdf-report
           path: |

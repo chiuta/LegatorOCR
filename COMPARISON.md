@@ -54,7 +54,7 @@ Sources read for this comparison:
 
 ## Not done (honest list)
 
-Mouse-drawn picture zones on the page, a draggable content box, dewarp control points, a native (non-Tesseract) OCR engine, table / column structure in the Word export, JBIG2 Huffman coding, certified PDF/A (a veraPDF job runs in CI and reports; until it passes, nothing is claimed), the extra binarisers of the Experimental
+Mouse-drawn picture zones on the page, a draggable content box, dewarp control points, a native (non-Tesseract) OCR engine, table / column structure in the Word export, JBIG2 Huffman coding, certified PDF/A (veraPDF validates our generated sample files against PDF/A-2b in CI; that covers the samples, not every input), the extra binarisers of the Experimental
 fork, EM denoise / deblur filters, and any run of the GUI or the Windows / macOS builds by the author (CI now smoke-tests the packaged command-line binary on every release target).
 
 Measured, not claimed: `docs/OCR-BENCH.md` (synthetic OCR accuracy, 8 languages × 3 conditions).
