@@ -487,7 +487,9 @@ pub fn remove_fingers(img: &mut RgbImage, dpi: u32, paper: Rgb<u8>) -> usize {
     let (py, _, pcr) = ycbcr(paper.0);
     let mask: Vec<u8> = small
         .as_raw()
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|p| {
             let (y, cb, cr) = ycbcr([p[0], p[1], p[2]]);
             ((77.0..=127.0).contains(&cb)
