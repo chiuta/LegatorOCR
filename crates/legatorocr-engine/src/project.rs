@@ -169,6 +169,7 @@ pub fn settings_to_pairs(s: &Settings) -> Vec<(&'static str, String)> {
         ("despeckle_strength", s.despeckle_strength.to_string()),
         ("show_through", s.show_through.to_string()),
         ("descreen", s.descreen.to_string()),
+        ("perspective", s.perspective.to_string()),
     ]
 }
 
@@ -217,6 +218,7 @@ pub fn apply_pair(s: &mut Settings, k: &str, v: &str) -> Result<bool> {
         "despeckle_strength" => s.despeckle_strength = v.parse().map_err(|_| bad())?,
         "show_through" => s.show_through = b(v).ok_or_else(bad)?,
         "descreen" => s.descreen = b(v).ok_or_else(bad)?,
+        "perspective" => s.perspective = b(v).ok_or_else(bad)?,
         _ => return Ok(false),
     }
     Ok(true)

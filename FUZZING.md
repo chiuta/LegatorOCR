@@ -38,3 +38,4 @@ absurd coordinates in the OCR text layer.
   production CCITT G4 decoder checked against the encoder (300 random pages, damaged streams) and against the independent test decoder.
 - `engine/tests/pdf_qpdf.rs`: reads files rewritten by qpdf (`--object-streams=generate`, `--qdf`, `--linearize`).
 - Round 2: fuzz_extreme also randomises `show_through` and `descreen`; engine tests cover duplicates, blank-separator splitting and target-size quality; OCR upscaling rules are unit-tested.
+- Round 3: fuzz_extreme randomises `perspective`; perspective module tested on a synthetic keystoned photo, upright, full-frame and dark inputs; multi-page TIFF checked with the `tiff` crate, Pillow and ImageMagick.

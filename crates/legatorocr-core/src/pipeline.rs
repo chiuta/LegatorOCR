@@ -101,6 +101,8 @@ pub struct Settings {
     pub show_through: bool,
     /// Smooth halftone screens of printed photographs.
     pub descreen: bool,
+    /// Straighten pages photographed at an angle (finds the page quadrilateral).
+    pub perspective: bool,
 }
 
 impl Default for Settings {
@@ -136,6 +138,7 @@ impl Default for Settings {
             despeckle_strength: 1.0,
             show_through: false,
             descreen: false,
+            perspective: false,
         }
     }
 }
@@ -276,6 +279,11 @@ impl Settings {
 /// Stages shared by [`process_page`] and [`measure_page`]: orientation and page split.
 fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<(RgbImage, Option<u8>)> {
     let mut rgb = transform::rot90(&src.to_rgb8(), s.rotate_quarters);
+    if s.perspective {
+        if let Some(flat) = crate::perspective::correct(&rgb) {
+            rgb = flat;
+        }
+    }
 
     if s.auto_orient {
         let a = analyse(&imageops::grayscale(&rgb), s.dpi);
@@ -1050,6 +1058,7 @@ mod tests {
                 despeckle_strength: rnd(500) as f32 / 100.0,
                 show_through: rnd(2) == 0,
                 descreen: rnd(2) == 0,
+                perspective: rnd(2) == 0,
             };
             let pages = process_page(&DynamicImage::ImageRgb8(img), &s);
             assert!(!pages.is_empty() && pages.len() <= 2, "iteration {it}");

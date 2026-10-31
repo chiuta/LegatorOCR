@@ -13,6 +13,7 @@ pub mod deskew;
 pub mod dewarp;
 pub mod layers;
 pub mod orient;
+pub mod perspective;
 pub mod pictures;
 pub mod pipeline;
 pub mod split;

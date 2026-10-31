@@ -342,6 +342,74 @@ pub fn tiff_g4(b: &legatorocr_core::BitImage, dpi: u32) -> Vec<u8> {
     out
 }
 
+/// One Group 4 compressed page for [`tiff_g4_multi`].
+pub struct G4Strip {
+    pub w: u32,
+    pub h: u32,
+    pub dpi: u32,
+    /// Output of [`encode_bitimage`].
+    pub data: Vec<u8>,
+}
+
+impl G4Strip {
+    pub fn from_bitimage(b: &legatorocr_core::BitImage, dpi: u32) -> Self {
+        G4Strip {
+            w: b.w,
+            h: b.h,
+            dpi,
+            data: encode_bitimage(b),
+        }
+    }
+}
+
+/// A multi-page Group 4 TIFF (one IFD per page, chained), the archival format for
+/// black & white books. Pages are stored in the order given.
+pub fn tiff_g4_multi(pages: &[G4Strip]) -> Vec<u8> {
+    let mut out: Vec<u8> =
+        Vec::with_capacity(pages.iter().map(|p| p.data.len() + 200).sum::<usize>() + 8);
+    out.extend_from_slice(b"II\x2a\x00");
+    out.extend_from_slice(&0u32.to_le_bytes()); // first IFD, patched
+    let mut next_field = 4usize;
+    for p in pages {
+        let strip_off = out.len() as u32;
+        out.extend_from_slice(&p.data);
+        if out.len() % 2 == 1 {
+            out.push(0);
+        }
+        let ifd_off = out.len() as u32;
+        out[next_field..next_field + 4].copy_from_slice(&ifd_off.to_le_bytes());
+        let res_off = ifd_off + 2 + 12 * 12 + 4;
+        let entries: [(u16, u16, u32, u32); 12] = [
+            (256, 4, 1, p.w),
+            (257, 4, 1, p.h),
+            (258, 3, 1, 1),
+            (259, 3, 1, 4),
+            (262, 3, 1, 0),
+            (273, 4, 1, strip_off),
+            (277, 3, 1, 1),
+            (278, 4, 1, p.h),
+            (279, 4, 1, p.data.len() as u32),
+            (282, 5, 1, res_off),
+            (283, 5, 1, res_off + 8),
+            (296, 3, 1, 2),
+        ];
+        out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        for (tag, ty, count, val) in entries {
+            out.extend_from_slice(&tag.to_le_bytes());
+            out.extend_from_slice(&ty.to_le_bytes());
+            out.extend_from_slice(&count.to_le_bytes());
+            out.extend_from_slice(&val.to_le_bytes());
+        }
+        next_field = out.len();
+        out.extend_from_slice(&0u32.to_le_bytes());
+        for _ in 0..2 {
+            out.extend_from_slice(&p.dpi.to_le_bytes());
+            out.extend_from_slice(&1u32.to_le_bytes());
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Decoder (T.6 / Group 4), tolerant: a damaged stream yields white rows for the
 // rest of the image instead of an error, like a viewer would show it.

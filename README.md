@@ -81,6 +81,8 @@ Without Tesseract everything else works; the OCR switch is disabled and says why
 | Paper problems | `--show-through` (levels the lighting, then pulls pixels only slightly darker than the paper back to paper; real ink is untouched), `--descreen` (≈2 mm tiles that are mostly mid-tone and busy at pixel scale are lightly blurred; text tiles are left alone) |
 | Batch | `--skip-duplicates` (consecutive pages with a 96×128 thumbnail difference ≤ 2/255), `--split-on-blank` (blank pages separate documents → `name_001.pdf`, …), `--target-size MB` (JPEG quality chosen from a sample of pages so the PDF fits) |
 | OCR input | pages below 250 dpi are enlarged ×2–×4 (Catmull-Rom) before Tesseract; word boxes are mapped back |
+| Phone photos | `--perspective`: finds the page as the large bright quadrilateral (Otsu + extreme corners, with convexity/fill checks) and warps it with a homography; does nothing for upright or full-frame scans |
+| QC and archive | `--report r.html` (contact sheet, flags blank / size-outlier / strongly deskewed pages), `--multitiff out.tif` (multi-page Group 4 TIFF, black & white only) |
 | Text output | `--txt` (plain text), `--hocr` (word boxes + confidences), PDF author/subject/keywords/dates |
 | PDF input | own tolerant reader: pages of scanned PDFs become `book.pdf#N` (Flate/LZW/ASCII85/RunLength, PNG/TIFF predictors, JPEG, CCITT G4, Gray/RGB/CMYK/Indexed, /Rotate, DPI from the page size); object streams and damaged cross-reference tables are fine; encrypted, JBIG2, JPEG 2000 and layered (multi-image) pages are refused with a clear message |
 | Profiles | `--profile NAME` / `--list-profiles` / `--save-profile NAME` (8 built in: book-bw, book-small-color, document-text, photo-archive, newspaper, form-dropout-red, negatives, phone-photos; user profiles in the config folder) and a GUI selector |
@@ -107,6 +109,7 @@ See `COMPARISON.md` for what other tools do that this one does not. In short:
   detected automatically (sensitivity adjustable) and the content box can be nudged per page.
 - Dewarp corrects vertical bending of text lines only (no perspective / horizontal stretch).
 - PDF input handles one scan image per page; PDF/A output is deliberately not claimed (the glyph-less, non-embedded text font would violate it); JBIG2 is not implemented.
+- Perspective correction needs a page that is clearly lighter than its surroundings and shows all four corners; otherwise it leaves the photo alone. It does not unroll curved pages (use `--dewarp`).
 - Skin/hole/finger removal are heuristics: `--fingers` is off by default and can eat skin-toned photographs at the page edge.
 - DPI is not read from TIFF headers (set it by hand); 16-bit TIFF is reduced to 8 bit.
 - A dark scanner-bed border *touching* the text can still enlarge the detected content box

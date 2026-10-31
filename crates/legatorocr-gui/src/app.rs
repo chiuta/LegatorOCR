@@ -1301,6 +1301,15 @@ impl App {
                             .checkbox(&mut self.s.auto_levels, tr("set.levels"))
                             .changed();
                         ch |= ui
+                            .checkbox(&mut self.s.show_through, tr("set.show_through"))
+                            .changed();
+                        ch |= ui
+                            .checkbox(&mut self.s.descreen, tr("set.descreen"))
+                            .changed();
+                        ch |= ui
+                            .checkbox(&mut self.s.perspective, tr("set.perspective"))
+                            .changed();
+                        ch |= ui
                             .checkbox(&mut self.s.punch_holes, tr("set.punch"))
                             .changed();
                         ch |= ui
@@ -1365,6 +1374,28 @@ impl App {
                         self.config_dirty |= ui
                             .checkbox(&mut self.s.uniform_size, tr("set.uniform"))
                             .changed();
+                        self.config_dirty |= ui
+                            .checkbox(&mut self.s.skip_duplicates, tr("set.skip_dup"))
+                            .changed();
+                        self.config_dirty |= ui
+                            .checkbox(&mut self.s.split_on_blank, tr("set.split_blank"))
+                            .changed();
+                        ui.horizontal(|ui| {
+                            ui.label(tr("set.target_mb"));
+                            self.config_dirty |= ui
+                                .add(
+                                    egui::DragValue::new(&mut self.s.target_mb)
+                                        .range(0..=100_000)
+                                        .custom_formatter(|v, _| {
+                                            if v < 1.0 {
+                                                "—".into()
+                                            } else {
+                                                format!("{v:.0} MB")
+                                            }
+                                        }),
+                                )
+                                .changed();
+                        });
                         ui.horizontal(|ui| {
                             ui.label(tr("set.author"));
                             self.config_dirty |= ui

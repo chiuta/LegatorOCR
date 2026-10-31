@@ -14,8 +14,10 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 pub mod files;
 pub mod profiles;
 pub mod project;
+pub mod report;
 pub use legatorocr_ocr as ocr;
 
+pub use legatorocr_pdf::g4;
 pub use legatorocr_pdf::Meta as PdfMeta;
 
 #[derive(Debug, Clone)]
@@ -97,7 +99,11 @@ pub fn thumb_diff(a: &[u8], b: &[u8]) -> f32 {
     if a.len() != b.len() || a.is_empty() {
         return 255.0;
     }
-    a.iter().zip(b).map(|(x, y)| (*x as i32 - *y as i32).unsigned_abs()).sum::<u32>() as f32 / a.len() as f32
+    a.iter()
+        .zip(b)
+        .map(|(x, y)| (*x as i32 - *y as i32).unsigned_abs())
+        .sum::<u32>() as f32
+        / a.len() as f32
 }
 
 /// Pass 1 of uniform sizing: the common page size in mm, from the pages' natural sizes.
@@ -668,7 +674,10 @@ pub fn run_export(
                 }
                 if job.skip_duplicates && !pg.blank {
                     let t = page_thumb(&pg);
-                    if last_thumb.as_deref().is_some_and(|l| thumb_diff(l, &t) <= 2.0) {
+                    if last_thumb
+                        .as_deref()
+                        .is_some_and(|l| thumb_diff(l, &t) <= 2.0)
+                    {
                         res.skipped_duplicates += 1;
                         continue;
                     }
@@ -1409,5 +1418,40 @@ mod batch_features_tests {
         assert!(q < 95, "got {q}");
         assert_eq!(quality_for_target(&s, None, 1_000, &no).unwrap(), 30);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod multitiff_tests {
+    use super::*;
+
+    #[test]
+    fn multipage_g4_tiff_reads_back_page_by_page() {
+        let strips: Vec<g4::G4Strip> = (1..=3u32)
+            .map(|n| {
+                let mut b = legatorocr_core::BitImage::new(40 + n, 30 + n);
+                for x in 0..(10 * n) {
+                    b.set(x, 5, true);
+                }
+                g4::G4Strip::from_bitimage(&b, 300)
+            })
+            .collect();
+        let f = std::env::temp_dir().join(format!("lgr-multi-{}.tif", std::process::id()));
+        std::fs::write(&f, g4::tiff_g4_multi(&strips)).unwrap();
+        assert_eq!(files::tiff_frame_count(&f), 3);
+        let pages = files::collect_images(std::slice::from_ref(&f));
+        assert_eq!(pages.len(), 3);
+        for (i, p) in pages.iter().enumerate() {
+            let img = load_image(p).unwrap().to_luma8();
+            assert_eq!(img.dimensions(), (41 + i as u32, 31 + i as u32));
+            assert_eq!(
+                img.get_pixel(10 * (i as u32 + 1) - 1, 5).0[0],
+                0,
+                "ink on page {}",
+                i + 1
+            );
+            assert_eq!(img.get_pixel(10 * (i as u32 + 1), 5).0[0], 255);
+        }
+        let _ = std::fs::remove_file(&f);
     }
 }

@@ -86,6 +86,14 @@ struct Cli {
     #[arg(long)]
     report_outliers: bool,
 
+    /// Write an HTML contact sheet (thumbnails, sizes, skew; odd pages highlighted).
+    #[arg(long)]
+    report: Option<PathBuf>,
+
+    /// Write all (black & white) pages into one multi-page Group 4 TIFF.
+    #[arg(long)]
+    multitiff: Option<PathBuf>,
+
     /// Write all processed pages into one PDF.
     #[arg(long)]
     pdf: Option<PathBuf>,
@@ -231,6 +239,10 @@ struct Cli {
     /// Fade print showing through thin paper (also levels the lighting).
     #[arg(long)]
     show_through: bool,
+
+    /// Straighten pages photographed at an angle (phone photos on a darker desk).
+    #[arg(long)]
+    perspective: bool,
 
     /// Smooth halftone screens of printed photographs.
     #[arg(long)]
@@ -407,6 +419,7 @@ fn main() -> Result<()> {
         despeckle_strength: cli.despeckle_strength,
         show_through: cli.show_through,
         descreen: cli.descreen,
+        perspective: cli.perspective,
     };
 
     let project = cli.project.as_deref().map(Project::load).transpose()?;
@@ -461,6 +474,8 @@ fn main() -> Result<()> {
         && matches!(cli.format, Fmt::None)
         && cli.txt.is_none()
         && cli.hocr.is_none()
+        && cli.report.is_none()
+        && cli.multitiff.is_none()
         && !cli.report_outliers
     {
         bail!("nothing to do: give --pdf and/or an image --format");
@@ -565,6 +580,14 @@ fn main() -> Result<()> {
         _ => "tif",
     };
     let first_err: Mutex<Option<String>> = Mutex::new(None);
+    if cli.multitiff.is_some() && (cli.skip_duplicates || cli.split_on_blank || cli.skip_blank) {
+        bail!("--multitiff writes every processed page; do not combine it with --skip-duplicates, --split-on-blank or --skip-blank");
+    }
+    type Key = (usize, u8);
+    let report_pages: Mutex<Vec<(Key, legatorocr_engine::report::ReportPage)>> =
+        Mutex::new(Vec::new());
+    let tiff_pages: Mutex<Vec<(Key, Option<legatorocr_engine::g4::G4Strip>)>> =
+        Mutex::new(Vec::new());
     let mut pdf_quality = cli.pdf_quality;
     if let Some(mb) = cli.target_size {
         if cli.pdf.is_none() || !(mb.is_finite() && mb > 0.0) {
@@ -625,6 +648,22 @@ fn main() -> Result<()> {
                 pg.skew_deg,
                 if pg.blank { ", blank" } else { "" }
             );
+            let key = (i, pg.split_index.unwrap_or(0));
+            if cli.report.is_some() {
+                report_pages.lock().unwrap().push((
+                    key,
+                    legatorocr_engine::report::ReportPage::from_page(name.clone(), pg),
+                ));
+            }
+            if cli.multitiff.is_some() {
+                let strip = match &pg.image {
+                    legatorocr_core::PageImage::Bw(b) => {
+                        Some(legatorocr_engine::g4::G4Strip::from_bitimage(b, pg.dpi))
+                    }
+                    _ => None,
+                };
+                tiff_pages.lock().unwrap().push((key, strip));
+            }
             if save_images {
                 let path = cli.out_dir.join(format!("{name}.{ext}"));
                 if let Err(e) = legatorocr_engine::save_page_image_q(pg, &path, cli.jpeg_quality) {
@@ -652,6 +691,29 @@ fn main() -> Result<()> {
             res.pages,
             cli.out_dir.display()
         );
+    }
+    if let Some(path) = &cli.report {
+        let mut v = report_pages.into_inner().unwrap();
+        v.sort_by_key(|(k, _)| *k);
+        let pages: Vec<_> = v.into_iter().map(|(_, p)| p).collect();
+        let (html, flagged) = legatorocr_engine::report::html(&pages);
+        write_atomic(path, html.as_bytes())?;
+        eprintln!(
+            "wrote {} ({} page(s), {} flagged)",
+            path.display(),
+            pages.len(),
+            flagged
+        );
+    }
+    if let Some(path) = &cli.multitiff {
+        let mut v = tiff_pages.into_inner().unwrap();
+        v.sort_by_key(|(k, _)| *k);
+        if v.iter().any(|(_, s)| s.is_none()) {
+            bail!("--multitiff needs black & white pages (use --mode bw)");
+        }
+        let strips: Vec<_> = v.into_iter().filter_map(|(_, s)| s).collect();
+        write_atomic(path, &legatorocr_engine::g4::tiff_g4_multi(&strips))?;
+        eprintln!("wrote {} ({} page(s))", path.display(), strips.len());
     }
     if res.skipped_duplicates > 0 {
         eprintln!("{} duplicate page(s) skipped", res.skipped_duplicates);

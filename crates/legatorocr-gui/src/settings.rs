@@ -83,6 +83,7 @@ pub struct UiSettings {
     pub despeckle_strength: f32,
     pub show_through: bool,
     pub descreen: bool,
+    pub perspective: bool,
     pub align: (HAlign, VAlign),
     pub pdf_quality: u8,
     pub skip_blank: bool,
@@ -134,6 +135,7 @@ impl Default for UiSettings {
             despeckle_strength: 1.0,
             show_through: false,
             descreen: false,
+            perspective: false,
             align: (HAlign::Center, VAlign::Center),
             pdf_quality: 80,
             skip_blank: false,
@@ -213,6 +215,7 @@ impl UiSettings {
             despeckle_strength: self.despeckle_strength,
             show_through: self.show_through,
             descreen: self.descreen,
+            perspective: self.perspective,
         }
     }
 
@@ -298,6 +301,7 @@ impl UiSettings {
         self.despeckle_strength = c.despeckle_strength;
         self.show_through = c.show_through;
         self.descreen = c.descreen;
+        self.perspective = c.perspective;
         if let Some(v) = p.get("pdf_quality").and_then(|v| v.parse::<u8>().ok()) {
             self.pdf_quality = v.min(100);
         }
@@ -410,6 +414,7 @@ mod tests {
             dropout: legatorocr_core::Dropout::Blue,
             despeckle_strength: 2.5,
             show_through: true,
+            perspective: true,
             ..Default::default()
         };
         let text = s.to_project(vec![]).to_text(None);
@@ -432,6 +437,14 @@ mod tests {
             (true, vec!["ron".into(), "eng".into()], 6)
         );
         assert_eq!((back.pdf_quality, back.uniform_size), (55, true));
+        assert_eq!(
+            (back.skip_duplicates, back.split_on_blank, back.target_mb),
+            (true, false, 25)
+        );
+        assert_eq!(
+            (back.show_through, back.descreen, back.perspective),
+            (true, false, true)
+        );
         assert_eq!(
             (
                 back.sidecar_txt,

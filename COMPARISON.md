@@ -36,6 +36,8 @@ Sources read for this comparison:
 | Show-through, halftone smoothing | ✘ | partial (filters) | ✔ |
 | Duplicate pages, separator-sheet splitting, target PDF size | ✘ | ✘ | ✔ (blank pages as separators; no barcodes) |
 | OCR on enlarged low-dpi pages | – | – | ✔ |
+| Perspective correction of phone photos | – | – | ◐ automatic quad detection, conservative |
+| HTML contact-sheet report, multi-page G4 TIFF | ✘ | ✘ | ✔ |
 | Outlier page report | – | – | ✔ `--report-outliers` |
 | GUI languages | many | many | 8 (ro en fr it es pt de hu) |
 | Platforms | Win / macOS / Linux | same | same (Windows/macOS from CI, unverified here) |
@@ -52,5 +54,5 @@ Sources read for this comparison:
 
 ## Not done (honest list)
 
-Hand-drawn picture / fill zones, dewarp control points, perspective correction (phone photos), JBIG2, PDF/A, the extra binarisers of the Experimental
+Hand-drawn picture / fill zones, dewarp control points, JBIG2, PDF/A, the extra binarisers of the Experimental
 fork, EM denoise / deblur filters, and any verification on Windows or macOS.
