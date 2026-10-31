@@ -625,7 +625,6 @@ mod tests {
         assert_eq!(h.len(), 1, "{h:?}");
         assert!(h[0].source.ends_with("a.tgz!in/n.txt"));
         assert_eq!(s.files, 2);
-        crate::archive::cleanup();
         let _ = std::fs::remove_dir_all(&d);
     }
 

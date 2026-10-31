@@ -197,6 +197,13 @@ fn tar_extract(mut r: impl Read, want: &dyn Fn(&str) -> bool, sink: &mut Sink) -
     Ok(())
 }
 
+/// macOS resource-fork leftovers (`__MACOSX/…`, `._name`) that archivers add: never pages.
+fn is_junk(member: &str) -> bool {
+    member
+        .split(['/', '\\'])
+        .any(|c| c == "__MACOSX" || c.starts_with("._"))
+}
+
 fn find_tool(names: &[&str]) -> Option<(String, PathBuf)> {
     let dirs: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect())
@@ -340,6 +347,7 @@ fn external_extract(archive: &Path, want: &dyn Fn(&str) -> bool, sink: &mut Sink
 /// archive) and return `(member path, extracted file)` in archive order (natural order of
 /// the member path for external extractors).
 pub fn extract(archive: &Path, want: &dyn Fn(&str) -> bool) -> Result<Vec<(String, PathBuf)>> {
+    let want = &|n: &str| !is_junk(n) && want(n);
     let Some(k) = kind(archive) else {
         bail!("{}: not a supported archive", archive.display());
     };
@@ -402,6 +410,14 @@ mod tests {
     }
 
     #[test]
+    fn mac_resource_forks_are_ignored() {
+        assert!(is_junk("__MACOSX/a/b.png"));
+        assert!(is_junk("in/._p1.png"));
+        assert!(!is_junk("in/p1.png"));
+        assert!(!is_junk("in/a._b.png"));
+    }
+
+    #[test]
     fn names_cannot_escape() {
         assert_eq!(flat_name(3, "../../etc/passwd"), "000003_passwd");
         assert_eq!(flat_name(0, "a\\b\\c:d.png"), "000000_c_d.png");
@@ -421,7 +437,6 @@ mod tests {
         assert_eq!(v[0].0, "p/b.jpg");
         assert_eq!(std::fs::read(&v[1].1).unwrap(), b"A");
         assert!(v[0].1.starts_with(work_dir()));
-        cleanup();
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -454,7 +469,6 @@ mod tests {
             assert_eq!(data, vec![b"one".to_vec(), b"two".to_vec()]);
             assert!(v.iter().any(|x| x.0.contains(&long)), "{v:?}");
         }
-        cleanup();
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -468,7 +482,6 @@ mod tests {
         std::fs::write(d.join("y.7z"), b"garbage").unwrap();
         // With or without an extractor installed: an error or nothing, never a panic.
         let _ = extract(&d.join("y.7z"), &|_| true);
-        cleanup();
         let _ = std::fs::remove_dir_all(&d);
     }
 }
