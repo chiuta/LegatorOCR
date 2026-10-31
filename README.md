@@ -122,6 +122,9 @@ See `COMPARISON.md` for what other tools do that this one does not. In short:
   (borders and corner shadows separated from the text are removed).
 - Windows and macOS builds come from the CI workflows (`.github/workflows`); the author's
   development environment verified Linux only.
+- Releases: **Actions → Release → Run workflow** (enter a tag such as `v0.2.0-pre.1`), or push a `v*`
+  tag. The workflow first runs the whole CI matrix, then builds all five platforms and opens a
+  **draft** pre-release for review; nothing is published until you press Publish.
 
 ## Clean-room statement
 
