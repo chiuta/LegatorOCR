@@ -9,6 +9,9 @@
 use crate::Rect;
 use image::GrayImage;
 
+/// A candidate blob whose tiles are, on average, more than this share paper is text, not a picture.
+const MAX_PAPER_SHARE: f32 = 0.58;
+
 /// One detected picture zone (full-resolution pixel coordinates).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Zone {
@@ -37,7 +40,7 @@ pub fn detect(gray: &GrayImage, dpi: u32, sensitivity: f32) -> Vec<Zone> {
     let (mut acc, mut paper) = (0u64, 255usize);
     for v in (0..256).rev() {
         acc += hist[v];
-        if acc * 5 >= total {
+        if acc * 10 >= total * 4 {
             paper = v;
             break;
         }
@@ -47,6 +50,7 @@ pub fn detect(gray: &GrayImage, dpi: u32, sensitivity: f32) -> Vec<Zone> {
     let mid_needed = 0.50 - 0.25 * sens; // share of mid-tone pixels that marks a picture tile
     let raw = small.as_raw();
     let mut pic = vec![false; gw * gh];
+    let mut pap = vec![0f32; gw * gh];
     for gy in 0..gh {
         for gx in 0..gw {
             let (x0, y0) = (gx * tile, gy * tile);
@@ -66,6 +70,7 @@ pub fn detect(gray: &GrayImage, dpi: u32, sensitivity: f32) -> Vec<Zone> {
                 }
             }
             let n = n.max(1) as f32;
+            pap[gy * gw + gx] = paperish as f32 / n;
             // Mostly mid-tone, or dark-and-grainy with little paper: a picture tile.
             // (A solid dark tile — the black part of a photo — also counts; the blob-size
             // test below keeps rules and bold headings from becoming pictures.)
@@ -105,11 +110,13 @@ pub fn detect(gray: &GrayImage, dpi: u32, sensitivity: f32) -> Vec<Zone> {
         }
         let (mut x0, mut y0, mut x1, mut y1, mut count) =
             (usize::MAX, usize::MAX, 0usize, 0usize, 0usize);
+        let mut paper_sum = 0f32;
         let mut st = vec![s];
         label[s] = true;
         while let Some(p) = st.pop() {
             let (px, py) = (p % gw, p / gw);
             count += 1;
+            paper_sum += pap[p];
             x0 = x0.min(px);
             y0 = y0.min(py);
             x1 = x1.max(px);
@@ -135,7 +142,14 @@ pub fn detect(gray: &GrayImage, dpi: u32, sensitivity: f32) -> Vec<Zone> {
         }
         let (bw, bh) = (x1 - x0 + 1, y1 - y0 + 1);
         // Big enough, reasonably filled (not a thin frame/rule), not a whole-page smear.
-        if bw >= min_tiles && bh >= min_tiles && count * 100 >= bw * bh * 45 {
+        // Paragraphs of text (heavy glyphs on yellowed paper look mid-grey tile by tile) still
+        // keep ~65–70 % paper between the lines; real photographs sit at 12–50 %.
+        let paper_share = paper_sum / count as f32;
+        if bw >= min_tiles
+            && bh >= min_tiles
+            && count * 100 >= bw * bh * 45
+            && paper_share <= MAX_PAPER_SHARE
+        {
             let scale = f * tile;
             let rx0 = (x0 * scale).min(w);
             let ry0 = (y0 * scale).min(h);
@@ -259,5 +273,45 @@ mod tests {
             "{r:?}"
         );
         assert!(r.y > 300, "text lines must not be swallowed: {r:?}");
+    }
+
+    #[test]
+    #[ignore = "diagnostic: LEGATOROCR_DIAG_DIR=<folder of scans>"]
+    fn diag_zones() {
+        let Ok(dir) = std::env::var("LEGATOROCR_DIAG_DIR") else {
+            return;
+        };
+        let mut fs: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .collect();
+        fs.sort();
+        for f in fs {
+            let Ok(img) = image::open(&f) else { continue };
+            let z = detect(&img.to_luma8(), 300, 0.5);
+            let area: u64 = z.iter().map(|z| z.rect.w as u64 * z.rect.h as u64).sum();
+            let page = img.width() as u64 * img.height() as u64;
+            println!(
+                "{} zones {} cover {:.1}%",
+                f.file_name().unwrap().to_string_lossy(),
+                z.len(),
+                100.0 * area as f64 / page as f64
+            );
+        }
+    }
+
+    /// Heavy text columns (mid-grey tile by tile, two thirds paper overall) are not pictures.
+    #[test]
+    fn paper_rich_grey_blocks_are_text_not_pictures() {
+        let mut g = GrayImage::from_pixel(900, 1200, Luma([240]));
+        for y in 200..900u32 {
+            for x in 150..750u32 {
+                if (x - 150) / 24 % 3 == 0 {
+                    g.put_pixel(x, y, Luma([120]));
+                }
+            }
+        }
+        assert!(detect(&g, 300, 0.5).is_empty());
     }
 }
