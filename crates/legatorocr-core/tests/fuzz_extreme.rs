@@ -326,6 +326,16 @@ fn gen_settings(r: &mut Rng) -> Settings {
     s.punch_holes = r.chance(40);
     s.fingers = r.chance(40);
     s.remove_lines = r.chance(40);
+    s.erase_zones = (0..r.below(4))
+        .map(|_| {
+            [
+                wild_f(r, -50.0, 400.0),
+                wild_f(r, -50.0, 400.0),
+                wild_f(r, -5.0, 400.0),
+                wild_f(r, -5.0, 400.0),
+            ]
+        })
+        .collect();
     s.dropout = r.pick(&legatorocr_core::Dropout::ALL);
     s.despeckle_strength = wild_f(r, 0.0, 6.0);
     s.show_through = r.chance(40);

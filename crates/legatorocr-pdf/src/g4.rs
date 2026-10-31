@@ -486,6 +486,98 @@ fn read_run(r: &mut BitReader, table: &RunTable) -> Option<usize> {
 /// Decode a Group 4 stream into `rows` rows of `width` pixels (`true` = black run).
 /// Returns the rows and how many were decoded before an error (the rest are white).
 /// `byte_align` = the PDF `EncodedByteAlign` flag.
+/// Decode one two-dimensional line against `reference`. `None` on an error / end of data.
+fn row_2d(
+    r: &mut BitReader,
+    reference: &[bool],
+    width: usize,
+    white: &RunTable,
+    black: &RunTable,
+) -> Option<Vec<bool>> {
+    let mut cur = vec![false; width];
+    let mut a0: isize = -1;
+    let mut colour = false;
+    while a0 < width as isize {
+        let mut x = (a0 + 1).max(0) as usize;
+        let b1 = loop {
+            if x >= width {
+                break width;
+            }
+            let prev = if x == 0 { false } else { reference[x - 1] };
+            if reference[x] != prev && reference[x] != colour {
+                break x;
+            }
+            x += 1;
+        };
+        let b2 = if b1 >= width {
+            width
+        } else {
+            let mut x = b1 + 1;
+            while x < width && reference[x] != colour {
+                x += 1;
+            }
+            x
+        };
+        // mode code (prefix-free, at most 7 bits)
+        let (mut code, mut len) = (0u16, 0u8);
+        let mode = loop {
+            let b = r.bit()?;
+            code = (code << 1) | b;
+            len += 1;
+            match (len, code) {
+                (1, 1) => break 0i32,
+                (3, 0b011) => break 1,
+                (3, 0b010) => break -1,
+                (3, 0b001) => break 100,
+                (4, 0b0001) => break 200,
+                (6, 0b000011) => break 2,
+                (6, 0b000010) => break -2,
+                (7, 0b0000011) => break 3,
+                (7, 0b0000010) => break -3,
+                (7.., _) => return None, // EOFB, extension codes or garbage
+                _ => {}
+            }
+        };
+        let fill = |cur: &mut Vec<bool>, from: usize, to: usize, c: bool| {
+            if c {
+                for v in cur.iter_mut().take(to.min(width)).skip(from) {
+                    *v = true;
+                }
+            }
+        };
+        match mode {
+            200 => {
+                fill(&mut cur, a0.max(0) as usize, b2, colour);
+                a0 = b2 as isize;
+            }
+            100 => {
+                let (t1, t2) = if colour {
+                    (black, white)
+                } else {
+                    (white, black)
+                };
+                let (Some(r1), Some(r2)) = (read_run(r, t1), read_run(r, t2)) else {
+                    return None;
+                };
+                let s = a0.max(0) as usize;
+                fill(&mut cur, s, s + r1, colour);
+                fill(&mut cur, s + r1, s + r1 + r2, !colour);
+                a0 = (s + r1 + r2) as isize;
+            }
+            d => {
+                let a1 = b1 as isize + d as isize;
+                if a1 < a0.max(0) || a1 as usize > width {
+                    return None;
+                }
+                fill(&mut cur, a0.max(0) as usize, a1 as usize, colour);
+                a0 = a1;
+                colour = !colour;
+            }
+        }
+    }
+    Some(cur)
+}
+
 pub fn decode(data: &[u8], width: usize, rows: usize, byte_align: bool) -> (Vec<Vec<bool>>, usize) {
     let (white, black) = run_tables();
     let mut r = BitReader { d: data, pos: 0 };
@@ -496,90 +588,132 @@ pub fn decode(data: &[u8], width: usize, rows: usize, byte_align: bool) -> (Vec<
         if byte_align {
             r.align();
         }
-        let mut cur = vec![false; width];
-        let mut a0: isize = -1;
-        let mut colour = false;
-        while a0 < width as isize {
-            let mut x = (a0 + 1).max(0) as usize;
-            let b1 = loop {
-                if x >= width {
-                    break width;
-                }
-                let prev = if x == 0 { false } else { reference[x - 1] };
-                if reference[x] != prev && reference[x] != colour {
-                    break x;
-                }
-                x += 1;
-            };
-            let b2 = if b1 >= width {
-                width
-            } else {
-                let mut x = b1 + 1;
-                while x < width && reference[x] != colour {
-                    x += 1;
-                }
-                x
-            };
-            // mode code (prefix-free, at most 7 bits)
-            let (mut code, mut len) = (0u16, 0u8);
-            let mode = loop {
-                let Some(b) = r.bit() else { break 'rows };
-                code = (code << 1) | b;
-                len += 1;
-                match (len, code) {
-                    (1, 1) => break 0i32,
-                    (3, 0b011) => break 1,
-                    (3, 0b010) => break -1,
-                    (3, 0b001) => break 100,
-                    (4, 0b0001) => break 200,
-                    (6, 0b000011) => break 2,
-                    (6, 0b000010) => break -2,
-                    (7, 0b0000011) => break 3,
-                    (7, 0b0000010) => break -3,
-                    (7.., _) => break 'rows, // EOFB, extension codes or garbage
-                    _ => {}
-                }
-            };
-            let fill = |cur: &mut Vec<bool>, from: usize, to: usize, c: bool| {
-                if c {
-                    for v in cur.iter_mut().take(to.min(width)).skip(from) {
-                        *v = true;
-                    }
-                }
-            };
-            match mode {
-                200 => {
-                    fill(&mut cur, a0.max(0) as usize, b2, colour);
-                    a0 = b2 as isize;
-                }
-                100 => {
-                    let (t1, t2) = if colour {
-                        (black, white)
-                    } else {
-                        (white, black)
-                    };
-                    let (Some(r1), Some(r2)) = (read_run(&mut r, t1), read_run(&mut r, t2)) else {
-                        break 'rows;
-                    };
-                    let s = a0.max(0) as usize;
-                    fill(&mut cur, s, s + r1, colour);
-                    fill(&mut cur, s + r1, s + r1 + r2, !colour);
-                    a0 = (s + r1 + r2) as isize;
-                }
-                d => {
-                    let a1 = b1 as isize + d as isize;
-                    if a1 < a0.max(0) || a1 as usize > width {
-                        break 'rows;
-                    }
-                    fill(&mut cur, a0.max(0) as usize, a1 as usize, colour);
-                    a0 = a1;
-                    colour = !colour;
-                }
-            }
-        }
+        let Some(cur) = row_2d(&mut r, &reference, width, white, black) else {
+            break 'rows;
+        };
         reference = cur.clone();
         out.push(cur);
         ok += 1;
+    }
+    out.resize(rows, vec![false; width]);
+    (out, ok)
+}
+
+/// Consume an EOL (at least 11 zero bits, any number of fill zeros, then a 1).
+fn take_eol(r: &mut BitReader) -> bool {
+    let save = r.pos;
+    let mut zeros = 0;
+    loop {
+        match r.bit() {
+            Some(0) => zeros += 1,
+            Some(_) => {
+                if zeros >= 11 {
+                    return true;
+                }
+                break;
+            }
+            None => break,
+        }
+    }
+    r.pos = save;
+    false
+}
+
+/// One-dimensional (modified Huffman) line.
+fn row_1d(
+    r: &mut BitReader,
+    width: usize,
+    white: &RunTable,
+    black: &RunTable,
+) -> Option<Vec<bool>> {
+    let mut cur = vec![false; width];
+    let (mut x, mut colour) = (0usize, false);
+    while x < width {
+        let n = read_run(r, if colour { black } else { white })?;
+        if x + n > width {
+            return None;
+        }
+        if colour {
+            for v in cur.iter_mut().skip(x).take(n) {
+                *v = true;
+            }
+        }
+        x += n;
+        colour = !colour;
+    }
+    Some(cur)
+}
+
+/// Decode a CCITT Group 3 stream (PDF `K >= 0`): `k == 0` is purely one-dimensional,
+/// `k > 0` mixes 1-D and 2-D lines, each introduced by an EOL and a tag bit.
+/// Damaged lines are skipped by resynchronising on the next EOL. Same result shape as
+/// [`decode`].
+pub fn decode_g3(
+    data: &[u8],
+    width: usize,
+    rows: usize,
+    k: i64,
+    byte_align: bool,
+) -> (Vec<Vec<bool>>, usize) {
+    let (white, black) = run_tables();
+    let mut r = BitReader { d: data, pos: 0 };
+    let mut reference = vec![false; width];
+    let mut out: Vec<Vec<bool>> = Vec::with_capacity(rows.min(1 << 16));
+    let mut ok = 0;
+    let mut guard = 0usize;
+    while out.len() < rows && r.pos < data.len() * 8 && guard < rows * 2 + 64 {
+        guard += 1;
+        let had_eol = take_eol(&mut r);
+        if had_eol && take_eol(&mut r) {
+            break; // RTC: consecutive EOLs
+        }
+        if byte_align && !had_eol {
+            r.align();
+        }
+        let two_d = if k > 0 {
+            if !had_eol && !out.is_empty() {
+                // 2-D streams always carry EOLs; without one we are lost
+                None
+            } else {
+                match r.bit() {
+                    Some(1) => Some(false),
+                    Some(_) => Some(true),
+                    None => break,
+                }
+            }
+        } else {
+            Some(false)
+        };
+        let row = match two_d {
+            Some(false) => row_1d(&mut r, width, white, black),
+            Some(true) => row_2d(&mut r, &reference, width, white, black),
+            None => None,
+        };
+        match row {
+            Some(row) => {
+                reference.clone_from(&row);
+                out.push(row);
+                ok += 1;
+            }
+            None => {
+                // resynchronise: skip to the next EOL, emit a blank line for the lost one
+                let mut found = false;
+                while r.pos < data.len() * 8 {
+                    let save = r.pos;
+                    if take_eol(&mut r) {
+                        r.pos = save;
+                        found = true;
+                        break;
+                    }
+                    r.pos = save + 1;
+                }
+                if !found {
+                    break;
+                }
+                reference = vec![false; width];
+                out.push(reference.clone());
+            }
+        }
     }
     out.resize(rows, vec![false; width]);
     (out, ok)
@@ -834,5 +968,96 @@ mod tests {
             .map(|i| u16::from_le_bytes(t[ifd + 2 + i * 12..ifd + 4 + i * 12].try_into().unwrap()))
             .collect();
         assert!(tags.windows(2).all(|w| w[0] < w[1]), "{tags:?}");
+    }
+}
+
+/// Group 3 streams written by libtiff (via Pillow): 1-D, 2-D (K>0) and byte-aligned EOLs.
+#[cfg(test)]
+mod g3_tests {
+    use super::*;
+
+    const ROWS: [&str; 30] = [
+        "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000000110000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000000110000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000001111000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000001111000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000011110000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000011110000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000001111111110000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000001111111111111000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000001111111111111000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000001111111111111000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000001111111110000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000000011000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000000011000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000000011000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000000011000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000000011000000000000000000000000000000",
+    ];
+    const CASES: [(&str, &str, i64); 3] = [
+        ("g3_1d", "0013503c350004d40f0d40013503e70690013503e70690013503c350004d40f0d40013503c350004d40f0d40013503c350004d4162c35c004d4162c35c004d40f0d40013503c350004d40f0d40013503c350004d40f560d20026a07ab06900135058a0690009a82c060d00026a0b018340009a82c060d00026a0b140d20013503c350004d40f0d40013503c350004d40f6e0d00026a07b70680013503db8340009a81edc1a0004d40f6e0d00", 0),
+        ("g3_2d", "0019a81e1a8002c0066a07ce0d2002f0019a81e1a8002c0066a0786a000b0019a81e1a80029058b800cd4162c35c0051800cd40f0d400160033503c350005207ab800cd40f560d20029058a40066a0b01834000bc0066a0b01834000b340d20019a81e1a8002c0066a0786a000a40f6f0019a81edc1a0005e0033503db834000bc", 1),
+        ("g3_align", "00013503c35000013503c35000013503e70690013503e70690013503c35000013503c35000013503c35000013503c35000013503c350000135058b0d700135058b0d70013503c35000013503c35000013503c35000013503c35000013503d5834800013503d58348000135058a06900001350580c1a00001350580c1a00001350580c1a0000135058a069000013503c35000013503c35000013503c35000013503db834000013503db834000013503db834000013503db834000013503db8340", 4),
+    ];
+
+    fn unhex(s: &str) -> Vec<u8> {
+        (0..s.len() / 2)
+            .map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn decodes_libtiff_group3_streams() {
+        for (name, hex, t4) in CASES {
+            let k = if t4 & 1 == 1 { 4 } else { 0 };
+            let (bits, ok) = decode_g3(&unhex(hex), 100, 30, k, t4 & 4 != 0);
+            assert_eq!(ok, 30, "{name}");
+            for (y, want) in ROWS.iter().enumerate() {
+                let got: String = bits[y].iter().map(|&b| if b { '1' } else { '0' }).collect();
+                // Pillow stores the page inverted (white pixel = black run in the stream)
+                let want: String = want
+                    .chars()
+                    .map(|c| if c == '1' { '0' } else { '1' })
+                    .collect();
+                assert_eq!(got, want, "{name} row {y}");
+            }
+        }
+    }
+
+    #[test]
+    fn damaged_group3_never_panics_and_resynchronises() {
+        let good = unhex(CASES[0].1);
+        let mut s = 0x1234_5678_9abc_def1u64;
+        for _ in 0..2000 {
+            let mut d = good.clone();
+            for _ in 0..1 + s % 5 {
+                s ^= s << 13;
+                s ^= s >> 7;
+                s ^= s << 17;
+                let i = (s as usize) % d.len();
+                d[i] ^= 1 << (s >> 40 & 7);
+            }
+            for k in [0, 4] {
+                let (rows, _) = decode_g3(&d, 100, 30, k, false);
+                assert_eq!(rows.len(), 30);
+            }
+        }
+        // truncated and empty input
+        assert_eq!(decode_g3(&[], 100, 5, 0, false).0.len(), 5);
+        assert_eq!(decode_g3(&good[..10], 100, 30, 0, false).0.len(), 30);
     }
 }

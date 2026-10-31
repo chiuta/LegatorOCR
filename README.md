@@ -79,12 +79,15 @@ Without Tesseract everything else works; the OCR switch is disabled and says why
 | PDF | own writer: JPEG (colour/gray), CCITT Group 4 for 1-bit (falls back to Flate when smaller), layered pages (stencil mask + background + patches); true page size from DPI |
 | Images | PNG with resolution, TIFF Group 4 for black & white |
 | Paper problems | `--show-through` (levels the lighting, then pulls pixels only slightly darker than the paper back to paper; real ink is untouched), `--descreen` (≈2 mm tiles that are mostly mid-tone and busy at pixel scale are lightly blurred; text tiles are left alone) |
+| Separator sheets | `--split-on-barcode` (pages carrying a **Code 128** bar code, upright, turned 180° or sideways, read on the raw scan, start a new document named after the code → `book_001_ACT-17.pdf`), `--make-separator TEXT` prints such a sheet (A4 PNG) |
+| PDF navigation | `--bookmarks` (one outline entry per source file), `--front-matter N` (pages i, ii, iii … then 1, 2, 3 in PDF viewers) |
+| Erase zones | `--erase X,Y,W,H` (mm from the page's top-left, repeatable): painted with the paper colour before anything else is measured; `erase=` in `.lgr` projects; GUI text field |
 | Batch | `--skip-duplicates` (consecutive pages with a 96×128 thumbnail difference ≤ 2/255), `--split-on-blank` (blank pages separate documents → `name_001.pdf`, …), `--target-size MB` (JPEG quality chosen from a sample of pages so the PDF fits) |
 | OCR input | pages below 250 dpi are enlarged ×2–×4 (Catmull-Rom) before Tesseract; word boxes are mapped back |
 | Phone photos | `--perspective`: finds the page as the large bright quadrilateral (Otsu + extreme corners, with convexity/fill checks) and warps it with a homography; does nothing for upright or full-frame scans |
 | QC and archive | `--report r.html` (contact sheet, flags blank / size-outlier / strongly deskewed pages), `--multitiff out.tif` (multi-page Group 4 TIFF, black & white only) |
 | Text output | `--txt` (plain text), `--hocr` (word boxes + confidences), PDF author/subject/keywords/dates |
-| PDF input | own tolerant reader: pages of scanned PDFs become `book.pdf#N` (Flate/LZW/ASCII85/RunLength, PNG/TIFF predictors, JPEG, CCITT G4, Gray/RGB/CMYK/Indexed, /Rotate, DPI from the page size); object streams and damaged cross-reference tables are fine; encrypted, JBIG2, JPEG 2000 and layered (multi-image) pages are refused with a clear message |
+| PDF input | own tolerant reader: pages of scanned PDFs become `book.pdf#N` (Flate/LZW/ASCII85/RunLength, PNG/TIFF predictors, JPEG, CCITT G4, Gray/RGB/CMYK/Indexed, /Rotate, DPI from the page size); object streams and damaged cross-reference tables are fine; **layered / scanner-MRC pages** (several images placed by their transformation matrices, stencil masks in the fill colour, form XObjects) are composited at the sharpest image's resolution; CCITT **Group 3** (1-D, 2-D and byte-aligned) and **JBIG2 generic regions** (arithmetic templates 0–3 with adaptive pixels and typical prediction, MMR) are decoded; encrypted files, JPEG 2000, JBIG2 symbol/text/halftone/refinement coding and rotated/skewed image placements are refused with a clear message |
 | Profiles | `--profile NAME` / `--list-profiles` / `--save-profile NAME` (8 built in: book-bw, book-small-color, document-text, photo-archive, newspaper, form-dropout-red, negatives, phone-photos; user profiles in the config folder) and a GUI selector |
 | Page-size check | `--report-outliers` lists pages whose size differs clearly from the rest (median/MAD) |
 | OCR | Tesseract word boxes → invisible text layer (render mode 3, glyph-less Type0 font + ToUnicode, so ăâîșț and any Unicode copy/search correctly) |
@@ -105,10 +108,11 @@ See `COMPARISON.md` for what other tools do that this one does not. In short:
   Tesseract's `osd` data installed, enable **Orientation via OCR (OSD)** (GUI) or `--auto-rotate`
   (CLI): it also resolves 90° vs 270° and upside-down pages (needs enough printed text on the page;
   otherwise it leaves the page alone). Manual fallback: *Rotate left/right 90°* / `--rotate`.
-- No drawing of picture zones, fill (erase) zones or dewarp control points by hand: pictures are
-  detected automatically (sensitivity adjustable) and the content box can be nudged per page.
+- No mouse-drawn zones: erase zones are typed as millimetres (the same rectangles on every page); picture
+  zones and dewarp control points cannot be drawn at all. Pictures are detected automatically
+  (sensitivity adjustable) and the content box can be nudged per page.
 - Dewarp corrects vertical bending of text lines only (no perspective / horizontal stretch).
-- PDF input handles one scan image per page; PDF/A output is deliberately not claimed (the glyph-less, non-embedded text font would violate it); JBIG2 is not implemented.
+- PDF/A output is deliberately not claimed (the glyph-less, non-embedded text font would violate it). PDF input: no JPEG 2000, no JBIG2 symbol dictionaries / text regions (what `jbig2enc -s` and most office scanners produce), no encryption; bar codes: Code 128 only (character sets A/B/C, no FNC/shift codes). JBIG2 and Group 3 were verified against poppler / libtiff output; layered-page compositing only against our own writer's pages.
 - Perspective correction needs a page that is clearly lighter than its surroundings and shows all four corners; otherwise it leaves the photo alone. It does not unroll curved pages (use `--dewarp`).
 - Skin/hole/finger removal are heuristics: `--fingers` is off by default and can eat skin-toned photographs at the page edge.
 - DPI is not read from TIFF headers (set it by hand); 16-bit TIFF is reduced to 8 bit.

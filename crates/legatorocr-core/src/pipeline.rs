@@ -93,6 +93,9 @@ pub struct Settings {
     pub fingers: bool,
     /// Erase ruled lines (1-bit output only).
     pub remove_lines: bool,
+    /// Rectangles (x, y, width, height in mm from the top-left of each page) painted with
+    /// the paper colour before anything else is measured (stamps, notes, scanner marks).
+    pub erase_zones: Vec<[f32; 4]>,
     /// Drop one printed colour (form rules, stamps).
     pub dropout: Dropout,
     /// Despeckle strength 0.25–4 (1 = default speck size).
@@ -134,6 +137,7 @@ impl Default for Settings {
             punch_holes: false,
             fingers: false,
             remove_lines: false,
+            erase_zones: Vec::new(),
             dropout: Dropout::Off,
             despeckle_strength: 1.0,
             show_through: false,
@@ -271,6 +275,20 @@ impl Settings {
         s.hybrid_bg_dpi = s.hybrid_bg_dpi.clamp(36, 300);
         s.sharpen = fin(s.sharpen, 0.0, 2.0, 0.0);
         s.despeckle_strength = fin(s.despeckle_strength, 0.25, 4.0, 1.0);
+        s.erase_zones = s
+            .erase_zones
+            .iter()
+            .filter(|z| z.iter().all(|v| v.is_finite()) && z[2] > 0.0 && z[3] > 0.0)
+            .take(64)
+            .map(|z| {
+                [
+                    z[0].clamp(-5000.0, 5000.0),
+                    z[1].clamp(-5000.0, 5000.0),
+                    z[2].min(5000.0),
+                    z[3].min(5000.0),
+                ]
+            })
+            .collect();
         s.output_dpi = s.output_dpi.filter(|&o| o >= 36).map(|o| o.min(s.dpi));
         s
     }
@@ -368,6 +386,10 @@ fn prepare(mut img: RgbImage, s: &Settings) -> Prepared {
     if s.show_through {
         let paper = transform::estimate_background(&img);
         img = cleanup::show_through(&img, s.dpi, paper);
+    }
+    if !s.erase_zones.is_empty() {
+        let paper = transform::estimate_background(&img);
+        cleanup::erase_zones(&mut img, s.dpi, &s.erase_zones, paper);
     }
     if s.punch_holes {
         cleanup::remove_punch_holes(&mut img, s.dpi);
@@ -1054,6 +1076,16 @@ mod tests {
                 punch_holes: rnd(2) == 0,
                 fingers: rnd(2) == 0,
                 remove_lines: rnd(2) == 0,
+                erase_zones: if rnd(2) == 0 {
+                    vec![[
+                        rnd(50) as f32,
+                        rnd(50) as f32,
+                        rnd(80) as f32,
+                        rnd(80) as f32,
+                    ]]
+                } else {
+                    vec![]
+                },
                 dropout: Dropout::ALL[rnd(4) as usize],
                 despeckle_strength: rnd(500) as f32 / 100.0,
                 show_through: rnd(2) == 0,

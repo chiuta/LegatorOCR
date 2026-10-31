@@ -651,6 +651,14 @@ impl Cs {
 // ---------------------------------------------------------------------------
 // document
 
+struct Placement {
+    dict: Dict,
+    s: usize,
+    e: usize,
+    m: [f64; 6],
+    fill: [u8; 3],
+}
+
 pub struct PdfDoc {
     data: Vec<u8>,
     offs: HashMap<u32, usize>,
@@ -970,7 +978,7 @@ impl PdfDoc {
         imgs.sort_by(|a, b| area(&b.0).total_cmp(&area(&a.0)));
         let top = area(&imgs[0].0);
         // images with an ImageMask or a size ≥ 10 % of the largest take part in the page
-        let layered = imgs.iter().skip(1).any(|i| area(&i.0) >= top * 0.1);
+        let layered = imgs.iter().skip(1).any(|i| area(&i.0) >= top * 0.005);
         Ok((imgs.swap_remove(0), layered))
     }
 
@@ -1025,8 +1033,15 @@ impl PdfDoc {
     pub fn page_image(&self, index: usize) -> R<PdfPage> {
         let info = self.page_info(index)?;
         let page = &self.pages[index];
-        let ((d, s, e), _) = self.page_image_ref(page)?;
-        let img = self.decode_image(&d, s, e)?;
+        let ((d, s, e), layered) = self.page_image_ref(page)?;
+        let img = match layered.then(|| self.compose_page(page)).transpose()? {
+            Some(Some(img)) => img,
+            _ => self.decode_image(&d, s, e)?,
+        };
+        let info = PageInfo {
+            dpi: self.composed_dpi(&img, page).or(info.dpi),
+            ..info
+        };
         let img = match info.rotate {
             90 => img.rotate90(),
             180 => img.rotate180(),
@@ -1034,6 +1049,332 @@ impl PdfDoc {
             _ => img,
         };
         Ok(PdfPage { image: img, info })
+    }
+
+    fn media_box(&self, page: &Dict) -> (f64, f64, f64, f64) {
+        page.get("MediaBox")
+            .and_then(|v| match self.resolve(v) {
+                Val::Arr(a) if a.len() == 4 => {
+                    let n: Vec<f64> = a.iter().filter_map(|x| self.resolve(x).num()).collect();
+                    (n.len() == 4).then(|| {
+                        (
+                            n[0].min(n[2]),
+                            n[1].min(n[3]),
+                            n[0].max(n[2]),
+                            n[1].max(n[3]),
+                        )
+                    })
+                }
+                _ => None,
+            })
+            .unwrap_or((0.0, 0.0, 612.0, 792.0))
+    }
+
+    fn composed_dpi(&self, img: &DynamicImage, page: &Dict) -> Option<u32> {
+        let (x0, _, x1, _) = self.media_box(page);
+        let unit = page
+            .get("UserUnit")
+            .and_then(|u| self.resolve(u).num())
+            .filter(|u| *u > 0.0)
+            .unwrap_or(1.0);
+        let d = (img.width() as f64 * 72.0 / ((x1 - x0).max(1.0) * unit)).round();
+        (36.0..=2400.0).contains(&d).then_some(d as u32)
+    }
+
+    /// Decoded content streams of a page, joined.
+    fn page_content(&self, page: &Dict) -> Vec<u8> {
+        let mut out = Vec::new();
+        let parts: Vec<Val> = match page.get("Contents").map(|c| self.resolve(c)) {
+            Some(Val::Arr(a)) => a,
+            Some(v @ Val::Stream(..)) => vec![v],
+            _ => vec![],
+        };
+        for p in parts {
+            if let Val::Stream(d, s, e) = self.resolve(&p) {
+                if let Ok(b) = self.decode_stream(&d, s, e, &mut |_| {}) {
+                    out.extend_from_slice(&b);
+                    out.push(b'\n');
+                }
+            }
+        }
+        out
+    }
+
+    /// Walk a content stream and record where each image is drawn.
+    fn placements(
+        &self,
+        content: &[u8],
+        res: &Val,
+        ctm: [f64; 6],
+        depth: u32,
+        fill: &mut [u8; 3],
+        out: &mut Vec<Placement>,
+    ) {
+        fn mul(m: [f64; 6], c: [f64; 6]) -> [f64; 6] {
+            [
+                m[0] * c[0] + m[1] * c[2],
+                m[0] * c[1] + m[1] * c[3],
+                m[2] * c[0] + m[3] * c[2],
+                m[2] * c[1] + m[3] * c[3],
+                m[4] * c[0] + m[5] * c[2] + c[4],
+                m[4] * c[1] + m[5] * c[3] + c[5],
+            ]
+        }
+        if depth > 3 || out.len() > 5000 {
+            return;
+        }
+        let xobjs = self
+            .dict_of(res)
+            .and_then(|r| r.get("XObject").and_then(|x| self.dict_of(x)))
+            .unwrap_or_default();
+        let mut p = P::new(content, 0);
+        let mut ops: Vec<Val> = Vec::new();
+        let mut ctm = ctm;
+        let mut stack: Vec<([f64; 6], [u8; 3])> = Vec::new();
+        let nums = |ops: &[Val]| -> Vec<f64> { ops.iter().filter_map(|v| v.num()).collect() };
+        loop {
+            p.skip_ws();
+            let Some(b) = p.peek() else { break };
+            let is_op = b.is_ascii_alphabetic() || matches!(b, b'\'' | b'"' | b'*');
+            if !is_op {
+                match p.val(0) {
+                    Some(v) => {
+                        ops.push(v);
+                        if ops.len() > 64 {
+                            ops.remove(0);
+                        }
+                        continue;
+                    }
+                    None => {
+                        p.pos += 1;
+                        continue;
+                    }
+                }
+            }
+            let w = p.word();
+            let word: &[u8] = w;
+            if matches!(word, b"true" | b"false" | b"null") {
+                ops.push(match word {
+                    b"true" => Val::Bool(true),
+                    b"false" => Val::Bool(false),
+                    _ => Val::Null,
+                });
+                continue;
+            }
+            match word {
+                b"q" => stack.push((ctm, *fill)),
+                b"Q" => {
+                    if let Some((c, f)) = stack.pop() {
+                        ctm = c;
+                        *fill = f;
+                    }
+                }
+                b"cm" => {
+                    let n = nums(&ops);
+                    if n.len() >= 6 {
+                        ctm = mul(
+                            [
+                                n[n.len() - 6],
+                                n[n.len() - 5],
+                                n[n.len() - 4],
+                                n[n.len() - 3],
+                                n[n.len() - 2],
+                                n[n.len() - 1],
+                            ],
+                            ctm,
+                        );
+                    }
+                }
+                b"g" | b"rg" | b"k" | b"sc" | b"scn" => {
+                    let n = nums(&ops);
+                    let u = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+                    match n.len() {
+                        1 => *fill = [u(n[0]); 3],
+                        3 => *fill = [u(n[0]), u(n[1]), u(n[2])],
+                        4 => {
+                            let k = 1.0 - n[3];
+                            *fill = [
+                                u((1.0 - n[0]) * k),
+                                u((1.0 - n[1]) * k),
+                                u((1.0 - n[2]) * k),
+                            ];
+                        }
+                        _ => {}
+                    }
+                }
+                b"BI" => {
+                    // inline image: skip to "EI"
+                    let mut at = p.pos;
+                    loop {
+                        match find(content, b"EI", at) {
+                            Some(q)
+                                if q > 0
+                                    && is_ws(content[q - 1])
+                                    && content.get(q + 2).is_none_or(|&c| is_ws(c)) =>
+                            {
+                                p.pos = q + 2;
+                                break;
+                            }
+                            Some(q) => at = q + 2,
+                            None => {
+                                p.pos = content.len();
+                                break;
+                            }
+                        }
+                    }
+                }
+                b"Do" => {
+                    if let Some(name) = ops.last().and_then(|v| v.name()) {
+                        if let Some(v) = xobjs.get(name) {
+                            if let Val::Stream(d, s, e) = self.resolve(v) {
+                                match d.get("Subtype").and_then(|t| t.name()) {
+                                    Some("Image") => out.push(Placement {
+                                        dict: d,
+                                        s,
+                                        e,
+                                        m: ctm,
+                                        fill: *fill,
+                                    }),
+                                    Some("Form") => {
+                                        let m = match d.get("Matrix").map(|m| self.resolve(m)) {
+                                            Some(Val::Arr(a)) if a.len() == 6 => {
+                                                let n: Vec<f64> = a
+                                                    .iter()
+                                                    .filter_map(|x| self.resolve(x).num())
+                                                    .collect();
+                                                if n.len() == 6 {
+                                                    [n[0], n[1], n[2], n[3], n[4], n[5]]
+                                                } else {
+                                                    [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+                                                }
+                                            }
+                                            _ => [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                                        };
+                                        if let Ok(body) = self.decode_stream(&d, s, e, &mut |_| {})
+                                        {
+                                            let inner = d
+                                                .get("Resources")
+                                                .cloned()
+                                                .unwrap_or_else(|| res.clone());
+                                            let mut f2 = *fill;
+                                            self.placements(
+                                                &body,
+                                                &inner,
+                                                mul(m, ctm),
+                                                depth + 1,
+                                                &mut f2,
+                                                out,
+                                            );
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            ops.clear();
+        }
+    }
+
+    /// Composite a page built from several images (scanner "MRC" layers, our own hybrid
+    /// pages): every image is placed by its transformation matrix on a white canvas at
+    /// the highest resolution present; stencil masks are painted in the current fill colour.
+    /// `Ok(None)` when no placement can be determined.
+    fn compose_page(&self, page: &Dict) -> R<Option<DynamicImage>> {
+        let Some(res) = page.get("Resources") else {
+            return Ok(None);
+        };
+        let content = self.page_content(page);
+        let mut pl = Vec::new();
+        self.placements(
+            &content,
+            res,
+            [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            0,
+            &mut [0, 0, 0],
+            &mut pl,
+        );
+        if pl.is_empty() {
+            return Ok(None);
+        }
+        let (x0, y0, x1, y1) = self.media_box(page);
+        // pixels per point: the sharpest image decides
+        let mut ppp = 0.0f64;
+        for q in &pl {
+            if q.m[1].abs() > 1e-3 * q.m[0].abs().max(1e-9)
+                || q.m[2].abs() > 1e-3 * q.m[3].abs().max(1e-9)
+                || q.m[0].abs() < 1e-6
+                || q.m[3].abs() < 1e-6
+            {
+                return fail("an image is drawn rotated or skewed; layered pages with rotated images are not supported");
+            }
+            ppp = ppp.max(self.num_of(&q.dict, "Width").unwrap_or(0.0) / q.m[0].abs());
+        }
+        let (pw, ph) = ((x1 - x0).max(1.0), (y1 - y0).max(1.0));
+        let mut scale = ppp.clamp(0.5, 33.4); // up to 2400 dpi
+        let limit = (MAX_PIXELS as f64 / (pw * ph))
+            .sqrt()
+            .min(16_000.0 / pw.max(ph));
+        scale = scale.min(limit);
+        let (cw, ch) = (
+            (pw * scale).round().max(1.0) as u32,
+            (ph * scale).round().max(1.0) as u32,
+        );
+        let mut canvas = RgbImage::from_pixel(cw, ch, image::Rgb([255, 255, 255]));
+        for q in &pl {
+            let is_mask = matches!(
+                q.dict.get("ImageMask").map(|v| self.resolve(v)),
+                Some(Val::Bool(true))
+            );
+            let img = self.decode_image(&q.dict, q.s, q.e)?;
+            let (dx, dy) = (
+                (q.m[4].min(q.m[4] + q.m[0]) - x0) * scale,
+                (y1 - (q.m[5] + q.m[3]).max(q.m[5])) * scale,
+            );
+            let (dw, dh) = (
+                (q.m[0].abs() * scale).round().max(1.0) as u32,
+                (q.m[3].abs() * scale).round().max(1.0) as u32,
+            );
+            if dw as u64 * dh as u64 > MAX_PIXELS {
+                return fail("layered page is too large");
+            }
+            // PDF images are stored top row first; a negative d flips them
+            let img = if q.m[3] < 0.0 { img.flipv() } else { img };
+            let img = if q.m[0] < 0.0 { img.fliph() } else { img };
+            let img = if img.width() == dw && img.height() == dh {
+                img
+            } else {
+                img.resize_exact(
+                    dw,
+                    dh,
+                    if is_mask {
+                        image::imageops::FilterType::Nearest
+                    } else {
+                        image::imageops::FilterType::Triangle
+                    },
+                )
+            };
+            let (dx, dy) = (dx.round() as i64, dy.round() as i64);
+            if is_mask {
+                let g = img.to_luma8();
+                for yy in 0..dh {
+                    for xx in 0..dw {
+                        if g.get_pixel(xx, yy).0[0] < 128 {
+                            let (cx, cy) = (dx + xx as i64, dy + yy as i64);
+                            if cx >= 0 && cy >= 0 && cx < cw as i64 && cy < ch as i64 {
+                                canvas.put_pixel(cx as u32, cy as u32, image::Rgb(q.fill));
+                            }
+                        }
+                    }
+                }
+            } else {
+                image::imageops::replace(&mut canvas, &img.to_rgb8(), dx, dy);
+            }
+        }
+        Ok(Some(DynamicImage::ImageRgb8(canvas)))
     }
 
     fn filters(&self, dict: &Dict) -> Vec<(String, Dict)> {
@@ -1198,22 +1539,41 @@ impl PdfDoc {
             match name.as_str() {
                 "DCTDecode" | "DCT" => {
                     return image::load_from_memory_with_format(&raw, image::ImageFormat::Jpeg)
-                        .map(|i| if i.color().has_color() { DynamicImage::ImageRgb8(i.to_rgb8()) } else { DynamicImage::ImageLuma8(i.to_luma8()) })
+                        .map(|i| {
+                            if i.color().has_color() {
+                                DynamicImage::ImageRgb8(i.to_rgb8())
+                            } else {
+                                DynamicImage::ImageLuma8(i.to_luma8())
+                            }
+                        })
                         .map_err(|err| ReadError(format!("JPEG page image: {err}")));
                 }
                 "CCITTFaxDecode" | "CCF" => {
-                    let pi = |k: &str, d: i64| parms.get(k).and_then(|v| self.resolve(v).int()).unwrap_or(d);
-                    if pi("K", 0) >= 0 {
-                        return fail("CCITT Group 3 page images are not supported (only Group 4)");
-                    }
+                    let pi = |k: &str, d: i64| {
+                        parms
+                            .get(k)
+                            .and_then(|v| self.resolve(v).int())
+                            .unwrap_or(d)
+                    };
+                    let k = pi("K", 0);
                     let columns = pi("Columns", 1728).clamp(1, 1 << 20) as usize;
-                    let black_is_1 = matches!(parms.get("BlackIs1").map(|v| self.resolve(v)), Some(Val::Bool(true)));
-                    let align = matches!(parms.get("EncodedByteAlign").map(|v| self.resolve(v)), Some(Val::Bool(true)));
+                    let black_is_1 = matches!(
+                        parms.get("BlackIs1").map(|v| self.resolve(v)),
+                        Some(Val::Bool(true))
+                    );
+                    let align = matches!(
+                        parms.get("EncodedByteAlign").map(|v| self.resolve(v)),
+                        Some(Val::Bool(true))
+                    );
                     let rows = match pi("Rows", 0) {
                         r if r > 0 => (r as usize).min(h),
                         _ => h,
                     };
-                    let (bits, _) = crate::g4::decode(&raw, columns, rows, align);
+                    let (bits, _) = if k < 0 {
+                        crate::g4::decode(&raw, columns, rows, align)
+                    } else {
+                        crate::g4::decode_g3(&raw, columns, rows, k, align)
+                    };
                     let stride = columns.div_ceil(8);
                     let mut packed = vec![if black_is_1 { 0x00 } else { 0xFF }; stride * h];
                     for (y, row) in bits.iter().enumerate() {
@@ -1234,7 +1594,34 @@ impl PdfDoc {
                     cs = Cs::Gray;
                     row_pixels = columns;
                 }
-                "JBIG2Decode" => return fail("JBIG2-compressed page images are not supported yet (convert the PDF, e.g. with mutool or pdfimages)"),
+                "JBIG2Decode" => {
+                    let globals =
+                        parms
+                            .get("JBIG2Globals")
+                            .map(|g| self.resolve(g))
+                            .and_then(|v| match v {
+                                Val::Stream(d, s, e) => {
+                                    self.decode_stream(&d, s, e, &mut |_| {}).ok()
+                                }
+                                _ => None,
+                            });
+                    let bm = crate::jbig2::decode(&raw, globals.as_deref(), w, h)
+                        .map_err(|e| ReadError(format!("JBIG2 page image: {e}")))?;
+                    let stride = w.div_ceil(8);
+                    // the filter's output convention: 1 = white
+                    let mut packed = vec![0xFFu8; stride * h];
+                    for y in 0..h {
+                        for x in 0..w {
+                            if bm[y * w + x] != 0 {
+                                packed[y * stride + x / 8] &= !(0x80u8 >> (x % 8));
+                            }
+                        }
+                    }
+                    raw = packed;
+                    bpc = 1;
+                    cs = Cs::Gray;
+                    row_pixels = w;
+                }
                 "JPXDecode" => return fail("JPEG 2000 page images are not supported"),
                 other => return fail(format!("unsupported image filter {other}")),
             }
@@ -1534,6 +1921,134 @@ mod tests {
             (p.image.width(), p.image.height(), p.info.rotate),
             (2, 3, 90)
         );
+    }
+
+    #[test]
+    fn layered_pages_are_composited() {
+        use legatorocr_core::layers::{Background, Layers, Patch};
+        let (w, h) = (300u32, 400u32);
+        let mut mask = BitImage::new(w, h);
+        for y in 50..60 {
+            for x in 40..200 {
+                mask.set(x, y, true);
+            }
+        }
+        let layers = Layers {
+            mask,
+            fg: [200, 0, 0],
+            bg: Some(Background {
+                img: RgbImage::from_pixel(30, 40, Rgb([240, 230, 200])),
+                dpi: 30,
+            }),
+            patches: vec![Patch {
+                x: 100,
+                y: 200,
+                img: RgbImage::from_pixel(80, 60, Rgb([0, 0, 255])),
+            }],
+        };
+        let mut pg = page(PageImage::Rgb(layers.compose()), 300);
+        pg.layers = Some(layers);
+        let mut wr = PdfWriter::new(Compress::Flate);
+        wr.add_page(&pg, &[]);
+        let doc = PdfDoc::open(wr.finish()).unwrap();
+        let out = doc.page_image(0).unwrap();
+        assert_eq!(out.info.dpi, Some(300));
+        let img = out.image.to_rgb8();
+        assert_eq!(img.dimensions(), (w, h));
+        assert_eq!(img.get_pixel(100, 55).0, [200, 0, 0]); // text in ink colour
+        assert_eq!(img.get_pixel(140, 230).0, [0, 0, 255]); // picture patch
+        let bgp = img.get_pixel(250, 350).0; // background layer
+        assert!((bgp[0] as i32 - 240).abs() < 6 && (bgp[2] as i32 - 200).abs() < 6);
+    }
+
+    #[test]
+    fn jbig2_generic_regions_match_poppler() {
+        use crate::jbig2::enc::stream;
+        let (w, h) = (97usize, 61usize);
+        let mut bm = vec![0u8; w * h];
+        let mut s = 99u64;
+        for y in 0..h {
+            for x in 0..w {
+                s ^= s << 13;
+                s ^= s >> 7;
+                s ^= s << 17;
+                bm[y * w + x] =
+                    (((y / 6) % 3 == 0 && x % 9 < 6) as u8) ^ s.is_multiple_of(41) as u8;
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("lgr-jbig2-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let have_poppler = std::process::Command::new("pdfimages")
+            .arg("-v")
+            .output()
+            .is_ok();
+        let at0 = [(3, -1), (-3, -1), (2, -2), (-2, -2)];
+        for (t, tp, at) in [
+            (0u8, false, at0),
+            (0, true, at0),
+            (1, false, at0),
+            (2, true, at0),
+            (3, false, at0),
+            (0, false, [(-4, -1), (5, -1), (1, -2), (-3, -2)]),
+        ] {
+            let data = stream(&bm, w, h, t, tp, {
+                let mut a = at;
+                match t {
+                    1 => a[0] = (3, -1),
+                    2 | 3 => a[0] = (2, -1),
+                    _ => {}
+                }
+                a
+            });
+            let mut o = b"%PDF-1.4\n".to_vec();
+            o.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+            o.extend_from_slice(format!("3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n").as_bytes());
+            o.extend_from_slice(format!("4 0 obj\n<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /JBIG2Decode /Length {} >>\nstream\n", data.len()).as_bytes());
+            o.extend_from_slice(&data);
+            let c = format!("q {w} 0 0 {h} 0 0 cm /Im0 Do Q");
+            o.extend_from_slice(format!("\nendstream\nendobj\n5 0 obj\n<< /Length {} >>\nstream\n{c}\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n", c.len()).as_bytes());
+            let doc = PdfDoc::open(o.clone()).unwrap();
+            let img = doc.page_image(0).unwrap().image.to_luma8();
+            for y in 0..h {
+                for x in 0..w {
+                    assert_eq!(
+                        img.get_pixel(x as u32, y as u32).0[0] < 128,
+                        bm[y * w + x] == 1,
+                        "ours t{t} tp{tp} ({x},{y})"
+                    );
+                }
+            }
+            if have_poppler {
+                let f = dir.join(format!("j{t}{}.pdf", tp as u8));
+                std::fs::write(&f, &o).unwrap();
+                let prefix = dir.join(format!("o{t}{}", tp as u8));
+                let st = std::process::Command::new("pdfimages")
+                    .arg("-png")
+                    .arg(&f)
+                    .arg(&prefix)
+                    .output()
+                    .unwrap();
+                assert!(
+                    st.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&st.stderr)
+                );
+                let png = image::open(format!("{}-000.png", prefix.display()))
+                    .unwrap()
+                    .to_luma8();
+                assert_eq!(png.dimensions(), (w as u32, h as u32));
+                for y in 0..h {
+                    for x in 0..w {
+                        assert_eq!(
+                            png.get_pixel(x as u32, y as u32).0[0] < 128,
+                            bm[y * w + x] == 1,
+                            "poppler t{t} tp{tp} ({x},{y})"
+                        );
+                    }
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

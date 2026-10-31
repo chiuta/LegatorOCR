@@ -43,7 +43,7 @@ enum Fmt {
 #[command(version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -126,6 +126,24 @@ struct Cli {
     /// (`name_001.pdf`, `name_002.pdf`, …). Needs --pdf.
     #[arg(long)]
     split_on_blank: bool,
+
+    /// Treat pages carrying a Code 128 bar code as separators (the page is dropped) and
+    /// write one PDF per document, named after the bar code (`name_001_<code>.pdf`).
+    /// Print separators with --make-separator. Needs --pdf.
+    #[arg(long)]
+    split_on_barcode: bool,
+
+    /// Add one PDF outline entry (bookmark) per source file.
+    #[arg(long)]
+    bookmarks: bool,
+
+    /// Label the first N pages i, ii, iii … in PDF viewers; numbering restarts at 1 after them.
+    #[arg(long, value_name = "N", default_value_t = 0)]
+    front_matter: u32,
+
+    /// Write a printable Code 128 separator sheet (PNG, 300 dpi A4) for this text and exit.
+    #[arg(long, value_name = "TEXT")]
+    make_separator: Option<String>,
 
     /// Choose the JPEG quality so the PDF stays within this many megabytes (estimated
     /// from a sample of pages). Needs --pdf.
@@ -231,6 +249,11 @@ struct Cli {
     /// Erase ruled lines (black & white / mixed / hybrid output).
     #[arg(long)]
     remove_lines: bool,
+
+    /// Paint a rectangle with the paper colour on every page: X,Y,WIDTH,HEIGHT in mm from the
+    /// top-left (repeatable). For stamps, notes, scanner marks.
+    #[arg(long, value_name = "X,Y,W,H")]
+    erase: Vec<String>,
 
     /// Drop one printed colour: off, red, green, blue.
     #[arg(long, default_value = "off")]
@@ -350,6 +373,26 @@ fn main() -> Result<()> {
         }
         return Ok(());
     }
+    if let Some(text) = &cli.make_separator {
+        let Some(bc) = legatorocr_core::barcode::render(text, 4, 500) else {
+            bail!("--make-separator: use 1–80 printable ASCII characters");
+        };
+        let mut sheet = image::GrayImage::from_pixel(2480, 3508, image::Luma([255]));
+        let (ox, oy) = (
+            2480u32.saturating_sub(bc.width()) / 2,
+            (3508 - bc.height()) / 2,
+        );
+        image::imageops::replace(&mut sheet, &bc, ox as i64, oy as i64);
+        let safe: String = text
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .take(40)
+            .collect();
+        let out = std::path::PathBuf::from(format!("separator_{safe}.png"));
+        sheet.save(&out)?;
+        eprintln!("wrote {} (A4, 300 dpi: print at 100 %)", out.display());
+        return Ok(());
+    }
     if !matches!(cli.rotate, 0 | 90 | 180 | 270) {
         bail!("--rotate must be 0, 90, 180 or 270");
     }
@@ -414,6 +457,9 @@ fn main() -> Result<()> {
         punch_holes: cli.punch_holes,
         fingers: cli.fingers,
         remove_lines: cli.remove_lines,
+        erase_zones: legatorocr_core::cleanup::parse_zones(&cli.erase.join(";")).ok_or_else(
+            || anyhow::anyhow!("--erase needs X,Y,WIDTH,HEIGHT in mm (width and height > 0)"),
+        )?,
         dropout: legatorocr_core::Dropout::from_name(&cli.dropout)
             .ok_or_else(|| anyhow::anyhow!("--dropout must be off, red, green or blue"))?,
         despeckle_strength: cli.despeckle_strength,
@@ -580,7 +626,9 @@ fn main() -> Result<()> {
         _ => "tif",
     };
     let first_err: Mutex<Option<String>> = Mutex::new(None);
-    if cli.multitiff.is_some() && (cli.skip_duplicates || cli.split_on_blank || cli.skip_blank) {
+    if cli.multitiff.is_some()
+        && (cli.skip_duplicates || cli.split_on_blank || cli.split_on_barcode || cli.skip_blank)
+    {
         bail!("--multitiff writes every processed page; do not combine it with --skip-duplicates, --split-on-blank or --skip-blank");
     }
     type Key = (usize, u8);
@@ -603,8 +651,8 @@ fn main() -> Result<()> {
             eprintln!("target {mb} MB: JPEG quality {pdf_quality}");
         }
     }
-    if cli.split_on_blank && cli.pdf.is_none() {
-        bail!("--split-on-blank needs --pdf");
+    if (cli.split_on_blank || cli.split_on_barcode) && cli.pdf.is_none() {
+        bail!("--split-on-blank / --split-on-barcode need --pdf");
     }
     let job = ExportJob {
         sheets: &sheets,
@@ -621,6 +669,8 @@ fn main() -> Result<()> {
                 keywords: cli.keywords.clone(),
                 created_unix: Some(legatorocr_engine::now_unix()),
             },
+            bookmarks: cli.bookmarks,
+            front_matter: cli.front_matter,
         }),
         text_ocr: cli.ocr.then(|| ocr_opts.clone()),
         skip_blank: cli.skip_blank,
@@ -629,6 +679,7 @@ fn main() -> Result<()> {
         uniform_size: cli.uniform_size,
         skip_duplicates: cli.skip_duplicates,
         split_on_blank: cli.split_on_blank,
+        split_on_barcode: cli.split_on_barcode,
     };
     let res = run_export(
         &job,
@@ -725,7 +776,8 @@ fn main() -> Result<()> {
             .unwrap_or("document")
             .to_string();
         for (i, bytes) in res.docs.iter().enumerate() {
-            let p = pdf_path.with_file_name(format!("{stem}_{:03}.pdf", i + 1));
+            let name = res.doc_names.get(i).and_then(|n| n.as_deref());
+            let p = pdf_path.with_file_name(legatorocr_engine::doc_file_name(&stem, i, name));
             write_atomic(&p, bytes)?;
             eprintln!("wrote {}", p.display());
         }

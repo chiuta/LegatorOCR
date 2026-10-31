@@ -18,6 +18,7 @@ pub mod report;
 pub use legatorocr_ocr as ocr;
 
 pub use legatorocr_pdf::g4;
+pub use legatorocr_pdf::LabelStyle;
 pub use legatorocr_pdf::Meta as PdfMeta;
 
 #[derive(Debug, Clone)]
@@ -29,6 +30,10 @@ pub struct PdfExport {
     pub title: Option<String>,
     /// Author / subject / keywords / creation time for the document information.
     pub meta: PdfMeta,
+    /// One outline entry per source file (named after the file).
+    pub bookmarks: bool,
+    /// The first N pages are labelled i, ii, iii …; numbering restarts at 1 afterwards.
+    pub front_matter: u32,
 }
 
 impl Default for PdfExport {
@@ -38,6 +43,8 @@ impl Default for PdfExport {
             ocr: None,
             title: None,
             meta: PdfMeta::default(),
+            bookmarks: false,
+            front_matter: 0,
         }
     }
 }
@@ -55,7 +62,7 @@ pub fn now_unix() -> u64 {
 }
 
 /// Pages kept from one sheet (each with its OCR words) and how many blank ones were skipped.
-type SheetOutput = (Vec<(Page, Vec<Word>)>, usize);
+type SheetOutput = (Vec<(Page, Vec<Word>)>, usize, Option<String>);
 
 /// One scanned sheet (may yield two pages when it is a spread).
 #[derive(Debug, Clone)]
@@ -86,6 +93,9 @@ pub struct ExportJob<'a> {
     /// Blank pages become separators: the PDF is cut there into several documents
     /// ([`ExportResult::docs`]); the separators themselves are dropped.
     pub split_on_blank: bool,
+    /// Pages with a readable Code 128 bar code are separators too; the code names the
+    /// document that follows ([`ExportResult::doc_names`]).
+    pub split_on_barcode: bool,
 }
 
 /// 96×128 grayscale thumbnail of a page, for duplicate detection.
@@ -162,6 +172,8 @@ pub struct ExportResult {
     pub skipped_duplicates: usize,
     /// With `split_on_blank`: one PDF per document (then `pdf` is `None`).
     pub docs: Vec<Vec<u8>>,
+    /// Bar-code text that opened each entry of `docs` (None before the first separator).
+    pub doc_names: Vec<Option<String>>,
 }
 
 /// Pick the JPEG quality (30–95) whose PDF is expected to stay within `target_bytes`:
@@ -195,6 +207,7 @@ pub fn quality_for_target(
             text_ocr: None,
             skip_duplicates: false,
             split_on_blank: false,
+            split_on_barcode: false,
         };
         let res = run_export(&job, cancel, &|_, _| {}, &|_, _| {})?;
         let bytes = res.pdf.map_or(0, |p| p.len() as u64);
@@ -473,13 +486,6 @@ fn load_pdf_page(path: &Path, index: u32) -> Result<DynamicImage> {
     let page = doc
         .page_image(index as usize)
         .map_err(|e| anyhow::anyhow!("{} page {}: {e}", path.display(), index + 1))?;
-    if page.info.layered {
-        bail!(
-            "{} page {}: the page is built from several images (layered / MRC PDF); only single-scan pages are supported",
-            path.display(),
-            index + 1
-        );
-    }
     Ok(page.image)
 }
 
@@ -595,6 +601,8 @@ pub fn run_export(
     };
     let mut writer = new_writer();
     let mut last_thumb: Option<Vec<u8>> = None;
+    let mut cur_name: Option<String> = None;
+    let mut last_src: Option<String> = None;
     let ocr_opts = job
         .pdf
         .as_ref()
@@ -627,6 +635,18 @@ pub fn run_export(
                 if settings.page_size_mm.is_none() {
                     settings.page_size_mm = uniform;
                 }
+                // separator sheets are recognised on the scan itself (before cropping or
+                // binarising can damage thin bars); sideways sheets are tried too
+                if job.split_on_barcode {
+                    let g = img.to_luma8();
+                    let code = legatorocr_core::barcode::decode(&g).or_else(|| {
+                        legatorocr_core::barcode::decode(&image::imageops::rotate90(&g))
+                    });
+                    if code.is_some() {
+                        progress(done.fetch_add(1, Ordering::Relaxed) + 1, total);
+                        return Ok((Vec::new(), 0, code));
+                    }
+                }
                 let mut kept = Vec::new();
                 let mut skipped = 0;
                 for pg in process_page(&img, &settings) {
@@ -648,11 +668,11 @@ pub fn run_export(
                     kept.push((pg, words));
                 }
                 progress(done.fetch_add(1, Ordering::Relaxed) + 1, total);
-                Ok((kept, skipped))
+                Ok((kept, skipped, None))
             })
             .collect();
         for (i, out) in outs.into_iter().enumerate() {
-            let (pages, skipped) = match out {
+            let (pages, skipped, sheet_code) = match out {
                 Ok(v) => v,
                 Err(e) if job.keep_going && e.to_string() != "cancelled" => {
                     res.failed.push((chunk[i].path.clone(), short_chain(&e)));
@@ -662,13 +682,26 @@ pub fn run_export(
                 Err(e) => return Err(e),
             };
             res.skipped_blank += skipped;
+            if sheet_code.is_some() {
+                if let Some(w) = writer.take().filter(|w| w.page_count() > 0) {
+                    res.docs.push(w.finish());
+                    res.doc_names.push(cur_name.take());
+                }
+                cur_name = sheet_code;
+                writer = new_writer();
+                last_thumb = None;
+                last_src = None;
+                continue;
+            }
             for (pg, words) in pages {
                 if job.split_on_blank && pg.blank {
                     if let Some(w) = writer.take().filter(|w| w.page_count() > 0) {
                         res.docs.push(w.finish());
+                        res.doc_names.push(cur_name.take());
                     }
                     writer = new_writer();
                     last_thumb = None;
+                    last_src = None;
                     res.skipped_blank += 1;
                     continue;
                 }
@@ -695,7 +728,21 @@ pub fn run_export(
                         res.pages,
                     ));
                 }
-                if let Some(w) = writer.as_mut() {
+                if let (Some(w), Some(p)) = (writer.as_mut(), job.pdf.as_ref()) {
+                    if p.front_matter > 0 {
+                        if w.page_count() == 0 {
+                            w.set_page_labels(legatorocr_pdf::LabelStyle::RomanLower, "", 1);
+                        } else if w.page_count() == p.front_matter as usize {
+                            w.set_page_labels(legatorocr_pdf::LabelStyle::Decimal, "", 1);
+                        }
+                    }
+                    if p.bookmarks {
+                        let key = source_key(&chunk[i].path);
+                        if last_src.as_deref() != Some(key.as_str()) {
+                            w.add_bookmark(&key);
+                            last_src = Some(key);
+                        }
+                    }
                     w.add_page(&pg, &words);
                 }
             }
@@ -711,14 +758,49 @@ pub fn run_export(
         res.text = Some(texts.join("\n\x0c"));
         res.hocr = Some(legatorocr_ocr::hocr_document(&hocr_pages));
     }
-    if job.split_on_blank {
+    if job.split_on_blank || job.split_on_barcode {
         if let Some(w) = writer.filter(|w| w.page_count() > 0) {
             res.docs.push(w.finish());
+            res.doc_names.push(cur_name.take());
         }
     } else {
         res.pdf = writer.map(PdfWriter::finish);
     }
     Ok(res)
+}
+
+/// Bookmark title for a sheet: its file name without the `#page` suffix or extension.
+fn source_key(p: &Path) -> String {
+    let s = p.to_string_lossy();
+    let base = s.split('#').next().unwrap_or("");
+    Path::new(base)
+        .file_stem()
+        .map(|x| x.to_string_lossy().into_owned())
+        .filter(|x| !x.is_empty())
+        .unwrap_or_else(|| "document".into())
+}
+
+/// File name for document `i` (0-based) of a split export: `stem_<barcode>.pdf` when a
+/// bar code named it (made file-safe, unique by index suffix), else `stem_001.pdf`.
+pub fn doc_file_name(stem: &str, i: usize, name: Option<&str>) -> String {
+    let safe: String = name
+        .unwrap_or("")
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(60)
+        .collect();
+    let safe = safe.trim_matches('.').to_string();
+    if safe.is_empty() {
+        format!("{stem}_{:03}.pdf", i + 1)
+    } else {
+        format!("{stem}_{:03}_{safe}.pdf", i + 1)
+    }
 }
 
 /// `{:#}` of an error chain, without segments that merely repeat the previous one
@@ -873,6 +955,7 @@ mod tests {
             text_ocr: None,
             skip_duplicates: false,
             split_on_blank: false,
+            split_on_barcode: false,
         };
         let r = run_export(
             &job,
@@ -911,6 +994,7 @@ mod tests {
             text_ocr: None,
             skip_duplicates: false,
             split_on_blank: false,
+            split_on_barcode: false,
         };
         let r = run_export(&job, &AtomicBool::new(false), &|_, _| {}, &|_, _| {}).unwrap();
         assert!(r.pdf.is_none() && r.pages == 1);
@@ -929,6 +1013,7 @@ mod tests {
             text_ocr: None,
             skip_duplicates: false,
             split_on_blank: false,
+            split_on_barcode: false,
         };
         assert!(run_export(&none, &AtomicBool::new(false), &|_, _| {}, &|_, _| {}).is_err());
         let bad = [SheetInput {
@@ -945,6 +1030,7 @@ mod tests {
             text_ocr: None,
             skip_duplicates: false,
             split_on_blank: false,
+            split_on_barcode: false,
         };
         let e = run_export(&job, &AtomicBool::new(false), &|_, _| {}, &|_, _| {}).unwrap_err();
         assert!(format!("{e:#}").contains("file.png"), "{e:#}");
@@ -963,6 +1049,7 @@ mod tests {
             text_ocr: None,
             skip_duplicates: false,
             split_on_blank: false,
+            split_on_barcode: false,
         };
         let e = run_export(&job, &AtomicBool::new(true), &|_, _| {}, &|_, _| {}).unwrap_err();
         assert!(e.to_string().contains("cancelled"));
@@ -1039,6 +1126,7 @@ mod tests {
             text_ocr: None,
             skip_duplicates: false,
             split_on_blank: false,
+            split_on_barcode: false,
         };
         let ticks = AtomicUsize::new(0);
         let r = run_export(&job, &AtomicBool::new(false), &|_, _| {}, &|_, _| {
@@ -1068,6 +1156,7 @@ mod tests {
             text_ocr: None,
             skip_duplicates: false,
             split_on_blank: false,
+            split_on_barcode: false,
         };
         let e = run_export(&job, &AtomicBool::new(false), &|_, _| {}, &|_, _| {}).unwrap_err();
         assert!(e.to_string().contains("bad.png"), "{e}");
@@ -1100,6 +1189,7 @@ mod tests {
             text_ocr: None,
             skip_duplicates: false,
             split_on_blank: false,
+            split_on_barcode: false,
         };
         let r = run_export(
             &job,
@@ -1161,6 +1251,7 @@ mod tests {
                 text_ocr: None,
                 skip_duplicates: false,
                 split_on_blank: false,
+                split_on_barcode: false,
             };
             run_export(
                 &job,
@@ -1359,6 +1450,7 @@ mod batch_features_tests {
             text_ocr: None,
             skip_duplicates: dup,
             split_on_blank: split,
+            split_on_barcode: false,
         }
     }
 
@@ -1393,6 +1485,48 @@ mod batch_features_tests {
                 .page_count()
         };
         assert_eq!(r.docs.iter().map(count).collect::<Vec<_>>(), vec![2, 1, 1]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn barcode_sheets_split_and_name_documents() {
+        let dir = std::env::temp_dir().join(format!("lgr-barcode-{}", std::process::id()));
+        let mut s = sheets(&dir, &[Some(1), Some(2), None, Some(3), Some(4), Some(5)]);
+        // sheets 0..: replace #0 and #3 by separator sheets "ACT-1" and "ACT-2"
+        for (idx, code) in [(0usize, "ACT-1"), (3, "ACT-2")] {
+            let bc = legatorocr_core::barcode::render(code, 3, 120).unwrap();
+            let mut page = image::GrayImage::from_pixel(600, 800, image::Luma([245]));
+            image::imageops::replace(&mut page, &bc, 60, 300);
+            page.save(&s[idx].path).unwrap();
+        }
+        let mut j = job(&s, false, false);
+        j.split_on_barcode = true;
+        let no = AtomicBool::new(false);
+        let r = run_export(&j, &no, &|_, _| {}, &|_, _| {}).unwrap();
+        assert!(r.pdf.is_none());
+        assert_eq!(r.docs.len(), 2);
+        assert_eq!(
+            r.doc_names,
+            vec![Some("ACT-1".to_string()), Some("ACT-2".to_string())]
+        );
+        let count = |b: &Vec<u8>| {
+            legatorocr_pdf::reader::PdfDoc::open(b.clone())
+                .unwrap()
+                .page_count()
+        };
+        // doc 1: sheets 1 and 2 (blank kept: split_on_blank is off); doc 2: sheets 4 and 5
+        assert_eq!(r.docs.iter().map(count).collect::<Vec<_>>(), vec![2, 2]);
+        assert_eq!(r.pages, 4);
+        assert_eq!(
+            doc_file_name("scan", 0, Some("ACT-1")),
+            "scan_001_ACT-1.pdf"
+        );
+        assert_eq!(
+            doc_file_name("scan", 1, Some("../x/y")),
+            "scan_002__x_y.pdf"
+        );
+        assert_eq!(doc_file_name("scan", 2, None), "scan_003.pdf");
+        let _ = s.pop();
         let _ = std::fs::remove_dir_all(&dir);
     }
 

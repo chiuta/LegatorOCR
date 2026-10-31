@@ -666,6 +666,8 @@ impl App {
                 author: Some(self.s.pdf_author.clone()).filter(|a| !a.trim().is_empty()),
                 ..Default::default()
             },
+            bookmarks: self.s.bookmarks,
+            front_matter: self.s.front_matter,
         });
         let (side_txt, side_hocr) = (
             self.s.sidecar_txt && self.s.ocr,
@@ -677,6 +679,7 @@ impl App {
             self.s.split_on_blank && kind == JobKind::Pdf,
             self.s.target_mb,
         );
+        let split_on_barcode = self.s.split_on_barcode && kind == JobKind::Pdf;
         let uniform_size = self.s.uniform_size;
         let osd = self.osd_options();
         let (cancel, done) = (
@@ -722,6 +725,7 @@ impl App {
                         text_ocr: None,
                         skip_duplicates,
                         split_on_blank,
+                        split_on_barcode,
                     };
                     let res = run_export(
                         &job,
@@ -762,7 +766,11 @@ impl App {
                         .unwrap_or_default();
                     for (i, bytes) in res.docs.iter().enumerate() {
                         write_atomic(
-                            &target2.with_file_name(format!("{stem}_{:03}.pdf", i + 1)),
+                            &target2.with_file_name(legatorocr_engine::doc_file_name(
+                                &stem,
+                                i,
+                                res.doc_names.get(i).and_then(|n| n.as_deref()),
+                            )),
                             bytes,
                         )
                         .map_err(|e| e.to_string())?;
@@ -1335,6 +1343,18 @@ impl App {
                                     }
                                 });
                         });
+                        ui.horizontal(|ui| {
+                            ui.label(tr("set.erase"));
+                            let bad =
+                                legatorocr_core::cleanup::parse_zones(&self.s.erase).is_none();
+                            let mut te = egui::TextEdit::singleline(&mut self.s.erase)
+                                .desired_width(120.0)
+                                .hint_text("x,y,w,h;…");
+                            if bad {
+                                te = te.text_color(egui::Color32::LIGHT_RED);
+                            }
+                            ch |= ui.add(te).changed();
+                        });
                         if self.s.mode != ModeChoice::Color && self.s.mode != ModeChoice::Gray {
                             ch |= ui
                                 .checkbox(&mut self.s.remove_lines, tr("set.lines"))
@@ -1380,6 +1400,18 @@ impl App {
                         self.config_dirty |= ui
                             .checkbox(&mut self.s.split_on_blank, tr("set.split_blank"))
                             .changed();
+                        self.config_dirty |= ui
+                            .checkbox(&mut self.s.split_on_barcode, tr("set.split_barcode"))
+                            .changed();
+                        self.config_dirty |= ui
+                            .checkbox(&mut self.s.bookmarks, tr("set.bookmarks"))
+                            .changed();
+                        ui.horizontal(|ui| {
+                            ui.label(tr("set.front_matter"));
+                            self.config_dirty |= ui
+                                .add(egui::DragValue::new(&mut self.s.front_matter).range(0..=999))
+                                .changed();
+                        });
                         ui.horizontal(|ui| {
                             ui.label(tr("set.target_mb"));
                             self.config_dirty |= ui

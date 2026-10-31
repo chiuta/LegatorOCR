@@ -7,6 +7,7 @@
 //!   Romanian ăâîșț) is searchable and copy-able.
 
 pub mod g4;
+pub mod jbig2;
 pub mod reader;
 
 use flate2::{write::ZlibEncoder, Compression};
@@ -31,6 +32,20 @@ pub struct PdfWriter {
     compress: Compress,
     title: Option<String>,
     meta: Meta,
+    bookmarks: Vec<(String, usize)>,
+    labels: Vec<(usize, LabelStyle, String, u32)>,
+}
+
+/// Numbering style of a page-label range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LabelStyle {
+    Decimal,
+    RomanLower,
+    RomanUpper,
+    AlphaLower,
+    AlphaUpper,
+    /// No number, only the prefix.
+    None,
 }
 
 /// Optional document-information entries.
@@ -83,9 +98,28 @@ impl PdfWriter {
             compress,
             title: None,
             meta: Meta::default(),
+            bookmarks: Vec::new(),
+            labels: Vec::new(),
         };
         w.buf.extend_from_slice(b"%PDF-1.5\n%\xE2\xE3\xCF\xD3\n");
         w
+    }
+
+    /// Outline entry pointing at the next page that will be added.
+    pub fn add_bookmark(&mut self, title: &str) {
+        if self.bookmarks.len() < 5000 {
+            self.bookmarks
+                .push((title.to_string(), self.page_ids.len()));
+        }
+    }
+
+    /// From the next page added on, label pages `prefix` + number in `style`, counting
+    /// from `start` (>= 1).
+    pub fn set_page_labels(&mut self, style: LabelStyle, prefix: &str, start: u32) {
+        let at = self.page_ids.len();
+        self.labels.retain(|l| l.0 != at);
+        self.labels
+            .push((at, style, prefix.to_string(), start.max(1)));
     }
 
     pub fn set_title(&mut self, t: &str) {
@@ -372,7 +406,80 @@ impl PdfWriter {
                 self.page_ids.len()
             ),
         );
-        self.plain_obj(CATALOG, &format!("<< /Type /Catalog /Pages {PAGES} 0 R >>"));
+        let n_pages = self.page_ids.len();
+        let marks: Vec<(String, usize)> = self
+            .bookmarks
+            .iter()
+            .filter(|b| b.1 < n_pages)
+            .cloned()
+            .collect();
+        let mut cat_extra = String::new();
+        if !marks.is_empty() {
+            let root = self.alloc();
+            let ids: Vec<u32> = marks.iter().map(|_| self.alloc()).collect();
+            self.plain_obj(
+                root,
+                &format!(
+                    "<< /Type /Outlines /First {} 0 R /Last {} 0 R /Count {} >>",
+                    ids[0],
+                    ids[ids.len() - 1],
+                    ids.len()
+                ),
+            );
+            for (k, (t, pg)) in marks.iter().enumerate() {
+                let prev = if k > 0 {
+                    format!(" /Prev {} 0 R", ids[k - 1])
+                } else {
+                    String::new()
+                };
+                let next = if k + 1 < ids.len() {
+                    format!(" /Next {} 0 R", ids[k + 1])
+                } else {
+                    String::new()
+                };
+                self.plain_obj(
+                    ids[k],
+                    &format!(
+                        "<< /Title {} /Parent {root} 0 R{prev}{next} /Dest [{} 0 R /Fit] >>",
+                        pdf_text_string(t),
+                        self.page_ids[*pg]
+                    ),
+                );
+            }
+            cat_extra.push_str(&format!(" /Outlines {root} 0 R /PageMode /UseOutlines"));
+        }
+        if !self.labels.is_empty() {
+            let mut labels = self.labels.clone();
+            labels.sort_by_key(|l| l.0);
+            if labels[0].0 != 0 {
+                labels.insert(0, (0, LabelStyle::Decimal, String::new(), 1));
+            }
+            let nums: String = labels
+                .iter()
+                .filter(|l| l.0 < n_pages)
+                .map(|(at, st, pre, start)| {
+                    let s = match st {
+                        LabelStyle::Decimal => "/S /D ",
+                        LabelStyle::RomanLower => "/S /r ",
+                        LabelStyle::RomanUpper => "/S /R ",
+                        LabelStyle::AlphaLower => "/S /a ",
+                        LabelStyle::AlphaUpper => "/S /A ",
+                        LabelStyle::None => "",
+                    };
+                    let p = if pre.is_empty() {
+                        String::new()
+                    } else {
+                        format!("/P {} ", pdf_text_string(pre))
+                    };
+                    format!("{at} << {s}{p}/St {start} >> ")
+                })
+                .collect();
+            cat_extra.push_str(&format!(" /PageLabels << /Nums [{nums}] >>"));
+        }
+        self.plain_obj(
+            CATALOG,
+            &format!("<< /Type /Catalog /Pages {PAGES} 0 R{cat_extra} >>"),
+        );
         let info_id = self.alloc();
         let title = self
             .title
@@ -753,5 +860,61 @@ mod g4_roundtrip {
             }
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod outline_tests {
+    use super::*;
+    use legatorocr_core::{Page, PageImage};
+
+    fn pg() -> Page {
+        Page {
+            image: PageImage::Gray(image::GrayImage::from_pixel(40, 40, image::Luma([255]))),
+            dpi: 100,
+            skew_deg: 0.0,
+            blank: false,
+            split_index: None,
+            layers: None,
+        }
+    }
+
+    #[test]
+    fn bookmarks_and_labels_are_written_and_stay_valid() {
+        let mut w = PdfWriter::new(Compress::Flate);
+        w.add_bookmark("Prima (ă)");
+        w.set_page_labels(LabelStyle::RomanLower, "", 1);
+        w.add_page(&pg(), &[]);
+        w.add_page(&pg(), &[]);
+        w.add_bookmark("Second");
+        w.set_page_labels(LabelStyle::Decimal, "A-", 1);
+        w.add_page(&pg(), &[]);
+        w.add_bookmark("beyond the last page"); // dropped
+        let pdf = w.finish();
+        let txt = String::from_utf8_lossy(&pdf);
+        assert!(txt.contains("/Type /Outlines"));
+        assert!(txt.contains("/Count 2"));
+        assert!(txt.contains("/S /r") && txt.contains("/S /D /P (A-) /St 1"));
+        assert!(!txt.contains("beyond"));
+        if std::process::Command::new("qpdf")
+            .arg("--version")
+            .output()
+            .is_ok()
+        {
+            let p = std::env::temp_dir().join(format!("lgr-outline-{}.pdf", std::process::id()));
+            std::fs::write(&p, &pdf).unwrap();
+            let o = std::process::Command::new("qpdf")
+                .arg("--check")
+                .arg(&p)
+                .output()
+                .unwrap();
+            let _ = std::fs::remove_file(&p);
+            assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        }
+        // no bookmark / label: untouched catalogue
+        let mut w = PdfWriter::new(Compress::Flate);
+        w.add_page(&pg(), &[]);
+        let t = String::from_utf8_lossy(&w.finish()).into_owned();
+        assert!(!t.contains("Outlines") && !t.contains("PageLabels"));
     }
 }

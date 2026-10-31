@@ -79,6 +79,8 @@ pub struct UiSettings {
     pub punch_holes: bool,
     pub fingers: bool,
     pub remove_lines: bool,
+    /// `x,y,w,h;…` in mm (see `legatorocr_core::cleanup::parse_zones`).
+    pub erase: String,
     pub dropout: legatorocr_core::Dropout,
     pub despeckle_strength: f32,
     pub show_through: bool,
@@ -91,6 +93,9 @@ pub struct UiSettings {
     /// Write `<pdf>.txt` / `<pdf>.hocr` next to the PDF when OCR is on.
     pub skip_duplicates: bool,
     pub split_on_blank: bool,
+    pub split_on_barcode: bool,
+    pub bookmarks: bool,
+    pub front_matter: u32,
     /// 0 = off; otherwise the PDF should stay within this many MB.
     pub target_mb: u32,
     pub sidecar_txt: bool,
@@ -131,6 +136,7 @@ impl Default for UiSettings {
             punch_holes: false,
             fingers: false,
             remove_lines: false,
+            erase: String::new(),
             dropout: legatorocr_core::Dropout::Off,
             despeckle_strength: 1.0,
             show_through: false,
@@ -142,6 +148,9 @@ impl Default for UiSettings {
             uniform_size: false,
             skip_duplicates: false,
             split_on_blank: false,
+            split_on_barcode: false,
+            bookmarks: false,
+            front_matter: 0,
             target_mb: 0,
             sidecar_txt: false,
             sidecar_hocr: false,
@@ -211,6 +220,7 @@ impl UiSettings {
             punch_holes: self.punch_holes,
             fingers: self.fingers,
             remove_lines: self.remove_lines,
+            erase_zones: legatorocr_core::cleanup::parse_zones(&self.erase).unwrap_or_default(),
             dropout: self.dropout,
             despeckle_strength: self.despeckle_strength,
             show_through: self.show_through,
@@ -232,6 +242,9 @@ impl UiSettings {
         e.push(("uniform_size".into(), self.uniform_size.to_string()));
         e.push(("skip_duplicates".into(), self.skip_duplicates.to_string()));
         e.push(("split_on_blank".into(), self.split_on_blank.to_string()));
+        e.push(("split_on_barcode".into(), self.split_on_barcode.to_string()));
+        e.push(("bookmarks".into(), self.bookmarks.to_string()));
+        e.push(("front_matter".into(), self.front_matter.to_string()));
         e.push(("target_mb".into(), self.target_mb.to_string()));
         e.push(("sidecar_txt".into(), self.sidecar_txt.to_string()));
         e.push(("sidecar_hocr".into(), self.sidecar_hocr.to_string()));
@@ -297,6 +310,7 @@ impl UiSettings {
         self.punch_holes = c.punch_holes;
         self.fingers = c.fingers;
         self.remove_lines = c.remove_lines;
+        self.erase = legatorocr_core::cleanup::zones_to_string(&c.erase_zones);
         self.dropout = c.dropout;
         self.despeckle_strength = c.despeckle_strength;
         self.show_through = c.show_through;
@@ -310,6 +324,11 @@ impl UiSettings {
         self.uniform_size = flag("uniform_size").unwrap_or(self.uniform_size);
         self.skip_duplicates = flag("skip_duplicates").unwrap_or(self.skip_duplicates);
         self.split_on_blank = flag("split_on_blank").unwrap_or(self.split_on_blank);
+        self.split_on_barcode = flag("split_on_barcode").unwrap_or(self.split_on_barcode);
+        self.bookmarks = flag("bookmarks").unwrap_or(self.bookmarks);
+        if let Some(v) = p.get("front_matter").and_then(|v| v.parse::<u32>().ok()) {
+            self.front_matter = v.min(999);
+        }
         if let Some(v) = p.get("target_mb").and_then(|v| v.parse::<u32>().ok()) {
             self.target_mb = v.min(100_000);
         }
@@ -406,11 +425,15 @@ mod tests {
             sidecar_hocr: true,
             skip_duplicates: true,
             target_mb: 25,
+            split_on_barcode: true,
+            bookmarks: true,
+            front_matter: 4,
             pdf_author: "Ana".into(),
             auto_invert: true,
             sharpen: 0.8,
             punch_holes: true,
             remove_lines: true,
+            erase: "10,20,30,15;0,0,5,5".into(),
             dropout: legatorocr_core::Dropout::Blue,
             despeckle_strength: 2.5,
             show_through: true,
@@ -437,6 +460,11 @@ mod tests {
             (true, vec!["ron".into(), "eng".into()], 6)
         );
         assert_eq!((back.pdf_quality, back.uniform_size), (55, true));
+        assert_eq!(back.erase, "10,20,30,15;0,0,5,5");
+        assert_eq!(
+            (back.split_on_barcode, back.bookmarks, back.front_matter),
+            (true, true, 4)
+        );
         assert_eq!(
             (back.skip_duplicates, back.split_on_blank, back.target_mb),
             (true, false, 25)

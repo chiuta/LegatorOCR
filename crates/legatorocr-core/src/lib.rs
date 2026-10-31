@@ -5,6 +5,7 @@
 //! orientation → page split → deskew → content selection → margins → output
 //! (colour / grayscale / black-and-white).
 
+pub mod barcode;
 pub mod binarize;
 pub mod bitimage;
 pub mod cleanup;

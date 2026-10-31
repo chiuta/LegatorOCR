@@ -412,6 +412,50 @@ pub fn remove_punch_holes(img: &mut RgbImage, dpi: u32) -> usize {
     n
 }
 
+/// Paint rectangles (mm from the top-left: x, y, width, height) with `paper`.
+pub fn erase_zones(img: &mut RgbImage, dpi: u32, zones: &[[f32; 4]], paper: Rgb<u8>) {
+    let k = dpi as f32 / 25.4;
+    let (w, h) = (img.width() as f32, img.height() as f32);
+    for z in zones.iter().take(64) {
+        let (x0, y0) = ((z[0] * k).max(0.0).min(w), (z[1] * k).max(0.0).min(h));
+        let (x1, y1) = (
+            ((z[0] + z[2]) * k).max(0.0).min(w),
+            ((z[1] + z[3]) * k).max(0.0).min(h),
+        );
+        if !(x1 > x0 && y1 > y0) {
+            continue;
+        }
+        for y in y0.round() as u32..(y1.round() as u32).min(img.height()) {
+            for x in x0.round() as u32..(x1.round() as u32).min(img.width()) {
+                img.put_pixel(x, y, paper);
+            }
+        }
+    }
+}
+
+/// `x,y,w,h;x,y,w,h` → zones (None on any malformed or non-finite entry).
+pub fn parse_zones(s: &str) -> Option<Vec<[f32; 4]>> {
+    let mut out = Vec::new();
+    for part in s.split(';').map(str::trim).filter(|p| !p.is_empty()) {
+        let v: Vec<f32> = part
+            .split(',')
+            .map(|x| x.trim().parse().ok())
+            .collect::<Option<_>>()?;
+        if v.len() != 4 || v.iter().any(|x| !x.is_finite()) || v[2] <= 0.0 || v[3] <= 0.0 {
+            return None;
+        }
+        out.push([v[0], v[1], v[2], v[3]]);
+    }
+    (out.len() <= 64).then_some(out)
+}
+
+pub fn zones_to_string(z: &[[f32; 4]]) -> String {
+    z.iter()
+        .map(|r| format!("{},{},{},{}", r[0], r[1], r[2], r[3]))
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
 fn ycbcr(p: [u8; 3]) -> (f32, f32, f32) {
     let (r, g, b) = (p[0] as f32, p[1] as f32, p[2] as f32);
     let y = 0.299 * r + 0.587 * g + 0.114 * b;
@@ -577,6 +621,38 @@ pub fn remove_lines(bw: &mut BitImage, dpi: u32) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn erase_zones_paint_only_their_rectangle() {
+        let mut img = RgbImage::from_pixel(254, 254, Rgb([10, 10, 10]));
+        erase_zones(
+            &mut img,
+            254,
+            &[
+                [2.0, 3.0, 4.0, 5.0],
+                [-10.0, -10.0, 5.0, 5.0],
+                [500.0, 0.0, 9.0, 9.0],
+            ],
+            Rgb([250, 250, 250]),
+        );
+        // 254 dpi → 10 px per mm: x 20..60, y 30..80
+        assert_eq!(img.get_pixel(20, 30).0, [250; 3]);
+        assert_eq!(img.get_pixel(59, 79).0, [250; 3]);
+        assert_eq!(img.get_pixel(60, 79).0, [10; 3]);
+        assert_eq!(img.get_pixel(19, 30).0, [10; 3]);
+        assert_eq!(img.get_pixel(0, 0).0, [10; 3]);
+    }
+
+    #[test]
+    fn zone_text_roundtrip_and_rejection() {
+        let z = parse_zones("1,2,3,4; 5.5,6,7,8").unwrap();
+        assert_eq!(z, vec![[1.0, 2.0, 3.0, 4.0], [5.5, 6.0, 7.0, 8.0]]);
+        assert_eq!(parse_zones(&zones_to_string(&z)).unwrap(), z);
+        assert_eq!(parse_zones("").unwrap().len(), 0);
+        for bad in ["1,2,3", "1,2,0,4", "a,b,c,d", "1,2,3,nan", "1,2,3,4,5"] {
+            assert!(parse_zones(bad).is_none(), "{bad}");
+        }
+    }
 
     fn page(w: u32, h: u32, c: [u8; 3]) -> RgbImage {
         RgbImage::from_pixel(w, h, Rgb(c))
