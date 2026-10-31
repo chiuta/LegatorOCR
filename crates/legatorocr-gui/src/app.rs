@@ -61,6 +61,8 @@ struct Sheet {
     ready: Option<Ready>,
     pending: Option<u64>,
     failed: Option<(u64, String)>,
+    /// Last time (App::tick) this sheet was on screen; used to evict old previews.
+    used: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -97,6 +99,7 @@ struct Shot {
 }
 
 pub struct App {
+    tick: u64,
     lang: Lang,
     s: UiSettings,
     settings_gen: u32,
@@ -112,6 +115,8 @@ pub struct App {
     status: Option<(String, bool)>,
     langs_rx: Option<mpsc::Receiver<OcrProbe>>,
     installed: Vec<String>,
+    /// Tesseract has the `osd` data (orientation detection).
+    has_osd: bool,
     ocr_info: String,
     show_about: bool,
     shot: Option<Shot>,
@@ -125,6 +130,7 @@ impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, files: Vec<PathBuf>) -> Self {
         let (pv_tx, pv_rx) = mpsc::channel();
         let mut app = Self {
+            tick: 0,
             lang: Lang::detect(),
             s: UiSettings::default(),
             settings_gen: 1,
@@ -140,6 +146,7 @@ impl App {
             status: None,
             langs_rx: None,
             installed: Vec::new(),
+            has_osd: false,
             ocr_info: String::new(),
             show_about: false,
             auto_export: std::env::var_os("LEGATOROCR_GUI_AUTOEXPORT_PDF").map(|p| (PathBuf::from(p), false)),
@@ -191,6 +198,7 @@ impl App {
                 adj_gen: 0,
                 ready: None,
                 pending: None,
+                used: 0,
                 failed: None,
             });
             self.next_id += 1;
@@ -198,6 +206,11 @@ impl App {
         if self.selected.is_none() && !self.sheets.is_empty() {
             self.selected = Some(0);
         }
+    }
+
+    /// OCR options for orientation detection, when the user asked for it and it is available.
+    fn osd_options(&self) -> Option<legatorocr_engine::ocr::OcrOptions> {
+        (self.s.use_osd && self.has_osd).then(|| self.s.ocr_options())
     }
 
     fn key_of(&self, sheet: &Sheet) -> u64 {
@@ -219,7 +232,24 @@ impl App {
     }
 
     // ----------------------------------------------------------------- background plumbing
+    /// Keep at most `KEEP` rendered previews (each is up to ~40 MB of textures).
+    fn evict_old_previews(&mut self) {
+        const KEEP: usize = 4;
+        self.tick += 1;
+        if let Some(sh) = self.selected.and_then(|i| self.sheets.get_mut(i)) {
+            sh.used = self.tick;
+        }
+        let mut held: Vec<usize> = (0..self.sheets.len()).filter(|&i| self.sheets[i].ready.is_some()).collect();
+        if held.len() > KEEP {
+            held.sort_by_key(|&i| std::cmp::Reverse(self.sheets[i].used));
+            for &i in &held[KEEP..] {
+                self.sheets[i].ready = None;
+            }
+        }
+    }
+
     fn pump(&mut self, ctx: &egui::Context) {
+        self.evict_old_previews();
         // dropped files
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
         if !dropped.is_empty() {
@@ -238,11 +268,13 @@ impl App {
                         if !langs.iter().any(|l| self.s.ocr_langs.contains(l)) {
                             self.s.ocr_langs = langs.iter().filter(|l| *l == "eng").cloned().collect();
                         }
+                        self.has_osd = langs.iter().any(|l| l == "osd");
                         self.installed = langs.into_iter().filter(|l| l != "osd").collect();
                     }
                     Err(e) => {
                         self.ocr_info = String::new();
                         self.installed.clear();
+                        self.has_osd = false;
                         let _ = e;
                     }
                 }
@@ -394,7 +426,7 @@ impl App {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
             return;
         }
-        let req = PreviewRequest { id: sheet.id, key, path: sheet.path.clone(), settings: self.s.to_core(&sheet.adj) };
+        let req = PreviewRequest { id: sheet.id, key, path: sheet.path.clone(), settings: self.s.to_core(&sheet.adj), osd: self.osd_options() };
         self.sheets[i].pending = Some(key);
         let (tx, ctx) = (self.pv_tx.clone(), ctx.clone());
         std::thread::spawn(move || {
@@ -435,17 +467,23 @@ impl App {
             title: target.file_stem().map(|s| s.to_string_lossy().into_owned()),
         });
         let skip_blank = self.s.skip_blank;
+        let osd = self.osd_options();
         let (cancel, done) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicUsize::new(0)));
         let (tx, rx) = mpsc::channel();
         let total = sheets.len();
         let (c2, d2, ctx2, target2) = (cancel.clone(), done.clone(), ctx.clone(), target.clone());
         std::thread::spawn(move || {
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<Done, String> {
+                if kind == JobKind::Pdf {
+                    legatorocr_engine::check_writable(&target2).map_err(|e| format!("{e:#}"))?;
+                } else {
+                    std::fs::create_dir_all(&target2).map_err(|e| format!("{}: {e}", target2.display()))?;
+                }
                 if let Some(o) = pdf.as_ref().and_then(|p| p.ocr.as_ref()) {
                     check_ocr(o).map_err(|e| e.to_string())?;
                 }
                 let first_err: Mutex<Option<String>> = Mutex::new(None);
-                let job = ExportJob { sheets: &sheets, pdf, skip_blank, keep_going: true };
+                let job = ExportJob { sheets: &sheets, pdf, skip_blank, keep_going: true, osd };
                 let res = run_export(
                     &job,
                     &c2,
@@ -634,6 +672,11 @@ impl App {
                     ch |= ui.add(egui::DragValue::new(&mut self.s.dpi).range(72..=1200)).changed();
                 });
                 ch |= ui.checkbox(&mut self.s.auto_orient, tr("set.auto_orient")).changed();
+                let osd_ok = self.has_osd;
+                ch |= ui
+                    .add_enabled(osd_ok, egui::Checkbox::new(&mut self.s.use_osd, tr("set.osd")))
+                    .on_hover_text(tr(if osd_ok { "set.osd_tip" } else { "set.osd_missing" }))
+                    .changed();
                 ui.horizontal(|ui| {
                     ui.label(tr("set.split"));
                     egui::ComboBox::from_id_salt("split").selected_text(split_name(lang, self.s.split)).show_ui(ui, |ui| {

@@ -80,6 +80,47 @@ pub fn list_languages(o: &OcrOptions) -> Result<Vec<String>, OcrError> {
     Ok(txt.lines().skip(1).map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
 }
 
+/// Parse Tesseract OSD output (`Rotate: 90`, `Orientation confidence: 5.2`) into the
+/// clockwise rotation (0/90/180/270) that makes the text upright. Low confidence → `None`.
+pub fn parse_osd(out: &str) -> Option<u16> {
+    let val = |key: &str| -> Option<f32> {
+        out.lines().find_map(|l| l.trim().strip_prefix(key)).and_then(|v| v.trim().parse().ok())
+    };
+    let rot = val("Rotate:")? as i32;
+    let conf = val("Orientation confidence:")?;
+    (conf >= 1.5 && matches!(rot, 0 | 90 | 180 | 270)).then_some(rot as u16)
+}
+
+/// Ask Tesseract's orientation/script detection how far `img` must be turned
+/// clockwise to be upright. `Ok(None)` when it cannot tell (too little text,
+/// low confidence, or the `osd` language data is not installed).
+pub fn detect_rotation(img: &image::DynamicImage, o: &OcrOptions) -> Result<Option<u16>, OcrError> {
+    let small = if img.width().max(img.height()) > 1800 {
+        img.thumbnail(1800, 1800)
+    } else {
+        img.clone()
+    };
+    let tmp = std::env::temp_dir().join(format!(
+        "legatorocr-osd-{}-{}.png",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    small.to_luma8().save(&tmp)?;
+    let out = base_cmd(o)
+        .arg(&tmp)
+        .arg("stdout")
+        .args(["--psm", "0", "-l", "osd"])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| OcrError::NotFound(e.to_string()));
+    let _ = std::fs::remove_file(&tmp);
+    let out = out?;
+    if !out.status.success() {
+        return Ok(None);
+    }
+    Ok(parse_osd(&String::from_utf8_lossy(&out.stdout)))
+}
+
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Recognise one processed page.
@@ -141,6 +182,15 @@ pub fn parse_tsv(tsv: &str, min_conf: f32) -> Vec<Word> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn osd_parsing() {
+        let ok = "Page number: 0\nOrientation in degrees: 270\nRotate: 90\nOrientation confidence: 7.31\nScript: Latin\n";
+        assert_eq!(parse_osd(ok), Some(90));
+        assert_eq!(parse_osd(&ok.replace("7.31", "0.4")), None);
+        assert_eq!(parse_osd("Warning. Invalid resolution 0 dpi.\n"), None);
+        assert_eq!(parse_osd(&ok.replace("Rotate: 90", "Rotate: 45")), None);
+    }
+
     #[test]
     fn lang_syntax() {
         for ok in ["eng", "ron+eng", "script/Latin", "chi_sim"] {

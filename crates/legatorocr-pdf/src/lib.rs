@@ -77,9 +77,14 @@ impl PdfWriter {
         write!(self.buf, "{body}\nendobj\n").unwrap();
     }
 
-    fn cid(&mut self, c: char) -> u16 {
-        let next = self.chars.len() as u16 + 1;
-        *self.chars.entry(c).or_insert(next)
+    /// CID for `c`; `None` once the 16-bit code space is exhausted (the word is then skipped).
+    fn cid(&mut self, c: char) -> Option<u16> {
+        if let Some(&id) = self.chars.get(&c) {
+            return Some(id);
+        }
+        let next = u16::try_from(self.chars.len() + 1).ok().filter(|&n| n < u16::MAX)?;
+        self.chars.insert(c, next);
+        Some(next)
     }
 
     /// Append one page. `words` (optional) are in the page's pixel coordinates.
@@ -151,7 +156,16 @@ impl PdfWriter {
                 let y = hpt - (w.y + w.h) as f32 * 72.0 / dpi + size * 0.2;
                 let mut hex = String::new();
                 for ch in w.text.chars().chain(std::iter::once(' ')) {
-                    hex.push_str(&format!("{:04X}", self.cid(ch)));
+                    match self.cid(ch) {
+                        Some(id) => hex.push_str(&format!("{id:04X}")),
+                        None => {
+                            hex.clear();
+                            break;
+                        }
+                    }
+                }
+                if hex.is_empty() {
+                    continue;
                 }
                 cs.push_str(&format!(
                     "/F1 {size:.2} Tf {tz:.1} Tz 1 0 0 1 {x:.2} {y:.2} Tm <{hex}> Tj\n"
@@ -330,6 +344,20 @@ mod tests {
         assert!(s.starts_with("%PDF-1.5"));
         assert!(s.contains("/Count 2"));
         assert!(s.trim_end().ends_with("%%EOF"));
+    }
+
+    #[test]
+    fn code_space_exhaustion_skips_words_instead_of_corrupting() {
+        let mut w = PdfWriter::new(Compress::Flate);
+        for i in 0..70_000u32 {
+            if let Some(c) = char::from_u32(0x4E00 + i) {
+                w.cid(c);
+            }
+        }
+        assert!(w.chars.len() < 65_535 && w.cid('\u{1F600}').is_none());
+        let words = [Word { text: "😀😀".into(), x: 1, y: 1, w: 10, h: 5, conf: 90.0, line: 0 }];
+        w.add_page(&page(PageImage::Gray(image::GrayImage::new(20, 20))), &words);
+        assert!(w.finish().ends_with(b"%%EOF\n"));
     }
 
     #[test]

@@ -50,7 +50,7 @@ Without Tesseract everything else works; the OCR switch is disabled and says why
 
 | Stage | Method (standard, textbook techniques) |
 |---|---|
-| Orientation | row/column profile energy around the line-pitch band (0° vs a quarter turn) or `--rotate` |
+| Orientation | row/column profile energy around the line-pitch band (0° vs a quarter turn); optional Tesseract OSD for the exact direction; or `--rotate` |
 | Page split | gutter = emptiest column band in the centre of a landscape sheet (`auto` / `middle` / `off`) |
 | Deskew | projection-profile sharpness, coarse→fine search to 0.01°, bilinear rotation; or a manual angle |
 | Content box | ink blocks → dilation → connected components; dust and scanner-edge shadows rejected, page numbers kept |
@@ -67,9 +67,10 @@ Crates: `legatorocr-core` (pipeline) · `-pdf` (writer) · `-ocr` (Tesseract dri
 
 ## Known limits (v0.1)
 
-- **Orientation**: auto-detect finds "page lies on its side" but not *which way*; it may leave the
-  page upside-down. Use the per-page *Rotate left/right 90°* buttons (GUI) or `--rotate` (CLI).
-  180° is not detected automatically.
+- **Orientation**: the built-in test only finds "page lies on its side", not *which way*. With
+  Tesseract's `osd` data installed, enable **Orientation via OCR (OSD)** (GUI) or `--auto-rotate`
+  (CLI): it also resolves 90° vs 270° and upside-down pages (needs enough printed text on the page;
+  otherwise it leaves the page alone). Manual fallback: *Rotate left/right 90°* / `--rotate`.
 - **No manual content-box editing** and no per-page margins yet; margins/page size are global.
 - No "mixed" mode (picture zones in colour, text in B/W), no page-curl dewarping.
 - Multi-page TIFF input: first page only. DPI is not read from TIFF headers (set it by hand).

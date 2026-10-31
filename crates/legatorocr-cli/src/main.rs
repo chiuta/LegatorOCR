@@ -100,6 +100,11 @@ struct Cli {
     #[arg(long, default_value_t = 7.0)]
     max_skew: f32,
 
+    /// Use Tesseract's orientation detection (needs the `osd` language data) to turn
+    /// pages upright, including 90° vs 270° and upside-down pages.
+    #[arg(long)]
+    auto_rotate: bool,
+
     /// Disable automatic detection of sideways pages.
     #[arg(long)]
     no_auto_orient: bool,
@@ -230,11 +235,19 @@ fn main() -> Result<()> {
         let v = check_ocr(&ocr_opts)?;
         eprintln!("OCR engine: {v}, language: {}", cli.lang);
     }
+    if cli.auto_rotate {
+        let o = OcrOptions { lang: "osd".into(), ..ocr_opts.clone() };
+        check_ocr(&o).context("--auto-rotate needs Tesseract with the 'osd' language data")?;
+    }
     if cli.pdf.is_none() && matches!(cli.format, Fmt::None) {
         bail!("nothing to do: give --pdf and/or an image --format");
     }
 
     // --- run: process → (save images) → OCR → PDF ---------------------------
+    // Fail now, not after an hour of OCR: make sure the outputs can be written.
+    if let Some(pdf) = &cli.pdf {
+        legatorocr_engine::check_writable(pdf)?;
+    }
     let mut inputs: Vec<PathBuf> = Vec::new();
     for p in &cli.inputs {
         if p.is_dir() {
@@ -271,6 +284,7 @@ fn main() -> Result<()> {
         }),
         skip_blank: cli.skip_blank,
         keep_going: cli.keep_going,
+        osd: cli.auto_rotate.then(|| ocr_opts.clone()),
     };
     let res = run_export(
         &job,

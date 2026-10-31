@@ -47,6 +47,9 @@ pub struct ExportJob<'a> {
     /// `true` → a sheet that cannot be read/processed is recorded in
     /// [`ExportResult::failed`] and the rest continues; `false` → first error aborts.
     pub keep_going: bool,
+    /// `Some` → use Tesseract OSD to turn each sheet upright before processing
+    /// (resolves 90° vs 270° and upside-down pages that the built-in test cannot).
+    pub osd: Option<OcrOptions>,
 }
 
 #[derive(Debug, Default)]
@@ -78,6 +81,23 @@ pub fn load_image(path: &Path) -> Result<DynamicImage> {
         img = DynamicImage::ImageRgb8(rgb);
     }
     Ok(img)
+}
+
+/// Apply OSD-detected rotation to a freshly loaded sheet. Returns the (possibly
+/// rotated) image and the settings to use for it (built-in orientation guess
+/// is switched off once OSD has decided).
+pub fn orient_with_osd(img: DynamicImage, settings: &Settings, osd: Option<&OcrOptions>) -> (DynamicImage, Settings) {
+    let mut s = settings.clone();
+    let Some(o) = osd else { return (img, s) };
+    match legatorocr_ocr::detect_rotation(&img, o) {
+        Ok(Some(deg)) => {
+            s.auto_orient = false;
+            // `rotate_quarters` is applied first by the pipeline.
+            s.rotate_quarters = (s.rotate_quarters + (deg / 90) as u8) % 4;
+            (img, s)
+        }
+        _ => (img, s),
+    }
 }
 
 /// Check that the OCR engine runs and every requested language is installed.
@@ -134,9 +154,10 @@ pub fn run_export(
                     bail!("cancelled");
                 }
                 let img = load_image(&sheet.path).with_context(|| format!("reading {}", sheet.path.display()))?;
+                let (img, settings) = orient_with_osd(img, &sheet.settings, job.osd.as_ref());
                 let mut kept = Vec::new();
                 let mut skipped = 0;
-                for pg in process_page(&img, &sheet.settings) {
+                for pg in process_page(&img, &settings) {
                     if job.skip_blank && pg.blank {
                         skipped += 1;
                         continue;
@@ -162,7 +183,7 @@ pub fn run_export(
             let (pages, skipped) = match out {
                 Ok(v) => v,
                 Err(e) if job.keep_going && e.to_string() != "cancelled" => {
-                    res.failed.push((chunk[i].path.clone(), format!("{e:#}")));
+                    res.failed.push((chunk[i].path.clone(), short_chain(&e)));
                     progress(done.fetch_add(1, Ordering::Relaxed) + 1, total);
                     continue;
                 }
@@ -186,6 +207,35 @@ pub fn run_export(
     }
     res.pdf = writer.map(PdfWriter::finish);
     Ok(res)
+}
+
+/// `{:#}` of an error chain, without segments that merely repeat the previous one
+/// (decoder errors often wrap their own message).
+fn short_chain(e: &anyhow::Error) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for c in e.chain() {
+        let c = c.to_string();
+        if parts.last().is_none_or(|p| !p.contains(c.trim_end_matches('.'))) {
+            parts.push(c);
+        }
+    }
+    parts.join(": ")
+}
+
+/// Verify early that `path` can be created (parent folder is made if missing).
+pub fn check_writable(path: &Path) -> Result<()> {
+    if path.is_dir() {
+        bail!("{} is a folder, not a file", path.display());
+    }
+    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    }
+    let mut probe = path.as_os_str().to_owned();
+    probe.push(".part");
+    let probe = PathBuf::from(probe);
+    std::fs::write(&probe, b"").with_context(|| format!("cannot write {}", path.display()))?;
+    let _ = std::fs::remove_file(&probe);
+    Ok(())
 }
 
 /// Write via a temporary sibling file, then rename (no half-written outputs).
@@ -249,7 +299,7 @@ mod tests {
             .collect();
         let seen = Mutex::new(Vec::new());
         let ticks = AtomicUsize::new(0);
-        let job = ExportJob { sheets: &sheets, pdf: Some(PdfExport::default()), skip_blank: true, keep_going: false };
+        let job = ExportJob { sheets: &sheets, pdf: Some(PdfExport::default()), skip_blank: true, keep_going: false, osd: None };
         let r = run_export(&job, &AtomicBool::new(false), &|i, _| seen.lock().unwrap().push(i), &|_, t| {
             assert_eq!(t, 3);
             ticks.fetch_add(1, Ordering::Relaxed);
@@ -269,7 +319,7 @@ mod tests {
     fn images_only_job_has_no_pdf() {
         let d = tmpdir("b");
         let sheets = vec![SheetInput { path: sheet(&d, "1.png", false), settings: st() }];
-        let job = ExportJob { sheets: &sheets, pdf: None, skip_blank: false, keep_going: false };
+        let job = ExportJob { sheets: &sheets, pdf: None, skip_blank: false, keep_going: false, osd: None };
         let r = run_export(&job, &AtomicBool::new(false), &|_, _| {}, &|_, _| {}).unwrap();
         assert!(r.pdf.is_none() && r.pages == 1);
         let _ = std::fs::remove_dir_all(d);
@@ -277,15 +327,15 @@ mod tests {
 
     #[test]
     fn errors_are_reported_with_context() {
-        let none = ExportJob { sheets: &[], pdf: None, skip_blank: false, keep_going: false };
+        let none = ExportJob { sheets: &[], pdf: None, skip_blank: false, keep_going: false, osd: None };
         assert!(run_export(&none, &AtomicBool::new(false), &|_, _| {}, &|_, _| {}).is_err());
         let bad = [SheetInput { path: "/no/such/file.png".into(), settings: st() }];
-        let job = ExportJob { sheets: &bad, pdf: None, skip_blank: false, keep_going: false };
+        let job = ExportJob { sheets: &bad, pdf: None, skip_blank: false, keep_going: false, osd: None };
         let e = run_export(&job, &AtomicBool::new(false), &|_, _| {}, &|_, _| {}).unwrap_err();
         assert!(format!("{e:#}").contains("file.png"), "{e:#}");
         let d = tmpdir("c");
         let ok = [SheetInput { path: sheet(&d, "1.png", false), settings: st() }];
-        let job = ExportJob { sheets: &ok, pdf: None, skip_blank: false, keep_going: false };
+        let job = ExportJob { sheets: &ok, pdf: None, skip_blank: false, keep_going: false, osd: None };
         let e = run_export(&job, &AtomicBool::new(true), &|_, _| {}, &|_, _| {}).unwrap_err();
         assert!(e.to_string().contains("cancelled"));
         let _ = std::fs::remove_dir_all(d);
@@ -342,7 +392,7 @@ mod tests {
             SheetInput { path: d.join("bad.png"), settings: st() },
             SheetInput { path: sheet(&d, "3.png", false), settings: st() },
         ];
-        let mut job = ExportJob { sheets: &sheets, pdf: Some(PdfExport::default()), skip_blank: false, keep_going: true };
+        let mut job = ExportJob { sheets: &sheets, pdf: Some(PdfExport::default()), skip_blank: false, keep_going: true, osd: None };
         let ticks = AtomicUsize::new(0);
         let r = run_export(&job, &AtomicBool::new(false), &|_, _| {}, &|_, _| {
             ticks.fetch_add(1, Ordering::Relaxed);
@@ -354,7 +404,7 @@ mod tests {
         job.keep_going = false;
         assert!(run_export(&job, &AtomicBool::new(false), &|_, _| {}, &|_, _| {}).is_err());
         let only_bad = [SheetInput { path: d.join("bad.png"), settings: st() }];
-        job = ExportJob { sheets: &only_bad, pdf: None, skip_blank: false, keep_going: true };
+        job = ExportJob { sheets: &only_bad, pdf: None, skip_blank: false, keep_going: true, osd: None };
         let e = run_export(&job, &AtomicBool::new(false), &|_, _| {}, &|_, _| {}).unwrap_err();
         assert!(e.to_string().contains("bad.png"), "{e}");
         let _ = std::fs::remove_dir_all(d);
@@ -373,9 +423,18 @@ mod tests {
             ..st()
         };
         let sheets = [SheetInput { path: sheet(&d, "1.png", false), settings: wild }];
-        let job = ExportJob { sheets: &sheets, pdf: Some(PdfExport::default()), skip_blank: false, keep_going: false };
+        let job = ExportJob { sheets: &sheets, pdf: Some(PdfExport::default()), skip_blank: false, keep_going: false, osd: None };
         let r = run_export(&job, &AtomicBool::new(false), &|_, pg| assert!(pg.image.width() < 20_000), &|_, _| {}).unwrap();
         assert_eq!(r.pages, 1);
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn writability_precheck() {
+        let d = tmpdir("h");
+        assert!(check_writable(&d.join("new/dir/o.pdf")).is_ok());
+        assert!(!d.join("new/dir/o.pdf.part").exists());
+        assert!(check_writable(&d).is_err(), "a folder is not a file");
         let _ = std::fs::remove_dir_all(d);
     }
 }

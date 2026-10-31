@@ -40,6 +40,8 @@ pub enum ModeChoice {
 pub struct UiSettings {
     pub dpi: u32,
     pub auto_orient: bool,
+    /// Turn pages upright with Tesseract's orientation detection (needs `osd` data).
+    pub use_osd: bool,
     pub split: SplitChoice,
     pub deskew: bool,
     pub max_skew: f32,
@@ -64,6 +66,7 @@ impl Default for UiSettings {
         Self {
             dpi: 300,
             auto_orient: true,
+            use_osd: false,
             split: SplitChoice::Auto,
             deskew: true,
             max_skew: 7.0,

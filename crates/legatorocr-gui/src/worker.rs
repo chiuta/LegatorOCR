@@ -12,6 +12,7 @@ pub struct PreviewRequest {
     pub key: u64,
     pub path: PathBuf,
     pub settings: Settings,
+    pub osd: Option<legatorocr_engine::ocr::OcrOptions>,
 }
 
 pub struct Thumb {
@@ -69,7 +70,8 @@ pub fn render(req: &PreviewRequest) -> Result<Preview, String> {
     let img = legatorocr_engine::load_image(&req.path).map_err(|e| format!("{}: {e}", req.path.display()))?;
     let original_size = (img.width(), img.height());
     let original = to_thumb(&img.to_rgba8(), PREVIEW_MAX);
-    let pages = process_page(&img, &req.settings)
+    let (img, settings) = legatorocr_engine::orient_with_osd(img, &req.settings, req.osd.as_ref());
+    let pages = process_page(&img, &settings)
         .into_iter()
         .map(|p| {
             let info = PageInfo { w: p.image.width(), h: p.image.height(), skew_deg: p.skew_deg, blank: p.blank };
@@ -116,6 +118,7 @@ mod tests {
             key: 7,
             path,
             settings: Settings { dpi: 150, auto_orient: false, deskew: false, ..Default::default() },
+            osd: None,
         };
         let pv = render(&req).unwrap();
         assert_eq!(pv.original_size, (600, 800));

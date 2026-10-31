@@ -59,8 +59,69 @@ pub fn find_gutter(ink: &BitImage) -> Option<u32> {
     let left: f32 = col[..cut as usize].iter().sum();
     let right: f32 = col[cut as usize..].iter().sum();
     let tot = left + right;
-    if tot <= 0.0 || left / tot < 0.15 || right / tot < 0.15 {
+    if tot <= 0.0 {
         return None;
     }
+    if left / tot < 0.15 || right / tot < 0.15 {
+        // One half is (almost) blank — a chapter end, a verso. Still a spread when the
+        // other half holds a page-sized body and the sparse half holds only a small mark.
+        let extent = |c: &[f32]| -> usize {
+            match (c.iter().position(|&v| v > 0.0), c.iter().rposition(|&v| v > 0.0)) {
+                (Some(a), Some(b)) => b - a + 1,
+                _ => 0,
+            }
+        };
+        let (ext_l, ext_r) = (extent(&col[..cut as usize]), extent(&col[cut as usize..]));
+        let (big, small) = if left > right { (ext_l, ext_r) } else { (ext_r, ext_l) };
+        if big * 100 < w * 30 || small * 100 > w * 20 {
+            return None;
+        }
+    }
     Some(cut)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn body(img: &mut BitImage, x0: u32, x1: u32) {
+        for y in (200..1500).step_by(30) {
+            for x in x0..x1 {
+                if (x / 25) % 2 == 0 {
+                    for yy in y..y + 12 {
+                        img.set(x, yy, true);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn spread_with_empty_right_half_is_still_split() {
+        let mut img = BitImage::new(2400, 1700);
+        body(&mut img, 150, 1000);
+        for y in 300..330 {
+            for x in 1500..1650 {
+                img.set(x, y, true);
+            }
+        }
+        let cut = find_gutter(&img).expect("split");
+        assert!((1000..1500).contains(&cut), "{cut}");
+    }
+
+    #[test]
+    fn wide_single_page_is_not_split() {
+        let mut img = BitImage::new(2400, 1700);
+        body(&mut img, 150, 2250);
+        assert_eq!(find_gutter(&img), None);
+    }
+
+    #[test]
+    fn normal_spread_is_split_in_the_middle() {
+        let mut img = BitImage::new(2400, 1700);
+        body(&mut img, 150, 1100);
+        body(&mut img, 1300, 2250);
+        let cut = find_gutter(&img).unwrap();
+        assert!((1100..1300).contains(&cut));
+    }
 }
