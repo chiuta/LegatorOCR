@@ -509,9 +509,9 @@ mod g4_roundtrip {
                 for x in 0..w {
                     let ink = match kind {
                         0 => true,
-                        1 => xorshift(&mut seed) % 2 == 0,
+                        1 => xorshift(&mut seed).is_multiple_of(2),
                         2 => (x / 3 + y / 5) % 2 == 0,
-                        3 => xorshift(&mut seed) % 40 == 0,
+                        3 => xorshift(&mut seed).is_multiple_of(40),
                         4 => (x / 1100) % 2 == 1, // runs longer than 2560
                         5 => (x * x + y * y) % 97 < 20,
                         6 => false,

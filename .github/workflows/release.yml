@@ -1,5 +1,5 @@
 name: Release
-# Tag `vX.Y.Z` (e.g. v0.1.0-alpha.1) → builds every platform and opens a DRAFT pre-release.
+# Tag `vX.Y.Z` (e.g. v0.2.0-alpha.1) → builds every platform and opens a DRAFT pre-release.
 on:
   push:
     tags: ["v*"]

@@ -329,6 +329,23 @@ mod tests {
     }
 
     #[test]
+    fn config_file_round_trip_on_disk() {
+        let dir = std::env::temp_dir().join(format!("lgr-cfg-{}", std::process::id()));
+        let path = dir.join("nested").join("settings.lgr");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let s = UiSettings { mode: ModeChoice::Mixed, margin_mm: 7.5, ..Default::default() };
+        let mut p = s.to_project(Vec::new());
+        p.extra.push(("lang".into(), "hu".into()));
+        p.save(&path).unwrap();
+        let back = Project::load(&path).unwrap();
+        let mut t = UiSettings::default();
+        t.apply_project(&back);
+        assert_eq!((t.mode, t.margin_mm), (ModeChoice::Mixed, 7.5));
+        assert_eq!(back.get("lang"), Some("hu"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn hostile_config_values_are_ignored() {
         let text = "legatorocr-project 1\npsm = 99\nocr_langs = a;b+--x\npdf_quality = 900\nmin_conf = nan\n";
         let mut s = UiSettings::default();
