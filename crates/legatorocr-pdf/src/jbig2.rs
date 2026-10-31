@@ -321,7 +321,7 @@ pub(crate) fn refine_ctx(
     y: usize,
 ) -> usize {
     let c = |ox: i32, oy: i32| -> usize {
-        let (px, py) = (x as i32 + ox, y as i32 + oy);
+        let (px, py) = (x as i64 + ox as i64, y as i64 + oy as i64);
         if px >= 0 && py >= 0 && (px as usize) < w && (py as usize) < h {
             cur[py as usize * w + px as usize] as usize
         } else {
@@ -329,7 +329,10 @@ pub(crate) fn refine_ctx(
         }
     };
     let r = |ox: i32, oy: i32| -> usize {
-        let (px, py) = (x as i32 - dx + ox, y as i32 - dy + oy);
+        let (px, py) = (
+            x as i64 - dx as i64 + ox as i64,
+            y as i64 - dy as i64 + oy as i64,
+        );
         if px >= 0 && py >= 0 && (px as usize) < rf.w && (py as usize) < rf.h {
             rf.d[py as usize * rf.w + px as usize] as usize
         } else {
@@ -378,7 +381,10 @@ pub(crate) fn refine_uniform(rf: &Bitmap, dx: i32, dy: i32, x: usize, y: usize) 
     let mut v = None;
     for oy in -1..=1 {
         for ox in -1..=1 {
-            let (px, py) = (x as i32 - dx + ox, y as i32 - dy + oy);
+            let (px, py) = (
+                x as i64 - dx as i64 + ox as i64,
+                y as i64 - dy as i64 + oy as i64,
+            );
             let b = if px >= 0 && py >= 0 && (px as usize) < rf.w && (py as usize) < rf.h {
                 rf.d[py as usize * rf.w + px as usize]
             } else {
@@ -2380,7 +2386,13 @@ pub(crate) mod tests {
             }
             let _ = decode(&d, None, w, h);
         }
-        assert!(t0.elapsed().as_secs() < 30, "too slow: {:?}", t0.elapsed());
+        // the budget is for optimised builds; debug builds are an order of magnitude slower
+        let budget = if cfg!(debug_assertions) { 300 } else { 30 };
+        assert!(
+            t0.elapsed().as_secs() < budget,
+            "too slow: {:?}",
+            t0.elapsed()
+        );
     }
 
     #[test]

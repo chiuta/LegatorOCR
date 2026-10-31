@@ -24,7 +24,10 @@ fn fail<T>(m: impl Into<String>) -> R<T> {
     Err(JpxError(m.into()))
 }
 
-const MAX_SAMPLES: u64 = 300_000_000;
+const MAX_SAMPLES: u64 = 120_000_000;
+const MAX_COMPONENTS: usize = 64;
+const MAX_PRECINCTS: u64 = 500_000;
+const MAX_T1_WORK: u64 = 8_000_000_000;
 const MAX_PACKETS: u64 = 20_000_000;
 
 /// 8-bit interleaved result.
@@ -322,7 +325,13 @@ fn gain(orient: u8) -> u32 {
     }
 }
 
-fn build_tile_comp(cc: &CompCod, q: &Quant, ci: &CompInfo, t: (u64, u64, u64, u64)) -> R<TileComp> {
+fn build_tile_comp(
+    cc: &CompCod,
+    q: &Quant,
+    ci: &CompInfo,
+    t: (u64, u64, u64, u64),
+    total_prec: &mut u64,
+) -> R<TileComp> {
     let (x0, y0, x1, y1) = (
         ceil_div(t.0, ci.dx),
         ceil_div(t.1, ci.dy),
@@ -353,7 +362,8 @@ fn build_tile_comp(cc: &CompCod, q: &Quant, ci: &CompInfo, t: (u64, u64, u64, u6
         } else {
             0
         };
-        if (npw as u64) * (nph as u64) > 4_000_000 {
+        *total_prec += (npw as u64) * (nph as u64);
+        if *total_prec > MAX_PRECINCTS {
             return fail("too many precincts");
         }
         let orients: &[u8] = if r == 0 { &[0] } else { &[1, 2, 3] };
@@ -998,13 +1008,13 @@ fn idwt53(a: &mut [f32], par: usize) {
     let mut i = first_even;
     while i < n {
         let (l, r) = (v[mirror(i as isize - 1, n)], v[mirror(i as isize + 1, n)]);
-        v[i] -= (l + r + 2) >> 2;
+        v[i] = v[i].wrapping_sub(l.wrapping_add(r).wrapping_add(2) >> 2);
         i += 2;
     }
     let mut i = 1 - first_even;
     while i < n {
         let (l, r) = (v[mirror(i as isize - 1, n)], v[mirror(i as isize + 1, n)]);
-        v[i] += (l + r) >> 1;
+        v[i] = v[i].wrapping_add(l.wrapping_add(r) >> 1);
         i += 2;
     }
     for (o, x) in a.iter_mut().zip(v) {
@@ -1259,7 +1269,7 @@ fn decode_codestream(d: &[u8]) -> R<Raw> {
                 let (x1, y1, x0, y0) = (r.u32()?, r.u32()?, r.u32()?, r.u32()?);
                 let (tw, th, tx0, ty0) = (r.u32()?, r.u32()?, r.u32()?, r.u32()?);
                 let n = r.u16()? as usize;
-                if n == 0 || n > 16384 {
+                if n == 0 || n > MAX_COMPONENTS {
                     return fail("bad component count");
                 }
                 let mut comps = Vec::new();
@@ -1415,6 +1425,12 @@ fn decode_codestream(d: &[u8]) -> R<Raw> {
     }
     let siz = siz.ok_or_else(|| JpxError("missing SIZ".into()))?;
     let main = main.unwrap();
+    if tiles
+        .iter()
+        .all(|t| t.params.is_none() || t.data.is_empty())
+    {
+        return fail("JPEG 2000 codestream carries no image data");
+    }
     let nc = siz.comps.len();
     // component planes on their own grids
     let mut dims = Vec::new();
@@ -1422,6 +1438,9 @@ fn decode_codestream(d: &[u8]) -> R<Raw> {
     for c in &siz.comps {
         let w = (ceil_div(siz.x1, c.dx) - ceil_div(siz.x0, c.dx)) as usize;
         let h = (ceil_div(siz.y1, c.dy) - ceil_div(siz.y0, c.dy)) as usize;
+        if w == 0 || h == 0 {
+            return fail("empty JPEG 2000 component");
+        }
         dims.push((w, h));
         planes.push(vec![0f32; w * h]);
     }
@@ -1459,8 +1478,15 @@ fn decode_tile(
 ) -> R<()> {
     let nc = siz.comps.len();
     let mut tcs = Vec::with_capacity(nc);
+    let mut total_prec = 0u64;
     for c in 0..nc {
-        tcs.push(build_tile_comp(&tp.cc[c], &tp.q[c], &siz.comps[c], t)?);
+        tcs.push(build_tile_comp(
+            &tp.cc[c],
+            &tp.q[c],
+            &siz.comps[c],
+            t,
+            &mut total_prec,
+        )?);
     }
     let order = progression(&tp.g, &tcs, &siz.comps, t)?;
     read_packets(&tp.g, &mut tcs, &order, data)?;
@@ -1509,6 +1535,16 @@ fn decode_tile(
                 }
             }
         }
+    }
+    let work: u64 = jobs
+        .iter()
+        .map(|j| {
+            let n = ((j.cb.x1 - j.cb.x0) * (j.cb.y1 - j.cb.y0)) as u64;
+            n * (j.cb.passes as u64).min(3 * j.mb as u64 + 1)
+        })
+        .sum();
+    if work > MAX_T1_WORK {
+        return fail("JPEG 2000 tile is too expensive to decode");
     }
     let results: Vec<Vec<f32>> = jobs
         .par_iter()
@@ -1579,10 +1615,10 @@ fn decode_tile(
         if tcs[0].cc.rev {
             for i in 0..n {
                 let (a0, a1, a2) = (y0[i] as i32, y1[i] as i32, y2[i] as i32);
-                let g = a0 - ((a1 + a2) >> 2);
-                y0[i] = (a2 + g) as f32;
+                let g = a0.wrapping_sub(a1.wrapping_add(a2) >> 2);
+                y0[i] = a2.wrapping_add(g) as f32;
                 y1[i] = g as f32;
-                y2[i] = (a1 + g) as f32;
+                y2[i] = a1.wrapping_add(g) as f32;
             }
         } else {
             for i in 0..n {
@@ -1756,6 +1792,127 @@ mod tests {
         eprintln!("{}x{}x{} in {:?}", img.w, img.h, img.nc, t.elapsed());
     }
 
+    /// Differential sweep: `LEGATOROCR_JPX_DIR` holds `NAME.j2k` (or .jp2), `NAME.raw`
+    /// (OpenJPEG's decoded 8-bit samples) and `NAME.txt` ("w h channels tolerance").
+    #[test]
+    #[ignore]
+    fn jpx_differential() {
+        let Ok(dir) = std::env::var("LEGATOROCR_JPX_DIR") else {
+            return;
+        };
+        let mut bad = Vec::new();
+        let mut n = 0;
+        for e in std::fs::read_dir(dir).unwrap() {
+            let p = e.unwrap().path();
+            if p.extension().is_none_or(|x| x != "txt") {
+                continue;
+            }
+            n += 1;
+            let meta = std::fs::read_to_string(&p).unwrap();
+            let v: Vec<usize> = meta
+                .split_whitespace()
+                .map(|x| x.parse().unwrap())
+                .collect();
+            let stem = p.with_extension("");
+            let stream = ["j2k", "jp2"]
+                .iter()
+                .find_map(|x| std::fs::read(stem.with_extension(x)).ok())
+                .unwrap();
+            let want = std::fs::read(stem.with_extension("raw")).unwrap();
+            match decode(&stream) {
+                Err(e) => bad.push(format!("{}: error {e}", stem.display())),
+                Ok(img) => {
+                    if (img.w, img.h, img.nc) != (v[0], v[1], v[2]) || img.data.len() != want.len()
+                    {
+                        bad.push(format!(
+                            "{}: shape {}x{}x{}",
+                            stem.display(),
+                            img.w,
+                            img.h,
+                            img.nc
+                        ));
+                        continue;
+                    }
+                    let worst = img
+                        .data
+                        .iter()
+                        .zip(&want)
+                        .map(|(&a, &b)| (a as i32 - b as i32).unsigned_abs())
+                        .max()
+                        .unwrap_or(0) as usize;
+                    if worst > v[3] {
+                        bad.push(format!("{}: worst {worst} > {}", stem.display(), v[3]));
+                    }
+                }
+            }
+        }
+        eprintln!("{n} streams, {} bad", bad.len());
+        for b in bad.iter().take(30) {
+            eprintln!("{b}");
+        }
+        assert!(bad.is_empty());
+    }
+
+    /// Hand-made codestream: one component, 8 bit, with the given geometry and coding style.
+    fn crafted(
+        (w, h, tw, th): (u32, u32, u32, u32),
+        nl: u8,
+        prec: Option<u8>,
+        cb: (u8, u8),
+        data: &[u8],
+    ) -> Vec<u8> {
+        let mut d = vec![0xFF, 0x4F, 0xFF, 0x51];
+        d.extend(41u16.to_be_bytes());
+        d.extend(0u16.to_be_bytes());
+        for v in [w, h, 0, 0, tw, th, 0, 0] {
+            d.extend(v.to_be_bytes());
+        }
+        d.extend(1u16.to_be_bytes());
+        d.extend([7, 1, 1]);
+        d.extend([0xFF, 0x52]);
+        let npr = if prec.is_some() { nl as usize + 1 } else { 0 };
+        d.extend((12 + npr as u16).to_be_bytes());
+        d.push(prec.is_some() as u8);
+        d.extend([0, 0, 1, 0]);
+        d.extend([nl, cb.0, cb.1, 0, 1]);
+        if let Some(p) = prec {
+            d.extend(vec![p; nl as usize + 1]);
+        }
+        d.extend([0xFF, 0x5C]);
+        d.extend((3 + 3 * nl as u16 + 1).to_be_bytes());
+        d.push(2 << 5);
+        d.extend(vec![8 << 3; 3 * nl as usize + 1]);
+        d.extend([0xFF, 0x90, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+        d.extend([0xFF, 0x93]);
+        d.extend_from_slice(data);
+        d.extend([0xFF, 0xD9]);
+        d
+    }
+
+    #[test]
+    fn hostile_headers_fail_fast_and_small() {
+        let t = std::time::Instant::now();
+        let junk = [0x55u8; 64];
+        // absurd canvas, tiny tiles, tiny precincts, many levels, no data at all
+        let cases = [
+            crafted((100_000, 100_000, 100_000, 100_000), 5, None, (4, 4), &junk),
+            crafted((9_000, 9_000, 9_000, 9_000), 5, Some(0x11), (0, 0), &junk),
+            crafted((9_000, 9_000, 9_000, 9_000), 32, None, (4, 4), &junk),
+            crafted((9_000, 9_000, 9_000, 9_000), 5, None, (4, 4), &[]),
+            crafted((3, 3, 1, 1), 32, None, (4, 4), &junk),
+            crafted((1, 1, 1, 1), 0, None, (0, 0), &junk),
+            crafted((u32::MAX, u32::MAX, 1, 1), 1, None, (4, 4), &junk),
+        ];
+        for c in &cases {
+            let _ = decode(c);
+        }
+        assert!(
+            t.elapsed().as_secs() < 20,
+            "hostile headers took {:?}",
+            t.elapsed()
+        );
+    }
+
     #[test]
     fn damaged_streams_do_not_panic() {
         let mut seed = 0x1234_5678_9abc_def1u64;
@@ -1773,7 +1930,13 @@ mod tests {
             for _ in 0..iters {
                 let mut d = stream.to_vec();
                 for _ in 0..1 + rnd() % 6 {
-                    let i = (rnd() as usize) % d.len();
+                    // half of the hits go to the marker segments at the front
+                    let span = if rnd() % 2 == 0 {
+                        d.len().min(160)
+                    } else {
+                        d.len()
+                    };
+                    let i = (rnd() as usize) % span;
                     match rnd() % 3 {
                         0 => d[i] = rnd() as u8,
                         1 => d[i] ^= 1 << (rnd() % 8),

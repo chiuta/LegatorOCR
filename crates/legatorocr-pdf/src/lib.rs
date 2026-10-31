@@ -861,6 +861,46 @@ mod unicode_file {
     }
 
     #[test]
+    fn pdfa_survives_empty_documents_and_exhausted_code_space() {
+        // no pages at all
+        let mut w = PdfWriter::new(Compress::Flate);
+        w.set_pdfa(true);
+        let empty = w.finish();
+        assert!(empty.starts_with(b"%PDF-") && empty.ends_with(b"%%EOF\n"));
+        // more distinct characters than a 16-bit font can address
+        let mut w = PdfWriter::new(Compress::Flate);
+        w.set_pdfa(true);
+        let words: Vec<Word> = (0..70_000u32)
+            .step_by(40)
+            .filter_map(|b| {
+                let t: String = (b..b + 40).filter_map(char::from_u32).collect();
+                (!t.is_empty()).then_some(Word {
+                    text: t,
+                    x: 1,
+                    y: 1,
+                    w: 10,
+                    h: 10,
+                    conf: 90.0,
+                    line: 0,
+                })
+            })
+            .collect();
+        w.add_page(
+            &Page {
+                image: PageImage::Bw(BitImage::new(20, 20)),
+                dpi: 100,
+                skew_deg: 0.0,
+                blank: false,
+                split_index: None,
+                layers: None,
+            },
+            &words,
+        );
+        let big = w.finish();
+        assert!(big.windows(10).any(|x| x == b"/FontFile2"));
+    }
+
+    #[test]
     fn pdfa_output_has_the_required_parts() {
         let pdf = pdfa_sample();
         let t = String::from_utf8_lossy(&pdf);
