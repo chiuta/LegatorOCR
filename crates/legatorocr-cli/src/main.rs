@@ -199,6 +199,11 @@ struct Cli {
     #[arg(long, default_value_t = 0.0)]
     min_conf: f32,
 
+    /// OCR engine: `auto` (Tesseract when installed with the languages, else the built-in
+    /// native engine), `native` (built-in, nothing to install) or `tesseract`.
+    #[arg(long, default_value = "auto")]
+    engine: legatorocr_engine::ocr::Engine,
+
     /// Path to the tesseract executable.
     #[arg(long, default_value = "tesseract")]
     tesseract: PathBuf,
@@ -556,6 +561,7 @@ fn real_main() -> Result<()> {
     }
 
     let ocr_opts = OcrOptions {
+        engine: cli.engine,
         lang: legatorocr_engine::ocr::canonical_lang(&cli.lang),
         psm: cli.psm,
         min_conf: cli.min_conf,

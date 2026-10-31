@@ -383,6 +383,7 @@ impl UiSettings {
 
     pub fn ocr_options(&self) -> OcrOptions {
         OcrOptions {
+            engine: legatorocr_engine::ocr::Engine::Auto,
             lang: self.lang_string(),
             psm: self.psm,
             min_conf: self.min_conf,

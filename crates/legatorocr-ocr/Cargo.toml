@@ -9,5 +9,6 @@ authors.workspace = true
 
 [dependencies]
 legatorocr-core = { path = "../legatorocr-core" }
+legatorocr-nocr = { path = "../legatorocr-nocr" }
 image.workspace = true
 thiserror.workspace = true

@@ -1,0 +1,15 @@
+[package]
+name = "legatorocr-nocr"
+description = "LegatorOCR native OCR engine: line segmentation, CNN+BiGRU+CTC recogniser, lexicon decoding (pure Rust, no external engine)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+legatorocr-core = { path = "../legatorocr-core" }
+image.workspace = true
+rayon.workspace = true
+thiserror.workspace = true
+flate2.workspace = true

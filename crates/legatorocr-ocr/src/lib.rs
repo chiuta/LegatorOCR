@@ -17,8 +17,44 @@ pub enum OcrError {
     Image(#[from] image::ImageError),
 }
 
+/// Which recogniser runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Engine {
+    /// Tesseract when it is installed *and* has every requested language, otherwise the
+    /// built-in native engine.
+    #[default]
+    Auto,
+    /// The built-in pure-Rust engine (`legatorocr-nocr`); needs nothing installed.
+    Native,
+    /// The separately installed Tesseract program.
+    Tesseract,
+}
+
+impl std::str::FromStr for Engine {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s.to_ascii_lowercase().as_str() {
+            "auto" => Ok(Engine::Auto),
+            "native" | "builtin" | "built-in" => Ok(Engine::Native),
+            "tesseract" => Ok(Engine::Tesseract),
+            _ => Err(format!("unknown OCR engine '{s}' (auto, native or tesseract)")),
+        }
+    }
+}
+
+impl Engine {
+    pub fn name(self) -> &'static str {
+        match self {
+            Engine::Auto => "auto",
+            Engine::Native => "native",
+            Engine::Tesseract => "tesseract",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct OcrOptions {
+    pub engine: Engine,
     /// Tesseract language(s), e.g. `eng`, `ron+eng`.
     pub lang: String,
     /// Page segmentation mode (3 = fully automatic, 6 = single block …).
@@ -33,6 +69,7 @@ pub struct OcrOptions {
 impl Default for OcrOptions {
     fn default() -> Self {
         Self {
+            engine: Engine::Auto,
             lang: "eng".into(),
             psm: 3,
             min_conf: 0.0,
@@ -159,8 +196,53 @@ pub fn valid_lang(l: &str) -> bool {
         })
 }
 
+/// The engine that will really run for these options (`Auto` resolved; the answer is cached per
+/// program path and language list, because it costs two process launches).
+pub fn effective_engine(o: &OcrOptions) -> Engine {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    match o.engine {
+        Engine::Native | Engine::Tesseract => o.engine,
+        Engine::Auto => {
+            static CACHE: OnceLock<Mutex<HashMap<(PathBuf, String), Engine>>> = OnceLock::new();
+            let key = (o.tesseract.clone(), canonical_lang(&o.lang));
+            let cache = CACHE.get_or_init(Default::default);
+            if let Some(&e) = cache.lock().unwrap().get(&key) {
+                return e;
+            }
+            let t = Engine::Tesseract;
+            let to = OcrOptions { engine: t, ..o.clone() };
+            let ok = check_tesseract(&to).is_ok()
+                && list_tesseract_languages(&to)
+                    .map(|have| key.1.split('+').all(|l| have.iter().any(|h| h == l)))
+                    .unwrap_or(false);
+            let e = if ok || !native_available() { t } else { Engine::Native };
+            cache.lock().unwrap().insert(key, e);
+            e
+        }
+    }
+}
+
+/// `true` when the program contains a native recognition model.
+pub fn native_available() -> bool {
+    legatorocr_nocr::embedded_model().is_some()
+}
+
 /// Returns the engine's version line, or an error if it cannot be run.
 pub fn check_engine(o: &OcrOptions) -> Result<String, OcrError> {
+    match effective_engine(o) {
+        Engine::Native => {
+            if native_available() {
+                Ok(format!("LegatorOCR native engine {}", env!("CARGO_PKG_VERSION")))
+            } else {
+                Err(OcrError::NotFound("this build contains no native recognition model".into()))
+            }
+        }
+        _ => check_tesseract(o),
+    }
+}
+
+fn check_tesseract(o: &OcrOptions) -> Result<String, OcrError> {
     let out = base_cmd(o)
         .arg("--version")
         .output()
@@ -175,6 +257,13 @@ pub fn check_engine(o: &OcrOptions) -> Result<String, OcrError> {
 
 /// Languages installed for the engine.
 pub fn list_languages(o: &OcrOptions) -> Result<Vec<String>, OcrError> {
+    match effective_engine(o) {
+        Engine::Native => Ok(UI_LANGUAGES.iter().map(|(_, t, _)| t.to_string()).collect()),
+        _ => list_tesseract_languages(o),
+    }
+}
+
+fn list_tesseract_languages(o: &OcrOptions) -> Result<Vec<String>, OcrError> {
     let out = base_cmd(o)
         .arg("--list-langs")
         .output()
@@ -267,6 +356,9 @@ pub fn upscale_factor(dpi: u32, w: u32, h: u32) -> u32 {
 /// Recognise one processed page. Low-resolution pages are enlarged first
 /// ([`upscale_factor`]); word boxes are mapped back to the page's own pixels.
 pub fn recognize(page: &PageImage, dpi: u32, o: &OcrOptions) -> Result<Vec<Word>, OcrError> {
+    if effective_engine(o) == Engine::Native {
+        return recognize_native(page, dpi, o);
+    }
     let k = upscale_factor(dpi, page.width(), page.height());
     let dpi = dpi * k;
     let img = page.to_dynamic();
@@ -314,6 +406,24 @@ pub fn recognize(page: &PageImage, dpi: u32, o: &OcrOptions) -> Result<Vec<Word>
             w.y /= k;
             w.w = (x1.div_ceil(k)).saturating_sub(w.x).max(1);
             w.h = (y1.div_ceil(k)).saturating_sub(w.y).max(1);
+        }
+    }
+    Ok(words)
+}
+
+fn recognize_native(page: &PageImage, dpi: u32, o: &OcrOptions) -> Result<Vec<Word>, OcrError> {
+    let model = legatorocr_nocr::embedded_model()
+        .ok_or_else(|| OcrError::NotFound("this build contains no native recognition model".into()))?;
+    let lang = canonical_lang(&o.lang);
+    let mut words = legatorocr_nocr::recognize(
+        page,
+        dpi,
+        model,
+        &legatorocr_nocr::NativeOptions { min_conf: o.min_conf, lang: lang.clone() },
+    );
+    if lang.split('+').any(|l| l == "ron") {
+        for w in &mut words {
+            w.text = legatorocr_core::text::normalize_ro(&w.text);
         }
     }
     Ok(words)

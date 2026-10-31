@@ -1237,11 +1237,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "legatorocr-nocr"
+version = "0.2.0-pre.2"
+dependencies = [
+ "flate2",
+ "image",
+ "legatorocr-core",
+ "rayon",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "legatorocr-ocr"
 version = "0.2.0-pre.2"
 dependencies = [
  "image",
  "legatorocr-core",
+ "legatorocr-nocr",
  "thiserror 2.0.21",
 ]
 
