@@ -238,7 +238,7 @@ fn finish_page(mut img: RgbImage, split_index: Option<u8>, s: &Settings) -> Page
                 None => PageImage::Bw(bw),
                 Some((wx, wy, ww, wh)) => {
                     let mut canvas = BitImage::new(cw, ch);
-                    canvas.paste_region(&bw, wx, wy, ww, wh, wx - canvas_x, wy - canvas_y);
+                    canvas.paste_region(&bw, (wx, wy, ww, wh), (wx - canvas_x, wy - canvas_y));
                     PageImage::Bw(canvas)
                 }
             }

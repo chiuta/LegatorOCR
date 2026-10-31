@@ -31,7 +31,8 @@ impl BitImage {
     /// Copy of the sub-rectangle `[x0,x1) × [0,h)`.
     /// Copy the `w`×`h` region of `src` starting at (`sx`,`sy`) to (`dx`,`dy`) in
     /// `self`; either side may extend past its image (clipped, nothing is wrapped).
-    pub fn paste_region(&mut self, src: &BitImage, sx: i64, sy: i64, w: u32, h: u32, dx: i64, dy: i64) {
+    pub fn paste_region(&mut self, src: &BitImage, from: (i64, i64, u32, u32), to: (i64, i64)) {
+        let ((sx, sy, w, h), (dx, dy)) = (from, to);
         for row in 0..h as i64 {
             let (ys, yd) = (sy + row, dy + row);
             if ys < 0 || ys >= src.h as i64 || yd < 0 || yd >= self.h as i64 {
