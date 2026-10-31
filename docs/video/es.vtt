@@ -1,0 +1,32 @@
+WEBVTT
+
+00:00:00.400 --> 00:00:07.700
+LegatorOCR convierte escaneos en bruto de libros en un PDF con búsqueda.
+
+00:00:08.400 --> 00:00:16.700
+Separa, endereza, recorta, limpia, binariza
+y exporta con una capa de texto OCR.
+
+00:00:17.400 --> 00:00:25.700
+Mide la inclinación de las líneas de texto
+y gira la página de vuelta.
+
+00:00:26.400 --> 00:00:34.700
+Los modos mixto e híbrido mantienen el texto nítido
+y reducen las páginas en color a unos 60–100 KB.
+
+00:00:35.400 --> 00:00:43.700
+Lee por sí mismo PDF escaneados: JPEG 2000,
+JBIG2, CCITT y archivos cifrados.
+
+00:00:44.400 --> 00:00:52.700
+Comprobado con OpenJPEG, poppler y qpdf,
+y sometido a fuzzing con entradas hostiles.
+
+00:00:53.400 --> 00:01:01.700
+Un solo comando en el terminal,
+o la interfaz gráfica en 8 idiomas.
+
+00:01:02.400 --> 00:01:09.700
+Gratis, local, sin cuentas. Licencia MIT.
+Código en GitHub.

@@ -1,0 +1,32 @@
+WEBVTT
+
+00:00:00.400 --> 00:00:07.700
+A LegatorOCR a nyers könyvszkenneket kereshető PDF-fé alakítja.
+
+00:00:08.400 --> 00:00:16.700
+Szétválaszt, kiegyenesít, vág, tisztít, binarizál,
+majd OCR-szövegréteggel exportál.
+
+00:00:17.400 --> 00:00:25.700
+Megméri a szövegsorok dőlését,
+és visszaforgatja az oldalt.
+
+00:00:26.400 --> 00:00:34.700
+A vegyes és hibrid mód éles szöveget tart,
+a színes oldalakat kb. 60–100 KB-ra csökkenti.
+
+00:00:35.400 --> 00:00:43.700
+Maga olvassa a beolvasott PDF-eket: JPEG 2000,
+JBIG2, CCITT és titkosított fájlok.
+
+00:00:44.400 --> 00:00:52.700
+Ellenőrizve OpenJPEG-gel, popplerrel és qpdf-fel,
+és ellenséges bemenetekkel fuzzolva.
+
+00:00:53.400 --> 00:01:01.700
+Egyetlen parancs a terminálban,
+vagy a grafikus felület 8 nyelven.
+
+00:01:02.400 --> 00:01:09.700
+Ingyenes, helyi, fiók nélkül. MIT-licenc.
+Kód a GitHubon.

@@ -1,0 +1,32 @@
+WEBVTT
+
+00:00:00.400 --> 00:00:07.700
+LegatorOCR transformă scanările brute de carte într-un PDF căutabil.
+
+00:00:08.400 --> 00:00:16.700
+Desparte, îndreaptă, taie, curăță, binarizează,
+apoi exportă cu strat de text OCR.
+
+00:00:17.400 --> 00:00:25.700
+Măsoară înclinarea rândurilor de text
+și rotește pagina înapoi.
+
+00:00:26.400 --> 00:00:34.700
+Modurile mixt și hibrid păstrează textul clar
+și reduc paginile color la circa 60–100 KB.
+
+00:00:35.400 --> 00:00:43.700
+Citește singur PDF-uri scanate: JPEG 2000,
+JBIG2, CCITT și fișiere criptate.
+
+00:00:44.400 --> 00:00:52.700
+Verificat cu OpenJPEG, poppler și qpdf,
+și testat cu intrări ostile (fuzzing).
+
+00:00:53.400 --> 00:01:01.700
+O singură comandă în terminal,
+sau interfața grafică în 8 limbi.
+
+00:01:02.400 --> 00:01:09.700
+Gratuit, local, fără conturi. Licență MIT.
+Cod pe GitHub.

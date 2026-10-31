@@ -1,0 +1,32 @@
+WEBVTT
+
+00:00:00.400 --> 00:00:07.700
+LegatorOCR turns raw book scans into a searchable PDF.
+
+00:00:08.400 --> 00:00:16.700
+Split, straighten, crop, clean, binarize,
+then export with an OCR text layer.
+
+00:00:17.400 --> 00:00:25.700
+It measures the skew of the text lines
+and rotates the page back.
+
+00:00:26.400 --> 00:00:34.700
+Mixed and hybrid modes keep sharp text
+and shrink colour pages to about 60–100 KB.
+
+00:00:35.400 --> 00:00:43.700
+It reads scanned PDFs itself: JPEG 2000,
+JBIG2, CCITT and encrypted files.
+
+00:00:44.400 --> 00:00:52.700
+Checked against OpenJPEG, poppler and qpdf,
+and fuzzed with hostile inputs.
+
+00:00:53.400 --> 00:01:01.700
+One command in the terminal,
+or the graphical interface in 8 languages.
+
+00:01:02.400 --> 00:01:09.700
+Free, local, no accounts. MIT licence.
+Code on GitHub.

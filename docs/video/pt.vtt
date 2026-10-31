@@ -1,0 +1,32 @@
+WEBVTT
+
+00:00:00.400 --> 00:00:07.700
+O LegatorOCR transforma digitalizações brutas de livros num PDF pesquisável.
+
+00:00:08.400 --> 00:00:16.700
+Separa, endireita, recorta, limpa, binariza
+e exporta com camada de texto OCR.
+
+00:00:17.400 --> 00:00:25.700
+Mede a inclinação das linhas de texto
+e roda a página de volta.
+
+00:00:26.400 --> 00:00:34.700
+Os modos misto e híbrido mantêm o texto nítido
+e reduzem páginas a cores para cerca de 60–100 KB.
+
+00:00:35.400 --> 00:00:43.700
+Lê sozinho PDFs digitalizados: JPEG 2000,
+JBIG2, CCITT e ficheiros cifrados.
+
+00:00:44.400 --> 00:00:52.700
+Verificado com OpenJPEG, poppler e qpdf,
+e testado com entradas hostis (fuzzing).
+
+00:00:53.400 --> 00:01:01.700
+Um só comando no terminal,
+ou a interface gráfica em 8 idiomas.
+
+00:01:02.400 --> 00:01:09.700
+Gratuito, local, sem contas. Licença MIT.
+Código no GitHub.

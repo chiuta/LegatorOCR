@@ -39,7 +39,7 @@ main{max-width:1040px;margin:auto;padding:0 16px 64px}
 .stats div{border:1px solid var(--line);background:var(--panel);border-radius:10px;padding:14px}
 .stats b{display:block;font-size:34px;color:var(--acc)}.stats span{color:var(--mute);font-size:14px}
 section{padding:44px 0;border-top:1px solid var(--line)}
-h2{font-size:28px;margin:0 0 6px}h2 small{color:var(--acc2);font-size:14px;letter-spacing:.15em;margin-right:10px}
+h2{font-size:28px;margin:0 0 6px}.vh{margin:36px 0 6px;font-size:20px}h2 small{color:var(--acc2);font-size:14px;letter-spacing:.15em;margin-right:10px}
 .lead{color:var(--mute);max-width:70ch}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;margin-top:18px}
 .card{border:1px solid var(--line);background:var(--panel);border-radius:10px;padding:16px}
@@ -96,6 +96,17 @@ footer{border-top:1px solid var(--line);padding:28px 16px;text-align:center;colo
 <div class="ctl"><label for="ang">Înclinare scanare</label><input id="ang" type="range" min="-8" max="8" step="0.1" value="3.2"><span id="angv">3.2°</span>
 <button id="fix">Îndreaptă</button><button id="noise">Adaugă zgomot</button><button id="reset">Resetează</button></div>
 <div class="out" id="log"></div>
+<h3 class="vh">Film de prezentare (70 s)</h3>
+<p class="lead">Fără sunet, cu subtitrări în 8 limbi. Scenele sunt animații desenate pentru prezentare; ecranul de terminal folosește ieșirea reală a programului.</p>
+<video id="film" controls preload="metadata" poster="video/poster.jpg" playsinline style="width:100%;max-width:900px;border-radius:10px;background:#0a1016">
+<source src="video/legatorocr.mp4" type="video/mp4"><track kind="subtitles" src="video/ro.vtt" srclang="ro" label="Română" default><track kind="subtitles" src="video/en.vtt" srclang="en" label="English"><track kind="subtitles" src="video/fr.vtt" srclang="fr" label="Français"><track kind="subtitles" src="video/it.vtt" srclang="it" label="Italiano"><track kind="subtitles" src="video/es.vtt" srclang="es" label="Español"><track kind="subtitles" src="video/pt.vtt" srclang="pt" label="Português"><track kind="subtitles" src="video/de.vtt" srclang="de" label="Deutsch"><track kind="subtitles" src="video/hu.vtt" srclang="hu" label="Magyar"></video>
+<div class="ctl"><label for="sub">Subtitrări</label><select id="sub"><option value="ro">Română</option><option value="en">English</option><option value="fr">Français</option><option value="it">Italiano</option><option value="es">Español</option><option value="pt">Português</option><option value="de">Deutsch</option><option value="hu">Magyar</option></select> <a href="video/legatorocr.mp4" download>Descarcă MP4 (8 piste de subtitrare)</a></div>
+<script>
+(function(){var v=document.getElementById('film'),s=document.getElementById('sub');
+var l=(navigator.language||'ro').slice(0,2);if([].some.call(s.options,function(o){return o.value===l}))s.value=l;
+function ap(){for(var i=0;i<v.textTracks.length;i++)v.textTracks[i].mode=v.textTracks[i].language===s.value?'showing':'disabled'}
+s.addEventListener('change',ap);v.addEventListener('loadedmetadata',ap);ap();})();
+</script>
 </section>
 
 <section id="flux">

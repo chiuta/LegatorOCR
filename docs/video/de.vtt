@@ -1,0 +1,32 @@
+WEBVTT
+
+00:00:00.400 --> 00:00:07.700
+LegatorOCR macht aus rohen Buchscans ein durchsuchbares PDF.
+
+00:00:08.400 --> 00:00:16.700
+Teilen, geradeziehen, beschneiden, säubern, binarisieren,
+dann mit OCR-Textebene exportieren.
+
+00:00:17.400 --> 00:00:25.700
+Es misst die Schräglage der Textzeilen
+und dreht die Seite zurück.
+
+00:00:26.400 --> 00:00:34.700
+Gemischter und Hybrid-Modus erhalten scharfen Text
+und verkleinern Farbseiten auf etwa 60–100 KB.
+
+00:00:35.400 --> 00:00:43.700
+Es liest gescannte PDFs selbst: JPEG 2000,
+JBIG2, CCITT und verschlüsselte Dateien.
+
+00:00:44.400 --> 00:00:52.700
+Geprüft mit OpenJPEG, poppler und qpdf
+und mit feindlichen Eingaben gefuzzt.
+
+00:00:53.400 --> 00:01:01.700
+Ein Befehl im Terminal
+oder die grafische Oberfläche in 8 Sprachen.
+
+00:01:02.400 --> 00:01:09.700
+Kostenlos, lokal, ohne Konto. MIT-Lizenz.
+Code auf GitHub.
