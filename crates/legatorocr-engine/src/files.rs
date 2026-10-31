@@ -143,8 +143,8 @@ pub fn collect_images(paths: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 /// Resolution stored in a PNG (`pHYs`) or JPEG (JFIF) header, if it looks like a
-/// real scan resolution. Values outside 150–1200 dpi are ignored: 72/96 dpi is
-/// what screenshots and many editors write by default and would be wrong here.
+/// real scan resolution. 150–1200 dpi is accepted; 50–149 only when the implied page size
+/// is plausible and it is not 72/96 dpi (what screenshots and many editors write by default).
 pub fn detect_dpi(path: &Path) -> Option<u32> {
     use std::io::Read;
     let (path, frame) = &split_frame(path);
@@ -160,7 +160,23 @@ pub fn detect_dpi(path: &Path) -> Option<u32> {
         .read_to_end(&mut head)
         .ok()?;
     let dpi = dpi_from_header(&head)?;
-    (150..=1200).contains(&dpi).then_some(dpi)
+    if (150..=1200).contains(&dpi) {
+        return Some(dpi);
+    }
+    // Low resolutions (e.g. a 100 dpi A4 export) are real too, but 72 and 96 are editor
+    // defaults, so accept the 50–149 range only when the physical page size is plausible.
+    if (50..150).contains(&dpi) && dpi != 72 && dpi != 96 {
+        let (w, h) = image::image_dimensions(path).ok()?;
+        return plausible_page(w, h, dpi).then_some(dpi);
+    }
+    None
+}
+
+/// Is `w`×`h` pixels at `dpi` a believable sheet of paper (2–24 in, at most ~2:1 beyond A-series)?
+fn plausible_page(w: u32, h: u32, dpi: u32) -> bool {
+    let (a, b) = (w as f64 / dpi as f64, h as f64 / dpi as f64);
+    let (short, long) = if a < b { (a, b) } else { (b, a) };
+    (2.0..=24.0).contains(&short) && (3.0..=36.0).contains(&long)
 }
 
 fn dpi_from_header(b: &[u8]) -> Option<u32> {
@@ -231,5 +247,31 @@ mod tests {
         assert_eq!(dpi_from_header(&jpg), Some(400));
         assert_eq!(dpi_from_header(b"garbage"), None);
         assert_eq!(dpi_from_header(&[]), None);
+    }
+
+    #[test]
+    fn low_dpi_is_accepted_only_for_plausible_pages() {
+        use image::codecs::jpeg::{JpegEncoder, PixelDensity};
+        let dir = std::env::temp_dir().join(format!("lgr-dpi-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mk = |name: &str, w: u32, h: u32, dpi: u16| {
+            let path = dir.join(name);
+            let img = image::RgbImage::from_pixel(w, h, image::Rgb([200, 200, 200]));
+            let mut f = std::fs::File::create(&path).unwrap();
+            let mut enc = JpegEncoder::new_with_quality(&mut f, 80);
+            enc.set_pixel_density(PixelDensity::dpi(dpi));
+            enc.encode_image(&img).unwrap();
+            path
+        };
+        // A4 at 100 dpi: believable
+        assert_eq!(detect_dpi(&mk("a.jpg", 826, 1169, 100)), Some(100));
+        // the same pixel size claiming 72/96 dpi: editor defaults, ignored
+        assert_eq!(detect_dpi(&mk("b.jpg", 826, 1169, 72)), None);
+        assert_eq!(detect_dpi(&mk("c.jpg", 826, 1169, 96)), None);
+        // 100 dpi but 25 × 35 inches: not a sheet of paper
+        assert_eq!(detect_dpi(&mk("d.jpg", 2480, 3508, 100)), None);
+        // unchanged: 300 dpi
+        assert_eq!(detect_dpi(&mk("e.jpg", 2480, 3508, 300)), Some(300));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
