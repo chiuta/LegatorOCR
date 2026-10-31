@@ -258,13 +258,11 @@ fn cut(p: &Prof, r: (u32, u32, u32, u32), med: u32, depth: u32, out: &mut Vec<Li
     let (x0, y0, x1, y1) = r;
     let (w, h) = (x1 - x0, y1 - y0);
     // ignore specks
-    if w < 3 || h < 3 {
+    if w < 2 || h < 2 {
         return;
     }
     if depth > 40 || h <= med * 2 + med / 2 && w <= med * 3 {
-        if h >= med / 3 {
-            out.push(Line { x: x0, y: y0, w, h });
-        }
+        out.push(Line { x: x0, y: y0, w, h }); // thin pieces are attached or dropped later
         return;
     }
     let rows = p.rows(r);
@@ -287,7 +285,7 @@ fn cut(p: &Prof, r: (u32, u32, u32, u32), med: u32, depth: u32, out: &mut Vec<Li
             }
         }
         (None, None) => {
-            if h >= med / 3 && h <= med * 8 {
+            if h <= med * 8 {
                 out.push(Line { x: x0, y: y0, w, h });
             } else if h > med * 8 {
                 // a block with no whitespace row (picture or heavy skew): try the weakest row
