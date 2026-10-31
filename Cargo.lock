@@ -1232,7 +1232,7 @@ version = "0.2.0-pre.1"
 dependencies = [
  "image",
  "legatorocr-core",
- "thiserror 1.0.69",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
