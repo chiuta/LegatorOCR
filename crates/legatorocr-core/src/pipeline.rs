@@ -527,4 +527,48 @@ mod tests {
         let ink_frac = bw.count_ink() as f64 / (bw_w as f64 * bw_h as f64);
         assert!((0.03..0.5).contains(&ink_frac), "ink fraction {ink_frac}");
     }
+
+    /// Random tiny/odd images × random settings must never panic and must stay bounded.
+    #[test]
+    fn fuzz_no_panics() {
+        let mut seed = 0x9E3779B97F4A7C15u64;
+        let mut rnd = move |n: u64| {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) % n
+        };
+        for it in 0..220 {
+            let (w, h) = (1 + rnd(400) as u32, 1 + rnd(400) as u32);
+            let kind = rnd(4);
+            let mut img = RgbImage::new(w, h);
+            for (x, y, p) in img.enumerate_pixels_mut() {
+                let v = match kind {
+                    0 => 255,
+                    1 => rnd(256) as u8,
+                    2 => if (y / 7) % 3 == 0 && (x / 5) % 2 == 0 { 20 } else { 235 },
+                    _ => if rnd(50) == 0 { 0 } else { 250 },
+                };
+                *p = Rgb([v, v, v]);
+            }
+            let s = Settings {
+                dpi: [36, 72, 100, 150, 300, 600][rnd(6) as usize],
+                rotate_quarters: rnd(4) as u8,
+                auto_orient: rnd(2) == 0,
+                split: [SplitMode::Off, SplitMode::Auto, SplitMode::Middle][rnd(3) as usize],
+                deskew: rnd(2) == 0,
+                manual_skew_deg: (rnd(3) == 0).then(|| rnd(120) as f32 - 60.0),
+                max_skew_deg: rnd(20) as f32,
+                margins_mm: [rnd(30) as f32; 4],
+                page_size_mm: (rnd(2) == 0).then(|| (rnd(300) as f32, rnd(300) as f32)),
+                mode: [OutputMode::Color, OutputMode::Gray, OutputMode::BlackWhite][rnd(3) as usize],
+                sauvola_k: rnd(100) as f32 / 100.0,
+                despeckle: rnd(2) == 0,
+            };
+            let pages = process_page(&DynamicImage::ImageRgb8(img), &s);
+            assert!(!pages.is_empty() && pages.len() <= 2, "iteration {it}");
+            for p in pages {
+                assert!(p.image.width() >= 1 && p.image.height() >= 1);
+                assert!(p.image.width() < 12_000 && p.image.height() < 12_000, "iteration {it}: {}x{}", p.image.width(), p.image.height());
+            }
+        }
+    }
 }

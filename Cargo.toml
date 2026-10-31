@@ -5,6 +5,7 @@ members = ["crates/legatorocr-core", "crates/legatorocr-pdf", "crates/legatorocr
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.95"
 license = "MIT"
 authors = ["Alexio <alexio@trom.tf>"]
 repository = "https://github.com/chiuta/legatorocr"

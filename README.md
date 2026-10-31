@@ -44,7 +44,10 @@ scripts/package.sh <target>    # e.g. x86_64-unknown-linux-gnu → dist/LegatorO
 **OCR needs Tesseract** (run as a separate program; the app finds it on `PATH`):
 `sudo apt install tesseract-ocr tesseract-ocr-ron` · `brew install tesseract tesseract-lang` ·
 Windows: `winget install UB-Mannheim.TesseractOCR` (add it to `PATH`).
+The app also looks in the usual install folders (Homebrew `/opt/homebrew/bin`, `/usr/local/bin`,
+`C:\Program Files\Tesseract-OCR`), so a double-clicked app works without editing `PATH`.
 Without Tesseract everything else works; the OCR switch is disabled and says why.
+`--auto-rotate` / the OSD checkbox additionally need `osd.traineddata` (part of the standard packages).
 
 ## Pipeline
 
@@ -88,4 +91,4 @@ connected components) and the publicly described workflow. No source code of any
 scan-processing tool was consulted or copied. Before commercial release, do your own due
 diligence, including a trademark search for the name.
 
-MIT licensed.
+MIT licensed. Dependencies and embedded fonts: see `THIRD_PARTY_LICENSES.md`.

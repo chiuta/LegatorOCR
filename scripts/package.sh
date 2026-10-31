@@ -17,7 +17,7 @@ BIN="target/${TARGET}/release"
 rm -rf "$OUT" && mkdir -p "$OUT" dist
 EXE=""; case "$TARGET" in *windows*) EXE=".exe";; esac
 cp "$BIN/legatorocr${EXE}" "$OUT/"
-cp README.md LICENSE "$OUT/"
+cp README.md LICENSE THIRD_PARTY_LICENSES.md "$OUT/"
 
 case "$TARGET" in
   *apple*)

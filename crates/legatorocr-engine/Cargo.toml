@@ -3,6 +3,7 @@ name = "legatorocr-engine"
 description = "LegatorOCR engine: shared export orchestration (OCR + PDF) used by the CLI and the GUI"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 

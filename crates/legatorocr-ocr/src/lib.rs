@@ -36,8 +36,53 @@ impl Default for OcrOptions {
     }
 }
 
+/// Folders where Tesseract is usually installed but which a GUI app launched from
+/// Finder / the Start menu does not have on its `PATH`.
+fn well_known_dirs() -> Vec<PathBuf> {
+    #[allow(unused_mut)] // only extended on macOS and Windows
+    let mut v: Vec<PathBuf> = Vec::new();
+    #[cfg(target_os = "macos")]
+    v.extend(["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"].map(PathBuf::from));
+    #[cfg(windows)]
+    {
+        for var in ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"] {
+            if let Some(base) = std::env::var_os(var) {
+                let base = PathBuf::from(base);
+                v.push(base.join("Tesseract-OCR"));
+                v.push(base.join("Programs").join("Tesseract-OCR"));
+            }
+        }
+    }
+    v
+}
+
+/// The program to run: the configured path as given when it works or is explicit,
+/// else (bare name only) the first well-known install location that has it.
+pub fn resolve_tesseract(configured: &std::path::Path) -> PathBuf {
+    if configured.components().count() != 1 {
+        return configured.to_path_buf(); // an explicit path: use it as is
+    }
+    let on_path = std::env::var_os("PATH").is_some_and(|p| {
+        std::env::split_paths(&p).any(|d| {
+            d.join(configured).is_file() || d.join(format!("{}.exe", configured.display())).is_file()
+        })
+    });
+    if on_path {
+        return configured.to_path_buf();
+    }
+    for d in well_known_dirs() {
+        for name in [configured.to_path_buf(), PathBuf::from(format!("{}.exe", configured.display()))] {
+            let cand = d.join(name);
+            if cand.is_file() {
+                return cand;
+            }
+        }
+    }
+    configured.to_path_buf()
+}
+
 fn base_cmd(o: &OcrOptions) -> Command {
-    let mut c = Command::new(&o.tesseract);
+    let mut c = Command::new(resolve_tesseract(&o.tesseract));
     c.env("OMP_THREAD_LIMIT", "1");
     if let Some(t) = &o.tessdata {
         c.env("TESSDATA_PREFIX", t);
@@ -187,6 +232,15 @@ mod tests {
         assert_eq!(parse_osd(&ok.replace("7.31", "0.4")), None);
         assert_eq!(parse_osd("Warning. Invalid resolution 0 dpi.\n"), None);
         assert_eq!(parse_osd(&ok.replace("Rotate: 90", "Rotate: 45")), None);
+    }
+
+    #[test]
+    fn explicit_paths_are_left_alone() {
+        let p = std::path::Path::new("/opt/custom/tesseract");
+        assert_eq!(resolve_tesseract(p), p);
+        // A bare name that exists nowhere stays as is (the caller then reports "not found").
+        let q = std::path::Path::new("definitely-not-installed-xyz");
+        assert_eq!(resolve_tesseract(q), q);
     }
 
     #[test]
