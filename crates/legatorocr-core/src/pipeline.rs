@@ -436,7 +436,24 @@ fn prepare(mut img: RgbImage, s: &Settings) -> Prepared {
     let angle = match s.manual_skew_deg {
         Some(deg) => Some(deg.to_radians()),
         None if s.deskew => {
-            let a = analyse(&imageops::grayscale(&img), s.dpi);
+            let gray = imageops::grayscale(&img);
+            let mut a = analyse(&gray, s.dpi);
+            // Photographs have no text lines: their edges and tones would steer the estimate
+            // (a mounted photo on a straight page came out rotated by 4°). Judge the skew
+            // from what is left outside the picture zones.
+            let f = a.factor.max(1);
+            for z in pictures::detect(&gray, s.dpi, s.picture_sensitivity) {
+                let pad = (z.rect.w.min(z.rect.h) / 25).max(f);
+                let x0 = z.rect.x.saturating_sub(pad) / f;
+                let y0 = z.rect.y.saturating_sub(pad) / f;
+                let x1 = ((z.rect.x + z.rect.w + pad) / f + 1).min(a.ink.w);
+                let y1 = ((z.rect.y + z.rect.h + pad) / f + 1).min(a.ink.h);
+                for y in y0..y1 {
+                    for x in x0..x1 {
+                        a.ink.data[(y * a.ink.w + x) as usize] = 0;
+                    }
+                }
+            }
             deskew::detect_skew(&a.ink, s.max_skew_deg)
         }
         None => None,

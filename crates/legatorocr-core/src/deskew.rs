@@ -11,6 +11,11 @@ pub fn detect_skew(ink: &BitImage, max_deg: f32) -> Option<f32> {
     if share < MIN_INK_SHARE {
         return None;
     }
+    // Line drawings, perspective views and photographs have no dominant line direction:
+    // their best angle barely stands out from the others and is not a page tilt.
+    if prom < MIN_PROMINENCE {
+        return None;
+    }
     // Cross-check with the vertical structure (columns, margins, drawing edges): a rigid
     // rotation of the scan tilts both. When both axes give strong evidence and disagree,
     // the content is not a plain rotated page (oblique drawing, hatching): do not rotate.
@@ -41,6 +46,9 @@ pub fn detect_skew(ink: &BitImage, max_deg: f32) -> Option<f32> {
 
 /// Fewer inked pixels than this share of the page: too little to judge the skew.
 const MIN_INK_SHARE: f64 = 0.008;
+/// Below this peak prominence there is no trustworthy text orientation (typical text pages
+/// score 15–60, drawings and half-tones 1.4–5.6): leave the page alone.
+const MIN_PROMINENCE: f64 = 8.0;
 /// Peak-to-median ratio of the sharpness curve over all tried angles that counts as a
 /// clear, well-defined orientation (typical text pages score 10–60).
 const STRONG_PROMINENCE: f64 = 10.0;
