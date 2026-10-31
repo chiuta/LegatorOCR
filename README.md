@@ -1,5 +1,7 @@
 # LegatorOCR
 
+Prezentare / presentation site: <https://legatorocr.chiuta.ro> (sursa în `docs/`).
+
 Clean-room Rust post-processor for scanned books:
 **split → deskew → crop → margins → clean / binarize → PDF with a searchable OCR text layer.**
 Same *workflow* as classic scan-tailoring tools, independent code. Graphical interface

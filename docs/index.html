@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="ro">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>LegatorOCR — scanări → PDF cu text căutabil · scans → searchable PDF</title>
+<meta name="description" content="LegatorOCR: post-procesor clean-room în Rust pentru cărți scanate — împarte, îndreaptă, taie, curăță, binarizează și exportă PDF cu strat OCR. Local, fără conturi, MIT.">
+<meta name="author" content="Alexio">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#0a1016">
+<meta name="color-scheme" content="light dark">
+<link rel="canonical" href="https://legatorocr.chiuta.ro/">
+<meta property="og:title" content="LegatorOCR">
+<meta property="og:description" content="Din scanări brute în PDF cu text căutabil. Rust, clean-room, local, trade-free.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://legatorocr.chiuta.ro/">
+<meta property="og:site_name" content="LegatorOCR">
+<meta property="og:locale" content="ro_RO">
+<style>
+:root{--bg:#0a1016;--panel:#111a23;--line:#223140;--ink:#e6edf3;--mute:#9fb0c0;--acc:#5bd1a5;--acc2:#f2b84b;--bad:#ff8a7a;--code:#0d1620}
+:root[data-theme=light]{--bg:#f6f4ee;--panel:#fff;--line:#d9d4c7;--ink:#17202a;--mute:#556270;--acc:#0b7a58;--acc2:#8a5a00;--bad:#b3261e;--code:#efece3}
+@media (prefers-color-scheme:light){:root:not([data-theme=dark]){--bg:#f6f4ee;--panel:#fff;--line:#d9d4c7;--ink:#17202a;--mute:#556270;--acc:#0b7a58;--acc2:#8a5a00;--bad:#b3261e;--code:#efece3}}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--acc)}a:focus-visible,button:focus-visible,summary:focus-visible{outline:2px solid var(--acc2);outline-offset:2px}
+.skip{position:absolute;left:-999px}.skip:focus{left:8px;top:8px;background:var(--panel);padding:8px;z-index:9}
+nav{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 92%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+nav div{max-width:1040px;margin:auto;padding:10px 16px;display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+nav b{letter-spacing:.12em;margin-right:auto}nav a{text-decoration:none;color:var(--mute);font-size:14px}nav a:hover{color:var(--ink)}
+nav button{background:none;border:1px solid var(--line);color:var(--mute);border-radius:6px;padding:2px 8px;cursor:pointer}
+main{max-width:1040px;margin:auto;padding:0 16px 64px}
+.hero{padding:72px 0 40px}.hero h1{font-size:clamp(44px,9vw,92px);letter-spacing:.06em;margin:0}
+.hero h1 i{color:var(--acc);font-style:normal}
+.hero p{max-width:60ch;color:var(--mute);font-size:19px}
+.btns{display:flex;gap:12px;flex-wrap:wrap;margin:22px 0}
+.btn{display:inline-block;padding:11px 18px;border-radius:8px;border:1px solid var(--acc);text-decoration:none;font-weight:600}
+.btn.p{background:var(--acc);color:#04120c}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:28px}
+.stats div{border:1px solid var(--line);background:var(--panel);border-radius:10px;padding:14px}
+.stats b{display:block;font-size:34px;color:var(--acc)}.stats span{color:var(--mute);font-size:14px}
+section{padding:44px 0;border-top:1px solid var(--line)}
+h2{font-size:28px;margin:0 0 6px}h2 small{color:var(--acc2);font-size:14px;letter-spacing:.15em;margin-right:10px}
+.lead{color:var(--mute);max-width:70ch}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;margin-top:18px}
+.card{border:1px solid var(--line);background:var(--panel);border-radius:10px;padding:16px}
+.card h3{margin:0 0 6px;font-size:17px}.card p{margin:0;color:var(--mute);font-size:15px}
+.tag{display:inline-block;font-size:12px;border:1px solid var(--line);border-radius:99px;padding:1px 9px;color:var(--mute);margin:2px 3px 2px 0}
+pre,code{font-family:ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:14px;overflow:auto;font-size:13.5px}
+code{background:var(--code);padding:1px 5px;border-radius:4px;font-size:.92em}pre code{background:none;padding:0}
+.demo{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin-top:18px}
+@media(max-width:720px){.demo{grid-template-columns:1fr}}
+canvas{width:100%;height:auto;border:1px solid var(--line);border-radius:8px;background:#fff;display:block}
+.ctl{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px}
+.ctl label{color:var(--mute);font-size:14px}.ctl input[type=range]{flex:1;min-width:140px}
+.ctl button{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:7px 12px;cursor:pointer}
+.ctl button:hover{border-color:var(--acc)}
+.out{font-family:ui-monospace,monospace;font-size:13px;color:var(--mute);margin-top:8px;min-height:1.4em}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+.tabs button{background:var(--panel);color:var(--mute);border:1px solid var(--line);border-radius:8px;padding:6px 12px;cursor:pointer}
+.tabs button[aria-selected=true]{color:var(--ink);border-color:var(--acc)}
+table{border-collapse:collapse;width:100%;font-size:15px}td,th{border-bottom:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+th{color:var(--mute);font-weight:600}.ok{color:var(--acc)}.no{color:var(--bad)}.part{color:var(--acc2)}
+.tablewrap{overflow:auto}
+ul.lim li{margin:6px 0}
+footer{border-top:1px solid var(--line);padding:28px 16px;text-align:center;color:var(--mute);font-size:14px}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+<a class="skip" href="#instalare">Sari la instalare</a>
+<nav><div><b>LEGATOROCR</b>
+<a href="#demo">Demonstrație</a><a href="#flux">Flux</a><a href="#functii">Funcții</a><a href="#pdf">PDF și OCR</a><a href="#calitate">Calitate</a><a href="#descarca">Descarcă</a><a href="#instalare">Instalare</a><a href="#limite">Limite</a>
+<a href="https://github.com/chiuta/LegatorOCR">GitHub</a>
+<button id="theme" aria-label="Schimbă tema">◐</button></div></nav>
+<main id="main">
+<header class="hero">
+<h1>Legator<i>OCR</i></h1>
+<p>Din scanări brute de carte în PDF cu text căutabil: <b>împarte → îndreaptă → taie → margini → curăță / binarizează → PDF cu strat OCR</b>. Scris în Rust, clean-room, cu interfață grafică în 8 limbi și linie de comandă. Rulează local, fără conturi.</p>
+<div class="btns"><a class="btn p" href="#demo">Încearcă demonstrația</a><a class="btn" href="#descarca">Descarcă</a></div>
+<div class="stats">
+<div><b>2</b><span>interfețe: grafică și linie de comandă</span></div>
+<div><b>8</b><span>limbi în interfață</span></div>
+<div><b>5</b><span>ținte de compilare în CI</span></div>
+<div><b>0</b><span>conturi sau servicii externe</span></div>
+</div>
+</header>
+
+<section id="demo">
+<h2><small>01</small>Demonstrație</h2>
+<p class="lead">O pagină scanată strâmb, îndreptată cu aceeași idee ca în aplicație: se estimează unghiul din liniile de text și pagina se rotește invers. Este o simulare în browser, nu codul Rust.</p>
+<div class="demo">
+<div><canvas id="c1" width="360" height="480" aria-label="Pagină scanată, înclinată"></canvas><div class="out">Scanare brută</div></div>
+<div><canvas id="c2" width="360" height="480" aria-label="Pagină îndreptată"></canvas><div class="out" id="est">Estimare: —</div></div>
+</div>
+<div class="ctl"><label for="ang">Înclinare scanare</label><input id="ang" type="range" min="-8" max="8" step="0.1" value="3.2"><span id="angv">3.2°</span>
+<button id="fix">Îndreaptă</button><button id="noise">Adaugă zgomot</button><button id="reset">Resetează</button></div>
+<div class="out" id="log"></div>
+</section>
+
+<section id="flux">
+<h2><small>02</small>Fluxul</h2>
+<p class="lead">Aceeași ordine de lucru ca la uneltele clasice de „croit” scanări, cod independent.</p>
+<div class="grid">
+<div class="card"><h3>1 · Împarte</h3><p>Pagini dublu-față separate automat, sau manual per foaie.</p></div>
+<div class="card"><h3>2 · Îndreaptă</h3><p>Deskew automat sau fix (<code>--skew</code>); <code>--dewarp</code> pentru rânduri curbate.</p></div>
+<div class="card"><h3>3 · Taie și margini</h3><p>Caseta de conținut detectată, margini egale, <code>--page-size a5</code>, aliniere.</p></div>
+<div class="card"><h3>4 · Curăță</h3><p>Zone de ștergere (în mm sau desenate cu mouse-ul), normalizare de lumină, auto-inversare.</p></div>
+<div class="card"><h3>5 · Binarizează</h3><p>Sauvola, Wolf, Niblack, NICK, Bradley, Otsu; moduri color, gri, bw, mixed, hybrid.</p></div>
+<div class="card"><h3>6 · PDF + OCR</h3><p>Strat de text invizibil (Tesseract), semne de carte, etichete de pagină, PDF/A-2b opțional.</p></div>
+</div>
+</section>
+
+<section id="functii">
+<h2><small>03</small>Funcții</h2>
+<div class="grid">
+<div class="card"><h3>Moduri de ieșire</h3><p><b>mixed</b>: text 1-bit clar plus petice color. <b>hybrid</b>: același lucru peste un fundal de rezoluție mică — pagini color de circa 60–100 KB în loc de 700 KB+.</p></div>
+<div class="card"><h3>Proiecte</h3><p>Fișier <code>.lgr</code> text simplu cu lista de pagini și ajustările fiecăreia.</p></div>
+<div class="card"><h3>Separatoare</h3><p><code>--split-on-barcode</code> (Code 128, EAN-13, ITF, Code 39), pagini goale, <code>--make-separator</code> tipărește foaia.</p></div>
+<div class="card"><h3>Lot și robustețe</h3><p>Foldere, TIFF multipagină (<code>scan.tif#3</code>), <code>--keep-going</code>, deduplicare, dimensiune țintă de PDF.</p></div>
+<div class="card"><h3>Interfață</h3><p>Vizualizare lângă lângă, Original, Procesat; rotire, împărțire și înclinare per pagină; română, engleză, franceză, italiană, spaniolă, portugheză, germană, maghiară.</p></div>
+<div class="card"><h3>Trade-free</h3><p>Fără telemetrie, fără cont, fără cloud. OCR-ul rulează prin Tesseract local.</p></div>
+</div>
+<p><span class="tag">Rust</span><span class="tag">egui</span><span class="tag">clean-room</span><span class="tag">MIT</span><span class="tag">Linux</span><span class="tag">Windows</span><span class="tag">macOS</span></p>
+</section>
+
+<section id="pdf">
+<h2><small>04</small>PDF și OCR</h2>
+<p class="lead">Cititorul de PDF este scris de la zero și tolerant la fișiere stricate. Toate decodoarele de mai jos sunt proprii.</p>
+<div class="tablewrap"><table>
+<tr><th>Format în PDF</th><th>Stare</th></tr>
+<tr><td>Flate, LZW, ASCII85, RunLength, JPEG, predictori</td><td class="ok">nativ</td></tr>
+<tr><td>CCITT Group 3 și 4</td><td class="ok">nativ; G3 verificat cu fișiere libtiff</td></tr>
+<tr><td>JBIG2: generic, simboluri, text, refinare, halftone</td><td class="ok">nativ; verificat cu poppler (excepții în „Limite”)</td></tr>
+<tr><td>JPEG 2000</td><td class="ok">nativ; identic cu OpenJPEG pe sute de fluxuri aleatorii</td></tr>
+<tr><td>Criptare RC4 / AES-128 / AES-256 (parolă de utilizator goală)</td><td class="ok">nativ</td></tr>
+<tr><td>Pagini pe straturi (MRC), plasări rotite</td><td class="ok">compuse</td></tr>
+<tr><td>JBIG2 Huffman, JPEG 2000 cu bypass</td><td class="part">prin pdftoppm / mutool / Ghostscript, dacă sunt instalate</td></tr>
+</table></div>
+<p>La scriere: PDF cu imagine 1-bit sau JPEG/Flate, text invizibil într-un font fără glife și ToUnicode (diacriticele românești se caută și se copiază), semne de carte, etichete de pagină (i, ii, … apoi 1), și <code>--pdfa</code> pentru structura PDF/A-2b.</p>
+</section>
+
+<section id="calitate">
+<h2><small>05</small>Calitate și securitate</h2>
+<div class="grid">
+<div class="card"><h3>Fuzz</h3><p>Semințe deterministe, iterații reglabile (<code>LEGATOROCR_FUZZ_ITERS</code>), fuzz pe linia de comandă cu valori ostile, mutații țintite pe antete de JPEG 2000 și JBIG2.</p></div>
+<div class="card"><h3>Comparații independente</h3><p>OpenJPEG pentru JPEG 2000, poppler pentru JBIG2, libtiff pentru G3, qpdf pentru criptare, fontTools și LittleCMS pentru PDF/A.</p></div>
+<div class="card"><h3>Limite de resurse</h3><p>Plafoane pentru dimensiuni, pachete, precincte și muncă de decodare; fișierele ostile se refuză repede, fără umflarea memoriei.</p></div>
+<div class="card"><h3>Clean-room</h3><p>Implementat din descrieri publice ale formatelor; codul concurenților nu a fost citit.</p></div>
+</div>
+</section>
+
+<section id="descarca">
+<h2><small>06</small>Descarcă</h2>
+<p class="lead">Arhive pentru Linux x86-64 și ARM64, Windows x86-64, macOS Apple-silicon și Intel, produse de CI la fiecare versiune etichetată. Până apare prima ediție publicată, compilează din sursă (vezi mai jos).</p>
+<div class="btns"><a class="btn p" href="https://github.com/chiuta/LegatorOCR/releases">Edițiile de pe GitHub</a><a class="btn" href="https://github.com/chiuta/LegatorOCR">Cod sursă</a></div>
+<div class="tablewrap"><table>
+<tr><th>Platformă</th><th>Format</th><th>Observații</th></tr>
+<tr><td>Linux x86-64 / ARM64</td><td><code>.tar.gz</code></td><td>OpenGL 2+, X11 sau Wayland</td></tr>
+<tr><td>Windows x86-64</td><td><code>.zip</code></td><td>OpenGL 2+ (sesiunile RDP simple pot lipsi)</td></tr>
+<tr><td>macOS</td><td><code>.zip</code> cu <code>LegatorOCR.app</code></td><td>nesemnată: clic dreapta → Deschide</td></tr>
+</table></div>
+<p>Interfața grafică a fost testată manual doar pe Linux; Windows și macOS sunt verificate doar prin CI.</p>
+</section>
+
+<section id="instalare">
+<h2><small>07</small>Instalare</h2>
+<div class="tabs" role="tablist">
+<button role="tab" aria-selected="true" data-t="t1">Compilează</button>
+<button role="tab" aria-selected="false" data-t="t2">Linie de comandă</button>
+<button role="tab" aria-selected="false" data-t="t3">PDF/A și lot</button>
+<button role="tab" aria-selected="false" data-t="t4">OCR (Tesseract)</button></div>
+<pre id="t1"><code>git clone https://github.com/chiuta/LegatorOCR
+cd LegatorOCR
+cargo build --release          # target/release/legatorocr și legatorocr-gui
+scripts/package.sh x86_64-unknown-linux-gnu</code></pre>
+<pre id="t2" hidden><code>legatorocr scan_*.png --mode bw --dpi 300 --margin 6 --page-size a5 \
+    --pdf carte.pdf --ocr --lang ron+eng</code></pre>
+<pre id="t3" hidden><code>legatorocr scans/ --mode mixed --dewarp --skip-blank --keep-going \
+    --split-on-barcode --bookmarks --front-matter 4 \
+    --erase 0,0,210,12 --pdfa --pdf carte.pdf</code></pre>
+<pre id="t4" hidden><code>sudo apt install tesseract-ocr tesseract-ocr-ron
+brew install tesseract tesseract-lang
+winget install UB-Mannheim.TesseractOCR</code></pre>
+<p>Fără Tesseract totul funcționează, în afară de OCR; comutatorul e dezactivat și spune de ce.</p>
+</section>
+
+<section id="limite">
+<h2><small>08</small>Limite cunoscute</h2>
+<ul class="lim">
+<li>PDF/A-2b: structura este scrisă (font încorporat, XMP, profil sRGB, gri CIE), dar fără un validator (veraPDF) conformitatea <b>nu este certificată</b>.</li>
+<li>JBIG2 cu codare Huffman și JPEG 2000 cu bypass / terminare pe fiecare trecere nu se decodează nativ — doar prin randator extern.</li>
+<li>Predicția tipică la refinarea JBIG2 (TPGRON) și grilele halftone deplasate sunt verificate doar cu encoderul propriu: poppler le decodează altfel.</li>
+<li>La fișierele criptate se încearcă doar parola de utilizator goală.</li>
+<li>Desenarea zonelor de ștergere cu mouse-ul nu a fost testată vizual.</li>
+<li>Windows și macOS: verificate doar în CI, nu manual.</li>
+</ul>
+<p>Lista completă și comparația cu alte unelte: <a href="https://github.com/chiuta/LegatorOCR/blob/main/COMPARISON.md">COMPARISON.md</a>.</p>
+</section>
+</main>
+<footer>
+<p>LegatorOCR — proiect trade-free, local, fără urmărire · parte din mișcarea trade-free · licență MIT</p>
+<p>© 2026 Alexio · <a href="mailto:alexio@trom.tf">alexio@trom.tf</a> · <a href="https://github.com/chiuta/LegatorOCR">GitHub</a> · <a href="https://trom.tf">trom.tf</a></p>
+</footer>
+<script>
+(function(){
+var $=function(i){return document.getElementById(i)};
+// theme
+var root=document.documentElement;
+try{var t=localStorage.getItem('lgr-theme');if(t)root.dataset.theme=t}catch(e){}
+$('theme').onclick=function(){var d=root.dataset.theme||(matchMedia('(prefers-color-scheme:light)').matches?'light':'dark');d=d==='dark'?'light':'dark';root.dataset.theme=d;try{localStorage.setItem('lgr-theme',d)}catch(e){}};
+// tabs
+document.querySelectorAll('.tabs button').forEach(function(b){b.onclick=function(){
+ document.querySelectorAll('.tabs button').forEach(function(x){x.setAttribute('aria-selected',x===b)});
+ ['t1','t2','t3','t4'].forEach(function(id){$(id).hidden=id!==b.dataset.t})}});
+// deskew simulation
+var c1=$('c1'),c2=$('c2'),W=c1.width,H=c1.height,seed=7,noisy=false;
+function rnd(){seed=(seed*1664525+1013904223)>>>0;return seed/4294967296}
+var lines=[];(function(){var r=7;for(var y=60;y<H-50;y+=22){var segs=[],x=40;while(x<W-60){var w=10+((x*7+y*3)%34);if(x+w>W-50)w=W-50-x;segs.push([x,w]);x+=w+7}lines.push([y,segs])}})();
+function page(ctx,deg,noise){
+ ctx.save();ctx.fillStyle='#fff';ctx.fillRect(0,0,W,H);
+ ctx.translate(W/2,H/2);ctx.rotate(deg*Math.PI/180);ctx.translate(-W/2,-H/2);
+ ctx.fillStyle='#1b1b1b';
+ lines.forEach(function(l){l[1].forEach(function(s){ctx.fillRect(s[0],l[0],s[1],6)})});
+ ctx.restore();
+ if(noise){var s=3;for(var i=0;i<500;i++){s=(s*1103515245+12345)>>>0;ctx.fillStyle='rgba(0,0,0,.35)';ctx.fillRect(s%W,(s>>8)%H,2,2)}}
+}
+function estimate(deg){ // projection-profile search over angles, on the real rendered canvas
+ var ctx=c1.getContext('2d'),img=ctx.getImageData(0,0,W,H).data,best=0,ba=0;
+ for(var a=-10;a<=10;a+=0.1){var rad=a*Math.PI/180,cs=Math.cos(rad),sn=Math.sin(rad),bins=new Float32Array(H*2);
+  for(var y=0;y<H;y++)for(var x=0;x<W;x++){if(img[(y*W+x)*4]<100){var yy=Math.round((-(x-W/2)*sn+(y-H/2)*cs)+H);if(yy>=0&&yy<H*2)bins[yy]++}}
+  var sc=0;for(var i=0;i<bins.length;i++){sc+=bins[i]*bins[i]}
+  if(sc>best){best=sc;ba=a}}
+ return ba}
+window.__lgrEstimate=estimate;
+var cur=3.2,fixed=false;
+function draw(){var d=parseFloat($('ang').value);$('angv').textContent=d.toFixed(1)+'°';
+ page(c1.getContext('2d'),d,noisy);
+ page(c2.getContext('2d'),fixed?0:d,false);
+ if(!fixed){c2.getContext('2d').clearRect(0,0,0,0)}}
+$('ang').oninput=function(){fixed=false;$('est').textContent='Estimare: —';draw()};
+$('fix').onclick=function(){var t0=performance.now();var a=estimate();var ms=Math.round(performance.now()-t0);
+ var d=parseFloat($('ang').value);
+ // second canvas: rotate the scan back by the estimate
+ var ctx=c2.getContext('2d');ctx.save();ctx.fillStyle='#fff';ctx.fillRect(0,0,W,H);ctx.translate(W/2,H/2);ctx.rotate(-a*Math.PI/180);ctx.translate(-W/2,-H/2);ctx.drawImage(c1,0,0);ctx.restore();
+ $('est').textContent='Estimare: '+a.toFixed(1)+'° (real '+d.toFixed(1)+'°, eroare '+Math.abs(a-d).toFixed(1)+'°)';
+ $('log').textContent='Profil de proiecție pe 201 unghiuri, '+ms+' ms în browser.'};
+$('noise').onclick=function(){noisy=!noisy;draw()};
+$('reset').onclick=function(){$('ang').value=3.2;noisy=false;fixed=false;$('est').textContent='Estimare: —';$('log').textContent='';draw()};
+draw();
+})();
+</script>
+</body>
+</html>
