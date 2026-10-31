@@ -29,8 +29,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest,    target: x86_64-unknown-linux-gnu }
-          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          - { os: ubuntu-22.04,     target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu }
           - { os: windows-latest,   target: x86_64-pc-windows-msvc }
           - { os: macos-latest,     target: aarch64-apple-darwin }
           - { os: macos-latest,     target: x86_64-apple-darwin }
@@ -50,6 +50,23 @@ jobs:
         run: |
           case "$TAG" in v[0-9]*) ;; *) echo "bad tag: $TAG"; exit 1;; esac
           scripts/package.sh "${{ matrix.target }}" "${TAG#v}"
+      - name: Portability checks (fail the release instead of shipping an unrunnable binary)
+        shell: bash
+        run: |
+          set -e
+          case "${{ matrix.target }}" in
+            *linux-gnu)
+              # built on Ubuntu 22.04 (glibc 2.35): must not need anything newer
+              for b in legatorocr legatorocr-gui; do
+                v=$(objdump -T "target/${{ matrix.target }}/release/$b" | grep -o 'GLIBC_[0-9.]*' | sort -V | tail -1)
+                echo "$b needs $v"
+                [ "$(printf '%s\n' "$v" GLIBC_2.35 | sort -V | tail -1)" = GLIBC_2.35 ] || { echo "glibc too new"; exit 1; }
+              done;;
+            *windows-msvc)
+              for b in legatorocr legatorocr-gui; do
+                if grep -aqi 'VCRUNTIME140' "target/${{ matrix.target }}/release/$b.exe"; then echo "$b.exe depends on the VC++ runtime DLL"; exit 1; fi
+              done;;
+          esac
       - uses: actions/upload-artifact@v4
         with:
           name: LegatorOCR-${{ matrix.target }}

@@ -1,0 +1,6 @@
+# Windows: link the C runtime statically so the .exe runs on a clean machine
+# without the "Visual C++ Redistributable" (otherwise it imports VCRUNTIME140.dll).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
