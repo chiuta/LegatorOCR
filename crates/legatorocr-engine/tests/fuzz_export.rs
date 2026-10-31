@@ -124,6 +124,7 @@ fn export_is_robust_to_bad_sheets_and_cancellation() {
                 quality: [0u8, 50, 90][r.below(3) as usize],
                 ocr: None,
                 title: Some("fuzz".into()),
+                pdfa: r.below(3) == 0,
                 ..Default::default()
             }),
             skip_blank: r.below(2) == 0,

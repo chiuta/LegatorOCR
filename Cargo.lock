@@ -1242,6 +1242,7 @@ dependencies = [
  "flate2",
  "image",
  "legatorocr-core",
+ "rayon",
 ]
 
 [[package]]

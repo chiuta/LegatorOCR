@@ -137,6 +137,10 @@ struct Cli {
     #[arg(long)]
     bookmarks: bool,
 
+    /// Write PDF/A-2b structure (embedded text font, XMP metadata, sRGB output intent).
+    #[arg(long)]
+    pdfa: bool,
+
     /// Label the first N pages i, ii, iii … in PDF viewers; numbering restarts at 1 after them.
     #[arg(long, value_name = "N", default_value_t = 0)]
     front_matter: u32,
@@ -672,6 +676,7 @@ fn main() -> Result<()> {
             },
             bookmarks: cli.bookmarks,
             front_matter: cli.front_matter,
+            pdfa: cli.pdfa,
         }),
         text_ocr: cli.ocr.then(|| ocr_opts.clone()),
         skip_blank: cli.skip_blank,

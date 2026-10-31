@@ -9,6 +9,8 @@
 pub mod crypt;
 pub mod g4;
 pub mod jbig2;
+pub mod jpx;
+pub mod pdfa;
 pub mod reader;
 
 use flate2::{write::ZlibEncoder, Compression};
@@ -35,6 +37,7 @@ pub struct PdfWriter {
     meta: Meta,
     bookmarks: Vec<(String, usize)>,
     labels: Vec<(usize, LabelStyle, String, u32)>,
+    pdfa: bool,
 }
 
 /// Numbering style of a page-label range.
@@ -101,6 +104,7 @@ impl PdfWriter {
             meta: Meta::default(),
             bookmarks: Vec::new(),
             labels: Vec::new(),
+            pdfa: false,
         };
         w.buf.extend_from_slice(b"%PDF-1.5\n%\xE2\xE3\xCF\xD3\n");
         w
@@ -121,6 +125,21 @@ impl PdfWriter {
         self.labels.retain(|l| l.0 != at);
         self.labels
             .push((at, style, prefix.to_string(), start.max(1)));
+    }
+
+    /// Write PDF/A-2b structure: embedded glyph-less font, XMP metadata, sRGB output intent,
+    /// CIE-based grey, trailer ID. (Structure verified against the standard's requirements
+    /// by hand and with open tools; no PDF/A validator was available to certify it.)
+    pub fn set_pdfa(&mut self, on: bool) {
+        self.pdfa = on;
+    }
+
+    fn gray_cs(&self) -> &'static str {
+        if self.pdfa {
+            "[/CalGray << /WhitePoint [0.9505 1 1.089] /Gamma 2.2 >>]"
+        } else {
+            "/DeviceGray"
+        }
     }
 
     pub fn set_title(&mut self, t: &str) {
@@ -191,12 +210,13 @@ impl PdfWriter {
         };
         match &page.image {
             PageImage::Bw(b) => {
+                let gray = self.gray_cs();
                 let (filter, z) = encode_1bit(b);
                 self.stream_obj(
                     img_id,
                     &format!(
                         "/Type /XObject /Subtype /Image /Width {pw} /Height {ph} \
-                         /ColorSpace /DeviceGray /BitsPerComponent 1 {filter}"
+                         /ColorSpace {gray} /BitsPerComponent 1 {filter}"
                     ),
                     &z,
                 );
@@ -207,11 +227,19 @@ impl PdfWriter {
                     JpegEncoder::new_with_quality(&mut out, q)
                         .encode(g.as_raw(), pw, ph, ExtendedColorType::L8)
                         .expect("jpeg encode");
-                    self.stream_obj(img_id, &image_dict(pw, ph, "DeviceGray", "DCTDecode"), &out);
+                    self.stream_obj(
+                        img_id,
+                        &image_dict(pw, ph, self.gray_cs(), "DCTDecode"),
+                        &out,
+                    );
                 }
                 Compress::Flate => {
                     let z = deflate(g.as_raw());
-                    self.stream_obj(img_id, &image_dict(pw, ph, "DeviceGray", "FlateDecode"), &z);
+                    self.stream_obj(
+                        img_id,
+                        &image_dict(pw, ph, self.gray_cs(), "FlateDecode"),
+                        &z,
+                    );
                 }
             },
             PageImage::Rgb(c) => match compress {
@@ -220,11 +248,11 @@ impl PdfWriter {
                     JpegEncoder::new_with_quality(&mut out, q)
                         .encode(c.as_raw(), pw, ph, ExtendedColorType::Rgb8)
                         .expect("jpeg encode");
-                    self.stream_obj(img_id, &image_dict(pw, ph, "DeviceRGB", "DCTDecode"), &out);
+                    self.stream_obj(img_id, &image_dict(pw, ph, "/DeviceRGB", "DCTDecode"), &out);
                 }
                 Compress::Flate => {
                     let z = deflate(c.as_raw());
-                    self.stream_obj(img_id, &image_dict(pw, ph, "DeviceRGB", "FlateDecode"), &z);
+                    self.stream_obj(img_id, &image_dict(pw, ph, "/DeviceRGB", "FlateDecode"), &z);
                 }
             },
         }
@@ -304,11 +332,11 @@ impl PdfWriter {
                 JpegEncoder::new_with_quality(&mut out, q)
                     .encode(c.as_raw(), w, h, ExtendedColorType::Rgb8)
                     .expect("jpeg encode");
-                self.stream_obj(id, &image_dict(w, h, "DeviceRGB", "DCTDecode"), &out);
+                self.stream_obj(id, &image_dict(w, h, "/DeviceRGB", "DCTDecode"), &out);
             }
             _ => {
                 let z = deflate(c.as_raw());
-                self.stream_obj(id, &image_dict(w, h, "DeviceRGB", "FlateDecode"), &z);
+                self.stream_obj(id, &image_dict(w, h, "/DeviceRGB", "FlateDecode"), &z);
             }
         }
         id
@@ -370,6 +398,19 @@ impl PdfWriter {
     /// Write the shared objects, xref and trailer; returns the finished file.
     pub fn finish(mut self) -> Vec<u8> {
         // Shared font objects.
+        let font_file = if self.pdfa {
+            let ttf = pdfa::glyphless_ttf(self.chars.len() + 1);
+            let id = self.alloc();
+            let z = deflate(&ttf);
+            self.stream_obj(
+                id,
+                &format!("/Filter /FlateDecode /Length1 {}", ttf.len()),
+                &z,
+            );
+            format!(" /FontFile2 {id} 0 R")
+        } else {
+            String::new()
+        };
         self.plain_obj(
             FONT,
             &format!(
@@ -387,9 +428,11 @@ impl PdfWriter {
         );
         self.plain_obj(
             DESCRIPTOR,
-            "<< /Type /FontDescriptor /FontName /GlyphLessFont /Flags 5 \
-             /FontBBox [0 0 500 1000] /ItalicAngle 0 /Ascent 1000 /Descent 0 \
-             /CapHeight 1000 /StemV 80 >>",
+            &format!(
+                "<< /Type /FontDescriptor /FontName /GlyphLessFont /Flags 5 \
+                 /FontBBox [0 0 500 1000] /ItalicAngle 0 /Ascent 1000 /Descent 0 \
+                 /CapHeight 1000 /StemV 80{font_file} >>"
+            ),
         );
         let cmap = self.to_unicode_cmap();
         let z = deflate(cmap.as_bytes());
@@ -477,6 +520,38 @@ impl PdfWriter {
                 .collect();
             cat_extra.push_str(&format!(" /PageLabels << /Nums [{nums}] >>"));
         }
+        let date = self.meta.created_unix.map(pdf_date);
+        let producer = format!("LegatorOCR {}", env!("CARGO_PKG_VERSION"));
+        if self.pdfa {
+            let xmp = pdfa::Xmp {
+                title: self.title.as_deref(),
+                author: self.meta.author.as_deref().filter(|v| !v.trim().is_empty()),
+                subject: self
+                    .meta
+                    .subject
+                    .as_deref()
+                    .filter(|v| !v.trim().is_empty()),
+                keywords: self
+                    .meta
+                    .keywords
+                    .as_deref()
+                    .filter(|v| !v.trim().is_empty()),
+                producer: &producer,
+                date: date.as_deref(),
+            }
+            .render();
+            let mid = self.alloc();
+            self.stream_obj(mid, "/Type /Metadata /Subtype /XML", xmp.as_bytes());
+            let icc = pdfa::srgb_icc();
+            let iid = self.alloc();
+            let z = deflate(&icc);
+            self.stream_obj(iid, "/N 3 /Alternate /DeviceRGB /Filter /FlateDecode", &z);
+            cat_extra.push_str(&format!(
+                " /Metadata {mid} 0 R /OutputIntents [<< /Type /OutputIntent /S /GTS_PDFA1 \
+                 /OutputConditionIdentifier (sRGB IEC61966-2.1) /Info (sRGB IEC61966-2.1) \
+                 /RegistryName (http://www.color.org) /DestOutputProfile {iid} 0 R >>]"
+            ));
+        }
         self.plain_obj(
             CATALOG,
             &format!("<< /Type /Catalog /Pages {PAGES} 0 R{cat_extra} >>"),
@@ -497,16 +572,12 @@ impl PdfWriter {
                 extra.push_str(&format!(" /{key} {}", pdf_text_string(v)));
             }
         }
-        if let Some(t) = self.meta.created_unix {
-            let d = pdf_date(t);
+        if let Some(d) = &date {
             extra.push_str(&format!(" /CreationDate ({d}) /ModDate ({d})"));
         }
         self.plain_obj(
             info_id,
-            &format!(
-                "<< /Producer (LegatorOCR {}){title}{extra} >>",
-                env!("CARGO_PKG_VERSION")
-            ),
+            &format!("<< /Producer ({producer}){title}{extra} >>"),
         );
 
         let xref_pos = self.buf.len();
@@ -516,9 +587,20 @@ impl PdfWriter {
             let off = self.offsets[id].expect("every object written");
             writeln!(self.buf, "{off:010} 00000 n ").unwrap();
         }
+        let id = if self.pdfa {
+            // two copies of a digest of everything written so far
+            let mut h = [0u8; 16];
+            for (i, b) in self.buf.iter().enumerate() {
+                h[i % 16] = h[i % 16].rotate_left(3) ^ b.wrapping_add(i as u8);
+            }
+            let hex: String = h.iter().map(|b| format!("{b:02X}")).collect();
+            format!(" /ID [<{hex}> <{hex}>]")
+        } else {
+            String::new()
+        };
         write!(
             self.buf,
-            "trailer\n<< /Size {n} /Root {CATALOG} 0 R /Info {info_id} 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n"
+            "trailer\n<< /Size {n} /Root {CATALOG} 0 R /Info {info_id} 0 R{id} >>\nstartxref\n{xref_pos}\n%%EOF\n"
         )
         .unwrap();
         self.buf
@@ -552,7 +634,7 @@ impl PdfWriter {
 
 fn image_dict(w: u32, h: u32, cs: &str, filter: &str) -> String {
     format!(
-        "/Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /{cs} \
+        "/Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace {cs} \
          /BitsPerComponent 8 /Filter /{filter}"
     )
 }
@@ -740,6 +822,79 @@ mod tests {
 mod unicode_file {
     use super::*;
     /// Writes a PDF with Romanian text for external extraction checks:
+    fn pdfa_sample() -> Vec<u8> {
+        let mut w = PdfWriter::new(Compress::Jpeg(80));
+        w.set_pdfa(true);
+        w.set_title("Școala & <test>");
+        w.set_meta(Meta {
+            author: Some("Alexio".into()),
+            subject: Some("subiect".into()),
+            keywords: Some("a, b".into()),
+            created_unix: Some(1_793_000_000),
+        });
+        let mut bw = BitImage::new(600, 300);
+        bw.set(1, 1, true);
+        let mk = |image| Page {
+            image,
+            dpi: 150,
+            skew_deg: 0.0,
+            blank: false,
+            split_index: None,
+            layers: None,
+        };
+        let words: Vec<Word> = ["Școala", "țăranului"]
+            .iter()
+            .enumerate()
+            .map(|(i, t)| Word {
+                text: t.to_string(),
+                x: 20 + (i as u32) * 90,
+                y: 40,
+                w: 80,
+                h: 24,
+                conf: 99.0,
+                line: 0,
+            })
+            .collect();
+        w.add_page(&mk(PageImage::Bw(bw)), &words);
+        w.add_page(&mk(PageImage::Rgb(image::RgbImage::new(40, 30))), &[]);
+        w.finish()
+    }
+
+    #[test]
+    fn pdfa_output_has_the_required_parts() {
+        let pdf = pdfa_sample();
+        let t = String::from_utf8_lossy(&pdf);
+        for need in [
+            "/FontFile2",
+            "/Type /Metadata /Subtype /XML",
+            "<pdfaid:part>2</pdfaid:part>",
+            "/OutputIntents",
+            "/DestOutputProfile",
+            "/ID [<",
+            "/CalGray",
+        ] {
+            assert!(t.contains(need), "missing {need}");
+        }
+        assert!(!t.contains("/DeviceGray"));
+        let mut w = PdfWriter::new(Compress::Flate);
+        w.add_page(
+            &Page {
+                image: PageImage::Bw(BitImage::new(8, 8)),
+                dpi: 150,
+                skew_deg: 0.0,
+                blank: false,
+                split_index: None,
+                layers: None,
+            },
+            &[],
+        );
+        let plain = String::from_utf8_lossy(&w.finish()).into_owned();
+        assert!(!plain.contains("/OutputIntents") && !plain.contains("/FontFile2"));
+        if let Ok(path) = std::env::var("LEGATOROCR_TEST_PDFA") {
+            std::fs::write(path, &pdf).unwrap();
+        }
+    }
+
     /// `LEGATOROCR_TEST_PDF=/path/x.pdf cargo test -p legatorocr-pdf -- --ignored`
     #[test]
     #[ignore]

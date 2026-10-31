@@ -674,6 +674,7 @@ impl App {
             },
             bookmarks: self.s.bookmarks,
             front_matter: self.s.front_matter,
+            pdfa: self.s.pdfa,
         });
         let (side_txt, side_hocr) = (
             self.s.sidecar_txt && self.s.ocr,
@@ -1412,6 +1413,8 @@ impl App {
                         self.config_dirty |= ui
                             .checkbox(&mut self.s.bookmarks, tr("set.bookmarks"))
                             .changed();
+                        self.config_dirty |=
+                            ui.checkbox(&mut self.s.pdfa, tr("set.pdfa")).changed();
                         ui.horizontal(|ui| {
                             ui.label(tr("set.front_matter"));
                             self.config_dirty |= ui

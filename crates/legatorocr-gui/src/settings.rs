@@ -95,6 +95,7 @@ pub struct UiSettings {
     pub split_on_blank: bool,
     pub split_on_barcode: bool,
     pub bookmarks: bool,
+    pub pdfa: bool,
     pub front_matter: u32,
     /// 0 = off; otherwise the PDF should stay within this many MB.
     pub target_mb: u32,
@@ -150,6 +151,7 @@ impl Default for UiSettings {
             split_on_blank: false,
             split_on_barcode: false,
             bookmarks: false,
+            pdfa: false,
             front_matter: 0,
             target_mb: 0,
             sidecar_txt: false,
@@ -247,6 +249,7 @@ impl UiSettings {
         e.push(("split_on_blank".into(), self.split_on_blank.to_string()));
         e.push(("split_on_barcode".into(), self.split_on_barcode.to_string()));
         e.push(("bookmarks".into(), self.bookmarks.to_string()));
+        e.push(("pdfa".into(), self.pdfa.to_string()));
         e.push(("front_matter".into(), self.front_matter.to_string()));
         e.push(("target_mb".into(), self.target_mb.to_string()));
         e.push(("sidecar_txt".into(), self.sidecar_txt.to_string()));
@@ -329,6 +332,7 @@ impl UiSettings {
         self.split_on_blank = flag("split_on_blank").unwrap_or(self.split_on_blank);
         self.split_on_barcode = flag("split_on_barcode").unwrap_or(self.split_on_barcode);
         self.bookmarks = flag("bookmarks").unwrap_or(self.bookmarks);
+        self.pdfa = flag("pdfa").unwrap_or(self.pdfa);
         if let Some(v) = p.get("front_matter").and_then(|v| v.parse::<u32>().ok()) {
             self.front_matter = v.min(999);
         }
@@ -430,6 +434,7 @@ mod tests {
             target_mb: 25,
             split_on_barcode: true,
             bookmarks: true,
+            pdfa: true,
             front_matter: 4,
             pdf_author: "Ana".into(),
             auto_invert: true,
@@ -468,6 +473,7 @@ mod tests {
             (back.split_on_barcode, back.bookmarks, back.front_matter),
             (true, true, 4)
         );
+        assert!(back.pdfa);
         assert_eq!(
             (back.skip_duplicates, back.split_on_blank, back.target_mb),
             (true, false, 25)

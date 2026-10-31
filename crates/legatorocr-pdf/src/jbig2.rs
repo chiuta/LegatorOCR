@@ -71,7 +71,7 @@ const QE: [(u32, u8, u8, bool); 47] = [
     (0x5601, 46, 46, false),
 ];
 
-struct Mq<'a> {
+pub(crate) struct Mq<'a> {
     d: &'a [u8],
     bp: usize,
     c: u32,
@@ -80,7 +80,7 @@ struct Mq<'a> {
 }
 
 impl<'a> Mq<'a> {
-    fn new(d: &'a [u8]) -> Self {
+    pub(crate) fn new(d: &'a [u8]) -> Self {
         let mut m = Mq {
             d,
             bp: 0,
@@ -128,7 +128,7 @@ impl<'a> Mq<'a> {
             }
         }
     }
-    fn decode(&mut self, cx: &mut (u8, u8)) -> u8 {
+    pub(crate) fn decode(&mut self, cx: &mut (u8, u8)) -> u8 {
         let (i, mps) = (cx.0 as usize, cx.1);
         let (qe, nmps, nlps, sw) = QE[i];
         self.a -= qe;
@@ -258,6 +258,21 @@ fn generic_with(
     tpgdon: bool,
     at: [(i32, i32); 4],
 ) -> Vec<u8> {
+    generic_full(mq, cx, w, h, t, tpgdon, at, None)
+}
+
+/// Generic region decoding with an optional skip mask (halftone regions).
+#[allow(clippy::too_many_arguments)]
+fn generic_full(
+    mq: &mut Mq,
+    cx: &mut [(u8, u8)],
+    w: usize,
+    h: usize,
+    t: u8,
+    tpgdon: bool,
+    at: [(i32, i32); 4],
+    skip: Option<&[u8]>,
+) -> Vec<u8> {
     let offs = template(t, &at);
     let sltp: usize = [0x9B25, 0x0795, 0x00E5, 0x0195][t as usize & 3];
     let mut bm = vec![0u8; w * h];
@@ -273,6 +288,9 @@ fn generic_with(
             }
         }
         for x in 0..w {
+            if skip.is_some_and(|k| k[y * w + x] != 0) {
+                continue;
+            }
             let mut ctx = 0usize;
             for (bit, &(dx, dy)) in offs.iter().enumerate() {
                 let (px, py) = (x as i32 + dx, y as i32 + dy);
@@ -281,6 +299,130 @@ fn generic_with(
                 }
             }
             bm[y * w + x] = mq.decode(&mut cx[ctx]);
+        }
+    }
+    bm
+}
+
+/// Generic refinement context (6.3.5.3); the bit order is arbitrary but fixed, which is all
+/// the adaptive coder needs. Returns the context and the position of the reference centre
+/// pixel's bit (the typical-prediction context has only that bit set).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn refine_ctx(
+    t: u8,
+    at: &[(i32, i32); 2],
+    cur: &[u8],
+    w: usize,
+    h: usize,
+    rf: &Bitmap,
+    dx: i32,
+    dy: i32,
+    x: usize,
+    y: usize,
+) -> usize {
+    let c = |ox: i32, oy: i32| -> usize {
+        let (px, py) = (x as i32 + ox, y as i32 + oy);
+        if px >= 0 && py >= 0 && (px as usize) < w && (py as usize) < h {
+            cur[py as usize * w + px as usize] as usize
+        } else {
+            0
+        }
+    };
+    let r = |ox: i32, oy: i32| -> usize {
+        let (px, py) = (x as i32 - dx + ox, y as i32 - dy + oy);
+        if px >= 0 && py >= 0 && (px as usize) < rf.w && (py as usize) < rf.h {
+            rf.d[py as usize * rf.w + px as usize] as usize
+        } else {
+            0
+        }
+    };
+    if t == 0 {
+        c(at[0].0, at[0].1)
+            | c(0, -1) << 1
+            | c(1, -1) << 2
+            | c(-1, 0) << 3
+            | r(at[1].0, at[1].1) << 4
+            | r(0, -1) << 5
+            | r(1, -1) << 6
+            | r(-1, 0) << 7
+            | r(0, 0) << 8
+            | r(1, 0) << 9
+            | r(-1, 1) << 10
+            | r(0, 1) << 11
+            | r(1, 1) << 12
+    } else {
+        c(-1, -1)
+            | c(0, -1) << 1
+            | c(1, -1) << 2
+            | c(-1, 0) << 3
+            | r(0, -1) << 4
+            | r(-1, 0) << 5
+            | r(0, 0) << 6
+            | r(1, 0) << 7
+            | r(0, 1) << 8
+            | r(1, 1) << 9
+    }
+}
+
+pub(crate) fn refine_sltp(t: u8) -> usize {
+    if t == 0 {
+        1 << 8
+    } else {
+        1 << 6
+    }
+}
+
+/// The reference value when its 3×3 neighbourhood around (x-dx, y-dy) is uniform.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn refine_uniform(rf: &Bitmap, dx: i32, dy: i32, x: usize, y: usize) -> Option<u8> {
+    let mut v = None;
+    for oy in -1..=1 {
+        for ox in -1..=1 {
+            let (px, py) = (x as i32 - dx + ox, y as i32 - dy + oy);
+            let b = if px >= 0 && py >= 0 && (px as usize) < rf.w && (py as usize) < rf.h {
+                rf.d[py as usize * rf.w + px as usize]
+            } else {
+                0
+            };
+            match v {
+                None => v = Some(b),
+                Some(o) if o != b => return None,
+                _ => {}
+            }
+        }
+    }
+    v
+}
+
+/// Generic refinement region decoding (6.3).
+#[allow(clippy::too_many_arguments)]
+fn refine(
+    mq: &mut Mq,
+    cx: &mut [(u8, u8)],
+    w: usize,
+    h: usize,
+    rf: &Bitmap,
+    dx: i32,
+    dy: i32,
+    t: u8,
+    tpgron: bool,
+    at: [(i32, i32); 2],
+) -> Vec<u8> {
+    let mut bm = vec![0u8; w * h];
+    let mut ltp = false;
+    for y in 0..h {
+        if tpgron {
+            ltp ^= mq.decode(&mut cx[refine_sltp(t)]) == 1;
+        }
+        for x in 0..w {
+            if ltp {
+                if let Some(v) = refine_uniform(rf, dx, dy, x, y) {
+                    bm[y * w + x] = v;
+                    continue;
+                }
+            }
+            let c = refine_ctx(t, &at, &bm, w, h, rf, dx, dy, x, y);
+            bm[y * w + x] = mq.decode(&mut cx[c]);
         }
     }
     bm
@@ -341,10 +483,10 @@ fn decode_iaid(mq: &mut Mq, cx: &mut [(u8, u8)], len: u32) -> usize {
 }
 
 #[derive(Clone)]
-struct Bitmap {
-    w: usize,
-    h: usize,
-    d: Vec<u8>,
+pub(crate) struct Bitmap {
+    pub(crate) w: usize,
+    pub(crate) h: usize,
+    pub(crate) d: Vec<u8>,
 }
 
 fn be16(b: &[u8], at: usize) -> R<u16> {
@@ -353,19 +495,89 @@ fn be16(b: &[u8], at: usize) -> R<u16> {
         .ok_or_else(|| Jbig2Error("truncated JBIG2 data".into()))
 }
 
-/// Symbol dictionary (arithmetic coding, no refinement/aggregation) → exported symbols.
+struct RefCtx {
+    gr: Vec<(u8, u8)>,
+    iari: IntCtx,
+    iardw: IntCtx,
+    iardh: IntCtx,
+    iardx: IntCtx,
+    iardy: IntCtx,
+}
+impl RefCtx {
+    fn new() -> Self {
+        RefCtx {
+            gr: vec![(0, 0); 1 << 13],
+            iari: IntCtx::new(),
+            iardw: IntCtx::new(),
+            iardh: IntCtx::new(),
+            iardx: IntCtx::new(),
+            iardy: IntCtx::new(),
+        }
+    }
+}
+
+struct TextCtx {
+    iadt: IntCtx,
+    iafs: IntCtx,
+    iads: IntCtx,
+    iait: IntCtx,
+    iaid: Vec<(u8, u8)>,
+    rc: RefCtx,
+}
+impl TextCtx {
+    fn new(code_len: u32) -> Self {
+        TextCtx {
+            iadt: IntCtx::new(),
+            iafs: IntCtx::new(),
+            iads: IntCtx::new(),
+            iait: IntCtx::new(),
+            iaid: vec![(0u8, 0u8); 1usize << (code_len + 1)],
+            rc: RefCtx::new(),
+        }
+    }
+}
+
+struct TextP {
+    rw: usize,
+    rh: usize,
+    strips: i64,
+    corner: u32,
+    transposed: bool,
+    comb: u8,
+    def_pixel: u8,
+    dso: i32,
+    n_inst: usize,
+    refine: bool,
+    rt: u8,
+    rat: [(i32, i32); 2],
+    code_len: u32,
+}
+
+fn code_len_for(n: usize) -> u32 {
+    if n <= 1 {
+        0
+    } else {
+        usize::BITS - (n - 1).leading_zeros()
+    }
+}
+
+fn int_or_fail(v: Option<i32>) -> R<i64> {
+    v.map(|v| v as i64)
+        .ok_or_else(|| Jbig2Error("bad JBIG2 coded integer".into()))
+}
+
+/// Symbol dictionary (arithmetic coding, with refinement/aggregation) → exported symbols.
 fn symbol_dict(data: &[u8], inputs: &[Bitmap]) -> R<Vec<Bitmap>> {
     let flags = be16(data, 0)?;
     if flags & 1 != 0 {
         return fail("JBIG2 Huffman-coded symbol dictionaries are not supported");
     }
-    if flags & 2 != 0 {
-        return fail("JBIG2 refinement/aggregate symbol dictionaries are not supported");
-    }
+    let refagg = flags & 2 != 0;
     if flags & 0x100 != 0 {
         return fail("JBIG2 symbol dictionaries with retained contexts are not supported");
     }
     let t = ((flags >> 10) & 3) as u8;
+    let rt = ((flags >> 12) & 1) as u8;
     let mut p = 2;
     let n_at = if t == 0 { 4 } else { 1 };
     let raw = data
@@ -376,6 +588,17 @@ fn symbol_dict(data: &[u8], inputs: &[Bitmap]) -> R<Vec<Bitmap>> {
         *a = (raw[2 * i] as i8 as i32, raw[2 * i + 1] as i8 as i32);
     }
     p += 2 * n_at;
+    let mut rat = [(-1i32, -1i32); 2];
+    if refagg && rt == 0 {
+        let raw = data
+            .get(p..p + 4)
+            .ok_or_else(|| Jbig2Error("truncated JBIG2 symbol dictionary".into()))?;
+        rat = [
+            (raw[0] as i8 as i32, raw[1] as i8 as i32),
+            (raw[2] as i8 as i32, raw[3] as i8 as i32),
+        ];
+        p += 4;
+    }
     let n_ex = be32(data, p)? as usize;
     let n_new = be32(data, p + 4)? as usize;
     p += 8;
@@ -384,21 +607,23 @@ fn symbol_dict(data: &[u8], inputs: &[Bitmap]) -> R<Vec<Bitmap>> {
     }
     let mut mq = Mq::new(&data[p.min(data.len())..]);
     let mut gb = vec![(0u8, 0u8); 1 << template(t, &at).len()];
-    let (mut iadh, mut iadw, mut iaex) = (IntCtx::new(), IntCtx::new(), IntCtx::new());
-    let mut news: Vec<Bitmap> = Vec::with_capacity(n_new.min(4096));
+    let (mut iadh, mut iadw, mut iaex, mut iaai) =
+        (IntCtx::new(), IntCtx::new(), IntCtx::new(), IntCtx::new());
+    let code_len = code_len_for(inputs.len() + n_new);
+    let mut tc = TextCtx::new(if refagg { code_len } else { 0 });
+    // inputs followed by the symbols decoded so far
+    let mut pool: Vec<Bitmap> = inputs.to_vec();
     let mut budget = 0u64;
     let mut hc_h: i64 = 0;
-    while news.len() < n_new {
-        let dh = iadh
-            .decode(&mut mq)
-            .ok_or_else(|| Jbig2Error("bad JBIG2 symbol height".into()))?;
-        hc_h += dh as i64;
+    while pool.len() - inputs.len() < n_new {
+        let dh = int_or_fail(iadh.decode(&mut mq))?;
+        hc_h += dh;
         if !(0..=65_535).contains(&hc_h) {
             return fail("bad JBIG2 symbol height");
         }
         let mut sym_w: i64 = 0;
         while let Some(dw) = iadw.decode(&mut mq) {
-            if news.len() >= n_new {
+            if pool.len() - inputs.len() >= n_new {
                 return fail("JBIG2 symbol dictionary overrun");
             }
             sym_w += dw as i64;
@@ -412,124 +637,181 @@ fn symbol_dict(data: &[u8], inputs: &[Bitmap]) -> R<Vec<Bitmap>> {
             }
             let d = if w == 0 || h == 0 {
                 Vec::new()
-            } else {
+            } else if !refagg {
                 generic_with(&mut mq, &mut gb, w, h, t, false, at)
+            } else {
+                let ninst = int_or_fail(iaai.decode(&mut mq))?;
+                if ninst == 1 {
+                    let id = decode_iaid(&mut mq, &mut tc.iaid, code_len);
+                    let rdx = int_or_fail(tc.rc.iardx.decode(&mut mq))? as i32;
+                    let rdy = int_or_fail(tc.rc.iardy.decode(&mut mq))? as i32;
+                    let rf = pool
+                        .get(id)
+                        .ok_or_else(|| Jbig2Error("JBIG2 symbol id out of range".into()))?
+                        .clone();
+                    refine(&mut mq, &mut tc.rc.gr, w, h, &rf, rdx, rdy, rt, false, rat)
+                } else if ninst > 1 && ninst < 100_000 {
+                    let tp = TextP {
+                        rw: w,
+                        rh: h,
+                        strips: 1,
+                        corner: 1,
+                        transposed: false,
+                        comb: 0,
+                        def_pixel: 0,
+                        dso: 0,
+                        n_inst: ninst as usize,
+                        refine: true,
+                        rt,
+                        rat,
+                        code_len,
+                    };
+                    text_decode(&mut mq, &mut tc, &tp, &pool)?
+                } else {
+                    return fail("bad JBIG2 aggregate instance count");
+                }
             };
-            news.push(Bitmap { w, h, d });
+            pool.push(Bitmap { w, h, d });
         }
     }
-    let total = inputs.len() + news.len();
+    let total = pool.len();
     let mut out = Vec::new();
     let (mut idx, mut flag) = (0usize, false);
     let mut guard = 0;
     while idx < total && guard < total + 8 {
         guard += 1;
-        let run = iaex
-            .decode(&mut mq)
-            .ok_or_else(|| Jbig2Error("bad JBIG2 export run".into()))?;
+        let run = int_or_fail(iaex.decode(&mut mq))?;
         if run < 0 || idx + run as usize > total {
             return fail("bad JBIG2 export run");
         }
         if flag {
-            for k in idx..idx + run as usize {
-                out.push(if k < inputs.len() {
-                    inputs[k].clone()
-                } else {
-                    news[k - inputs.len()].clone()
-                });
-            }
+            out.extend(pool[idx..idx + run as usize].iter().cloned());
         }
         idx += run as usize;
         flag = !flag;
     }
-    if out.len() != n_ex && n_ex != 0 {
-        // tolerate producers that count differently, but never exceed the declared total
-        if out.len() > total {
-            return fail("bad JBIG2 export table");
-        }
-    }
     Ok(out)
 }
 
-/// Text region (arithmetic coding, no refinement) → region bitmap.
+/// Text region (arithmetic coding) → region bitmap.
 fn text_region(data: &[u8], rw: usize, rh: usize, syms: &[Bitmap]) -> R<Vec<u8>> {
     let flags = be16(data, 0)?;
     if flags & 1 != 0 {
         return fail("JBIG2 Huffman-coded text regions are not supported");
     }
-    if flags & 2 != 0 {
-        return fail("JBIG2 text regions with refinement are not supported");
+    let refine = flags & 2 != 0;
+    let rt = ((flags >> 15) & 1) as u8;
+    let mut p = 2;
+    let mut rat = [(-1i32, -1i32); 2];
+    if refine && rt == 0 {
+        let raw = data
+            .get(p..p + 4)
+            .ok_or_else(|| Jbig2Error("truncated JBIG2 text region".into()))?;
+        rat = [
+            (raw[0] as i8 as i32, raw[1] as i8 as i32),
+            (raw[2] as i8 as i32, raw[3] as i8 as i32),
+        ];
+        p += 4;
     }
-    let log_strips = (flags >> 2) & 3;
-    let strips = 1i64 << log_strips;
-    let corner = (flags >> 4) & 3; // 0 BL, 1 TL, 2 BR, 3 TR
-    let transposed = flags & 0x40 != 0;
-    let comb = ((flags >> 7) & 3) as u8;
-    let def_pixel = ((flags >> 9) & 1) as u8;
     let mut dso = ((flags >> 10) & 31) as i32;
     if dso > 15 {
         dso -= 32;
     }
-    let n_inst = be32(data, 2)? as usize;
+    let n_inst = be32(data, p)? as usize;
+    p += 4;
     if n_inst > 4_000_000 {
         return fail("too many JBIG2 symbol instances");
     }
-    let mut mq = Mq::new(&data[6.min(data.len())..]);
-    let n_sym = syms.len();
-    let code_len = if n_sym <= 1 {
-        0
-    } else {
-        usize::BITS - (n_sym - 1).leading_zeros()
+    let code_len = code_len_for(syms.len());
+    let tp = TextP {
+        rw,
+        rh,
+        strips: 1i64 << ((flags >> 2) & 3),
+        corner: ((flags >> 4) & 3) as u32,
+        transposed: flags & 0x40 != 0,
+        comb: ((flags >> 7) & 3) as u8,
+        def_pixel: ((flags >> 9) & 1) as u8,
+        dso,
+        n_inst,
+        refine,
+        rt,
+        rat,
+        code_len,
     };
-    let (mut iadt, mut iafs, mut iads, mut iait) =
-        (IntCtx::new(), IntCtx::new(), IntCtx::new(), IntCtx::new());
-    let mut iaid = vec![(0u8, 0u8); 1usize << (code_len + 1)];
-    let mut bm = vec![def_pixel; rw * rh];
-    let mut stript: i64 = -(iadt
-        .decode(&mut mq)
-        .ok_or_else(|| Jbig2Error("bad JBIG2 text region".into()))?
-        as i64)
-        * strips;
+    let mut mq = Mq::new(&data[p.min(data.len())..]);
+    let mut tc = TextCtx::new(code_len);
+    text_decode(&mut mq, &mut tc, &tp, syms)
+}
+
+fn text_decode(mq: &mut Mq, tc: &mut TextCtx, tp: &TextP, syms: &[Bitmap]) -> R<Vec<u8>> {
+    let (rw, rh, strips, corner, transposed) = (tp.rw, tp.rh, tp.strips, tp.corner, tp.transposed);
+    let mut bm = vec![tp.def_pixel; rw * rh];
+    let mut stript: i64 = -int_or_fail(tc.iadt.decode(mq))? * strips;
     let mut firsts: i64 = 0;
     let mut done = 0usize;
     let mut drawn = 0u64;
-    while done < n_inst {
-        let dt = iadt
-            .decode(&mut mq)
-            .ok_or_else(|| Jbig2Error("bad JBIG2 text region".into()))? as i64;
+    while done < tp.n_inst {
+        let dt = int_or_fail(tc.iadt.decode(mq))?;
         stript += dt * strips;
         let mut curs: i64 = 0;
         let mut first = true;
         loop {
             if first {
-                let dfs = iafs
-                    .decode(&mut mq)
-                    .ok_or_else(|| Jbig2Error("bad JBIG2 text region".into()))?
-                    as i64;
-                firsts += dfs;
+                firsts += int_or_fail(tc.iafs.decode(mq))?;
                 curs = firsts;
                 first = false;
             } else {
-                match iads.decode(&mut mq) {
+                match tc.iads.decode(mq) {
                     None => break,
-                    Some(ids) => curs += ids as i64 + dso as i64,
+                    Some(ids) => curs += ids as i64 + tp.dso as i64,
                 }
             }
-            if done >= n_inst {
+            if done >= tp.n_inst {
                 return fail("JBIG2 text region overrun");
             }
             let curt = if strips == 1 {
                 0
             } else {
-                iait.decode(&mut mq)
-                    .ok_or_else(|| Jbig2Error("bad JBIG2 text region".into()))?
-                    as i64
+                int_or_fail(tc.iait.decode(mq))?
             };
             let ti = stript + curt;
-            let id = decode_iaid(&mut mq, &mut iaid, code_len);
-            let sym = syms
+            let id = decode_iaid(mq, &mut tc.iaid, tp.code_len);
+            let base = syms
                 .get(id)
                 .ok_or_else(|| Jbig2Error("JBIG2 symbol id out of range".into()))?;
+            let mut refined: Option<Bitmap> = None;
+            if tp.refine && int_or_fail(tc.rc.iari.decode(mq))? != 0 {
+                let rdw = int_or_fail(tc.rc.iardw.decode(mq))?;
+                let rdh = int_or_fail(tc.rc.iardh.decode(mq))?;
+                let rdx = int_or_fail(tc.rc.iardx.decode(mq))?;
+                let rdy = int_or_fail(tc.rc.iardy.decode(mq))?;
+                let (nw, nh) = (base.w as i64 + rdw, base.h as i64 + rdh);
+                if !(0..=65_535).contains(&nw)
+                    || !(0..=65_535).contains(&nh)
+                    || nw * nh > 16_000_000
+                {
+                    return fail("bad JBIG2 refined symbol size");
+                }
+                let (nw, nh) = (nw as usize, nh as usize);
+                let d = if nw == 0 || nh == 0 {
+                    Vec::new()
+                } else {
+                    refine(
+                        mq,
+                        &mut tc.rc.gr,
+                        nw,
+                        nh,
+                        base,
+                        (rdw.div_euclid(2) + rdx) as i32,
+                        (rdh.div_euclid(2) + rdy) as i32,
+                        tp.rt,
+                        false,
+                        tp.rat,
+                    )
+                };
+                refined = Some(Bitmap { w: nw, h: nh, d });
+            }
+            let sym = refined.as_ref().unwrap_or(base);
             let (wi, hi) = (sym.w as i64, sym.h as i64);
             if !transposed && corner >= 2 {
                 curs += wi - 1;
@@ -566,7 +848,7 @@ fn text_region(data: &[u8], rw: usize, rh: usize, syms: &[Bitmap]) -> R<Vec<u8>>
                         &mut bm[py as usize * rw + px as usize],
                         sym.d[yy * sym.w + xx],
                     );
-                    *dst = match comb {
+                    *dst = match tp.comb {
                         0 => *dst | src,
                         1 => *dst & src,
                         2 => *dst ^ src,
@@ -693,6 +975,35 @@ fn blit(
     }
 }
 
+/// Immediate regions are drawn on the page; intermediate ones are kept for later reference.
+#[allow(clippy::too_many_arguments)]
+fn place(
+    page: &mut [u8],
+    inter: &mut std::collections::HashMap<u32, Bitmap>,
+    s: &Seg,
+    w: usize,
+    h: usize,
+    bm: Vec<u8>,
+    rw: usize,
+    rh: usize,
+    rx: usize,
+    ry: usize,
+    op: u8,
+) {
+    if matches!(s.kind, 4 | 20 | 36 | 40) {
+        inter.insert(
+            s.num,
+            Bitmap {
+                w: rw,
+                h: rh,
+                d: bm,
+            },
+        );
+    } else {
+        blit(page, w, h, &bm, rw, rh, rx, ry, op);
+    }
+}
+
 /// Decode an embedded JBIG2 stream (plus optional globals) to a `w`×`h` bitmap, one byte
 /// per pixel, 1 = black.
 pub fn decode(data: &[u8], globals: Option<&[u8]>, w: usize, h: usize) -> R<Vec<u8>> {
@@ -707,6 +1018,7 @@ pub fn decode(data: &[u8], globals: Option<&[u8]>, w: usize, h: usize) -> R<Vec<
     let mut page = vec![0u8; w * h];
     let mut regions = 0;
     let mut dicts: std::collections::HashMap<u32, Vec<Bitmap>> = std::collections::HashMap::new();
+    let mut inter: std::collections::HashMap<u32, Bitmap> = std::collections::HashMap::new();
     for s in &segs {
         let data: &[u8] = &s.data;
         match s.kind {
@@ -768,7 +1080,7 @@ pub fn decode(data: &[u8], globals: Option<&[u8]>, w: usize, h: usize) -> R<Vec<
                     }
                     generic_arith(&data[p..], rw, rh, t, tpgdon, at)
                 };
-                blit(&mut page, w, h, &bm, rw, rh, rx, ry, op);
+                place(&mut page, &mut inter, s, w, h, bm, rw, rh, rx, ry, op);
                 regions += 1;
             }
             0 => {
@@ -783,7 +1095,7 @@ pub fn decode(data: &[u8], globals: Option<&[u8]>, w: usize, h: usize) -> R<Vec<
                 }
                 dicts.insert(s.num, symbol_dict(data, &inputs)?);
             }
-            6 | 7 => {
+            4 | 6 | 7 => {
                 if data.len() < 17 {
                     return fail("truncated JBIG2 region");
                 }
@@ -800,11 +1112,227 @@ pub fn decode(data: &[u8], globals: Option<&[u8]>, w: usize, h: usize) -> R<Vec<
                     }
                 }
                 let bm = text_region(&data[17..], rw, rh, &syms)?;
-                blit(&mut page, w, h, &bm, rw, rh, rx, ry, op);
+                place(&mut page, &mut inter, s, w, h, bm, rw, rh, rx, ry, op);
                 regions += 1;
             }
-            16 | 22 | 23 => return fail("JBIG2 halftone regions are not supported"),
-            40 | 42 | 43 => return fail("JBIG2 refinement regions are not supported"),
+            16 => {
+                let flags = *data
+                    .first()
+                    .ok_or_else(|| Jbig2Error("truncated JBIG2 pattern dictionary".into()))?;
+                let t = (flags >> 1) & 3;
+                let pw = *data
+                    .get(1)
+                    .ok_or_else(|| Jbig2Error("truncated JBIG2 pattern dictionary".into()))?
+                    as usize;
+                let ph = *data
+                    .get(2)
+                    .ok_or_else(|| Jbig2Error("truncated JBIG2 pattern dictionary".into()))?
+                    as usize;
+                let n = be32(data, 3)? as usize + 1;
+                if pw == 0 || ph == 0 || n > 65_536 || n * pw * ph > 64_000_000 {
+                    return fail("bad JBIG2 pattern dictionary");
+                }
+                let cw = n * pw;
+                let body = data.get(7..).unwrap_or(&[]);
+                let coll: Vec<u8> = if flags & 1 != 0 {
+                    let (rows, _) = crate::g4::decode(body, cw, ph, false);
+                    let mut v = vec![0u8; cw * ph];
+                    for (y, r) in rows.iter().enumerate().take(ph) {
+                        for (x, &b) in r.iter().enumerate().take(cw) {
+                            v[y * cw + x] = b as u8;
+                        }
+                    }
+                    v
+                } else {
+                    let at = [(-(pw as i32), 0), (-3, -1), (2, -2), (-2, -2)];
+                    generic_arith(body, cw, ph, t, false, at)
+                };
+                let mut pats = Vec::with_capacity(n);
+                for k in 0..n {
+                    let mut d = Vec::with_capacity(pw * ph);
+                    for y in 0..ph {
+                        d.extend_from_slice(&coll[y * cw + k * pw..y * cw + (k + 1) * pw]);
+                    }
+                    pats.push(Bitmap { w: pw, h: ph, d });
+                }
+                dicts.insert(s.num, pats);
+            }
+            20 | 22 | 23 => {
+                if data.len() < 17 + 1 + 16 + 4 {
+                    return fail("truncated JBIG2 halftone region");
+                }
+                let (rw, rh) = (be32(data, 0)? as usize, be32(data, 4)? as usize);
+                let (rx, ry) = (be32(data, 8)? as usize, be32(data, 12)? as usize);
+                let op = data[16] & 7;
+                if rw == 0 || rh == 0 || rw > w || rh > h {
+                    return fail("invalid JBIG2 region size");
+                }
+                let f = data[17];
+                let (mmr, t, enable_skip, comb, defpix) = (
+                    f & 1 != 0,
+                    (f >> 1) & 3,
+                    f & 8 != 0,
+                    (f >> 4) & 7,
+                    (f >> 7) & 1,
+                );
+                let (gw, gh) = (be32(data, 18)? as usize, be32(data, 22)? as usize);
+                let gx = be32(data, 26)? as i32 as i64;
+                let gy = be32(data, 30)? as i32 as i64;
+                let rxs = be16(data, 34)? as i64;
+                let rys = be16(data, 36)? as i64;
+                if gw == 0 || gh == 0 || gw.checked_mul(gh).is_none_or(|n| n > 64_000_000) {
+                    return fail("bad JBIG2 halftone grid");
+                }
+                let pats = s.refs.iter().find_map(|r| dicts.get(r)).ok_or_else(|| {
+                    Jbig2Error("JBIG2 halftone without a pattern dictionary".into())
+                })?;
+                let np = pats.len();
+                let mut bpp = 0;
+                while (1usize << bpp) < np {
+                    bpp += 1;
+                }
+                let (pw, ph) = (pats[0].w as i64, pats[0].h as i64);
+                let pos = |m: usize, n: usize| -> (i64, i64) {
+                    (
+                        (gx + m as i64 * rys + n as i64 * rxs) >> 8,
+                        (gy + m as i64 * rxs - n as i64 * rys) >> 8,
+                    )
+                };
+                let skip: Option<Vec<u8>> = enable_skip.then(|| {
+                    let mut k = vec![0u8; gw * gh];
+                    for m in 0..gh {
+                        for n in 0..gw {
+                            let (x, y) = pos(m, n);
+                            if x + pw <= 0 || x >= rw as i64 || y + ph <= 0 || y >= rh as i64 {
+                                k[m * gw + n] = 1;
+                            }
+                        }
+                    }
+                    k
+                });
+                let body = &data[38..];
+                let mut gray = vec![0u32; gw * gh];
+                if bpp > 0 {
+                    let mut planes: Vec<Vec<u8>> = Vec::new();
+                    if mmr {
+                        if bpp > 1 {
+                            return fail("multi-plane MMR JBIG2 halftones are not supported");
+                        }
+                        let (rows, _) = crate::g4::decode(body, gw, gh, false);
+                        let mut v = vec![0u8; gw * gh];
+                        for (y, r) in rows.iter().enumerate().take(gh) {
+                            for (x, &b) in r.iter().enumerate().take(gw) {
+                                v[y * gw + x] = b as u8;
+                            }
+                        }
+                        planes.push(v);
+                    } else {
+                        let at = [
+                            (if t <= 1 { 3 } else { 2 }, -1),
+                            (-3, -1),
+                            (2, -2),
+                            (-2, -2),
+                        ];
+                        let mut mq = Mq::new(body);
+                        let mut cx = vec![(0u8, 0u8); 1 << template(t, &at).len()];
+                        for _ in 0..bpp {
+                            planes.push(generic_full(
+                                &mut mq,
+                                &mut cx,
+                                gw,
+                                gh,
+                                t,
+                                false,
+                                at,
+                                skip.as_deref(),
+                            ));
+                        }
+                    }
+                    // planes[0] is the most significant bit-plane; Gray-code decoding
+                    for j in 1..planes.len() {
+                        let (a, b) = planes.split_at_mut(j);
+                        for (x, y) in b[0].iter_mut().zip(a[j - 1].iter()) {
+                            *x ^= *y;
+                        }
+                    }
+                    for pl in &planes {
+                        for (g, &b) in gray.iter_mut().zip(pl) {
+                            *g = (*g << 1) | b as u32;
+                        }
+                    }
+                }
+                let mut bm = vec![defpix; rw * rh];
+                for m in 0..gh {
+                    for n in 0..gw {
+                        let (x, y) = pos(m, n);
+                        let pat = &pats[(gray[m * gw + n] as usize).min(np - 1)];
+                        for yy in 0..pat.h {
+                            for xx in 0..pat.w {
+                                let (px, py) = (x + xx as i64, y + yy as i64);
+                                if px < 0 || py < 0 || px >= rw as i64 || py >= rh as i64 {
+                                    continue;
+                                }
+                                let dst = &mut bm[py as usize * rw + px as usize];
+                                let src = pat.d[yy * pat.w + xx];
+                                *dst = match comb {
+                                    0 => *dst | src,
+                                    1 => *dst & src,
+                                    2 => *dst ^ src,
+                                    3 => 1 - (*dst ^ src),
+                                    _ => src,
+                                };
+                            }
+                        }
+                    }
+                }
+                place(&mut page, &mut inter, s, w, h, bm, rw, rh, rx, ry, op);
+                regions += 1;
+            }
+            40 | 42 | 43 => {
+                if data.len() < 18 {
+                    return fail("truncated JBIG2 region");
+                }
+                let (rw, rh) = (be32(data, 0)? as usize, be32(data, 4)? as usize);
+                let (rx, ry) = (be32(data, 8)? as usize, be32(data, 12)? as usize);
+                let op = data[16] & 7;
+                if rw == 0 || rh == 0 || rw > w || rh > h {
+                    return fail("invalid JBIG2 region size");
+                }
+                let f = data[17];
+                let (rt, tpgron) = (f & 1, f & 2 != 0);
+                let mut p = 18;
+                let mut at = [(-1i32, -1i32); 2];
+                if rt == 0 {
+                    let raw = data
+                        .get(p..p + 4)
+                        .ok_or_else(|| Jbig2Error("truncated JBIG2 region".into()))?;
+                    at = [
+                        (raw[0] as i8 as i32, raw[1] as i8 as i32),
+                        (raw[2] as i8 as i32, raw[3] as i8 as i32),
+                    ];
+                    p += 4;
+                }
+                let rf = match s.refs.first().and_then(|r| inter.get(r)) {
+                    Some(b) if b.w == rw && b.h == rh => b.clone(),
+                    Some(_) => return fail("JBIG2 refinement reference has a different size"),
+                    None => {
+                        let mut d = vec![0u8; rw * rh];
+                        for yy in 0..rh {
+                            for xx in 0..rw {
+                                if rx + xx < w && ry + yy < h {
+                                    d[yy * rw + xx] = page[(ry + yy) * w + rx + xx];
+                                }
+                            }
+                        }
+                        Bitmap { w: rw, h: rh, d }
+                    }
+                };
+                let mut mq = Mq::new(&data[p..]);
+                let mut cx = vec![(0u8, 0u8); 1 << 13];
+                let bm = refine(&mut mq, &mut cx, rw, rh, &rf, 0, 0, rt, tpgron, at);
+                place(&mut page, &mut inter, s, w, h, bm, rw, rh, rx, ry, op);
+                regions += 1;
+            }
             _ => {}
         }
     }
@@ -1232,6 +1760,436 @@ pub(crate) mod enc {
         out
     }
 
+    // ---- refinement, aggregate symbols and halftones (test encoders)
+
+    pub fn bm(w: usize, h: usize, d: Vec<u8>) -> Bitmap {
+        Bitmap { w, h, d }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn enc_refine(
+        e: &mut Mqe,
+        base: usize,
+        target: &[u8],
+        w: usize,
+        h: usize,
+        rf: &Bitmap,
+        dx: i32,
+        dy: i32,
+        t: u8,
+        tpgron: bool,
+        at: [(i32, i32); 2],
+    ) {
+        let mut ltp = false;
+        for y in 0..h {
+            if tpgron {
+                let typical = (0..w).all(|x| {
+                    refine_uniform(rf, dx, dy, x, y).is_none_or(|v| v == target[y * w + x])
+                });
+                e.encode((typical != ltp) as u8, base + refine_sltp(t));
+                ltp = typical;
+            }
+            for x in 0..w {
+                if ltp && refine_uniform(rf, dx, dy, x, y).is_some() {
+                    continue;
+                }
+                let c = refine_ctx(t, &at, target, w, h, rf, dx, dy, x, y);
+                e.encode(target[y * w + x], base + c);
+            }
+        }
+    }
+
+    fn page_info(w: usize, h: usize) -> Vec<u8> {
+        let mut pi = (w as u32).to_be_bytes().to_vec();
+        pi.extend((h as u32).to_be_bytes());
+        pi.extend([0; 8]);
+        pi.extend([0, 0, 0]);
+        seg(0, 48, 1, &pi)
+    }
+
+    fn region_info(w: usize, h: usize, op: u8) -> Vec<u8> {
+        let mut r = (w as u32).to_be_bytes().to_vec();
+        r.extend((h as u32).to_be_bytes());
+        r.extend([0; 8]);
+        r.push(op);
+        r
+    }
+
+    /// A generic region carrying `base`, then a refinement region turning it into `target`.
+    pub fn refinement_stream(
+        base: &[u8],
+        target: &[u8],
+        w: usize,
+        h: usize,
+        t: u8,
+        tpgron: bool,
+        at: [(i32, i32); 2],
+    ) -> Vec<u8> {
+        let at0 = [(3, -1), (-3, -1), (2, -2), (-2, -2)];
+        let mut g = region_info(w, h, 0);
+        g.push(0);
+        for a in at0 {
+            g.push(a.0 as i8 as u8);
+            g.push(a.1 as i8 as u8);
+        }
+        g.extend(encode_generic(base, w, h, 0, false, at0));
+        let mut r = region_info(w, h, 4);
+        r.push(t | ((tpgron as u8) << 1));
+        if t == 0 {
+            for a in at {
+                r.push(a.0 as i8 as u8);
+                r.push(a.1 as i8 as u8);
+            }
+        }
+        let mut e = Mqe::new(1 << 13);
+        let rf = bm(w, h, base.to_vec());
+        enc_refine(&mut e, 0, target, w, h, &rf, 0, 0, t, tpgron, at);
+        r.extend(e.finish());
+        let mut out = page_info(w, h);
+        out.extend(seg(1, 38, 1, &g));
+        out.extend(seg(2, 42, 1, &r));
+        out
+    }
+
+    /// A refinement of one symbol inside a text region / aggregate dictionary.
+    pub struct Refined {
+        pub w: usize,
+        pub h: usize,
+        pub d: Vec<u8>,
+        pub rdx: i32,
+        pub rdy: i32,
+    }
+
+    // contexts of the text coder
+    struct TextBases {
+        ri: usize,
+        rdw: usize,
+        rdh: usize,
+        rdx: usize,
+        rdy: usize,
+        gr: usize,
+        aai: usize,
+        total: usize,
+    }
+    fn text_bases(code_len: u32) -> TextBases {
+        let ri = IAID + (1usize << (code_len + 1));
+        TextBases {
+            ri,
+            rdw: ri + 512,
+            rdh: ri + 1024,
+            rdx: ri + 1536,
+            rdy: ri + 2048,
+            aai: ri + 2560,
+            gr: ri + 3072,
+            total: ri + 3072 + 8192,
+        }
+    }
+
+    /// Text region, one instance per strip, top-left reference corner, optional refinement.
+    /// `placed` = (symbol id, x, y, refinement), sorted by y.
+    pub fn refined_text_region(
+        w: usize,
+        h: usize,
+        syms: &[Bitmap],
+        placed: &[(usize, i64, i64, Option<Refined>)],
+        refine: bool,
+        rt: u8,
+        rat: [(i32, i32); 2],
+    ) -> Vec<u8> {
+        let code_len = if syms.len() <= 1 {
+            0
+        } else {
+            usize::BITS - (syms.len() - 1).leading_zeros()
+        };
+        let b = text_bases(code_len);
+        let mut e = Mqe::new(b.total);
+        enc_int(&mut e, IADT, Some(0));
+        let (mut cur_t, mut firsts) = (0i64, 0i64);
+        for (id, x, y, rf) in placed {
+            enc_int(&mut e, IADT, Some((*y - cur_t) as i32));
+            cur_t = *y;
+            enc_int(&mut e, IAFS, Some((*x - firsts) as i32));
+            firsts = *x;
+            enc_iaid(&mut e, *id, code_len);
+            if refine {
+                match rf {
+                    None => enc_int(&mut e, b.ri, Some(0)),
+                    Some(r) => {
+                        enc_int(&mut e, b.ri, Some(1));
+                        let base = &syms[*id];
+                        let rdw = r.w as i32 - base.w as i32;
+                        let rdh = r.h as i32 - base.h as i32;
+                        enc_int(&mut e, b.rdw, Some(rdw));
+                        enc_int(&mut e, b.rdh, Some(rdh));
+                        enc_int(&mut e, b.rdx, Some(r.rdx));
+                        enc_int(&mut e, b.rdy, Some(r.rdy));
+                        enc_refine(
+                            &mut e,
+                            b.gr,
+                            &r.d,
+                            r.w,
+                            r.h,
+                            base,
+                            rdw.div_euclid(2) + r.rdx,
+                            rdh.div_euclid(2) + r.rdy,
+                            rt,
+                            false,
+                            rat,
+                        );
+                    }
+                }
+            }
+            enc_int(&mut e, IADS, None);
+        }
+        let data = e.finish();
+        let mut region = region_info(w, h, 0);
+        let flags: u16 = ((refine as u16) << 1) | (1 << 4) | ((rt as u16) << 15);
+        region.extend(flags.to_be_bytes());
+        if refine && rt == 0 {
+            for a in rat {
+                region.push(a.0 as i8 as u8);
+                region.push(a.1 as i8 as u8);
+            }
+        }
+        region.extend((placed.len() as u32).to_be_bytes());
+        region.extend(data);
+        region
+    }
+
+    fn plain_dict(syms: &[Bitmap]) -> Vec<u8> {
+        let at = [(3, -1), (-3, -1), (2, -2), (-2, -2)];
+        let n = syms.len();
+        let code_len = if n <= 1 {
+            0
+        } else {
+            usize::BITS - (n - 1).leading_zeros()
+        };
+        let mut e = Mqe::new(IAID + (1usize << (code_len + 1)));
+        let mut prev_h = 0i32;
+        let mut i = 0;
+        while i < n {
+            let hh = syms[i].h as i32;
+            enc_int(&mut e, IADH, Some(hh - prev_h));
+            prev_h = hh;
+            let mut prev_w = 0i32;
+            while i < n && syms[i].h as i32 == hh {
+                let ww = syms[i].w as i32;
+                enc_int(&mut e, IADW, Some(ww - prev_w));
+                prev_w = ww;
+                encode_generic_with(&mut e, &syms[i].d, syms[i].w, syms[i].h, 0, false, at);
+                i += 1;
+            }
+            enc_int(&mut e, IADW, None);
+        }
+        enc_int(&mut e, IAEX, Some(0));
+        enc_int(&mut e, IAEX, Some(n as i32));
+        let mut sd = 0u16.to_be_bytes().to_vec();
+        for a in at {
+            sd.push(a.0 as i8 as u8);
+            sd.push(a.1 as i8 as u8);
+        }
+        sd.extend((n as u32).to_be_bytes());
+        sd.extend((n as u32).to_be_bytes());
+        sd.extend(e.finish());
+        sd
+    }
+
+    /// Dictionary of `syms`, then a text region that refines some of them while drawing.
+    pub fn refined_text_stream(
+        w: usize,
+        h: usize,
+        syms: &[Bitmap],
+        placed: &[(usize, i64, i64, Option<Refined>)],
+        rt: u8,
+        rat: [(i32, i32); 2],
+    ) -> Vec<u8> {
+        let mut out = page_info(w, h);
+        out.extend(seg(1, 0, 1, &plain_dict(syms)));
+        let region = refined_text_region(w, h, syms, placed, true, rt, rat);
+        out.extend(seg_refs(2, 6, 1, &[1], &region));
+        out
+    }
+
+    /// A plain dictionary, an aggregate (refinement) dictionary built from it, and a text
+    /// region drawing the refined symbols. `news` = (height-sorted) (source id, refined).
+    pub fn aggregate_stream(
+        w: usize,
+        h: usize,
+        syms: &[Bitmap],
+        news: &[(usize, Refined)],
+        placed: &[(usize, i64, i64)],
+        rt: u8,
+        rat: [(i32, i32); 2],
+    ) -> Vec<u8> {
+        let nin = syms.len();
+        let nnew = news.len();
+        let code_len = if nin + nnew <= 1 {
+            0
+        } else {
+            usize::BITS - (nin + nnew - 1).leading_zeros()
+        };
+        let b = text_bases(code_len);
+        let mut e = Mqe::new(b.total);
+        let mut prev_h = 0i32;
+        let mut i = 0;
+        while i < nnew {
+            let hh = news[i].1.h as i32;
+            enc_int(&mut e, IADH, Some(hh - prev_h));
+            prev_h = hh;
+            let mut prev_w = 0i32;
+            while i < nnew && news[i].1.h as i32 == hh {
+                let (src, r) = &news[i];
+                enc_int(&mut e, IADW, Some(r.w as i32 - prev_w));
+                prev_w = r.w as i32;
+                enc_int(&mut e, b.aai, Some(1));
+                enc_iaid(&mut e, *src, code_len);
+                enc_int(&mut e, b.rdx, Some(r.rdx));
+                enc_int(&mut e, b.rdy, Some(r.rdy));
+                enc_refine(
+                    &mut e,
+                    b.gr,
+                    &r.d,
+                    r.w,
+                    r.h,
+                    &syms[*src],
+                    r.rdx,
+                    r.rdy,
+                    rt,
+                    false,
+                    rat,
+                );
+                i += 1;
+            }
+            enc_int(&mut e, IADW, None);
+        }
+        enc_int(&mut e, IAEX, Some(nin as i32));
+        enc_int(&mut e, IAEX, Some(nnew as i32));
+        let at = [(3, -1), (-3, -1), (2, -2), (-2, -2)];
+        let mut sd = (2u16 | ((rt as u16) << 12)).to_be_bytes().to_vec();
+        for a in at {
+            sd.push(a.0 as i8 as u8);
+            sd.push(a.1 as i8 as u8);
+        }
+        if rt == 0 {
+            for a in rat {
+                sd.push(a.0 as i8 as u8);
+                sd.push(a.1 as i8 as u8);
+            }
+        }
+        sd.extend((nnew as u32).to_be_bytes());
+        sd.extend((nnew as u32).to_be_bytes());
+        sd.extend(e.finish());
+        let new_syms: Vec<Bitmap> = news
+            .iter()
+            .map(|(_, r)| bm(r.w, r.h, r.d.clone()))
+            .collect();
+        let pl: Vec<(usize, i64, i64, Option<Refined>)> =
+            placed.iter().map(|&(id, x, y)| (id, x, y, None)).collect();
+        let region = refined_text_region(w, h, &new_syms, &pl, false, 0, rat);
+        let mut out = page_info(w, h);
+        out.extend(seg(1, 0, 1, &plain_dict(syms)));
+        out.extend(seg_refs(2, 0, 1, &[1], &sd));
+        out.extend(seg_refs(3, 6, 1, &[2], &region));
+        out
+    }
+
+    /// Halftone: pattern dictionary + region. Returns the stream.
+    #[allow(clippy::too_many_arguments)]
+    pub fn halftone_stream(
+        w: usize,
+        h: usize,
+        pats: &[Bitmap],
+        gray: &[u32],
+        gw: usize,
+        gh: usize,
+        (gx, gy, hrx, hry): (i32, i32, u16, u16),
+        t: u8,
+        skip: bool,
+    ) -> Vec<u8> {
+        let (pw, ph) = (pats[0].w, pats[0].h);
+        let n = pats.len();
+        let cw = n * pw;
+        let mut coll = vec![0u8; cw * ph];
+        for (k, p) in pats.iter().enumerate() {
+            for y in 0..ph {
+                coll[y * cw + k * pw..y * cw + (k + 1) * pw]
+                    .copy_from_slice(&p.d[y * pw..(y + 1) * pw]);
+            }
+        }
+        let pat_at = [(-(pw as i32), 0), (-3, -1), (2, -2), (-2, -2)];
+        let mut pd = vec![t << 1, pw as u8, ph as u8];
+        pd.extend(((n - 1) as u32).to_be_bytes());
+        pd.extend(encode_generic(&coll, cw, ph, t, false, pat_at));
+        let mut bpp = 0;
+        while (1usize << bpp) < n {
+            bpp += 1;
+        }
+        let at = [
+            (if t <= 1 { 3 } else { 2 }, -1),
+            (-3, -1),
+            (2, -2),
+            (-2, -2),
+        ];
+        let skipm: Option<Vec<u8>> = skip.then(|| {
+            let mut k = vec![0u8; gw * gh];
+            for m in 0..gh {
+                for nn in 0..gw {
+                    let x = (gx as i64 + m as i64 * hry as i64 + nn as i64 * hrx as i64) >> 8;
+                    let y = (gy as i64 + m as i64 * hrx as i64 - nn as i64 * hry as i64) >> 8;
+                    if x + pw as i64 <= 0 || x >= w as i64 || y + ph as i64 <= 0 || y >= h as i64 {
+                        k[m * gw + nn] = 1;
+                    }
+                }
+            }
+            k
+        });
+        let mut e = Mqe::new(1 << template(t, &at).len());
+        let offs = template(t, &at);
+        for j in (0..bpp).rev() {
+            let plane: Vec<u8> = gray
+                .iter()
+                .map(|&g| {
+                    let b = (g >> j) & 1;
+                    let hi = if j + 1 < bpp { (g >> (j + 1)) & 1 } else { 0 };
+                    (b ^ hi) as u8
+                })
+                .collect();
+            for y in 0..gh {
+                for x in 0..gw {
+                    if skipm.as_ref().is_some_and(|k| k[y * gw + x] != 0) {
+                        continue;
+                    }
+                    let mut ctx = 0usize;
+                    for (bit, &(dx, dy)) in offs.iter().enumerate() {
+                        let (px, py) = (x as i32 + dx, y as i32 + dy);
+                        if px >= 0 && py >= 0 && (px as usize) < gw && (py as usize) < gh {
+                            let skipped = skipm
+                                .as_ref()
+                                .is_some_and(|k| k[py as usize * gw + px as usize] != 0);
+                            if !skipped {
+                                ctx |= (plane[py as usize * gw + px as usize] as usize) << bit;
+                            }
+                        }
+                    }
+                    e.encode(plane[y * gw + x], ctx);
+                }
+            }
+        }
+        let mut r = region_info(w, h, 0);
+        r.push((t << 1) | ((skip as u8) << 3));
+        r.extend((gw as u32).to_be_bytes());
+        r.extend((gh as u32).to_be_bytes());
+        r.extend(gx.to_be_bytes());
+        r.extend(gy.to_be_bytes());
+        r.extend(hrx.to_be_bytes());
+        r.extend(hry.to_be_bytes());
+        r.extend(e.finish());
+        let mut out = page_info(w, h);
+        out.extend(seg(1, 16, 1, &pd));
+        out.extend(seg_refs(2, 22, 1, &[1], &r));
+        out
+    }
+
     /// A one-page PDF whose only image is this JBIG2 stream (page = w x h points).
     pub fn pdf_with_stream(data: &[u8], w: usize, h: usize) -> Vec<u8> {
         let mut o = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n".to_vec();
@@ -1423,6 +2381,67 @@ pub(crate) mod tests {
             let _ = decode(&d, None, w, h);
         }
         assert!(t0.elapsed().as_secs() < 30, "too slow: {:?}", t0.elapsed());
+    }
+
+    #[test]
+    fn damaged_refinement_aggregate_and_halftone_streams_never_panic() {
+        let (w, h) = (40usize, 30usize);
+        let base = sample(w, h, 3);
+        let target = sample(w, h, 4);
+        let syms: Vec<Bitmap> = (0..4).map(|i| bm(6, 7, sample(6, 7, 10 + i))).collect();
+        let rf = |id: usize| Refined {
+            w: 7,
+            h: 8,
+            d: sample(7, 8, 20 + id as u64),
+            rdx: 0,
+            rdy: 1,
+        };
+        let placed = vec![(0usize, 2i64, 1i64, Some(rf(0))), (1, 12, 9, None)];
+        let news = vec![(0usize, rf(1)), (2, rf(2))];
+        let pats: Vec<Bitmap> = (0..4).map(|i| bm(3, 3, sample(3, 3, 30 + i))).collect();
+        let gray: Vec<u32> = (0..20).map(|i| i % 4).collect();
+        let streams = [
+            refinement_stream(&base, &target, w, h, 0, true, [(-1, -1), (-1, -1)]),
+            refinement_stream(&base, &target, w, h, 1, false, [(-1, -1), (-1, -1)]),
+            refined_text_stream(w, h, &syms, &placed, 0, [(-1, -1), (-1, -1)]),
+            aggregate_stream(
+                w,
+                h,
+                &syms,
+                &news,
+                &[(0, 1, 1), (1, 20, 12)],
+                1,
+                [(-1, -1); 2],
+            ),
+            halftone_stream(w, h, &pats, &gray, 5, 4, (0, 0, 3 << 8, 0), 0, false),
+            halftone_stream(w, h, &pats, &gray, 5, 4, (-256, 0, 3 << 8, 0), 2, true),
+        ];
+        let iters: u64 = std::env::var("LEGATOROCR_FUZZ_ITERS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(150);
+        let mut s = 0xC0FFEEu64;
+        let mut rnd = move || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            s
+        };
+        for st in &streams {
+            assert!(decode(st, None, w, h).is_ok());
+            for _ in 0..iters {
+                let mut d = st.clone();
+                for _ in 0..1 + rnd() % 4 {
+                    let i = (rnd() as usize) % d.len();
+                    match rnd() % 3 {
+                        0 => d[i] = rnd() as u8,
+                        1 => d[i] ^= 1 << (rnd() % 8),
+                        _ => d.truncate(i.max(12)),
+                    }
+                }
+                let _ = decode(&d, None, w, h);
+            }
+        }
     }
 
     #[test]

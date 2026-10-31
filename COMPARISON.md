@@ -29,7 +29,7 @@ Sources read for this comparison:
 | PDF with text layer | ✘ (images only) | ✘ | ✔ own writer + Tesseract OCR layer |
 | Compact PDF | – | – | ✔ CCITT G4, **hybrid** layered pages (mask + low-res background + patches) |
 | Multi-page TIFF input | ✔ | – | ✔ |
-| PDF input | – | – | ✔ scanned pages incl. layered/MRC, CCITT G3/G4, JBIG2 generic + symbol/text regions, native decryption (RC4/AES), external-renderer fallback for JPEG 2000 and the rest |
+| PDF input | – | – | ✔ scanned pages incl. layered/MRC, CCITT G3/G4, JBIG2 generic/symbol/text/refinement/halftone, native JPEG 2000, native decryption (RC4/AES), external-renderer fallback for the rest |
 | Punch holes, fingers, ruled lines, colour drop-out, negatives, levels, sharpen | partial (fill zones) | partial | ✔ automatic, off by default |
 | Profiles | – | – | ✔ built-in + user, CLI and GUI |
 | Text / hOCR sidecar, PDF metadata | ✘ | ✘ | ✔ |
@@ -54,5 +54,5 @@ Sources read for this comparison:
 
 ## Not done (honest list)
 
-Mouse-drawn picture / fill zones, dewarp control points, JBIG2 symbol coding, JPEG 2000, PDF/A, the extra binarisers of the Experimental
+Mouse-drawn picture / fill zones, dewarp control points, JBIG2 Huffman coding, certified PDF/A (structure is written, no validator was available), the extra binarisers of the Experimental
 fork, EM denoise / deblur filters, and any verification on Windows or macOS.

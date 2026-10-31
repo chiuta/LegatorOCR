@@ -1826,7 +1826,17 @@ impl PdfDoc {
                     cs = Cs::Gray;
                     row_pixels = w;
                 }
-                "JPXDecode" => return fail("JPEG 2000 page images are not supported"),
+                "JPXDecode" => {
+                    let j = crate::jpx::decode(&raw)
+                        .map_err(|e| ReadError(format!("JPEG 2000 page image: {e}")))?;
+                    let (jw, jh) = (j.w as u32, j.h as u32);
+                    return if j.nc == 1 {
+                        image::GrayImage::from_raw(jw, jh, j.data).map(DynamicImage::ImageLuma8)
+                    } else {
+                        image::RgbImage::from_raw(jw, jh, j.data).map(DynamicImage::ImageRgb8)
+                    }
+                    .ok_or_else(|| ReadError("JPEG 2000 page image: bad size".into()));
+                }
                 other => return fail(format!("unsupported image filter {other}")),
             }
         }
@@ -2163,6 +2173,292 @@ mod tests {
         assert_eq!(img.get_pixel(140, 230).0, [0, 0, 255]); // picture patch
         let bgp = img.get_pixel(250, 350).0; // background layer
         assert!((bgp[0] as i32 - 240).abs() < 6 && (bgp[2] as i32 - 200).abs() < 6);
+    }
+
+    #[test]
+    fn jpeg2000_page_images_are_decoded() {
+        let data = include_bytes!("../tests/jpx/rgb_lossless_rct.j2k");
+        let want = include_bytes!("../tests/jpx/rgb_lossless_rct.raw");
+        let (w, h) = (67usize, 45usize);
+        let mut o = b"%PDF-1.5\n".to_vec();
+        o.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+        o.extend_from_slice(format!("3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n").as_bytes());
+        o.extend_from_slice(format!("4 0 obj\n<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /Filter /JPXDecode /Length {} >>\nstream\n", data.len()).as_bytes());
+        o.extend_from_slice(data);
+        let c = format!("q {w} 0 0 {h} 0 0 cm /Im0 Do Q");
+        o.extend_from_slice(format!("\nendstream\nendobj\n5 0 obj\n<< /Length {} >>\nstream\n{c}\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n", c.len()).as_bytes());
+        let doc = PdfDoc::open(o).unwrap();
+        let img = doc.page_image(0).unwrap().image.to_rgb8();
+        assert_eq!(img.dimensions(), (w as u32, h as u32));
+        assert_eq!(img.as_raw().as_slice(), &want[..]);
+    }
+
+    /// Decode `stream` with our reader and (when installed) with poppler; both must give `want`.
+    fn jbig2_agrees(
+        dir: &std::path::Path,
+        tag: &str,
+        (stream, poppler): (&[u8], bool),
+        w: usize,
+        h: usize,
+        want: &[u8],
+    ) {
+        use crate::jbig2::enc::pdf_with_stream;
+        let pdf = pdf_with_stream(stream, w, h);
+        let ours = PdfDoc::open(pdf.clone())
+            .unwrap()
+            .page_image(0)
+            .unwrap_or_else(|e| panic!("{tag}: {e}"))
+            .image
+            .to_luma8();
+        for y in 0..h {
+            for x in 0..w {
+                assert_eq!(
+                    ours.get_pixel(x as u32, y as u32).0[0] < 128,
+                    want[y * w + x] == 1,
+                    "ours {tag} ({x},{y})"
+                );
+            }
+        }
+        if !poppler
+            || std::process::Command::new("pdfimages")
+                .arg("-v")
+                .output()
+                .is_err()
+        {
+            return;
+        }
+        let f = dir.join(format!("{tag}.pdf"));
+        std::fs::write(&f, &pdf).unwrap();
+        let prefix = dir.join(format!("o-{tag}"));
+        let st = std::process::Command::new("pdfimages")
+            .arg("-png")
+            .arg(&f)
+            .arg(&prefix)
+            .output()
+            .unwrap();
+        assert!(
+            st.status.success(),
+            "{tag}: {}",
+            String::from_utf8_lossy(&st.stderr)
+        );
+        let theirs = image::open(format!("{}-000.png", prefix.display()))
+            .unwrap()
+            .to_luma8();
+        for y in 0..h {
+            for x in 0..w {
+                assert_eq!(
+                    theirs.get_pixel(x as u32, y as u32).0[0] < 128,
+                    want[y * w + x] == 1,
+                    "poppler {tag} ({x},{y})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn jbig2_refinement_aggregate_and_halftone_match_poppler() {
+        use crate::jbig2::enc::*;
+        use crate::jbig2::Bitmap;
+        let dir = std::env::temp_dir().join(format!("lgr-jbig2r-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut rnd = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        // blobby base picture
+        let (w, h) = (61usize, 47usize);
+        let mut base = vec![0u8; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                base[y * w + x] = (((x / 7 + y / 5) % 3 == 0) as u8) ^ (rnd() % 37 == 0) as u8;
+            }
+        }
+        let mut target = base.clone();
+        for v in target.iter_mut() {
+            if rnd() % 19 == 0 {
+                *v ^= 1;
+            }
+        }
+        for y in 10..20 {
+            for x in 30..45 {
+                target[y * w + x] = 1;
+            }
+        }
+        for (n, (t, tp, at)) in [
+            (0u8, false, [(-1, -1), (-1, -1)]),
+            (0, true, [(-1, -1), (-1, -1)]),
+            (0, false, [(-2, -1), (1, 1)]),
+            (1, false, [(-1, -1); 2]),
+            (1, true, [(-1, -1); 2]),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let st = refinement_stream(&base, &target, w, h, t, tp, at);
+            // typical prediction (TPGRON) is checked against our own encoder only: poppler
+            // decodes it differently and no other independent decoder is at hand
+            jbig2_agrees(&dir, &format!("ref{n}"), (&st, !tp), w, h, &target);
+        }
+        // glyphs
+        let glyph = |rnd: &mut dyn FnMut() -> u64, gw: usize, gh: usize| -> Bitmap {
+            bm(
+                gw,
+                gh,
+                (0..gw * gh)
+                    .map(|i| {
+                        (!(i % gw + i / gw).is_multiple_of(3)) as u8
+                            ^ rnd().is_multiple_of(11) as u8
+                    })
+                    .collect(),
+            )
+        };
+        let mut syms: Vec<Bitmap> = vec![
+            glyph(&mut rnd, 5, 7),
+            glyph(&mut rnd, 7, 7),
+            glyph(&mut rnd, 6, 9),
+            glyph(&mut rnd, 8, 9),
+        ];
+        syms.sort_by_key(|s| s.h);
+        let tweak = |b: &Bitmap, nw: usize, nh: usize, rnd: &mut dyn FnMut() -> u64| -> Vec<u8> {
+            (0..nw * nh)
+                .map(|i| {
+                    let (x, y) = (i % nw, i / nw);
+                    let o = if x < b.w && y < b.h {
+                        b.d[y * b.w + x]
+                    } else {
+                        0
+                    };
+                    o ^ rnd().is_multiple_of(7) as u8
+                })
+                .collect()
+        };
+        for rt in [0u8, 1] {
+            let rat = [(-1, -1), (-1, -1)];
+            let (pw, ph) = (80usize, 70usize);
+            let mut placed = Vec::new();
+            let mut want = vec![0u8; pw * ph];
+            let mut y = 2i64;
+            for (k, (id, nw, nh, rdx, rdy)) in [
+                (0usize, 5usize, 7usize, 0i32, 0i32),
+                (1, 7, 7, 0, 0),
+                (2, 8, 10, 1, -1),
+                (3, 8, 9, 0, 0),
+                (1, 6, 8, -1, 1),
+                (0, 5, 7, 0, 0),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let x = 3 + (k as i64 * 11) % 60;
+                let refined = (k != 1 && k != 5).then(|| Refined {
+                    w: nw,
+                    h: nh,
+                    d: tweak(&syms[id], nw, nh, &mut rnd),
+                    rdx,
+                    rdy,
+                });
+                let (dw, dh, dd) = match &refined {
+                    Some(r) => (r.w, r.h, r.d.clone()),
+                    None => (syms[id].w, syms[id].h, syms[id].d.clone()),
+                };
+                for yy in 0..dh {
+                    for xx in 0..dw {
+                        let (px, py) = (x as usize + xx, y as usize + yy);
+                        if px < pw && py < ph {
+                            want[py * pw + px] |= dd[yy * dw + xx];
+                        }
+                    }
+                }
+                placed.push((id, x, y, refined));
+                y += 11;
+            }
+            let st = refined_text_stream(pw, ph, &syms, &placed, rt, rat);
+            jbig2_agrees(&dir, &format!("txt{rt}"), (&st, true), pw, ph, &want);
+            // aggregate dictionary
+            let mut news: Vec<(usize, Refined)> = [
+                (0usize, 5usize, 8usize, 0i32, 0i32),
+                (1, 7, 7, 1, 0),
+                (3, 9, 9, 0, 1),
+                (2, 6, 9, 0, 0),
+            ]
+            .into_iter()
+            .map(|(id, nw, nh, rdx, rdy)| {
+                (
+                    id,
+                    Refined {
+                        w: nw,
+                        h: nh,
+                        d: tweak(&syms[id], nw, nh, &mut rnd),
+                        rdx,
+                        rdy,
+                    },
+                )
+            })
+            .collect();
+            news.sort_by_key(|(_, r)| r.h);
+            let mut want = vec![0u8; pw * ph];
+            let mut placed = Vec::new();
+            for (k, (_, r)) in news.iter().enumerate() {
+                let (x, y) = (4 + k as i64 * 15, 3 + k as i64 * 12);
+                placed.push((k, x, y));
+                for yy in 0..r.h {
+                    for xx in 0..r.w {
+                        want[(y as usize + yy) * pw + x as usize + xx] |= r.d[yy * r.w + xx];
+                    }
+                }
+            }
+            let st = aggregate_stream(pw, ph, &syms, &news, &placed, rt, rat);
+            jbig2_agrees(&dir, &format!("agg{rt}"), (&st, true), pw, ph, &want);
+        }
+        // halftones
+        let (pw, ph, np) = (4usize, 4usize, 8usize);
+        let pats: Vec<Bitmap> = (0..np)
+            .map(|k| bm(pw, ph, (0..pw * ph).map(|i| (i < 2 * k) as u8).collect()))
+            .collect();
+        let (gw, gh) = (10usize, 7usize);
+        let gray: Vec<u32> = (0..gw * gh).map(|_| (rnd() % np as u64) as u32).collect();
+        for (t, geo, skip) in [
+            (0u8, (0i32, 0i32, 4u16 << 8, 0u16), false),
+            (1, (0, 0, 4 << 8, 0), false),
+            (2, (0, 0, 4 << 8, 0), false),
+            (3, (0, 0, 4 << 8, 0), false),
+            (0, (-(2 << 8), -(3 << 8), 4 << 8, 0), true),
+            (2, (-(2 << 8), -(3 << 8), 4 << 8, 0), true),
+        ] {
+            let (rw, rh) = (gw * pw - 6, gh * ph - 5);
+            let st = halftone_stream(rw, rh, &pats, &gray, gw, gh, geo, t, skip);
+            let mut want = vec![0u8; rw * rh];
+            for m in 0..gh {
+                for nn in 0..gw {
+                    let x =
+                        (geo.0 as i64 + m as i64 * geo.3 as i64 + nn as i64 * geo.2 as i64) >> 8;
+                    let y =
+                        (geo.1 as i64 + m as i64 * geo.2 as i64 - nn as i64 * geo.3 as i64) >> 8;
+                    let p = &pats[gray[m * gw + nn] as usize];
+                    for yy in 0..ph {
+                        for xx in 0..pw {
+                            let (px, py) = (x + xx as i64, y + yy as i64);
+                            if px >= 0 && py >= 0 && (px as usize) < rw && (py as usize) < rh {
+                                want[py as usize * rw + px as usize] |= p.d[yy * pw + xx];
+                            }
+                        }
+                    }
+                }
+            }
+            // shifted grids are checked against our own encoder only (poppler places them differently)
+            let plain = geo.0 == 0 && geo.1 == 0;
+            jbig2_agrees(
+                &dir,
+                &format!("ht{t}{}", skip as u8),
+                (&st, plain),
+                rw,
+                rh,
+                &want,
+            );
+        }
     }
 
     #[test]

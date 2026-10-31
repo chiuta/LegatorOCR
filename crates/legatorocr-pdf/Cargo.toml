@@ -11,3 +11,4 @@ authors.workspace = true
 legatorocr-core = { path = "../legatorocr-core" }
 image.workspace = true
 flate2.workspace = true
+rayon.workspace = true

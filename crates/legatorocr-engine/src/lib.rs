@@ -35,6 +35,8 @@ pub struct PdfExport {
     pub bookmarks: bool,
     /// The first N pages are labelled i, ii, iii …; numbering restarts at 1 afterwards.
     pub front_matter: u32,
+    /// PDF/A-2b structure: embedded font, XMP, sRGB output intent.
+    pub pdfa: bool,
 }
 
 impl Default for PdfExport {
@@ -46,6 +48,7 @@ impl Default for PdfExport {
             meta: PdfMeta::default(),
             bookmarks: false,
             front_matter: 0,
+            pdfa: false,
         }
     }
 }
@@ -608,6 +611,7 @@ pub fn run_export(
                 w.set_title(t);
             }
             w.set_meta(p.meta.clone());
+            w.set_pdfa(p.pdfa);
             w
         })
     };
