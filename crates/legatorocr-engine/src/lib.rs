@@ -11,11 +11,14 @@ use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+pub mod docx;
 pub mod extpdf;
 pub mod files;
 pub mod profiles;
 pub mod project;
 pub mod report;
+pub mod search;
+pub mod zipmini;
 pub use legatorocr_ocr as ocr;
 
 pub use legatorocr_pdf::g4;

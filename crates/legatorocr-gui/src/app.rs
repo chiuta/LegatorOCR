@@ -1936,6 +1936,13 @@ impl eframe::App for App {
                     ui.label(format!("v{}", env!("CARGO_PKG_VERSION")));
                     ui.label(self.tr("about.text"));
                     ui.label("MIT — © 2026 Alexio <alexio@trom.tf>");
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(self.tr("about.coauthor"));
+                        ui.hyperlink_to(
+                            "Alexandru Dumbravă",
+                            "https://competentedigitalizare.blogspot.com/",
+                        );
+                    });
                 });
             self.show_about = open;
         }

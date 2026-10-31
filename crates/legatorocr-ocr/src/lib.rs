@@ -257,6 +257,13 @@ pub fn recognize(page: &PageImage, dpi: u32, o: &OcrOptions) -> Result<Vec<Word>
         ));
     }
     let mut words = parse_tsv(&String::from_utf8_lossy(&out.stdout), o.min_conf);
+    // Romanian: Tesseract (and old fonts) sometimes give cedilla ş/ţ; the correct letters
+    // are comma-below ș/ț, and search depends on it.
+    if o.lang.split('+').any(|l| l == "ron") {
+        for w in &mut words {
+            w.text = legatorocr_core::text::normalize_ro(&w.text);
+        }
+    }
     if k > 1 {
         for w in &mut words {
             let (x1, y1) = (w.x + w.w, w.y + w.h);

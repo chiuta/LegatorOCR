@@ -7,7 +7,7 @@ version = "0.2.0-pre.1"
 edition = "2021"
 rust-version = "1.95"
 license = "MIT"
-authors = ["Alexio <alexio@trom.tf>"]
+authors = ["Alexio <alexio@trom.tf>", "Alexandru Dumbravă"]
 repository = "https://github.com/chiuta/legatorocr"
 
 [workspace.dependencies]
@@ -17,3 +17,4 @@ clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 thiserror = "2"
 rayon = "1"
+regex = { version = "1", default-features = false, features = ["std", "unicode-case", "unicode-perl", "perf"] }

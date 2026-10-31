@@ -44,6 +44,21 @@ const BUILTIN: &[(&str, &str, &str)] = &[
         "mode = gray\nauto_invert = true\nauto_levels = true\n",
     ),
     (
+        "flux-1-optim",
+        "Flux 1 (optim, scan at 300 dpi): sharp 1-bit text, pictures in colour, margins cleaned, best quality",
+        "mode = mixed\nthreshold = auto\nauto_levels = true\npunch_holes = true\nsharpen = 0.2\npdf_quality = 85\n",
+    ),
+    (
+        "flux-2-draft",
+        "Flux 2 (ciornă / draft): quick grey pass, light compression - for checking and proofreading",
+        "mode = gray\nauto_levels = true\npdf_quality = 55\n",
+    ),
+    (
+        "flux-3-volum",
+        "Flux 3 (volum mare / high volume): 1-bit text over a very light background, smallest files",
+        "mode = hybrid\nhybrid_dpi = 80\nthreshold = auto\npdf_quality = 50\n",
+    ),
+    (
         "phone-photos",
         "Pages photographed by phone: level lighting, wider skew range, fingers removed",
         "mode = color\nnormalize = true\nauto_levels = true\nmax_skew = 15\nfingers = true\nsharpen = 0.5\n",

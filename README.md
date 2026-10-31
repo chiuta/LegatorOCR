@@ -88,9 +88,10 @@ Without Tesseract everything else works; the OCR switch is disabled and says why
 | OCR input | pages below 250 dpi are enlarged ×2–×4 (Catmull-Rom) before Tesseract; word boxes are mapped back |
 | Phone photos | `--perspective`: finds the page as the large bright quadrilateral (Otsu + extreme corners, with convexity/fill checks) and warps it with a homography; does nothing for upright or full-frame scans |
 | QC and archive | `--report r.html` (contact sheet, flags blank / size-outlier / strongly deskewed pages), `--multitiff out.tif` (multi-page Group 4 TIFF, black & white only) |
-| Text output | `--txt` (plain text), `--hocr` (word boxes + confidences), PDF author/subject/keywords/dates |
+| Text output | `--txt` (plain text), `--hocr` (word boxes + confidences), `--docx` (editable Word document, one page break per scanned page), PDF author/subject/keywords/dates. With `--lang ron` the cedilla letters ş/ţ are corrected to the proper comma-below ș/ț |
+| Full-text search | `legatorocr --search "text" FOLDER-OR-FILE…` finds a phrase in PDF text layers (LegatorOCR, ABBYY FineReader, PDF24, Word …), `.txt`, `.hocr`/`.html`, `.docx` and inside `.zip` archives; ignores case and diacritics (`mobila` finds `Mobilă`, also across a line break); `--search-regex`, `--search-exact`, `--search-max N`; exit status 1 when nothing is found. Scans without a text layer are reported so you know they still need `--ocr` |
 | PDF input | own tolerant reader: pages of scanned PDFs become `book.pdf#N` (Flate/LZW/ASCII85/RunLength, PNG/TIFF predictors, JPEG, CCITT G4, Gray/RGB/CMYK/Indexed, /Rotate, DPI from the page size); object streams and damaged cross-reference tables are fine; **layered / scanner-MRC pages** (several images placed by their transformation matrices, stencil masks in the fill colour, form XObjects) are composited at the sharpest image's resolution; CCITT **Group 3** (1-D, 2-D and byte-aligned) and **JBIG2 generic regions** (arithmetic templates 0–3 with adaptive pixels and typical prediction, MMR) are decoded; **encrypted files** (RC4 40/128, AES-128, AES-256 R5/R6, empty user password) are opened natively; JBIG2 **symbol dictionaries and text regions** (arithmetic coding) and **rotated/skewed placements** are handled; **JPEG 2000** (JP2 or raw codestream: tiles, all five progression orders, layers, precincts, 5/3 and 9/7 wavelets, RCT/ICT) and JBIG2 **generic refinement, refinement/aggregate symbols and halftone regions** are decoded natively; what is still outside the built-in reader (JBIG2 Huffman coding, JPEG 2000 bypass/termall code-block styles, POC/PPM/PPT) is rendered through an installed `pdftoppm`, `mutool` or Ghostscript when one exists, otherwise refused with a clear message |
-| Profiles | `--profile NAME` / `--list-profiles` / `--save-profile NAME` (8 built in: book-bw, book-small-color, document-text, photo-archive, newspaper, form-dropout-red, negatives, phone-photos; user profiles in the config folder) and a GUI selector |
+| Profiles | `--profile NAME` / `--list-profiles` / `--save-profile NAME` (11 built in: book-bw, book-small-color, document-text, photo-archive, newspaper, form-dropout-red, negatives, flux-1-optim, flux-2-draft, flux-3-volum, phone-photos; user profiles in the config folder) and a GUI selector |
 | Page-size check | `--report-outliers` lists pages whose size differs clearly from the rest (median/MAD) |
 | OCR | Tesseract word boxes → invisible text layer (render mode 3, glyph-less Type0 font + ToUnicode, so ăâîșț and any Unicode copy/search correctly) |
 
@@ -126,6 +127,15 @@ See `COMPARISON.md` for what other tools do that this one does not. In short:
 - Releases: **Actions → Release → Run workflow** (enter a tag such as `v0.2.0-pre.1`), or push a `v*`
   tag. The workflow first runs the whole CI matrix, then builds all five platforms and opens a
   **draft** pre-release for review; nothing is published until you press Publish.
+
+## Credits
+
+**Co-author: [Alexandru Dumbravă](https://competentedigitalizare.blogspot.com/)** (HUB DIGITAL — digitisation, OCR and archiving
+workshop). The three ready-made digitisation flows (`flux-1-optim`, `flux-2-draft`, `flux-3-volum`: optimal quality at
+300 dpi / quick draft / high volume), the full-text search over scans (the job Agent Ransack and DocFetcher do in his
+workflow), the editable Word export (what ABBYY FineReader is used for) and the attention to Romanian diacritics follow his
+published workflow and tool recommendations. Only the *workflow ideas* were taken; no code of ABBYY, Agent Ransack, DocFetcher
+or PDF24 was consulted.
 
 ## Clean-room statement
 

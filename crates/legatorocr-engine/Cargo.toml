@@ -14,5 +14,6 @@ legatorocr-ocr = { path = "../legatorocr-ocr" }
 anyhow.workspace = true
 image.workspace = true
 rayon.workspace = true
+regex.workspace = true
 tiff = "0.11"
 flate2.workspace = true

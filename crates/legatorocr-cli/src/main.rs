@@ -118,6 +118,30 @@ struct Cli {
     #[arg(long)]
     hocr: Option<PathBuf>,
 
+    /// Also write the recognised text as an editable Word document, one page break per
+    /// scanned page (needs --ocr).
+    #[arg(long)]
+    docx: Option<PathBuf>,
+
+    /// SEARCH instead of processing: find this phrase in the given files and folders (PDF
+    /// text layers, .txt, .hocr/.html, .docx, and all of these inside .zip). Ignores case
+    /// and diacritics (`mobila` finds `Mobilă`, also across a line break). Exit status 1
+    /// when nothing is found.
+    #[arg(long, value_name = "TEXT")]
+    search: Option<String>,
+
+    /// With --search: TEXT is a regular expression, matched line by line.
+    #[arg(long, requires = "search")]
+    search_regex: bool,
+
+    /// With --search: match case and diacritics exactly.
+    #[arg(long, requires = "search")]
+    search_exact: bool,
+
+    /// With --search: stop after this many hits.
+    #[arg(long, requires = "search", value_name = "N", default_value_t = 0)]
+    search_max: usize,
+
     /// Drop a page that is almost identical to the previous one (double feed).
     #[arg(long)]
     skip_duplicates: bool,
@@ -377,6 +401,9 @@ fn main() -> Result<()> {
         }
         return Ok(());
     }
+    if let Some(q) = &cli.search {
+        return run_search(&cli, q);
+    }
     if let Some(text) = &cli.make_separator {
         let Some(bc) = legatorocr_core::barcode::render(text, 4, 500) else {
             bail!("--make-separator: use 1–80 printable ASCII characters");
@@ -515,16 +542,17 @@ fn main() -> Result<()> {
         };
         check_ocr(&o).context("--auto-rotate needs Tesseract with the 'osd' language data")?;
     }
-    if (cli.txt.is_some() || cli.hocr.is_some()) && !cli.ocr {
-        bail!("--txt and --hocr need --ocr");
+    if (cli.txt.is_some() || cli.hocr.is_some() || cli.docx.is_some()) && !cli.ocr {
+        bail!("--txt, --hocr and --docx need --ocr");
     }
-    for p in cli.txt.iter().chain(cli.hocr.iter()) {
+    for p in cli.txt.iter().chain(cli.hocr.iter()).chain(cli.docx.iter()) {
         legatorocr_engine::check_writable(p)?;
     }
     if cli.pdf.is_none()
         && matches!(cli.format, Fmt::None)
         && cli.txt.is_none()
         && cli.hocr.is_none()
+        && cli.docx.is_none()
         && cli.report.is_none()
         && cli.multitiff.is_none()
         && !cli.report_outliers
@@ -809,9 +837,71 @@ fn main() -> Result<()> {
         write_atomic(p, t.as_bytes())?;
         eprintln!("wrote {}", p.display());
     }
+    if let (Some(p), Some(t)) = (&cli.docx, &res.text) {
+        let pages: Vec<String> = t
+            .split('\x0c')
+            .map(|s| s.trim_start_matches('\n').to_string())
+            .collect();
+        let title = p
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("LegatorOCR");
+        write_atomic(p, &legatorocr_engine::docx::from_pages(&pages, title))?;
+        eprintln!("wrote {}", p.display());
+    }
     if !res.failed.is_empty() {
         eprintln!("{} input(s) could not be processed", res.failed.len());
         std::process::exit(2);
+    }
+    Ok(())
+}
+
+fn run_search(cli: &Cli, query: &str) -> Result<()> {
+    if cli.inputs.is_empty() {
+        bail!("--search needs at least one file or folder to look in");
+    }
+    let o = legatorocr_engine::search::SearchOptions {
+        regex: cli.search_regex,
+        exact: cli.search_exact,
+        max_hits: cli.search_max,
+    };
+    let mut out = std::io::BufWriter::new(std::io::stdout().lock());
+    let mut write_err = None;
+    let s = legatorocr_engine::search::search(&cli.inputs, query, &o, &mut |h| {
+        use std::io::Write;
+        let page = h.page.map(|p| format!(" p.{p}")).unwrap_or_default();
+        if let Err(e) = writeln!(out, "{}{page}:{}: {}", h.source, h.line, h.text) {
+            write_err.get_or_insert(e);
+        }
+    })?;
+    use std::io::Write;
+    let _ = out.flush();
+    if let Some(e) = write_err {
+        if e.kind() != std::io::ErrorKind::BrokenPipe {
+            return Err(e.into());
+        }
+    }
+    eprintln!(
+        "{} hit(s) in {} file(s){}",
+        s.hits,
+        s.files,
+        if s.truncated {
+            " (stopped at the limit)"
+        } else {
+            ""
+        }
+    );
+    if s.image_only_pdfs > 0 {
+        eprintln!(
+            "{} PDF(s) are scans without a text layer: run them through LegatorOCR with --ocr first",
+            s.image_only_pdfs
+        );
+    }
+    if s.unreadable > 0 {
+        eprintln!("{} file(s) could not be read", s.unreadable);
+    }
+    if s.hits == 0 {
+        std::process::exit(1);
     }
     Ok(())
 }

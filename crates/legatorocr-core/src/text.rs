@@ -12,3 +12,81 @@ pub struct Word {
     /// Index of the text line the word belongs to (for reading order).
     pub line: u32,
 }
+
+/// Romanian text must use comma-below `ș`/`ț`; OCR engines and old fonts often give the
+/// cedilla forms `ş`/`ţ` (U+015F/U+0163), which are different characters and break search.
+pub fn normalize_ro(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            '\u{15F}' => '\u{219}', // ş → ș
+            '\u{15E}' => '\u{218}', // Ş → Ș
+            '\u{163}' => '\u{21B}', // ţ → ț
+            '\u{162}' => '\u{21A}', // Ţ → Ț
+            c => c,
+        })
+        .collect()
+}
+
+/// Lower-case and strip diacritics so that "Mobilă", "mobila" and "MOBILA" compare equal
+/// (also `ș`/`ş`/`s`, `ț`/`ţ`/`t`, and the usual Western-European accents). Length in
+/// `char`s is preserved except for ligatures (`ß`, `æ`, `œ`), which expand.
+pub fn fold(s: &str) -> String {
+    let mut o = String::with_capacity(s.len());
+    for c in s.chars() {
+        let b: &str =
+            match c {
+                'ă' | 'â' | 'à' | 'á' | 'ä' | 'ã' | 'å' | 'ā' | 'Ă' | 'Â' | 'À' | 'Á' | 'Ä'
+                | 'Ã' | 'Å' | 'Ā' => "a",
+                'î' | 'ì' | 'í' | 'ï' | 'ī' | 'Î' | 'Ì' | 'Í' | 'Ï' | 'Ī' => "i",
+                'ș' | 'ş' | 'š' | 'ś' | 'Ș' | 'Ş' | 'Š' | 'Ś' => "s",
+                'ț' | 'ţ' | 'ť' | 'Ț' | 'Ţ' | 'Ť' => "t",
+                'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ę' | 'ě' | 'È' | 'É' | 'Ê' | 'Ë' | 'Ē' | 'Ę'
+                | 'Ě' => "e",
+                'ò' | 'ó' | 'ô' | 'ö' | 'õ' | 'ő' | 'ø' | 'Ò' | 'Ó' | 'Ô' | 'Ö' | 'Õ' | 'Ő'
+                | 'Ø' => "o",
+                'ù' | 'ú' | 'û' | 'ü' | 'ű' | 'ū' | 'Ù' | 'Ú' | 'Û' | 'Ü' | 'Ű' | 'Ū' => {
+                    "u"
+                }
+                'ç' | 'ć' | 'č' | 'Ç' | 'Ć' | 'Č' => "c",
+                'ñ' | 'ń' | 'ň' | 'Ñ' | 'Ń' | 'Ň' => "n",
+                'ý' | 'ÿ' | 'Ý' => "y",
+                'ž' | 'ź' | 'ż' | 'Ž' | 'Ź' | 'Ż' => "z",
+                'ł' | 'Ł' => "l",
+                'ď' | 'đ' | 'Ď' | 'Đ' => "d",
+                'ř' | 'Ř' => "r",
+                'ß' => "ss",
+                'æ' | 'Æ' => "ae",
+                'œ' | 'Œ' => "oe",
+                _ => {
+                    o.extend(c.to_lowercase());
+                    continue;
+                }
+            };
+        o.push_str(b);
+    }
+    o
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cedilla_becomes_comma_below() {
+        assert_eq!(normalize_ro("ştiinţă ŞŢ"), "știință ȘȚ");
+        assert_eq!(normalize_ro("deja ok ș ț"), "deja ok ș ț");
+    }
+
+    #[test]
+    fn fold_ignores_case_and_diacritics() {
+        assert_eq!(
+            fold("Tehnologia Producerii MOBILEI"),
+            "tehnologia producerii mobilei"
+        );
+        assert_eq!(
+            fold("Mobilă ȘTIINȚĂ ştiinţă Cluj-Năpoca"),
+            "mobila stiinta stiinta cluj-napoca"
+        );
+        assert_eq!(fold("Straße Œuvre"), "strasse oeuvre");
+    }
+}

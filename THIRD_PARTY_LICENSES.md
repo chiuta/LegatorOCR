@@ -12,6 +12,7 @@ nothing from Tesseract is linked or bundled.
 | accesskit | 0.25.2 | MIT OR Apache-2.0 |
 | adler2 | 2.0.1 | 0BSD OR MIT OR Apache-2.0 |
 | ahash | 0.8.12 | MIT OR Apache-2.0 |
+| aho-corasick | 1.1.5 | Unlicense OR MIT |
 | android-activity | 0.6.1 | MIT OR Apache-2.0 |
 | android-properties | 0.2.2 | MIT |
 | anstream | 1.0.0 | MIT OR Apache-2.0 |
@@ -213,6 +214,9 @@ nothing from Tesseract is linked or bundled.
 | redox_syscall | 0.4.1 | MIT |
 | redox_syscall | 0.5.18 | MIT |
 | redox_syscall | 0.9.5 | MIT |
+| regex | 1.13.1 | MIT OR Apache-2.0 |
+| regex-automata | 0.4.18 | MIT OR Apache-2.0 |
+| regex-syntax | 0.8.11 | MIT OR Apache-2.0 |
 | renderdoc-sys | 1.1.0 | MIT OR Apache-2.0 |
 | rfd | 0.17.2 | MIT |
 | rustc-hash | 1.1.0 | Apache-2.0/MIT |

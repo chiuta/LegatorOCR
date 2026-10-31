@@ -1954,6 +1954,300 @@ impl PdfDoc {
     }
 }
 
+// ---------------------------------------------------------------------------
+// text extraction (for full-text search)
+
+/// A font's byte-code → text map.
+struct FontMap {
+    /// Codes are two bytes wide (Type0 / Identity-H and friends).
+    wide: bool,
+    map: HashMap<u32, String>,
+    /// There is a ToUnicode map (otherwise single bytes are taken as Latin-1).
+    has_map: bool,
+}
+
+fn hex_tokens(t: &[u8]) -> Vec<(usize, Vec<u8>)> {
+    // (position, bytes) of every <hex> token; position lets callers see `[` / `]` in between.
+    let mut v = Vec::new();
+    let mut i = 0;
+    while i < t.len() {
+        if t[i] == b'<' && t.get(i + 1) != Some(&b'<') {
+            let st = i + 1;
+            let mut j = st;
+            while j < t.len() && t[j] != b'>' {
+                j += 1;
+            }
+            let digits: Vec<u8> = t[st..j.min(t.len())]
+                .iter()
+                .filter(|b| b.is_ascii_hexdigit())
+                .copied()
+                .collect();
+            let bytes = digits
+                .chunks(2)
+                .map(|c| {
+                    let h = |b: u8| (b as char).to_digit(16).unwrap_or(0) as u8;
+                    if c.len() == 2 {
+                        h(c[0]) * 16 + h(c[1])
+                    } else {
+                        h(c[0]) * 16
+                    }
+                })
+                .collect();
+            v.push((i, bytes));
+            i = j + 1;
+        } else {
+            i += 1;
+        }
+    }
+    v
+}
+
+fn utf16_be(b: &[u8]) -> String {
+    let u: Vec<u16> = b
+        .chunks(2)
+        .map(|c| ((c[0] as u16) << 8) | *c.get(1).unwrap_or(&0) as u16)
+        .collect();
+    String::from_utf16_lossy(&u)
+}
+
+fn be_num(b: &[u8]) -> u32 {
+    b.iter().take(4).fold(0, |a, &x| (a << 8) | x as u32)
+}
+
+/// Parse the `bfchar` / `bfrange` entries of a ToUnicode CMap.
+fn parse_to_unicode(cmap: &[u8]) -> (HashMap<u32, String>, bool) {
+    let mut map = HashMap::new();
+    let mut wide = false;
+    let mut pos = 0;
+    while let Some(a) = find(cmap, b"beginbf", pos) {
+        let is_range = cmap[a..].starts_with(b"beginbfrange");
+        let Some(e) = find(
+            cmap,
+            if is_range {
+                b"endbfrange"
+            } else {
+                b"endbfchar"
+            },
+            a,
+        ) else {
+            break;
+        };
+        let body = &cmap[a + 7..e];
+        let toks = hex_tokens(body);
+        if is_range {
+            let mut i = 0;
+            while i + 2 < toks.len() && map.len() < 70_000 {
+                let (lo, hi) = (be_num(&toks[i].1), be_num(&toks[i + 1].1));
+                if toks[i].1.len() > 1 {
+                    wide = true;
+                }
+                // `[ <..> <..> ]` form: an opening bracket sits between the hi and next token.
+                let between = &body[toks[i + 1].0..toks[i + 2].0];
+                if between.contains(&b'[') {
+                    let close = body[toks[i + 2].0..]
+                        .iter()
+                        .position(|&b| b == b']')
+                        .map(|x| x + toks[i + 2].0)
+                        .unwrap_or(body.len());
+                    let mut k = i + 2;
+                    let mut code = lo;
+                    while k < toks.len() && toks[k].0 < close && code <= hi && code - lo < 65_536 {
+                        map.insert(code, utf16_be(&toks[k].1));
+                        code += 1;
+                        k += 1;
+                    }
+                    i = k;
+                } else {
+                    let base = utf16_be(&toks[i + 2].1);
+                    let mut chars: Vec<char> = base.chars().collect();
+                    for code in lo..=hi.min(lo.saturating_add(65_535)) {
+                        map.insert(code, chars.iter().collect());
+                        if let Some(l) = chars.last_mut() {
+                            *l = char::from_u32(*l as u32 + 1).unwrap_or(*l);
+                        }
+                    }
+                    i += 3;
+                }
+            }
+        } else {
+            let mut i = 0;
+            while i + 1 < toks.len() && map.len() < 70_000 {
+                if toks[i].1.len() > 1 {
+                    wide = true;
+                }
+                map.insert(be_num(&toks[i].1), utf16_be(&toks[i + 1].1));
+                i += 2;
+            }
+        }
+        pos = e + 1;
+    }
+    (map, wide)
+}
+
+impl PdfDoc {
+    /// Best-effort text of a page: text drawn with `Tj`/`TJ`/`'`/`"`, decoded through each
+    /// font's ToUnicode map (PDFs written by LegatorOCR, ABBYY, Tesseract, Word, … carry
+    /// one). Lines are separated by `\n`. Pure scans without a text layer give an empty string.
+    pub fn page_text(&self, index: usize) -> R<String> {
+        let Some(page) = self.pages.get(index) else {
+            return fail("page index out of range");
+        };
+        let res = page
+            .get("Resources")
+            .map(|r| self.resolve(r))
+            .unwrap_or(Val::Null);
+        let fonts_d = self
+            .dict_of(&res)
+            .and_then(|r| r.get("Font").and_then(|f| self.dict_of(f)))
+            .unwrap_or_default();
+        let mut fonts: HashMap<String, FontMap> = HashMap::new();
+        for (name, fv) in &fonts_d {
+            let Some(fd) = self.dict_of(fv) else { continue };
+            let type0 = fd
+                .get("Subtype")
+                .and_then(|v| self.resolve(v).name().map(str::to_string))
+                .as_deref()
+                == Some("Type0");
+            let mut fm = FontMap {
+                wide: type0,
+                map: HashMap::new(),
+                has_map: false,
+            };
+            if let Some(Val::Stream(d, s, e)) = fd.get("ToUnicode").map(|t| self.resolve(t)) {
+                if let Ok(b) = self.decode_stream(&d, s, e, &mut |_| {}) {
+                    let (m, wide) = parse_to_unicode(&b);
+                    fm.has_map = !m.is_empty();
+                    fm.wide |= wide;
+                    fm.map = m;
+                }
+            }
+            fonts.insert(name.clone(), fm);
+        }
+        let content = self.page_content(page);
+        let mut out = String::new();
+        let mut cur: Option<&FontMap> = None;
+        let mut last_y = f64::NAN;
+        let mut p = P::new(&content, 0);
+        let mut ops: Vec<Val> = Vec::new();
+        let decode = |fm: Option<&FontMap>, bytes: &[u8], out: &mut String| match fm {
+            Some(f) if f.has_map => {
+                if f.wide {
+                    for c in bytes.chunks(2) {
+                        let code = ((c[0] as u32) << 8) | *c.get(1).unwrap_or(&0) as u32;
+                        if let Some(t) = f.map.get(&code) {
+                            out.push_str(t);
+                        }
+                    }
+                } else {
+                    for &b in bytes {
+                        match f.map.get(&(b as u32)) {
+                            Some(t) => out.push_str(t),
+                            None => out.push(b as char),
+                        }
+                    }
+                }
+            }
+            Some(f) if f.wide => {} // Identity-H without a map: nothing meaningful to read
+            _ => out.extend(bytes.iter().map(|&b| b as char)),
+        };
+        let newline = |out: &mut String| {
+            if !out.is_empty() && !out.ends_with('\n') {
+                out.push('\n');
+            }
+        };
+        let space = |out: &mut String| {
+            if !out.is_empty() && !out.ends_with([' ', '\n']) {
+                out.push(' ');
+            }
+        };
+        let mut guard = 0usize;
+        loop {
+            p.skip_ws();
+            let Some(b) = p.peek() else { break };
+            guard += 1;
+            if guard > 4_000_000 || out.len() > 8_000_000 {
+                break;
+            }
+            let is_op = b.is_ascii_alphabetic() || matches!(b, b'\'' | b'"' | b'*');
+            if !is_op {
+                match p.val(0) {
+                    Some(v) => {
+                        ops.push(v);
+                        if ops.len() > 64 {
+                            ops.remove(0);
+                        }
+                    }
+                    None => p.pos += 1,
+                }
+                continue;
+            }
+            let op = p.word().to_vec();
+            match op.as_slice() {
+                b"Tf" => {
+                    if let Some(n) = ops.iter().rev().find_map(|v| v.name()) {
+                        cur = fonts.get(n);
+                    }
+                }
+                b"Tj" => {
+                    if let Some(Val::Str(s)) = ops.last() {
+                        decode(cur, s, &mut out);
+                    }
+                }
+                b"'" | b"\"" => {
+                    newline(&mut out);
+                    if let Some(Val::Str(s)) = ops.last() {
+                        decode(cur, s, &mut out);
+                    }
+                }
+                b"TJ" => {
+                    if let Some(Val::Arr(a)) = ops.last() {
+                        for v in a {
+                            match v {
+                                Val::Str(s) => decode(cur, s, &mut out),
+                                v => {
+                                    if v.num().is_some_and(|n| n < -250.0) {
+                                        space(&mut out);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                b"Td" | b"TD" => {
+                    let n: Vec<f64> = ops.iter().filter_map(|v| v.num()).collect();
+                    if n.len() >= 2 && n[n.len() - 1].abs() > 0.01 {
+                        newline(&mut out);
+                    } else {
+                        space(&mut out);
+                    }
+                }
+                b"T*" => newline(&mut out),
+                b"Tm" => {
+                    let n: Vec<f64> = ops.iter().filter_map(|v| v.num()).collect();
+                    if n.len() >= 6 {
+                        let y = n[n.len() - 1];
+                        if last_y.is_finite() && (y - last_y).abs() > 1.0 {
+                            newline(&mut out);
+                        } else {
+                            space(&mut out);
+                        }
+                        last_y = y;
+                    }
+                }
+                b"ET" => space(&mut out),
+                _ => {}
+            }
+            ops.clear();
+        }
+        let cleaned: Vec<String> = out
+            .lines()
+            .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+            .filter(|l| !l.is_empty())
+            .collect();
+        Ok(cleaned.join("\n"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2800,6 +3094,51 @@ mod tests {
         // PNG "up" predictor
         let data = vec![2, 1, 2, 3, 2, 1, 1, 1];
         assert_eq!(unpredict(data, 12, 1, 8, 3), vec![1, 2, 3, 2, 3, 4]);
+    }
+
+    #[test]
+    fn text_layer_reads_back_with_diacritics_and_lines() {
+        use legatorocr_core::text::Word;
+        let w = |t: &str, x: u32, y: u32, line: u32| Word {
+            text: t.into(),
+            x,
+            y,
+            w: 60,
+            h: 20,
+            conf: 90.0,
+            line,
+        };
+        let mut wr = PdfWriter::new(Compress::Flate);
+        wr.add_page(
+            &page(PageImage::Rgb(gradient(300, 200)), 150),
+            &[
+                w("Tehnologia", 10, 10, 0),
+                w("mobilei", 90, 10, 0),
+                w("șțăîâ", 10, 80, 1),
+            ],
+        );
+        let doc = PdfDoc::open(wr.finish()).unwrap();
+        assert_eq!(doc.page_text(0).unwrap(), "Tehnologia mobilei\nșțăîâ");
+        assert!(doc.page_text(5).is_err());
+    }
+
+    #[test]
+    fn plain_scan_has_no_text() {
+        let mut wr = PdfWriter::new(Compress::Flate);
+        wr.add_page(&page(PageImage::Rgb(gradient(40, 40)), 150), &[]);
+        let doc = PdfDoc::open(wr.finish()).unwrap();
+        assert_eq!(doc.page_text(0).unwrap(), "");
+    }
+
+    #[test]
+    fn to_unicode_ranges_and_bracket_lists() {
+        let (m, wide) = parse_to_unicode(
+            b"1 beginbfrange <0041> <0043> <0061> endbfrange 1 beginbfrange <0050> <0051> [<0058> <0059>] endbfrange 1 beginbfchar <0001> <021B> endbfchar",
+        );
+        assert!(wide);
+        assert_eq!(m[&0x42], "b");
+        assert_eq!(m[&0x51], "Y");
+        assert_eq!(m[&1], "ț");
     }
 
     #[test]
