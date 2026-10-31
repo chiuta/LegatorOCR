@@ -180,6 +180,10 @@ fn analyse(gray: &GrayImage, dpi: u32) -> Analysis {
     Analysis { ink: binarize::sauvola(&small, (eff / 8).max(15), 0.3), factor, dpi: eff }
 }
 
+/// Largest output canvas side and area the pipeline will build.
+const MAX_SIDE_PX: u32 = 16_000;
+const MAX_AREA_PX: f64 = 150e6;
+
 impl Settings {
     /// Copy with every value forced into a range the pipeline can handle:
     /// non-finite numbers fall back to defaults, sizes are bounded so that a
@@ -192,14 +196,26 @@ impl Settings {
         s.rotate_quarters %= 4;
         s.manual_skew_deg = s.manual_skew_deg.filter(|v| v.is_finite()).map(|v| v.clamp(-45.0, 45.0));
         s.max_skew_deg = fin(s.max_skew_deg, 0.0, 15.0, d.max_skew_deg);
+        // No canvas side may exceed MAX_SIDE_PX and the area is capped, whatever the
+        // dpi: a typo like `--page-size 2000x2000 --dpi 2400` must not ask for 35 gigapixels.
+        let max_mm = MAX_SIDE_PX as f32 * 25.4 / s.dpi as f32;
         for (m, dm) in s.margins_mm.iter_mut().zip(d.margins_mm) {
-            *m = fin(*m, 0.0, 200.0, dm);
+            *m = fin(*m, 0.0, 200.0f32.min(max_mm / 4.0), dm.min(max_mm / 4.0));
         }
         for a in s.content_adjust_mm.iter_mut() {
             *a = fin(*a, -100.0, 100.0, 0.0);
         }
         s.page_size_mm = s.page_size_mm.and_then(|(w, h)| {
-            (w.is_finite() && h.is_finite() && w >= 10.0 && h >= 10.0).then(|| (w.min(2000.0), h.min(2000.0)))
+            (w.is_finite() && h.is_finite() && w >= 10.0 && h >= 10.0).then(|| {
+                let (mut w, mut h) = (w.min(2000.0).min(max_mm), h.min(2000.0).min(max_mm));
+                let px = (w as f64 * s.dpi as f64 / 25.4) * (h as f64 * s.dpi as f64 / 25.4);
+                if px > MAX_AREA_PX {
+                    let k = (MAX_AREA_PX / px).sqrt() as f32;
+                    w *= k;
+                    h *= k;
+                }
+                (w, h)
+            })
         });
         s.sauvola_k = fin(s.sauvola_k, 0.0, 1.0, d.sauvola_k);
         s.picture_sensitivity = fin(s.picture_sensitivity, 0.0, 1.0, d.picture_sensitivity);

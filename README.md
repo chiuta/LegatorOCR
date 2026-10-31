@@ -85,6 +85,8 @@ does not have to fit in memory.
 Crates: `legatorocr-core` (pipeline) · `-pdf` (writer) · `-ocr` (Tesseract driver) ·
 `-engine` (shared export orchestration) · `-cli` · `-gui` (egui/eframe).
 
+Quality gates: see `FUZZING.md` (10 fuzz/property suites, run weekly in CI with qpdf/poppler cross-checks).
+
 ## Known limits
 
 See `COMPARISON.md` for what other tools do that this one does not. In short:

@@ -145,12 +145,12 @@ impl PdfWriter {
         }
 
         let mut cs = format!("q {wpt:.3} 0 0 {hpt:.3} 0 0 cm /Im0 Do Q\n");
-        self.text_ops(&mut cs, words, dpi, hpt);
+        self.text_ops(&mut cs, words, dpi, wpt, hpt);
         self.finish_page(cs, &format!("/Im0 {img_id} 0 R"), wpt, hpt);
     }
 
     /// Invisible-text operators for OCR words.
-    fn text_ops(&mut self, cs: &mut String, words: &[Word], dpi: f32, hpt: f32) {
+    fn text_ops(&mut self, cs: &mut String, words: &[Word], dpi: f32, wpt: f32, hpt: f32) {
         if words.is_empty() {
             return;
         }
@@ -161,10 +161,15 @@ impl PdfWriter {
             }
             let n = w.text.chars().count() as f32;
             let size = (w.h as f32 * 72.0 / dpi).max(1.0);
-            // Glyph advance is 0.5 em; scale horizontally to the word box.
-            let tz = (w.w as f32 * 72.0 / dpi) / (n * 0.5 * size) * 100.0;
-            let x = w.x as f32 * 72.0 / dpi;
-            let y = hpt - (w.y + w.h) as f32 * 72.0 / dpi + size * 0.2;
+            let (x, top) = (w.x as f32 * 72.0 / dpi, w.y as f32 * 72.0 / dpi);
+            // Words outside the page or taller than it are garbage (a PDF reader may choke on
+            // 10-digit coordinates): drop them rather than write absurd numbers.
+            if !(x.is_finite() && top.is_finite() && size.is_finite()) || x >= wpt || top >= hpt || size > hpt {
+                continue;
+            }
+            // Glyph advance is 0.5 em; scale horizontally to the word box (kept within sane bounds).
+            let tz = ((w.w as f32 * 72.0 / dpi) / (n * 0.5 * size) * 100.0).clamp(5.0, 2000.0);
+            let y = hpt - top - size + size * 0.2;
             let mut hex = String::new();
             for ch in w.text.chars().chain(std::iter::once(' ')) {
                 match self.cid(ch) {
@@ -249,7 +254,7 @@ impl PdfWriter {
         xo.push_str(&format!("/Mk {mask_id} 0 R"));
         let [r, g, b] = l.fg.map(|c| c as f32 / 255.0);
         cs.push_str(&format!("q {r:.3} {g:.3} {b:.3} rg {wpt:.3} 0 0 {hpt:.3} 0 0 cm /Mk Do Q\n"));
-        self.text_ops(&mut cs, words, dpi, hpt);
+        self.text_ops(&mut cs, words, dpi, wpt, hpt);
         self.finish_page(cs, &xo, wpt, hpt);
     }
 

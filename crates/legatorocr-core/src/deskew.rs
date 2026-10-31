@@ -6,6 +6,9 @@ use crate::BitImage;
 /// Returns the angle (radians) by which the page must be rotated clockwise to
 /// level the text lines, or `None` when the page has too little ink to judge.
 pub fn detect_skew(ink: &BitImage, max_deg: f32) -> Option<f32> {
+    // tan() explodes towards 90°: bound the search (and survive NaN) so the
+    // profile table can never be absurdly large.
+    let max_deg = if max_deg.is_finite() { max_deg.clamp(0.0, 30.0) } else { 0.0 };
     let total = ink.count_ink();
     // Too little ink to judge, or so much that the page is a solid area (a
     // black scan, a photo) rather than text lines.

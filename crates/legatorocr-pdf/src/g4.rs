@@ -200,3 +200,220 @@ pub fn tiff_g4(b: &legatorocr_core::BitImage, dpi: u32) -> Vec<u8> {
     }
     out
 }
+
+#[cfg(test)]
+#[allow(clippy::manual_is_multiple_of, clippy::needless_range_loop)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    struct Reader<'a> {
+        d: &'a [u8],
+        pos: usize, // bit position
+    }
+    impl Reader<'_> {
+        fn bit(&mut self) -> Option<u8> {
+            let b = *self.d.get(self.pos / 8)?;
+            let v = (b >> (7 - self.pos % 8)) & 1;
+            self.pos += 1;
+            Some(v)
+        }
+    }
+
+    fn run_table(black: bool) -> HashMap<String, usize> {
+        let (term, makeup) = if black { (&BLACK_TERM, &BLACK_MAKEUP) } else { (&WHITE_TERM, &WHITE_MAKEUP) };
+        let mut m = HashMap::new();
+        for (i, c) in term.iter().enumerate() {
+            m.insert(c.to_string(), i);
+        }
+        for (i, c) in makeup.iter().enumerate() {
+            m.insert(c.to_string(), 64 * (i + 1));
+        }
+        for (i, c) in EXT_MAKEUP.iter().enumerate() {
+            m.insert(c.to_string(), 1792 + 64 * i);
+        }
+        m
+    }
+
+    fn read_run(r: &mut Reader, table: &HashMap<String, usize>) -> Option<usize> {
+        let mut total = 0;
+        loop {
+            let mut code = String::new();
+            let v = loop {
+                code.push(if r.bit()? == 1 { '1' } else { '0' });
+                if let Some(&v) = table.get(&code) {
+                    break v;
+                }
+                if code.len() > 13 {
+                    return None;
+                }
+            };
+            total += v;
+            if v < 64 {
+                return Some(total);
+            }
+        }
+    }
+
+    /// Independent reference decoder (T.6), written from the spec, not from the encoder.
+    fn decode(data: &[u8], width: usize, rows: usize) -> Option<Vec<Vec<bool>>> {
+        let (white, black) = (run_table(false), run_table(true));
+        let mut r = Reader { d: data, pos: 0 };
+        let mut reference = vec![false; width];
+        let mut out = Vec::new();
+        for _ in 0..rows {
+            let mut cur = vec![false; width];
+            let mut a0: isize = -1;
+            let mut colour = false;
+            while a0 < width as isize {
+                // b1/b2 on the reference line
+                let find_b1 = |a0: isize, colour: bool| -> usize {
+                    let mut x = (a0 + 1).max(0) as usize;
+                    while x < width {
+                        let prev = if x == 0 { false } else { reference[x - 1] };
+                        if reference[x] != prev && reference[x] != colour {
+                            return x;
+                        }
+                        x += 1;
+                    }
+                    width
+                };
+                let b1 = find_b1(a0, colour);
+                let b2 = if b1 >= width {
+                    width
+                } else {
+                    let mut x = b1 + 1;
+                    while x < width && reference[x] != colour {
+                        x += 1;
+                    }
+                    x
+                };
+                // read mode
+                let mut code = String::new();
+                let mode = loop {
+                    code.push(if r.bit()? == 1 { '1' } else { '0' });
+                    match code.as_str() {
+                        "1" => break 0i32,
+                        "011" => break 1,
+                        "010" => break -1,
+                        "001" => break 100, // horizontal
+                        "0001" => break 200, // pass
+                        "000011" => break 2,
+                        "000010" => break -2,
+                        "0000011" => break 3,
+                        "0000010" => break -3,
+                        _ if code.len() > 7 => return None,
+                        _ => {}
+                    }
+                };
+                let fill = |cur: &mut Vec<bool>, from: usize, to: usize, c: bool| {
+                    if c {
+                        for x in from..to.min(width) {
+                            cur[x] = true;
+                        }
+                    }
+                };
+                match mode {
+                    200 => {
+                        fill(&mut cur, a0.max(0) as usize, b2, colour);
+                        a0 = b2 as isize;
+                    }
+                    100 => {
+                        let t1 = if colour { &black } else { &white };
+                        let t2 = if colour { &white } else { &black };
+                        let r1 = read_run(&mut r, t1)?;
+                        let r2 = read_run(&mut r, t2)?;
+                        let s = a0.max(0) as usize;
+                        fill(&mut cur, s, s + r1, colour);
+                        fill(&mut cur, s + r1, s + r1 + r2, !colour);
+                        a0 = (s + r1 + r2) as isize;
+                    }
+                    d => {
+                        let a1 = (b1 as isize + d as isize) as usize;
+                        if a1 > width {
+                            return None;
+                        }
+                        fill(&mut cur, a0.max(0) as usize, a1, colour);
+                        a0 = a1 as isize;
+                        colour = !colour;
+                    }
+                }
+            }
+            reference = cur.clone();
+            out.push(cur);
+        }
+        Some(out)
+    }
+
+    fn rnd(s: &mut u64) -> u64 {
+        *s ^= *s << 13;
+        *s ^= *s >> 7;
+        *s ^= *s << 17;
+        *s
+    }
+
+    fn make(kind: u64, w: usize, h: usize, s: &mut u64) -> Vec<Vec<bool>> {
+        (0..h)
+            .map(|y| {
+                (0..w)
+                    .map(|x| match kind {
+                        0 => rnd(s) % 2 == 0,
+                        1 => rnd(s) % 50 == 0,
+                        2 => rnd(s) % 50 != 0,
+                        3 => (x / (1 + (y % 40) * 100)) % 2 == 0, // very long runs, shifting edges
+                        4 => (x + y) % 7 < 3,
+                        5 => x % 2 == 0,
+                        6 => false,
+                        7 => true,
+                        8 => (x * y) % 13 < 5,
+                        9 => x == (y * 7) % w.max(1) || x == w - 1,
+                        10 => y % 3 == 0 || (x / 64) % 2 == y % 2, // 64-boundary make-up codes
+                        _ => x.is_multiple_of(2560) || (x + 1) % 1792 == 0, // 2560/1792 boundaries
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn independent_decoder_agrees_on_extreme_pages() {
+        let mut s = 0x1234_5678_9ABC_DEF1u64;
+        let n: u64 = std::env::var("LEGATOROCR_FUZZ_ITERS").ok().and_then(|v| v.parse().ok()).unwrap_or(600);
+        for it in 0..n {
+            let kind = it % 12;
+            let w = match rnd(&mut s) % 7 {
+                0 => 1,
+                1 => 2 + (rnd(&mut s) % 6) as usize,
+                2 => 63 + (rnd(&mut s) % 3) as usize,
+                3 => 1790 + (rnd(&mut s) % 5) as usize,
+                4 => 2558 + (rnd(&mut s) % 6) as usize,
+                5 => 5000 + (rnd(&mut s) % 3000) as usize,
+                _ => 1 + (rnd(&mut s) % 900) as usize,
+            };
+            let h = 1 + (rnd(&mut s) % 40) as usize;
+            let img = make(kind, w, h, &mut s);
+            let enc = encode(w, img.iter().cloned());
+            let dec = decode(&enc, w, h).unwrap_or_else(|| panic!("decode failed: it={it} kind={kind} {w}x{h}"));
+            assert_eq!(dec, img, "mismatch it={it} kind={kind} {w}x{h}");
+        }
+    }
+
+    #[test]
+    fn tiff_wrapper_is_well_formed() {
+        let mut b = legatorocr_core::BitImage::new(37, 11);
+        for i in 0..37 {
+            b.set(i, i % 11, true);
+        }
+        let t = tiff_g4(&b, 300);
+        assert_eq!(&t[..4], b"II\x2a\x00");
+        let ifd = u32::from_le_bytes(t[4..8].try_into().unwrap()) as usize;
+        assert_eq!(ifd % 2, 0, "IFD must be word aligned");
+        let n = u16::from_le_bytes(t[ifd..ifd + 2].try_into().unwrap()) as usize;
+        assert_eq!(n, 12);
+        let end = ifd + 2 + n * 12 + 4 + 16;
+        assert_eq!(t.len(), end, "no trailing garbage");
+        // tags strictly ascending (a TIFF requirement)
+        let tags: Vec<u16> = (0..n).map(|i| u16::from_le_bytes(t[ifd + 2 + i * 12..ifd + 4 + i * 12].try_into().unwrap())).collect();
+        assert!(tags.windows(2).all(|w| w[0] < w[1]), "{tags:?}");
+    }
+}

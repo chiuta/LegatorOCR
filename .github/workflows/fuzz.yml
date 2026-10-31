@@ -1,0 +1,44 @@
+name: Fuzz
+# Long randomized runs (deterministic seeds, so failures reproduce locally). Weekly + on demand.
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: "iterations per fuzz test"
+        default: "3000"
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Tools used for cross-checking output
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils qpdf python3-pil
+      - name: Core pipeline, release (3 seeds)
+        run: |
+          for s in 1 2 3; do
+            LEGATOROCR_FUZZ_ITERS=${{ inputs.iterations || '3000' }} LEGATOROCR_FUZZ_SEED=$s \
+              cargo test --locked --release -p legatorocr-core --test fuzz_extreme
+          done
+      - name: Core pipeline, debug build (integer-overflow checks on)
+        run: LEGATOROCR_FUZZ_ITERS=200 cargo test --locked -p legatorocr-core --test fuzz_extreme
+      - name: Metamorphic quality tests
+        run: cargo test --locked --release -p legatorocr-core --test metamorphic
+      - name: Parsers, loaders, export, PDF writer, G4 codec
+        run: |
+          N=${{ inputs.iterations || '3000' }}
+          for s in 1 2 3; do
+            LEGATOROCR_FUZZ_ITERS=$((N*20)) LEGATOROCR_FUZZ_SEED=$s cargo test --locked --release -p legatorocr-engine --test fuzz_inputs
+            LEGATOROCR_FUZZ_ITERS=$N LEGATOROCR_FUZZ_SEED=$s cargo test --locked --release -p legatorocr-engine --test fuzz_export
+            LEGATOROCR_FUZZ_ITERS=$N LEGATOROCR_FUZZ_SEED=$s cargo test --locked --release -p legatorocr-pdf --test fuzz_pdf
+          done
+          LEGATOROCR_FUZZ_ITERS=$((N*10)) cargo test --locked --release -p legatorocr-pdf g4::tests
+      - name: Command line
+        run: |
+          cargo build --locked --release -p legatorocr-cli
+          for s in 1 2 3; do python3 scripts/fuzz_cli.py --runs 400 --seed $s; done
