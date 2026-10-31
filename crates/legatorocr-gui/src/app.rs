@@ -1,0 +1,947 @@
+use crate::i18n::{t, Lang};
+use crate::settings::{ModeChoice, PageSizeChoice, SheetAdjust, SplitChoice, UiSettings};
+use crate::worker::{self, PreviewRequest, PreviewResult};
+use eframe::egui::{self, Color32, RichText, TextureHandle, TextureOptions, Vec2};
+use legatorocr_engine::{check_ocr, run_export, write_atomic, ExportJob, PdfExport, SheetInput};
+use std::cmp::Ordering as Ord_;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
+
+const IMAGE_EXT: &[&str] = &["png", "jpg", "jpeg", "tif", "tiff", "bmp"];
+
+pub fn is_image(p: &Path) -> bool {
+    p.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| IMAGE_EXT.contains(&e.to_ascii_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
+/// "page2" < "page10": digit runs compare numerically.
+pub fn natural_cmp(a: &str, b: &str) -> Ord_ {
+    let (mut a, mut b) = (a.chars().peekable(), b.chars().peekable());
+    loop {
+        match (a.peek().copied(), b.peek().copied()) {
+            (None, None) => return Ord_::Equal,
+            (None, _) => return Ord_::Less,
+            (_, None) => return Ord_::Greater,
+            (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
+                let mut na = String::new();
+                let mut nb = String::new();
+                while let Some(c) = a.peek().copied().filter(char::is_ascii_digit) {
+                    na.push(c);
+                    a.next();
+                }
+                while let Some(c) = b.peek().copied().filter(char::is_ascii_digit) {
+                    nb.push(c);
+                    b.next();
+                }
+                let (na, nb) = (na.trim_start_matches('0'), nb.trim_start_matches('0'));
+                let o = na.len().cmp(&nb.len()).then_with(|| na.cmp(nb));
+                if o != Ord_::Equal {
+                    return o;
+                }
+            }
+            (Some(x), Some(y)) => {
+                let o = x.to_lowercase().cmp(y.to_lowercase());
+                if o != Ord_::Equal {
+                    return o;
+                }
+                a.next();
+                b.next();
+            }
+        }
+    }
+}
+
+/// Image files from a mix of files and folders (folders are not recursed), natural order.
+pub fn collect_images(paths: &[PathBuf]) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for p in paths {
+        if p.is_dir() {
+            let mut v: Vec<PathBuf> = std::fs::read_dir(p)
+                .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| is_image(p)).collect())
+                .unwrap_or_default();
+            v.sort_by(|a, b| natural_cmp(&a.to_string_lossy(), &b.to_string_lossy()));
+            out.extend(v);
+        } else if is_image(p) {
+            out.push(p.clone());
+        }
+    }
+    out
+}
+
+fn split_name(lang: Lang, c: SplitChoice) -> &'static str {
+    t(
+        lang,
+        match c {
+            SplitChoice::Auto => "split.auto",
+            SplitChoice::Off => "split.off",
+            SplitChoice::Middle => "split.middle",
+        },
+    )
+}
+
+fn size_name(lang: Lang, c: PageSizeChoice) -> &'static str {
+    match c {
+        PageSizeChoice::Free => t(lang, "size.free"),
+        PageSizeChoice::A4 => "A4",
+        PageSizeChoice::A5 => "A5",
+        PageSizeChoice::Letter => "Letter",
+        PageSizeChoice::Custom => t(lang, "size.custom"),
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum View {
+    Original,
+    Processed,
+    Both,
+}
+
+struct PageTex {
+    tex: TextureHandle,
+    w: u32,
+    h: u32,
+    skew_deg: f32,
+    blank: bool,
+}
+
+struct Ready {
+    key: u64,
+    original: TextureHandle,
+    original_size: (u32, u32),
+    pages: Vec<PageTex>,
+}
+
+struct Sheet {
+    id: u64,
+    path: PathBuf,
+    name: String,
+    adj: SheetAdjust,
+    adj_gen: u32,
+    ready: Option<Ready>,
+    pending: Option<u64>,
+    failed: Option<(u64, String)>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum JobKind {
+    Pdf,
+    Images,
+}
+
+struct Done {
+    kind: JobKind,
+    target: PathBuf,
+    pages: usize,
+    words: usize,
+    skipped: usize,
+}
+
+struct Job {
+    cancel: Arc<AtomicBool>,
+    done: Arc<AtomicUsize>,
+    total: usize,
+    rx: mpsc::Receiver<Result<Done, String>>,
+}
+
+/// Result of probing the OCR engine: (version line, installed languages) or an error text.
+type OcrProbe = Result<(String, Vec<String>), String>;
+
+struct Shot {
+    path: PathBuf,
+    ready_frames: u32,
+    requested: bool,
+    saved: Arc<AtomicBool>,
+}
+
+pub struct App {
+    lang: Lang,
+    s: UiSettings,
+    settings_gen: u32,
+    sheets: Vec<Sheet>,
+    selected: Option<usize>,
+    next_id: u64,
+    pv_tx: mpsc::Sender<PreviewResult>,
+    pv_rx: mpsc::Receiver<PreviewResult>,
+    view: View,
+    fit: bool,
+    zoom: f32,
+    job: Option<Job>,
+    status: Option<(String, bool)>,
+    langs_rx: Option<mpsc::Receiver<OcrProbe>>,
+    installed: Vec<String>,
+    ocr_info: String,
+    show_about: bool,
+    shot: Option<Shot>,
+    /// Test hook: run an export without a file dialog (env LEGATOROCR_GUI_AUTOEXPORT_PDF).
+    auto_export: Option<(PathBuf, bool)>,
+    /// Test hook: after the first preview, apply per-page adjustments (env LEGATOROCR_GUI_TEST_ADJUST).
+    adjust_test: Option<bool>,
+}
+
+impl App {
+    pub fn new(cc: &eframe::CreationContext<'_>, files: Vec<PathBuf>) -> Self {
+        let (pv_tx, pv_rx) = mpsc::channel();
+        let mut app = Self {
+            lang: Lang::detect(),
+            s: UiSettings::default(),
+            settings_gen: 1,
+            sheets: Vec::new(),
+            selected: None,
+            next_id: 1,
+            pv_tx,
+            pv_rx,
+            view: View::Both,
+            fit: true,
+            zoom: 1.0,
+            job: None,
+            status: None,
+            langs_rx: None,
+            installed: Vec::new(),
+            ocr_info: String::new(),
+            show_about: false,
+            auto_export: std::env::var_os("LEGATOROCR_GUI_AUTOEXPORT_PDF").map(|p| (PathBuf::from(p), false)),
+            adjust_test: std::env::var_os("LEGATOROCR_GUI_TEST_ADJUST").map(|_| false),
+            shot: std::env::var_os("LEGATOROCR_GUI_SCREENSHOT").map(|p| Shot {
+                path: p.into(),
+                ready_frames: 0,
+                requested: false,
+                saved: Arc::new(AtomicBool::new(false)),
+            }),
+        };
+        if let Ok(v) = std::env::var("LEGATOROCR_GUI_LANG") {
+            app.lang = if v == "ro" { Lang::Ro } else { Lang::En };
+        }
+        if let Ok(v) = std::env::var("LEGATOROCR_GUI_MODE") {
+            app.s.mode = match v.as_str() {
+                "bw" => ModeChoice::Bw,
+                "gray" => ModeChoice::Gray,
+                _ => ModeChoice::Color,
+            };
+        }
+        app.add_files(&collect_images(&files));
+        app.refresh_langs(&cc.egui_ctx);
+        app
+    }
+
+    fn tr(&self, key: &'static str) -> &'static str {
+        t(self.lang, key)
+    }
+
+    fn say(&mut self, text: String, error: bool) {
+        self.status = Some((text, error));
+    }
+
+    fn add_files(&mut self, files: &[PathBuf]) {
+        for p in files {
+            let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            self.sheets.push(Sheet {
+                id: self.next_id,
+                path: p.clone(),
+                name,
+                adj: SheetAdjust::default(),
+                adj_gen: 0,
+                ready: None,
+                pending: None,
+                failed: None,
+            });
+            self.next_id += 1;
+        }
+        if self.selected.is_none() && !self.sheets.is_empty() {
+            self.selected = Some(0);
+        }
+    }
+
+    fn key_of(&self, sheet: &Sheet) -> u64 {
+        ((self.settings_gen as u64) << 32) | sheet.adj_gen as u64
+    }
+
+    fn refresh_langs(&mut self, ctx: &egui::Context) {
+        let (tx, rx) = mpsc::channel();
+        let opts = self.s.ocr_options();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let r = legatorocr_engine::ocr::check_engine(&opts)
+                .and_then(|v| legatorocr_engine::ocr::list_languages(&opts).map(|l| (v, l)))
+                .map_err(|e| e.to_string());
+            let _ = tx.send(r);
+            ctx.request_repaint();
+        });
+        self.langs_rx = Some(rx);
+    }
+
+    // ----------------------------------------------------------------- background plumbing
+    fn pump(&mut self, ctx: &egui::Context) {
+        // dropped files
+        let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
+        if !dropped.is_empty() {
+            let files = collect_images(&dropped);
+            let n = files.len();
+            self.add_files(&files);
+            let msg = format!("{} {}", n, self.tr("status.added"));
+            self.say(msg, false);
+        }
+        // OCR engine info
+        if let Some(rx) = &self.langs_rx {
+            if let Ok(r) = rx.try_recv() {
+                match r {
+                    Ok((v, langs)) => {
+                        self.ocr_info = v;
+                        if !langs.iter().any(|l| self.s.ocr_langs.contains(l)) {
+                            self.s.ocr_langs = langs.iter().filter(|l| *l == "eng").cloned().collect();
+                        }
+                        self.installed = langs.into_iter().filter(|l| l != "osd").collect();
+                    }
+                    Err(e) => {
+                        self.ocr_info = String::new();
+                        self.installed.clear();
+                        let _ = e;
+                    }
+                }
+                self.langs_rx = None;
+            }
+        }
+        // preview results
+        while let Ok(res) = self.pv_rx.try_recv() {
+            let cur = self.sheets.iter().position(|s| s.id == res.id);
+            let Some(i) = cur else { continue };
+            let key_now = self.key_of(&self.sheets[i]);
+            let sheet = &mut self.sheets[i];
+            if sheet.pending == Some(res.key) {
+                sheet.pending = None;
+            }
+            if res.key != key_now {
+                continue; // stale
+            }
+            match res.outcome {
+                Ok(pv) => {
+                    let up = |name: String, th: worker::Thumb| {
+                        let img = egui::ColorImage::from_rgba_unmultiplied([th.w, th.h], &th.rgba);
+                        ctx.load_texture(name, img, TextureOptions::LINEAR)
+                    };
+                    let original = up(format!("o{}-{}", res.id, res.key), pv.original);
+                    let pages = pv
+                        .pages
+                        .into_iter()
+                        .enumerate()
+                        .map(|(n, (th, info))| PageTex {
+                            tex: up(format!("p{}-{}-{n}", res.id, res.key), th),
+                            w: info.w,
+                            h: info.h,
+                            skew_deg: info.skew_deg,
+                            blank: info.blank,
+                        })
+                        .collect();
+                    sheet.ready = Some(Ready { key: res.key, original, original_size: pv.original_size, pages });
+                    sheet.failed = None;
+                }
+                Err(e) => sheet.failed = Some((res.key, e)),
+            }
+        }
+        // export job
+        if let Some(job) = &self.job {
+            match job.rx.try_recv() {
+                Ok(r) => {
+                    self.job = None;
+                    match r {
+                        Ok(d) => {
+                            let key = if d.kind == JobKind::Pdf { "status.pdf_saved" } else { "status.images_saved" };
+                            let mut msg = format!("{}: {} — {} {}", self.tr(key), d.target.display(), d.pages, self.tr("status.pages"));
+                            if d.kind == JobKind::Pdf && self.s.ocr {
+                                msg += &format!(", {} {}", d.words, self.tr("status.words"));
+                            }
+                            if d.skipped > 0 {
+                                msg += &format!(", {} {}", d.skipped, self.tr("status.blank_skipped"));
+                            }
+                            self.say(msg, false);
+                        }
+                        Err(e) if e.contains("cancelled") => {
+                            let m = self.tr("status.cancelled").to_string();
+                            self.say(m, false)
+                        }
+                        Err(e) => {
+                            let m = format!("{}: {e}", self.tr("status.error"));
+                            self.say(m, true)
+                        }
+                    }
+                }
+                Err(mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(150)),
+                Err(mpsc::TryRecvError::Disconnected) => self.job = None,
+            }
+        }
+        // auto-export hook (automated GUI test): start once the OCR probe has finished
+        if self.langs_rx.is_none() && !self.sheets.is_empty() && self.job.is_none() {
+            if let Some((target, started)) = self.auto_export.clone() {
+                if !started {
+                    self.auto_export = Some((target.clone(), true));
+                    self.s.ocr = std::env::var_os("LEGATOROCR_GUI_OCR").is_some() && !self.installed.is_empty();
+                    self.launch_export(ctx, JobKind::Pdf, target);
+                }
+            }
+        }
+        if self.adjust_test == Some(false) {
+            if let Some(sh) = self.selected.and_then(|i| self.sheets.get_mut(i)).filter(|s| s.ready.is_some()) {
+                sh.adj = SheetAdjust { rotate_quarters: 1, split: Some(SplitChoice::Off), skew_deg: Some(1.25) };
+                sh.adj_gen += 1;
+                self.adjust_test = Some(true);
+            }
+        }
+        let export_settled = match &self.auto_export {
+            Some((_, started)) => *started && self.job.is_none(),
+            None => true,
+        };
+        // screenshot hook (automated GUI test)
+        if let Some(shot) = &mut self.shot {
+            let ready = self
+                .selected
+                .and_then(|i| self.sheets.get(i))
+                .map(|s| s.ready.as_ref().map(|r| r.key) == Some(((self.settings_gen as u64) << 32) | s.adj_gen as u64))
+                .unwrap_or(false)
+                && self.adjust_test != Some(false);
+            if shot.saved.load(Ordering::Relaxed) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            } else if (ready || self.sheets.is_empty()) && export_settled {
+                shot.ready_frames += 1;
+                ctx.request_repaint();
+                if shot.ready_frames >= 12 && !shot.requested {
+                    shot.requested = true;
+                    let (path, saved) = (shot.path.clone(), shot.saved.clone());
+                    ctx.request_screenshot(move |img| {
+                        let [w, h] = img.size;
+                        let mut buf = Vec::with_capacity(w * h * 4);
+                        for p in &img.pixels {
+                            buf.extend_from_slice(&p.to_array());
+                        }
+                        if let Some(rgba) = image::RgbaImage::from_raw(w as u32, h as u32, buf) {
+                            let _ = rgba.save(&path);
+                        }
+                        saved.store(true, Ordering::Relaxed);
+                    });
+                }
+            }
+        }
+    }
+
+    fn request_preview(&mut self, ctx: &egui::Context) {
+        let Some(i) = self.selected else { return };
+        let Some(sheet) = self.sheets.get(i) else { return };
+        let key = self.key_of(sheet);
+        if sheet.ready.as_ref().map(|r| r.key) == Some(key) || sheet.pending.is_some() || sheet.failed.as_ref().map(|f| f.0) == Some(key) {
+            return;
+        }
+        let req = PreviewRequest { id: sheet.id, key, path: sheet.path.clone(), settings: self.s.to_core(&sheet.adj) };
+        self.sheets[i].pending = Some(key);
+        let (tx, ctx) = (self.pv_tx.clone(), ctx.clone());
+        std::thread::spawn(move || {
+            let outcome = worker::render(&req);
+            let _ = tx.send(PreviewResult { id: req.id, key: req.key, outcome });
+            ctx.request_repaint();
+        });
+    }
+
+    // ------------------------------------------------------------------------------- export
+    fn sheet_inputs(&self) -> Vec<SheetInput> {
+        self.sheets.iter().map(|s| SheetInput { path: s.path.clone(), settings: self.s.to_core(&s.adj) }).collect()
+    }
+
+    fn start_export(&mut self, ctx: &egui::Context, kind: JobKind) {
+        if self.job.is_some() || self.sheets.is_empty() {
+            return;
+        }
+        let target = match kind {
+            JobKind::Pdf => rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_file_name("LegatorOCR.pdf").save_file(),
+            JobKind::Images => rfd::FileDialog::new().pick_folder(),
+        };
+        let Some(target) = target else { return };
+        self.launch_export(ctx, kind, target);
+    }
+
+    fn launch_export(&mut self, ctx: &egui::Context, kind: JobKind, target: PathBuf) {
+        if self.job.is_some() || self.sheets.is_empty() {
+            return;
+        }
+        let sheets = self.sheet_inputs();
+        let names: Vec<String> =
+            self.sheets.iter().map(|s| Path::new(&s.name).file_stem().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default()).collect();
+        let pdf = (kind == JobKind::Pdf).then(|| PdfExport {
+            quality: self.s.pdf_quality,
+            ocr: self.s.ocr.then(|| self.s.ocr_options()),
+            title: target.file_stem().map(|s| s.to_string_lossy().into_owned()),
+        });
+        let skip_blank = self.s.skip_blank;
+        let (cancel, done) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicUsize::new(0)));
+        let (tx, rx) = mpsc::channel();
+        let total = sheets.len();
+        let (c2, d2, ctx2, target2) = (cancel.clone(), done.clone(), ctx.clone(), target.clone());
+        std::thread::spawn(move || {
+            let r = (|| -> Result<Done, String> {
+                if let Some(o) = pdf.as_ref().and_then(|p| p.ocr.as_ref()) {
+                    check_ocr(o).map_err(|e| e.to_string())?;
+                }
+                let first_err: Mutex<Option<String>> = Mutex::new(None);
+                let job = ExportJob { sheets: &sheets, pdf, skip_blank };
+                let res = run_export(
+                    &job,
+                    &c2,
+                    &|i, pg| {
+                        if kind == JobKind::Images {
+                            let suffix = match pg.split_index {
+                                Some(0) => "_L",
+                                Some(_) => "_R",
+                                None => "",
+                            };
+                            let path = target2.join(format!("{:04}_{}{}.png", i + 1, names[i], suffix));
+                            if let Err(e) = pg.image.to_dynamic().save(&path) {
+                                first_err.lock().unwrap().get_or_insert(format!("{}: {e}", path.display()));
+                            }
+                        }
+                    },
+                    &|d, _| {
+                        d2.store(d, Ordering::Relaxed);
+                        ctx2.request_repaint();
+                    },
+                )
+                .map_err(|e| format!("{e:#}"))?;
+                if let Some(e) = first_err.into_inner().unwrap() {
+                    return Err(e);
+                }
+                if let Some(bytes) = &res.pdf {
+                    write_atomic(&target2, bytes).map_err(|e| e.to_string())?;
+                }
+                Ok(Done { kind, target: target2.clone(), pages: res.pages, words: res.words, skipped: res.skipped_blank })
+            })();
+            let _ = tx.send(r);
+            ctx2.request_repaint();
+        });
+        self.job = Some(Job { cancel, done, total, rx });
+    }
+
+    // ---------------------------------------------------------------------------------- UI
+    fn menu(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        egui::MenuBar::new().ui(ui, |ui| {
+            ui.menu_button(self.tr("menu.file"), |ui| {
+                if ui.button(self.tr("menu.add_images")).clicked() {
+                    if let Some(f) = rfd::FileDialog::new().add_filter("images", IMAGE_EXT).pick_files() {
+                        self.add_files(&f);
+                    }
+                    ui.close();
+                }
+                if ui.button(self.tr("menu.add_folder")).clicked() {
+                    if let Some(d) = rfd::FileDialog::new().pick_folder() {
+                        self.add_files(&collect_images(&[d]));
+                    }
+                    ui.close();
+                }
+                ui.separator();
+                let idle = self.job.is_none() && !self.sheets.is_empty();
+                if ui.add_enabled(idle, egui::Button::new(self.tr("menu.export_pdf"))).clicked() {
+                    self.start_export(&ctx, JobKind::Pdf);
+                    ui.close();
+                }
+                if ui.add_enabled(idle, egui::Button::new(self.tr("menu.export_images"))).clicked() {
+                    self.start_export(&ctx, JobKind::Images);
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button(self.tr("menu.quit")).clicked() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            });
+            ui.menu_button(self.tr("menu.language"), |ui| {
+                for (l, name) in [(Lang::Ro, "Română"), (Lang::En, "English")] {
+                    if ui.selectable_label(self.lang == l, name).clicked() {
+                        self.lang = l;
+                        ui.close();
+                    }
+                }
+            });
+            if ui.button(self.tr("menu.about")).clicked() {
+                self.show_about = true;
+            }
+        });
+    }
+
+    fn status_bar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            if let Some(job) = &self.job {
+                let d = job.done.load(Ordering::Relaxed);
+                ui.add(egui::ProgressBar::new(d as f32 / job.total.max(1) as f32).desired_width(260.0).text(format!("{d}/{}", job.total)));
+                if ui.button(self.tr("btn.cancel")).clicked() {
+                    job.cancel.store(true, Ordering::Relaxed);
+                }
+                ui.label(self.tr("status.working"));
+            } else if let Some((m, err)) = &self.status {
+                let c = if *err { Color32::from_rgb(220, 70, 60) } else { ui.visuals().text_color() };
+                ui.label(RichText::new(m).color(c));
+            } else {
+                ui.label(self.tr("status.hint"));
+            }
+        });
+    }
+
+    fn page_list(&mut self, ui: &mut egui::Ui) {
+        ui.heading(self.tr("list.title"));
+        ui.horizontal_wrapped(|ui| {
+            if ui.button(self.tr("btn.add")).clicked() {
+                if let Some(f) = rfd::FileDialog::new().add_filter("images", IMAGE_EXT).pick_files() {
+                    self.add_files(&f);
+                }
+            }
+            if ui.add_enabled(self.selected.is_some(), egui::Button::new(self.tr("btn.remove"))).clicked() {
+                if let Some(i) = self.selected {
+                    self.sheets.remove(i);
+                    self.selected = if self.sheets.is_empty() { None } else { Some(i.min(self.sheets.len() - 1)) };
+                }
+            }
+            if ui.add_enabled(!self.sheets.is_empty(), egui::Button::new(self.tr("btn.clear"))).clicked() {
+                self.sheets.clear();
+                self.selected = None;
+            }
+        });
+        ui.horizontal(|ui| {
+            let can_up = matches!(self.selected, Some(i) if i > 0);
+            let can_down = matches!(self.selected, Some(i) if i + 1 < self.sheets.len());
+            if ui.add_enabled(can_up, egui::Button::new(self.tr("btn.up"))).clicked() {
+                let i = self.selected.unwrap();
+                self.sheets.swap(i, i - 1);
+                self.selected = Some(i - 1);
+            }
+            if ui.add_enabled(can_down, egui::Button::new(self.tr("btn.down"))).clicked() {
+                let i = self.selected.unwrap();
+                self.sheets.swap(i, i + 1);
+                self.selected = Some(i + 1);
+            }
+        });
+        ui.separator();
+        if self.sheets.is_empty() {
+            ui.label(self.tr("list.empty"));
+            return;
+        }
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            for i in 0..self.sheets.len() {
+                let key = self.key_of(&self.sheets[i]);
+                let s = &self.sheets[i];
+                let color = if s.failed.as_ref().map(|f| f.0) == Some(key) {
+                    Color32::from_rgb(220, 70, 60)
+                } else if s.ready.as_ref().map(|r| r.key) == Some(key) {
+                    Color32::from_rgb(70, 170, 90)
+                } else if s.pending.is_some() {
+                    Color32::from_rgb(230, 180, 50)
+                } else {
+                    Color32::GRAY
+                };
+                let label = format!("{:>3}  {}", i + 1, s.name);
+                ui.horizontal(|ui| {
+                    let (rect, _) = ui.allocate_exact_size(Vec2::splat(10.0), egui::Sense::hover());
+                    ui.painter().circle_filled(rect.center(), 4.0, color);
+                    if ui.selectable_label(self.selected == Some(i), label).clicked() {
+                        self.selected = Some(i);
+                    }
+                });
+            }
+        });
+    }
+
+    fn settings_panel(&mut self, ui: &mut egui::Ui) {
+        let lang = self.lang;
+        let tr = |k: &'static str| t(lang, k);
+        let mut ch = false;
+        ui.heading(tr("set.title"));
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            egui::CollapsingHeader::new(tr("set.input")).default_open(true).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(tr("set.dpi"));
+                    ch |= ui.add(egui::DragValue::new(&mut self.s.dpi).range(72..=1200)).changed();
+                });
+                ch |= ui.checkbox(&mut self.s.auto_orient, tr("set.auto_orient")).changed();
+                ui.horizontal(|ui| {
+                    ui.label(tr("set.split"));
+                    egui::ComboBox::from_id_salt("split").selected_text(split_name(lang, self.s.split)).show_ui(ui, |ui| {
+                        for c in [SplitChoice::Auto, SplitChoice::Middle, SplitChoice::Off] {
+                            ch |= ui.selectable_value(&mut self.s.split, c, split_name(lang, c)).changed();
+                        }
+                    });
+                });
+            });
+            egui::CollapsingHeader::new(tr("set.geometry")).default_open(true).show(ui, |ui| {
+                ch |= ui.checkbox(&mut self.s.deskew, tr("set.deskew")).changed();
+                ui.horizontal(|ui| {
+                    ui.label(tr("set.max_skew"));
+                    ch |= ui.add(egui::Slider::new(&mut self.s.max_skew, 1.0..=15.0).suffix("°")).changed();
+                });
+                ui.horizontal(|ui| {
+                    ui.label(tr("set.margin"));
+                    ch |= ui.add(egui::Slider::new(&mut self.s.margin_mm, 0.0..=30.0).suffix(" mm")).changed();
+                });
+                ui.horizontal(|ui| {
+                    ui.label(tr("set.page_size"));
+                    egui::ComboBox::from_id_salt("psize").selected_text(size_name(lang, self.s.page_size)).show_ui(ui, |ui| {
+                        for c in [PageSizeChoice::Free, PageSizeChoice::A4, PageSizeChoice::A5, PageSizeChoice::Letter, PageSizeChoice::Custom] {
+                            ch |= ui.selectable_value(&mut self.s.page_size, c, size_name(lang, c)).changed();
+                        }
+                    });
+                });
+                if self.s.page_size == PageSizeChoice::Custom {
+                    ui.horizontal(|ui| {
+                        ch |= ui.add(egui::DragValue::new(&mut self.s.custom_w).range(10.0..=1000.0).suffix(" mm")).changed();
+                        ui.label("×");
+                        ch |= ui.add(egui::DragValue::new(&mut self.s.custom_h).range(10.0..=1000.0).suffix(" mm")).changed();
+                    });
+                }
+            });
+            egui::CollapsingHeader::new(tr("set.output")).default_open(true).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for (m, k) in [(ModeChoice::Color, "mode.color"), (ModeChoice::Gray, "mode.gray"), (ModeChoice::Bw, "mode.bw")] {
+                        ch |= ui.selectable_value(&mut self.s.mode, m, tr(k)).changed();
+                    }
+                });
+                if self.s.mode == ModeChoice::Bw {
+                    ui.horizontal(|ui| {
+                        ui.label(tr("set.sauvola"));
+                        ch |= ui.add(egui::Slider::new(&mut self.s.sauvola_k, 0.05..=0.6)).changed();
+                    });
+                    ch |= ui.checkbox(&mut self.s.despeckle, tr("set.despeckle")).changed();
+                }
+            });
+            egui::CollapsingHeader::new(tr("set.pdf")).default_open(true).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(tr("set.quality"));
+                    ui.add(egui::Slider::new(&mut self.s.pdf_quality, 0..=100));
+                });
+                ui.label(RichText::new(tr("set.quality_hint")).small().weak());
+                ui.checkbox(&mut self.s.skip_blank, tr("set.skip_blank"));
+            });
+            egui::CollapsingHeader::new(tr("set.ocr")).default_open(true).show(ui, |ui| {
+                let can_ocr = !self.installed.is_empty();
+                ui.add_enabled(can_ocr, egui::Checkbox::new(&mut self.s.ocr, tr("set.ocr_enable")));
+                if !can_ocr {
+                    self.s.ocr = false;
+                    ui.label(RichText::new(tr("set.ocr_missing")).color(Color32::from_rgb(220, 150, 60)));
+                } else {
+                    ui.label(RichText::new(&self.ocr_info).small().weak());
+                    ui.label(tr("set.ocr_langs"));
+                    ui.horizontal_wrapped(|ui| {
+                        for l in self.installed.clone() {
+                            let mut on = self.s.ocr_langs.contains(&l);
+                            if ui.checkbox(&mut on, &l).changed() {
+                                if on {
+                                    self.s.ocr_langs.push(l.clone());
+                                } else {
+                                    self.s.ocr_langs.retain(|x| x != &l);
+                                }
+                            }
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(tr("set.psm"));
+                        egui::ComboBox::from_id_salt("psm").selected_text(self.s.psm.to_string()).show_ui(ui, |ui| {
+                            for p in [3u32, 4, 6, 11] {
+                                ui.selectable_value(&mut self.s.psm, p, p.to_string());
+                            }
+                        });
+                    });
+                }
+            });
+            ui.add_space(8.0);
+            let idle = self.job.is_none() && !self.sheets.is_empty();
+            let ctx = ui.ctx().clone();
+            ui.horizontal_wrapped(|ui| {
+                if ui.add_enabled(idle, egui::Button::new(RichText::new(tr("menu.export_pdf")).strong())).clicked() {
+                    self.start_export(&ctx, JobKind::Pdf);
+                }
+                if ui.add_enabled(idle, egui::Button::new(tr("menu.export_images"))).clicked() {
+                    self.start_export(&ctx, JobKind::Images);
+                }
+            });
+        });
+        if ch {
+            self.settings_gen += 1;
+        }
+    }
+
+    fn preview(&mut self, ui: &mut egui::Ui) {
+        let lang = self.lang;
+        let tr = |k: &'static str| t(lang, k);
+        let Some(i) = self.selected.filter(|&i| i < self.sheets.len()) else {
+            ui.centered_and_justified(|ui| {
+                ui.label(RichText::new(tr("preview.empty")).size(18.0).weak());
+            });
+            return;
+        };
+        // --- toolbar: view + zoom
+        ui.horizontal(|ui| {
+            for (v, k) in [(View::Both, "view.both"), (View::Original, "view.original"), (View::Processed, "view.processed")] {
+                ui.selectable_value(&mut self.view, v, tr(k));
+            }
+            ui.separator();
+            ui.checkbox(&mut self.fit, tr("view.fit"));
+            ui.add_enabled(!self.fit, egui::Slider::new(&mut self.zoom, 0.2..=4.0).suffix("×"));
+        });
+        // --- per-sheet adjustments
+        let mut adj_changed = false;
+        let detected = self.sheets[i].ready.as_ref().and_then(|r| r.pages.first()).map(|p| p.skew_deg).unwrap_or(0.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(tr("adj.title")).strong());
+            let adj = &mut self.sheets[i].adj;
+            if ui.button(tr("adj.rot_left")).clicked() {
+                adj.rotate_quarters = (adj.rotate_quarters + 3) % 4;
+                adj_changed = true;
+            }
+            if ui.button(tr("adj.rot_right")).clicked() {
+                adj.rotate_quarters = (adj.rotate_quarters + 1) % 4;
+                adj_changed = true;
+            }
+            ui.separator();
+            let label = match adj.split {
+                None => tr("adj.split_default"),
+                Some(SplitChoice::Auto) => tr("split.auto"),
+                Some(SplitChoice::Middle) => tr("split.middle"),
+                Some(SplitChoice::Off) => tr("split.off"),
+            };
+            egui::ComboBox::from_id_salt("adj_split").selected_text(format!("{}: {label}", tr("set.split"))).show_ui(ui, |ui| {
+                adj_changed |= ui.selectable_value(&mut adj.split, None, tr("adj.split_default")).changed();
+                for c in [SplitChoice::Auto, SplitChoice::Middle, SplitChoice::Off] {
+                    let n = match c {
+                        SplitChoice::Auto => "split.auto",
+                        SplitChoice::Off => "split.off",
+                        SplitChoice::Middle => "split.middle",
+                    };
+                    adj_changed |= ui.selectable_value(&mut adj.split, Some(c), tr(n)).changed();
+                }
+            });
+            ui.separator();
+            let mut manual = adj.skew_deg.is_some();
+            if ui.checkbox(&mut manual, tr("adj.skew_manual")).changed() {
+                adj.skew_deg = manual.then_some((detected * 100.0).round() / 100.0);
+                adj_changed = true;
+            }
+            if let Some(v) = adj.skew_deg.as_mut() {
+                adj_changed |= ui.add(egui::Slider::new(v, -10.0..=10.0).suffix("°").fixed_decimals(2)).changed();
+            }
+            if ui.button(tr("adj.reset")).clicked() {
+                *adj = SheetAdjust::default();
+                adj_changed = true;
+            }
+        });
+        if adj_changed {
+            self.sheets[i].adj_gen += 1;
+        }
+        ui.separator();
+
+        // --- image area
+        let key = self.key_of(&self.sheets[i]);
+        let sheet = &self.sheets[i];
+        if let Some((k, e)) = &sheet.failed {
+            if *k == key {
+                ui.colored_label(Color32::from_rgb(220, 70, 60), e);
+                return;
+            }
+        }
+        let Some(ready) = &sheet.ready else {
+            ui.centered_and_justified(|ui| {
+                ui.spinner();
+            });
+            return;
+        };
+        let mut cells: Vec<(&TextureHandle, String)> = Vec::new();
+        if self.view != View::Processed {
+            cells.push((&ready.original, format!("{} — {}×{} px", tr("view.original"), ready.original_size.0, ready.original_size.1)));
+        }
+        if self.view != View::Original {
+            for (n, p) in ready.pages.iter().enumerate() {
+                let blank = if p.blank { format!(" — {}", tr("preview.blank")) } else { String::new() };
+                cells.push((
+                    &p.tex,
+                    format!("{} {} — {}×{} px, {} {:+.2}°{}", tr("view.processed"), n + 1, p.w, p.h, tr("preview.skew"), p.skew_deg, blank),
+                ));
+            }
+        }
+        let avail = ui.available_size();
+        let n = cells.len().max(1) as f32;
+        let cell_w = (avail.x / n - ui.spacing().item_spacing.x).max(50.0);
+        let cell_h = (avail.y - 24.0).max(50.0);
+        let (fit, zoom) = (self.fit, self.zoom);
+        let draw = |ui: &mut egui::Ui| {
+            ui.horizontal_top(|ui| {
+                for (tex, caption) in &cells {
+                    ui.vertical(|ui| {
+                        let ts = tex.size_vec2();
+                        let scale = if fit { (cell_w / ts.x).min(cell_h / ts.y).min(4.0) } else { zoom };
+                        ui.add(egui::Image::from_texture(*tex).fit_to_exact_size(ts * scale));
+                        ui.label(RichText::new(caption).small());
+                    });
+                }
+            });
+        };
+        if fit {
+            draw(ui);
+        } else {
+            egui::ScrollArea::both().auto_shrink([false, false]).show(ui, draw);
+        }
+    }
+}
+
+impl eframe::App for App {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        self.pump(&ctx);
+        egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
+        egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
+        egui::Panel::left("pages").default_size(230.0).min_size(160.0).show(ui, |ui| self.page_list(ui));
+        egui::Panel::right("settings").default_size(310.0).min_size(250.0).show(ui, |ui| self.settings_panel(ui));
+        egui::CentralPanel::default().show(ui, |ui| self.preview(ui));
+        self.request_preview(&ctx);
+        if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
+            egui::Area::new(egui::Id::unique("drop_hint")).anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO).show(&ctx, |ui| {
+                ui.label(RichText::new(self.tr("drop.hint")).size(28.0).strong());
+            });
+        }
+        if self.show_about {
+            let mut open = true;
+            egui::Window::new(self.tr("menu.about")).open(&mut open).collapsible(false).show(&ctx, |ui| {
+                ui.heading("LegatorOCR");
+                ui.label(format!("v{}", env!("CARGO_PKG_VERSION")));
+                ui.label(self.tr("about.text"));
+                ui.label("MIT — © 2026 Alexio <alexio@trom.tf>");
+            });
+            self.show_about = open;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn natural_order() {
+        let mut v = vec!["p10.png", "p2.png", "P1.png", "p02b.png", "p100.png"];
+        v.sort_by(|a, b| natural_cmp(a, b));
+        // digit runs compare numerically, letters case-insensitively; p2 < p02b because '.' < 'b'
+        assert_eq!(v, ["P1.png", "p2.png", "p02b.png", "p10.png", "p100.png"]);
+        assert_eq!(natural_cmp("a", "a"), Ord_::Equal);
+        assert_eq!(natural_cmp("a", "ab"), Ord_::Less);
+    }
+
+    #[test]
+    fn image_detection_and_folder_collection() {
+        assert!(is_image(Path::new("x/Scan.JPG")) && is_image(Path::new("a.tiff")));
+        assert!(!is_image(Path::new("notes.txt")) && !is_image(Path::new("noext")));
+        let d = std::env::temp_dir().join(format!("lgr-gui-col-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        for n in ["p10.png", "p2.png", "readme.txt", "p1.jpg"] {
+            std::fs::write(d.join(n), b"x").unwrap();
+        }
+        let single = d.join("p2.png");
+        let got: Vec<String> = collect_images(&[d.clone(), single.clone(), d.join("readme.txt")])
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        // folder expanded in natural order, explicit image kept, non-image dropped
+        assert_eq!(got, ["p1.jpg", "p2.png", "p10.png", "p2.png"]);
+        let _ = std::fs::remove_dir_all(d);
+    }
+}

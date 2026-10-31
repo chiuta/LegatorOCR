@@ -1,0 +1,21 @@
+[package]
+name = "legatorocr-gui"
+description = "LegatorOCR graphical interface (egui/eframe): Windows, macOS, Linux"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "legatorocr-gui"
+path = "src/main.rs"
+
+[dependencies]
+legatorocr-core = { path = "../legatorocr-core" }
+legatorocr-engine = { path = "../legatorocr-engine" }
+image.workspace = true
+anyhow.workspace = true
+rayon.workspace = true
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+rfd = "0.17"
+sys-locale = "0.3"

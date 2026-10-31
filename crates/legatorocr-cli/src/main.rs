@@ -1,10 +1,9 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, ValueEnum};
-use legatorocr_core::{process_page, OutputMode, Page, Settings, SplitMode};
-use legatorocr_ocr::OcrOptions;
-use legatorocr_pdf::{Compress, PdfWriter};
-use rayon::prelude::*;
-use std::path::{Path, PathBuf};
+use legatorocr_core::{OutputMode, Settings, SplitMode};
+use legatorocr_engine::{check_ocr, ocr::OcrOptions, run_export, write_atomic, ExportJob, PdfExport, SheetInput};
+use std::path::PathBuf;
+use std::sync::{atomic::AtomicBool, Mutex};
 
 #[derive(Copy, Clone, ValueEnum)]
 enum Mode {
@@ -90,6 +89,10 @@ struct Cli {
     #[arg(long)]
     no_deskew: bool,
 
+    /// Fixed skew correction in degrees (clockwise positive); overrides detection.
+    #[arg(long, allow_negative_numbers = true)]
+    skew: Option<f32>,
+
     /// Maximum skew searched, in degrees.
     #[arg(long, default_value_t = 7.0)]
     max_skew: f32,
@@ -150,6 +153,7 @@ fn main() -> Result<()> {
             Split::Middle => SplitMode::Middle,
         },
         deskew: !cli.no_deskew,
+        manual_skew_deg: cli.skew,
         max_skew_deg: cli.max_skew,
         margins_mm: [cli.margin; 4],
         page_size_mm: cli.page_size.as_deref().map(parse_page_size).transpose()?,
@@ -170,41 +174,40 @@ fn main() -> Result<()> {
         tessdata: cli.tessdata.clone(),
     };
     if cli.ocr {
-        let v = legatorocr_ocr::check_engine(&ocr_opts)?;
-        let installed = legatorocr_ocr::list_languages(&ocr_opts)?;
-        for l in cli.lang.split('+') {
-            if !installed.iter().any(|i| i == l) {
-                bail!("OCR language '{l}' is not installed for {v} (installed: {})", installed.join(", "));
-            }
-        }
+        let v = check_ocr(&ocr_opts)?;
         eprintln!("OCR engine: {v}, language: {}", cli.lang);
     }
     if cli.pdf.is_none() && matches!(cli.format, Fmt::None) {
         bail!("nothing to do: give --pdf and/or an image --format");
     }
 
-    // --- process sheets in parallel (order preserved) ----------------------
-    let sheets: Vec<Result<Vec<Page>>> = cli
-        .inputs
-        .par_iter()
-        .map(|p| {
-            let img = image::open(p).with_context(|| format!("reading {}", p.display()))?;
-            Ok(process_page(&img, &settings))
-        })
-        .collect();
-
-    let mut pages: Vec<(String, Page)> = Vec::new();
-    for (path, res) in cli.inputs.iter().zip(sheets) {
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("page").to_string();
-        for pg in res? {
-            if cli.skip_blank && pg.blank {
-                eprintln!("{}: blank, skipped", path.display());
-                continue;
-            }
+    // --- run: process → (save images) → OCR → PDF ---------------------------
+    let sheets: Vec<SheetInput> =
+        cli.inputs.iter().map(|p| SheetInput { path: p.clone(), settings: settings.clone() }).collect();
+    let save_images = !matches!(cli.format, Fmt::None);
+    if save_images {
+        std::fs::create_dir_all(&cli.out_dir)?;
+    }
+    let ext = if matches!(cli.format, Fmt::Png) { "png" } else { "tif" };
+    let first_err: Mutex<Option<String>> = Mutex::new(None);
+    let job = ExportJob {
+        sheets: &sheets,
+        pdf: cli.pdf.as_ref().map(|pdf_path| PdfExport {
+            quality: cli.pdf_quality,
+            ocr: cli.ocr.then(|| ocr_opts.clone()),
+            title: pdf_path.file_stem().and_then(|s| s.to_str()).map(str::to_string),
+        }),
+        skip_blank: cli.skip_blank,
+    };
+    let res = run_export(
+        &job,
+        &AtomicBool::new(false),
+        &|i, pg| {
+            let stem = sheets[i].path.file_stem().and_then(|s| s.to_str()).unwrap_or("page");
             let name = match pg.split_index {
                 Some(0) => format!("{stem}_L"),
                 Some(_) => format!("{stem}_R"),
-                None => stem.clone(),
+                None => stem.to_string(),
             };
             eprintln!(
                 "{name}: {}x{} px, skew {:+.2}°{}",
@@ -213,67 +216,32 @@ fn main() -> Result<()> {
                 pg.skew_deg,
                 if pg.blank { ", blank" } else { "" }
             );
-            pages.push((name, pg));
-        }
+            if save_images {
+                let path = cli.out_dir.join(format!("{name}.{ext}"));
+                if let Err(e) = pg.image.to_dynamic().save(&path) {
+                    first_err.lock().unwrap().get_or_insert(format!("{}: {e}", path.display()));
+                }
+            }
+        },
+        &|_, _| {},
+    )?;
+    if let Some(e) = first_err.into_inner().unwrap() {
+        bail!("saving image failed: {e}");
     }
-    if pages.is_empty() {
-        bail!("no pages produced");
+    if res.skipped_blank > 0 {
+        eprintln!("{} blank page(s) skipped", res.skipped_blank);
     }
-
-    // --- processed images -------------------------------------------------
-    if !matches!(cli.format, Fmt::None) {
-        std::fs::create_dir_all(&cli.out_dir)?;
-        let ext = if matches!(cli.format, Fmt::Png) { "png" } else { "tif" };
-        pages.par_iter().try_for_each(|(name, pg)| -> Result<()> {
-            let path = cli.out_dir.join(format!("{name}.{ext}"));
-            pg.image.to_dynamic().save(&path).with_context(|| path.display().to_string())?;
-            Ok(())
-        })?;
-        eprintln!("wrote {} page image(s) to {}", pages.len(), cli.out_dir.display());
+    if save_images {
+        eprintln!("wrote {} page image(s) to {}", res.pages, cli.out_dir.display());
     }
-
-    // --- OCR + PDF --------------------------------------------------------
-    if let Some(pdf_path) = &cli.pdf {
-        let words: Vec<Vec<legatorocr_core::Word>> = if cli.ocr {
-            pages
-                .par_iter()
-                .map(|(name, pg)| {
-                    legatorocr_ocr::recognize(&pg.image, pg.dpi, &ocr_opts)
-                        .with_context(|| format!("OCR of {name}"))
-                })
-                .collect::<Result<_>>()?
-        } else {
-            vec![Vec::new(); pages.len()]
-        };
-        let mut w = PdfWriter::new(if cli.pdf_quality == 0 {
-            Compress::Flate
-        } else {
-            Compress::Jpeg(cli.pdf_quality.min(100))
-        });
-        if let Some(t) = pdf_path.file_stem().and_then(|s| s.to_str()) {
-            w.set_title(t);
-        }
-        for ((_, pg), ws) in pages.iter().zip(&words) {
-            w.add_page(pg, ws);
-        }
-        write_atomic(pdf_path, &w.finish())?;
-        let nwords: usize = words.iter().map(Vec::len).sum();
+    if let (Some(pdf_path), Some(bytes)) = (&cli.pdf, &res.pdf) {
+        write_atomic(pdf_path, bytes)?;
         eprintln!(
             "wrote {} ({} page(s){})",
             pdf_path.display(),
-            pages.len(),
-            if cli.ocr { format!(", {nwords} OCR words") } else { String::new() }
+            res.pages,
+            if cli.ocr { format!(", {} OCR words", res.words) } else { String::new() }
         );
     }
-    Ok(())
-}
-
-fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
-    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-        std::fs::create_dir_all(dir)?;
-    }
-    let tmp = path.with_extension("pdf.part");
-    std::fs::write(&tmp, data)?;
-    std::fs::rename(&tmp, path)?;
     Ok(())
 }

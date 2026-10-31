@@ -12,8 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 legatorocr-core = { path = "../legatorocr-core" }
-legatorocr-pdf = { path = "../legatorocr-pdf" }
-legatorocr-ocr = { path = "../legatorocr-ocr" }
+legatorocr-engine = { path = "../legatorocr-engine" }
 image.workspace = true
 clap.workspace = true
 anyhow.workspace = true

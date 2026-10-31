@@ -27,6 +27,9 @@ pub struct Settings {
     pub auto_orient: bool,
     pub split: SplitMode,
     pub deskew: bool,
+    /// Manual skew correction in degrees (clockwise positive). When set it
+    /// replaces the automatic estimate, even if `deskew` is off.
+    pub manual_skew_deg: Option<f32>,
     pub max_skew_deg: f32,
     /// Margins around the detected content, millimetres: left, top, right, bottom.
     pub margins_mm: [f32; 4],
@@ -45,6 +48,7 @@ impl Default for Settings {
             auto_orient: true,
             split: SplitMode::Auto,
             deskew: true,
+            manual_skew_deg: None,
             max_skew_deg: 7.0,
             margins_mm: [5.0; 4],
             page_size_mm: None,
@@ -119,7 +123,7 @@ pub fn process_page(src: &DynamicImage, s: &Settings) -> Vec<Page> {
 
     if s.auto_orient {
         let ink = analysis_ink(&imageops::grayscale(&rgb), s.dpi);
-        if orient::needs_quarter_turn(&ink) {
+        if orient::needs_quarter_turn(&ink, s.dpi) {
             rgb = transform::rot90(&rgb, 1);
         }
     }
@@ -153,13 +157,18 @@ fn finish_page(mut img: RgbImage, split_index: Option<u8>, s: &Settings) -> Page
     let mut skew_deg = 0.0;
 
     // --- deskew -------------------------------------------------------
-    if s.deskew {
-        let ink = analysis_ink(&imageops::grayscale(&img), s.dpi);
-        if let Some(a) = deskew::detect_skew(&ink, s.max_skew_deg) {
-            if a.abs() > 0.02f32.to_radians() {
-                img = transform::rotate_cw(&img, a, bg);
-                skew_deg = a.to_degrees();
-            }
+    let angle = match s.manual_skew_deg {
+        Some(deg) => Some(deg.to_radians()),
+        None if s.deskew => {
+            let ink = analysis_ink(&imageops::grayscale(&img), s.dpi);
+            deskew::detect_skew(&ink, s.max_skew_deg)
+        }
+        None => None,
+    };
+    if let Some(a) = angle {
+        if a.abs() > 0.02f32.to_radians() {
+            img = transform::rotate_cw(&img, a, bg);
+            skew_deg = a.to_degrees();
         }
     }
 
@@ -358,9 +367,25 @@ mod tests {
     fn sideways_page_detected() {
         let g = text_page(1000, 800, 80, 920);
         let up = binarize::sauvola(&g, 41, 0.3);
-        assert!(!orient::needs_quarter_turn(&up));
+        assert!(!orient::needs_quarter_turn(&up, DPI));
         let side = imageops::rotate90(&g);
-        assert!(orient::needs_quarter_turn(&binarize::sauvola(&side, 41, 0.3)));
+        assert!(orient::needs_quarter_turn(&binarize::sauvola(&side, 41, 0.3), DPI));
+    }
+
+    #[test]
+    fn rotated_two_page_spread_is_detected_and_upright_one_is_not() {
+        // two text pages with a gutter between them: big low-frequency structure
+        let mut spread = text_page(2400, 1500, 100, 2300);
+        for y in 0..1500 {
+            for x in 1150..1260 {
+                spread.put_pixel(x, y, Luma([235]));
+            }
+        }
+        let upright = binarize::sauvola(&spread, 41, 0.3);
+        assert!(!orient::needs_quarter_turn(&upright, DPI), "upright spread flagged sideways");
+        for side in [imageops::rotate90(&spread), imageops::rotate270(&spread)] {
+            assert!(orient::needs_quarter_turn(&binarize::sauvola(&side, 41, 0.3), DPI), "sideways spread missed");
+        }
     }
 
     #[test]
@@ -374,6 +399,21 @@ mod tests {
         }
         assert_eq!(b.despeckle(6), 1);
         assert!(!b.get(3, 3) && b.get(25, 25));
+    }
+
+    #[test]
+    fn manual_skew_overrides_auto() {
+        let g = text_page(1500, 2000, 250, 1250);
+        let rot = transform::rotate_cw(&to_rgb(&g), 2.0f32.to_radians(), Rgb([235; 3]));
+        let src = image::DynamicImage::ImageRgb8(rot);
+        let off = Settings { deskew: false, ..Default::default() };
+        assert_eq!(process_page(&src, &off)[0].skew_deg, 0.0);
+        let manual = Settings { deskew: false, manual_skew_deg: Some(-2.0), ..Default::default() };
+        let p = &process_page(&src, &manual)[0];
+        assert!((p.skew_deg + 2.0).abs() < 1e-3);
+        // a correct manual angle must give the same geometry as auto-deskew
+        let auto = &process_page(&src, &Settings::default())[0];
+        assert!((p.image.width() as i32 - auto.image.width() as i32).abs() < 12);
     }
 
     #[test]

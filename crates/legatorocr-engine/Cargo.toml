@@ -1,0 +1,15 @@
+[package]
+name = "legatorocr-engine"
+description = "LegatorOCR engine: shared export orchestration (OCR + PDF) used by the CLI and the GUI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+legatorocr-core = { path = "../legatorocr-core" }
+legatorocr-pdf = { path = "../legatorocr-pdf" }
+legatorocr-ocr = { path = "../legatorocr-ocr" }
+anyhow.workspace = true
+image.workspace = true
+rayon.workspace = true

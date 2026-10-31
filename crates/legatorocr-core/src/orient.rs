@@ -1,17 +1,37 @@
 //! Coarse text-orientation test (0° vs a quarter turn) from projection profiles.
+//!
+//! Horizontal text lines make the *row* profile oscillate at the line pitch.
+//! Large structures (page gutter, margins, a spread's two pages) also move the
+//! profile but at much lower frequency, so each profile is band-passed around
+//! the line-pitch scale before comparing rows against columns.
 
 use crate::BitImage;
 
-fn variance(v: &[f64]) -> f64 {
-    let n = v.len() as f64;
-    let m = v.iter().sum::<f64>() / n;
-    v.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / n
+/// Box-filter `p` with half-width `r` (prefix sums, edges clamp).
+fn box_smooth(p: &[f64], r: usize) -> Vec<f64> {
+    let n = p.len();
+    let mut pre = vec![0.0; n + 1];
+    for i in 0..n {
+        pre[i + 1] = pre[i] + p[i];
+    }
+    (0..n)
+        .map(|i| {
+            let (a, b) = (i.saturating_sub(r), (i + r + 1).min(n));
+            (pre[b] - pre[a]) / (b - a) as f64
+        })
+        .collect()
 }
 
-/// `true` when text lines run vertically (page lies on its side), i.e. the
-/// column profile is markedly "peakier" than the row profile.
+/// Mean squared difference between a fine and a coarse smoothing of the profile.
+fn band_energy(profile: &[f64], dpi: u32) -> f64 {
+    let fine = box_smooth(profile, (dpi / 60).max(2) as usize);
+    let coarse = box_smooth(profile, (dpi / 4).max(8) as usize);
+    fine.iter().zip(&coarse).map(|(a, b)| (a - b) * (a - b)).sum::<f64>() / profile.len().max(1) as f64
+}
+
+/// `true` when text lines run vertically (page lies on its side).
 /// Cannot distinguish 90° from 270° or detect 180° (use OCR/OSD for that).
-pub fn needs_quarter_turn(ink: &BitImage) -> bool {
+pub fn needs_quarter_turn(ink: &BitImage, dpi: u32) -> bool {
     if ink.count_ink() < 500 {
         return false;
     }
@@ -27,7 +47,7 @@ pub fn needs_quarter_turn(ink: &BitImage) -> bool {
         }
     }
     // Normalise by length so landscape/portrait shape does not bias the test.
-    let vr = variance(&rows) / (w as f64 * w as f64);
-    let vc = variance(&cols) / (h as f64 * h as f64);
-    vc > 2.0 * vr
+    let er = band_energy(&rows, dpi) / (w as f64 * w as f64);
+    let ec = band_energy(&cols, dpi) / (h as f64 * h as f64);
+    ec > 2.0 * er
 }
