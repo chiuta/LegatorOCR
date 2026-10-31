@@ -77,6 +77,13 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - name: Release notes
+        id: notes
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          f=".github/release-notes/${tag}.md"
+          if [ -f "$f" ]; then echo "path=$f" >> "$GITHUB_OUTPUT"; else echo "path=" >> "$GITHUB_OUTPUT"; fi
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -88,4 +95,5 @@ jobs:
           files: dist/LegatorOCR-*
           draft: true
           prerelease: ${{ inputs.prerelease != false }}
-          generate_release_notes: true
+          body_path: ${{ steps.notes.outputs.path }}
+          generate_release_notes: ${{ steps.notes.outputs.path == '' }}

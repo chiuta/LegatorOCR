@@ -1180,7 +1180,7 @@ dependencies = [
 
 [[package]]
 name = "legatorocr-cli"
-version = "0.2.0"
+version = "0.2.0-pre.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1192,7 +1192,7 @@ dependencies = [
 
 [[package]]
 name = "legatorocr-core"
-version = "0.2.0"
+version = "0.2.0-pre.1"
 dependencies = [
  "image",
  "rayon",
@@ -1200,7 +1200,7 @@ dependencies = [
 
 [[package]]
 name = "legatorocr-engine"
-version = "0.2.0"
+version = "0.2.0-pre.1"
 dependencies = [
  "anyhow",
  "flate2",
@@ -1214,7 +1214,7 @@ dependencies = [
 
 [[package]]
 name = "legatorocr-gui"
-version = "0.2.0"
+version = "0.2.0-pre.1"
 dependencies = [
  "anyhow",
  "eframe",
@@ -1228,7 +1228,7 @@ dependencies = [
 
 [[package]]
 name = "legatorocr-ocr"
-version = "0.2.0"
+version = "0.2.0-pre.1"
 dependencies = [
  "image",
  "legatorocr-core",
@@ -1237,7 +1237,7 @@ dependencies = [
 
 [[package]]
 name = "legatorocr-pdf"
-version = "0.2.0"
+version = "0.2.0-pre.1"
 dependencies = [
  "flate2",
  "image",

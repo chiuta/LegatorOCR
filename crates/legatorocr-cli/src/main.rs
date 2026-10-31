@@ -40,7 +40,7 @@ enum Fmt {
 /// LegatorOCR — clean-room scan post-processor: split, deskew, crop, clean,
 /// then export to PDF with optional OCR text layer.
 #[derive(Parser)]
-#[command(version, about)]
+#[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
     #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator"])]
