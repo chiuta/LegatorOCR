@@ -1,7 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=LegatorOCR
-Comment=Scan post-processing: split, deskew, crop, PDF with OCR
-Exec=legatorocr-gui
-Terminal=false
-Categories=Graphics;Office;

@@ -85,11 +85,13 @@ impl PdfWriter {
     /// Append one page. `words` (optional) are in the page's pixel coordinates.
     pub fn add_page(&mut self, page: &Page, words: &[Word]) {
         let (pw, ph) = (page.image.width(), page.image.height());
-        let dpi = page.dpi.max(1) as f32;
+        let dpi = page.dpi.clamp(36, 2400) as f32;
         let (wpt, hpt) = (pw as f32 * 72.0 / dpi, ph as f32 * 72.0 / dpi);
 
         // --- image XObject -------------------------------------------
         let img_id = self.alloc();
+        // JPEG cannot exceed 65535 px per side; such pages stay lossless.
+        let compress = if pw > 65_000 || ph > 65_000 { Compress::Flate } else { self.compress };
         match &page.image {
             PageImage::Bw(b) => {
                 let data = pack_1bit_up_predicted(b);
@@ -104,7 +106,7 @@ impl PdfWriter {
                     &z,
                 );
             }
-            PageImage::Gray(g) => match self.compress {
+            PageImage::Gray(g) => match compress {
                 Compress::Jpeg(q) => {
                     let mut out = Vec::new();
                     JpegEncoder::new_with_quality(&mut out, q)
@@ -117,7 +119,7 @@ impl PdfWriter {
                     self.stream_obj(img_id, &image_dict(pw, ph, "DeviceGray", "FlateDecode"), &z);
                 }
             },
-            PageImage::Rgb(c) => match self.compress {
+            PageImage::Rgb(c) => match compress {
                 Compress::Jpeg(q) => {
                     let mut out = Vec::new();
                     JpegEncoder::new_with_quality(&mut out, q)

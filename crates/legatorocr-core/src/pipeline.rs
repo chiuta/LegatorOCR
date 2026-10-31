@@ -117,8 +117,32 @@ fn analysis_ink(gray: &GrayImage, dpi: u32) -> BitImage {
     binarize::sauvola(gray, (dpi / 8).max(15), 0.3)
 }
 
+impl Settings {
+    /// Copy with every value forced into a range the pipeline can handle:
+    /// non-finite numbers fall back to defaults, sizes are bounded so that a
+    /// typo (`--margin 100000`) cannot request a multi-gigabyte canvas.
+    pub fn sanitized(&self) -> Settings {
+        let d = Settings::default();
+        let fin = |v: f32, lo: f32, hi: f32, dflt: f32| if v.is_finite() { v.clamp(lo, hi) } else { dflt };
+        let mut s = self.clone();
+        s.dpi = s.dpi.clamp(36, 2400);
+        s.rotate_quarters %= 4;
+        s.manual_skew_deg = s.manual_skew_deg.filter(|v| v.is_finite()).map(|v| v.clamp(-45.0, 45.0));
+        s.max_skew_deg = fin(s.max_skew_deg, 0.0, 15.0, d.max_skew_deg);
+        for (m, dm) in s.margins_mm.iter_mut().zip(d.margins_mm) {
+            *m = fin(*m, 0.0, 200.0, dm);
+        }
+        s.page_size_mm = s.page_size_mm.and_then(|(w, h)| {
+            (w.is_finite() && h.is_finite() && w >= 10.0 && h >= 10.0).then(|| (w.min(2000.0), h.min(2000.0)))
+        });
+        s.sauvola_k = fin(s.sauvola_k, 0.0, 1.0, d.sauvola_k);
+        s
+    }
+}
+
 /// Run the whole pipeline on one scanned sheet. A two-page spread yields two pages.
 pub fn process_page(src: &DynamicImage, s: &Settings) -> Vec<Page> {
+    let s = &s.sanitized();
     let mut rgb = transform::rot90(&src.to_rgb8(), s.rotate_quarters);
 
     if s.auto_orient {
@@ -428,5 +452,32 @@ mod tests {
         // content (~1000 px wide) + 2×10 mm margin (118 px each) = ≈ 1236
         assert!((p.image.width() as i32 - 1236).abs() < 40, "w {}", p.image.width());
         assert!(matches!(p.image, PageImage::Bw(_)));
+    }
+
+    #[test]
+    fn sanitized_bounds_everything() {
+        let wild = Settings {
+            dpi: 0,
+            margins_mm: [1e9, f32::NAN, -5.0, f32::INFINITY],
+            page_size_mm: Some((1e9, f32::NAN)),
+            max_skew_deg: 1e9,
+            manual_skew_deg: Some(1e9),
+            sauvola_k: f32::NAN,
+            rotate_quarters: 7,
+            ..Settings::default()
+        }
+        .sanitized();
+        assert_eq!(wild.dpi, 36);
+        assert_eq!(wild.margins_mm, [200.0, 5.0, 0.0, 5.0]);
+        assert_eq!(wild.page_size_mm, None);
+        assert_eq!((wild.max_skew_deg, wild.manual_skew_deg, wild.rotate_quarters), (15.0, Some(45.0), 3));
+        assert!(wild.sauvola_k.is_finite());
+    }
+
+    #[test]
+    fn solid_black_page_is_not_deskewed() {
+        let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(900, 1200, Rgb([0, 0, 0])));
+        let pages = process_page(&img, &Settings { dpi: 150, split: SplitMode::Off, auto_orient: false, ..Settings::default() });
+        assert_eq!(pages[0].skew_deg, 0.0);
     }
 }

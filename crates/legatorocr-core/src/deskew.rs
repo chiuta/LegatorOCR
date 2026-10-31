@@ -7,7 +7,9 @@ use crate::BitImage;
 /// level the text lines, or `None` when the page has too little ink to judge.
 pub fn detect_skew(ink: &BitImage, max_deg: f32) -> Option<f32> {
     let total = ink.count_ink();
-    if total < 200 {
+    // Too little ink to judge, or so much that the page is a solid area (a
+    // black scan, a photo) rather than text lines.
+    if total < 200 || total * 2 > ink.w as u64 * ink.h as u64 {
         return None;
     }
     // Collect (a possibly sub-sampled set of) ink coordinates.

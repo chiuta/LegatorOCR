@@ -94,6 +94,8 @@ const TABLE: &[(&str, &str, &str)] = &[
     ("status.pages", "pagini", "pages"),
     ("status.words", "cuvinte recunoscute", "words recognised"),
     ("status.blank_skipped", "pagini goale omise", "blank pages skipped"),
+    ("status.failed", "fișiere eșuate (primul)", "file(s) failed (first)"),
+    ("status.crashed", "procesarea s-a oprit neașteptat", "processing stopped unexpectedly"),
     ("status.cancelled", "Anulat.", "Cancelled."),
     ("status.error", "Eroare", "Error"),
 ];

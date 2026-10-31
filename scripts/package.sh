@@ -8,12 +8,13 @@ TARGET="${1:?usage: package.sh <target-triple> [version]}"
 cd "$(dirname "$0")/.."
 VERSION="${2:-$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)}"
 NAME="LegatorOCR-${VERSION}-${TARGET}"
-OUT="dist/${NAME}"
+# Staging lives outside dist/ so that dist/ holds only the archives and checksums.
+OUT="target/package-stage/${NAME}"
 
 cargo build --release --locked --target "$TARGET" -p legatorocr-cli -p legatorocr-gui
 BIN="target/${TARGET}/release"
 
-rm -rf "$OUT" && mkdir -p "$OUT"
+rm -rf "$OUT" && mkdir -p "$OUT" dist
 EXE=""; case "$TARGET" in *windows*) EXE=".exe";; esac
 cp "$BIN/legatorocr${EXE}" "$OUT/"
 cp README.md LICENSE "$OUT/"
@@ -37,6 +38,8 @@ case "$TARGET" in
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
+    # Ad-hoc signature: Apple-silicon Macs refuse to run completely unsigned code.
+    if command -v codesign >/dev/null; then codesign --force --deep -s - "$OUT/LegatorOCR.app"; fi
     ;;
   *windows*)
     cp "$BIN/legatorocr-gui.exe" "$OUT/"
@@ -55,11 +58,14 @@ DESK
     ;;
 esac
 
-cd dist
+ROOT="$PWD"
+rm -f "dist/${NAME}".zip "dist/${NAME}".tar.gz "dist/${NAME}".*.sha256
+cd "$(dirname "$OUT")"
 case "$TARGET" in
-  *windows*) if command -v 7z >/dev/null; then 7z a -tzip "${NAME}.zip" "${NAME}" >/dev/null; else zip -qr "${NAME}.zip" "${NAME}"; fi; ARCHIVE="${NAME}.zip" ;;
-  *apple*)   zip -qr "${NAME}.zip" "${NAME}"; ARCHIVE="${NAME}.zip" ;;
-  *)         tar -czf "${NAME}.tar.gz" "${NAME}"; ARCHIVE="${NAME}.tar.gz" ;;
+  *windows*) if command -v 7z >/dev/null; then 7z a -tzip "$ROOT/dist/${NAME}.zip" "${NAME}" >/dev/null; else zip -qr "$ROOT/dist/${NAME}.zip" "${NAME}"; fi; ARCHIVE="${NAME}.zip" ;;
+  *apple*)   zip -qry "$ROOT/dist/${NAME}.zip" "${NAME}"; ARCHIVE="${NAME}.zip" ;;
+  *)         tar -czf "$ROOT/dist/${NAME}.tar.gz" "${NAME}"; ARCHIVE="${NAME}.tar.gz" ;;
 esac
+cd "$ROOT/dist"
 if command -v sha256sum >/dev/null; then sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256"; else shasum -a 256 "$ARCHIVE" > "${ARCHIVE}.sha256"; fi
 echo "packaged: dist/${ARCHIVE}"

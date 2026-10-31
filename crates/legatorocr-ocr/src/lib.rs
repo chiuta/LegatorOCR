@@ -43,7 +43,21 @@ fn base_cmd(o: &OcrOptions) -> Command {
     if let Some(t) = &o.tessdata {
         c.env("TESSDATA_PREFIX", t);
     }
+    #[cfg(windows)]
+    {
+        // A GUI app must not flash a console window for every OCR call.
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
     c
+}
+
+/// Tesseract language list syntax: names joined by `+` (e.g. `ron+eng`, `script/Latin`).
+pub fn valid_lang(l: &str) -> bool {
+    !l.is_empty()
+        && l.split('+').all(|p| {
+            !p.is_empty() && !p.starts_with('-') && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '/' || c == '-')
+        })
 }
 
 /// Returns the engine's version line, or an error if it cannot be run.
@@ -127,6 +141,16 @@ pub fn parse_tsv(tsv: &str, min_conf: f32) -> Vec<Word> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn lang_syntax() {
+        for ok in ["eng", "ron+eng", "script/Latin", "chi_sim"] {
+            assert!(valid_lang(ok), "{ok}");
+        }
+        for bad in ["", "+", "eng+", "--psm", "-l", "a b", "en;g", "ron+-x"] {
+            assert!(!valid_lang(bad), "{bad}");
+        }
+    }
+
     #[test]
     fn parses_tsv() {
         let tsv = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n\

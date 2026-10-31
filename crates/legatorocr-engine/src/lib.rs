@@ -3,6 +3,7 @@
 //! page, assemble the PDF, write files atomically.
 
 use anyhow::{bail, Context, Result};
+use image::DynamicImage;
 use legatorocr_core::{process_page, Page, Settings, Word};
 use legatorocr_ocr::OcrOptions;
 use legatorocr_pdf::{Compress, PdfWriter};
@@ -10,6 +11,7 @@ use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+pub mod files;
 pub use legatorocr_ocr as ocr;
 
 #[derive(Debug, Clone)]
@@ -42,19 +44,48 @@ pub struct ExportJob<'a> {
     /// `None` → only run the pipeline (e.g. to save page images via `on_page`).
     pub pdf: Option<PdfExport>,
     pub skip_blank: bool,
+    /// `true` → a sheet that cannot be read/processed is recorded in
+    /// [`ExportResult::failed`] and the rest continues; `false` → first error aborts.
+    pub keep_going: bool,
 }
 
 #[derive(Debug, Default)]
 pub struct ExportResult {
+    /// Sheets that failed (path, message) when `keep_going` was set.
+    pub failed: Vec<(PathBuf, String)>,
     pub pdf: Option<Vec<u8>>,
     pub pages: usize,
     pub words: usize,
     pub skipped_blank: usize,
 }
 
+/// Open an image the way a person sees it: EXIF orientation applied (phone and
+/// camera JPEGs), transparency flattened onto white.
+pub fn load_image(path: &Path) -> Result<DynamicImage> {
+    use image::{ImageDecoder, ImageReader};
+    let mut dec = ImageReader::open(path)?.with_guessed_format()?.into_decoder()?;
+    let orientation = dec.orientation().unwrap_or(image::metadata::Orientation::NoTransforms);
+    let mut img = DynamicImage::from_decoder(dec)?;
+    img.apply_orientation(orientation);
+    if img.color().has_alpha() {
+        let mut rgb = image::RgbImage::new(img.width(), img.height());
+        for (o, p) in rgb.pixels_mut().zip(img.to_rgba8().pixels()) {
+            let a = p[3] as u32;
+            for c in 0..3 {
+                o[c] = ((p[c] as u32 * a + 255 * (255 - a) + 127) / 255) as u8;
+            }
+        }
+        img = DynamicImage::ImageRgb8(rgb);
+    }
+    Ok(img)
+}
+
 /// Check that the OCR engine runs and every requested language is installed.
 /// Returns the engine's version string.
 pub fn check_ocr(o: &OcrOptions) -> Result<String> {
+    if !legatorocr_ocr::valid_lang(&o.lang) {
+        bail!("invalid OCR language list '{}' (expected e.g. 'eng' or 'ron+eng')", o.lang);
+    }
     let v = legatorocr_ocr::check_engine(o)?;
     let installed = legatorocr_ocr::list_languages(o)?;
     for l in o.lang.split('+') {
@@ -102,7 +133,7 @@ pub fn run_export(
                 if cancel.load(Ordering::Relaxed) {
                     bail!("cancelled");
                 }
-                let img = image::open(&sheet.path).with_context(|| format!("reading {}", sheet.path.display()))?;
+                let img = load_image(&sheet.path).with_context(|| format!("reading {}", sheet.path.display()))?;
                 let mut kept = Vec::new();
                 let mut skipped = 0;
                 for pg in process_page(&img, &sheet.settings) {
@@ -127,8 +158,16 @@ pub fn run_export(
                 Ok((kept, skipped))
             })
             .collect();
-        for out in outs {
-            let (pages, skipped) = out?;
+        for (i, out) in outs.into_iter().enumerate() {
+            let (pages, skipped) = match out {
+                Ok(v) => v,
+                Err(e) if job.keep_going && e.to_string() != "cancelled" => {
+                    res.failed.push((chunk[i].path.clone(), format!("{e:#}")));
+                    progress(done.fetch_add(1, Ordering::Relaxed) + 1, total);
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
             res.skipped_blank += skipped;
             for (pg, words) in pages {
                 res.pages += 1;
@@ -140,7 +179,10 @@ pub fn run_export(
         }
     }
     if res.pages == 0 {
-        bail!("no pages produced");
+        match res.failed.first() {
+            Some((p, e)) => bail!("no pages produced; first error ({}): {e}", p.display()),
+            None => bail!("no pages produced"),
+        }
     }
     res.pdf = writer.map(PdfWriter::finish);
     Ok(res)
@@ -154,9 +196,11 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".part");
     let tmp = PathBuf::from(tmp);
-    std::fs::write(&tmp, data)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+    let r = std::fs::write(&tmp, data).and_then(|_| std::fs::rename(&tmp, path));
+    if r.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    r.with_context(|| format!("writing {}", path.display()))
 }
 
 #[cfg(test)]
@@ -205,7 +249,7 @@ mod tests {
             .collect();
         let seen = Mutex::new(Vec::new());
         let ticks = AtomicUsize::new(0);
-        let job = ExportJob { sheets: &sheets, pdf: Some(PdfExport::default()), skip_blank: true };
+        let job = ExportJob { sheets: &sheets, pdf: Some(PdfExport::default()), skip_blank: true, keep_going: false };
         let r = run_export(&job, &AtomicBool::new(false), &|i, _| seen.lock().unwrap().push(i), &|_, t| {
             assert_eq!(t, 3);
             ticks.fetch_add(1, Ordering::Relaxed);
@@ -225,7 +269,7 @@ mod tests {
     fn images_only_job_has_no_pdf() {
         let d = tmpdir("b");
         let sheets = vec![SheetInput { path: sheet(&d, "1.png", false), settings: st() }];
-        let job = ExportJob { sheets: &sheets, pdf: None, skip_blank: false };
+        let job = ExportJob { sheets: &sheets, pdf: None, skip_blank: false, keep_going: false };
         let r = run_export(&job, &AtomicBool::new(false), &|_, _| {}, &|_, _| {}).unwrap();
         assert!(r.pdf.is_none() && r.pages == 1);
         let _ = std::fs::remove_dir_all(d);
@@ -233,15 +277,15 @@ mod tests {
 
     #[test]
     fn errors_are_reported_with_context() {
-        let none = ExportJob { sheets: &[], pdf: None, skip_blank: false };
+        let none = ExportJob { sheets: &[], pdf: None, skip_blank: false, keep_going: false };
         assert!(run_export(&none, &AtomicBool::new(false), &|_, _| {}, &|_, _| {}).is_err());
         let bad = [SheetInput { path: "/no/such/file.png".into(), settings: st() }];
-        let job = ExportJob { sheets: &bad, pdf: None, skip_blank: false };
+        let job = ExportJob { sheets: &bad, pdf: None, skip_blank: false, keep_going: false };
         let e = run_export(&job, &AtomicBool::new(false), &|_, _| {}, &|_, _| {}).unwrap_err();
         assert!(format!("{e:#}").contains("file.png"), "{e:#}");
         let d = tmpdir("c");
         let ok = [SheetInput { path: sheet(&d, "1.png", false), settings: st() }];
-        let job = ExportJob { sheets: &ok, pdf: None, skip_blank: false };
+        let job = ExportJob { sheets: &ok, pdf: None, skip_blank: false, keep_going: false };
         let e = run_export(&job, &AtomicBool::new(true), &|_, _| {}, &|_, _| {}).unwrap_err();
         assert!(e.to_string().contains("cancelled"));
         let _ = std::fs::remove_dir_all(d);
@@ -255,6 +299,83 @@ mod tests {
         write_atomic(&f, b"two").unwrap();
         assert_eq!(std::fs::read(&f).unwrap(), b"two");
         assert!(!d.join("sub/out.pdf.part").exists());
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn exif_orientation_and_alpha_are_honoured() {
+        let d = tmpdir("e");
+        // 40x20 JPEG carrying EXIF orientation 6 (needs a 90° clockwise turn) → 20x40.
+        let img = image::RgbImage::from_pixel(40, 20, image::Rgb([30, 30, 30]));
+        let mut jpg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut jpg)
+            .encode(img.as_raw(), 40, 20, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        let mut app1 = b"Exif\0\0MM\x00\x2a\x00\x00\x00\x08\x00\x01\x01\x12\x00\x03\x00\x00\x00\x01\x00\x06\x00\x00\x00\x00\x00\x00".to_vec();
+        let mut seg = vec![0xFF, 0xE1];
+        seg.extend_from_slice(&((app1.len() + 2) as u16).to_be_bytes());
+        seg.append(&mut app1);
+        let mut out = jpg[..2].to_vec();
+        out.extend(seg);
+        out.extend_from_slice(&jpg[2..]);
+        let p = d.join("rot.jpg");
+        std::fs::write(&p, out).unwrap();
+        let l = load_image(&p).unwrap();
+        assert_eq!((l.width(), l.height()), (20, 40));
+        // Fully transparent black must become paper white, not black.
+        let mut rgba = image::RgbaImage::from_pixel(4, 4, image::Rgba([0, 0, 0, 0]));
+        rgba.put_pixel(0, 0, image::Rgba([0, 0, 0, 255]));
+        let p = d.join("a.png");
+        rgba.save(&p).unwrap();
+        let l = load_image(&p).unwrap().to_rgb8();
+        assert_eq!(l.get_pixel(3, 3).0, [255, 255, 255]);
+        assert_eq!(l.get_pixel(0, 0).0, [0, 0, 0]);
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn keep_going_skips_bad_sheets_but_fails_when_nothing_is_left() {
+        let d = tmpdir("f");
+        std::fs::write(d.join("bad.png"), b"not an image").unwrap();
+        let sheets = vec![
+            SheetInput { path: sheet(&d, "1.png", false), settings: st() },
+            SheetInput { path: d.join("bad.png"), settings: st() },
+            SheetInput { path: sheet(&d, "3.png", false), settings: st() },
+        ];
+        let mut job = ExportJob { sheets: &sheets, pdf: Some(PdfExport::default()), skip_blank: false, keep_going: true };
+        let ticks = AtomicUsize::new(0);
+        let r = run_export(&job, &AtomicBool::new(false), &|_, _| {}, &|_, _| {
+            ticks.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
+        assert_eq!((r.pages, r.failed.len()), (2, 1));
+        assert!(r.failed[0].0.ends_with("bad.png"));
+        assert_eq!(ticks.load(Ordering::Relaxed), 3, "progress still reaches 100 %");
+        job.keep_going = false;
+        assert!(run_export(&job, &AtomicBool::new(false), &|_, _| {}, &|_, _| {}).is_err());
+        let only_bad = [SheetInput { path: d.join("bad.png"), settings: st() }];
+        job = ExportJob { sheets: &only_bad, pdf: None, skip_blank: false, keep_going: true };
+        let e = run_export(&job, &AtomicBool::new(false), &|_, _| {}, &|_, _| {}).unwrap_err();
+        assert!(e.to_string().contains("bad.png"), "{e}");
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn absurd_settings_do_not_explode() {
+        let d = tmpdir("g");
+        let wild = Settings {
+            dpi: 0,
+            margins_mm: [1e9, f32::NAN, -5.0, f32::INFINITY],
+            page_size_mm: Some((1e9, 1e9)),
+            max_skew_deg: 1e9,
+            manual_skew_deg: Some(f32::NAN),
+            sauvola_k: f32::NAN,
+            ..st()
+        };
+        let sheets = [SheetInput { path: sheet(&d, "1.png", false), settings: wild }];
+        let job = ExportJob { sheets: &sheets, pdf: Some(PdfExport::default()), skip_blank: false, keep_going: false };
+        let r = run_export(&job, &AtomicBool::new(false), &|_, pg| assert!(pg.image.width() < 20_000), &|_, _| {}).unwrap();
+        assert_eq!(r.pages, 1);
         let _ = std::fs::remove_dir_all(d);
     }
 }

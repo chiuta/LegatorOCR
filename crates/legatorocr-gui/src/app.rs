@@ -3,73 +3,11 @@ use crate::settings::{ModeChoice, PageSizeChoice, SheetAdjust, SplitChoice, UiSe
 use crate::worker::{self, PreviewRequest, PreviewResult};
 use eframe::egui::{self, Color32, RichText, TextureHandle, TextureOptions, Vec2};
 use legatorocr_engine::{check_ocr, run_export, write_atomic, ExportJob, PdfExport, SheetInput};
-use std::cmp::Ordering as Ord_;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 
-const IMAGE_EXT: &[&str] = &["png", "jpg", "jpeg", "tif", "tiff", "bmp"];
-
-pub fn is_image(p: &Path) -> bool {
-    p.extension()
-        .and_then(|e| e.to_str())
-        .map(|e| IMAGE_EXT.contains(&e.to_ascii_lowercase().as_str()))
-        .unwrap_or(false)
-}
-
-/// "page2" < "page10": digit runs compare numerically.
-pub fn natural_cmp(a: &str, b: &str) -> Ord_ {
-    let (mut a, mut b) = (a.chars().peekable(), b.chars().peekable());
-    loop {
-        match (a.peek().copied(), b.peek().copied()) {
-            (None, None) => return Ord_::Equal,
-            (None, _) => return Ord_::Less,
-            (_, None) => return Ord_::Greater,
-            (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
-                let mut na = String::new();
-                let mut nb = String::new();
-                while let Some(c) = a.peek().copied().filter(char::is_ascii_digit) {
-                    na.push(c);
-                    a.next();
-                }
-                while let Some(c) = b.peek().copied().filter(char::is_ascii_digit) {
-                    nb.push(c);
-                    b.next();
-                }
-                let (na, nb) = (na.trim_start_matches('0'), nb.trim_start_matches('0'));
-                let o = na.len().cmp(&nb.len()).then_with(|| na.cmp(nb));
-                if o != Ord_::Equal {
-                    return o;
-                }
-            }
-            (Some(x), Some(y)) => {
-                let o = x.to_lowercase().cmp(y.to_lowercase());
-                if o != Ord_::Equal {
-                    return o;
-                }
-                a.next();
-                b.next();
-            }
-        }
-    }
-}
-
-/// Image files from a mix of files and folders (folders are not recursed), natural order.
-pub fn collect_images(paths: &[PathBuf]) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    for p in paths {
-        if p.is_dir() {
-            let mut v: Vec<PathBuf> = std::fs::read_dir(p)
-                .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| is_image(p)).collect())
-                .unwrap_or_default();
-            v.sort_by(|a, b| natural_cmp(&a.to_string_lossy(), &b.to_string_lossy()));
-            out.extend(v);
-        } else if is_image(p) {
-            out.push(p.clone());
-        }
-    }
-    out
-}
+use legatorocr_engine::files::{collect_images, IMAGE_EXT};
 
 fn split_name(lang: Lang, c: SplitChoice) -> &'static str {
     t(
@@ -137,6 +75,8 @@ struct Done {
     pages: usize,
     words: usize,
     skipped: usize,
+    /// Sheets that could not be processed: (file name, reason).
+    failed: Vec<(String, String)>,
 }
 
 struct Job {
@@ -235,6 +175,12 @@ impl App {
     }
 
     fn add_files(&mut self, files: &[PathBuf]) {
+        // First files of a session: adopt the resolution stored in the scan, if any.
+        if self.sheets.is_empty() {
+            if let Some(d) = files.first().and_then(|f| legatorocr_engine::files::detect_dpi(f)) {
+                self.s.dpi = d;
+            }
+        }
         for p in files {
             let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             self.sheets.push(Sheet {
@@ -355,7 +301,14 @@ impl App {
                             if d.skipped > 0 {
                                 msg += &format!(", {} {}", d.skipped, self.tr("status.blank_skipped"));
                             }
-                            self.say(msg, false);
+                            if let Some((name, why)) = d.failed.first() {
+                                msg += &format!(
+                                    " — {} {}: {name}: {why}",
+                                    d.failed.len(),
+                                    self.tr("status.failed")
+                                );
+                            }
+                            self.say(msg, !d.failed.is_empty());
                         }
                         Err(e) if e.contains("cancelled") => {
                             let m = self.tr("status.cancelled").to_string();
@@ -368,7 +321,11 @@ impl App {
                     }
                 }
                 Err(mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(150)),
-                Err(mpsc::TryRecvError::Disconnected) => self.job = None,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.job = None;
+                    let m = format!("{}: {}", self.tr("status.error"), self.tr("status.crashed"));
+                    self.say(m, true);
+                }
             }
         }
         // auto-export hook (automated GUI test): start once the OCR probe has finished
@@ -431,11 +388,18 @@ impl App {
         if sheet.ready.as_ref().map(|r| r.key) == Some(key) || sheet.pending.is_some() || sheet.failed.as_ref().map(|f| f.0) == Some(key) {
             return;
         }
+        // One preview at a time: scrolling quickly through big scans must not
+        // decode dozens of full-size images concurrently.
+        if self.sheets.iter().any(|s| s.pending.is_some()) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            return;
+        }
         let req = PreviewRequest { id: sheet.id, key, path: sheet.path.clone(), settings: self.s.to_core(&sheet.adj) };
         self.sheets[i].pending = Some(key);
         let (tx, ctx) = (self.pv_tx.clone(), ctx.clone());
         std::thread::spawn(move || {
-            let outcome = worker::render(&req);
+            let outcome = std::panic::catch_unwind(|| worker::render(&req))
+                .unwrap_or_else(|_| Err(format!("{}: internal error while processing", req.path.display())));
             let _ = tx.send(PreviewResult { id: req.id, key: req.key, outcome });
             ctx.request_repaint();
         });
@@ -476,12 +440,12 @@ impl App {
         let total = sheets.len();
         let (c2, d2, ctx2, target2) = (cancel.clone(), done.clone(), ctx.clone(), target.clone());
         std::thread::spawn(move || {
-            let r = (|| -> Result<Done, String> {
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<Done, String> {
                 if let Some(o) = pdf.as_ref().and_then(|p| p.ocr.as_ref()) {
                     check_ocr(o).map_err(|e| e.to_string())?;
                 }
                 let first_err: Mutex<Option<String>> = Mutex::new(None);
-                let job = ExportJob { sheets: &sheets, pdf, skip_blank };
+                let job = ExportJob { sheets: &sheets, pdf, skip_blank, keep_going: true };
                 let res = run_export(
                     &job,
                     &c2,
@@ -510,8 +474,21 @@ impl App {
                 if let Some(bytes) = &res.pdf {
                     write_atomic(&target2, bytes).map_err(|e| e.to_string())?;
                 }
-                Ok(Done { kind, target: target2.clone(), pages: res.pages, words: res.words, skipped: res.skipped_blank })
-            })();
+                let failed = res
+                    .failed
+                    .iter()
+                    .map(|(p, e)| (p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), e.clone()))
+                    .collect();
+                Ok(Done {
+                    kind,
+                    target: target2.clone(),
+                    pages: res.pages,
+                    words: res.words,
+                    skipped: res.skipped_blank,
+                    failed,
+                })
+            }))
+            .unwrap_or_else(|_| Err(String::from("internal error")));
             let _ = tx.send(r);
             ctx2.request_repaint();
         });
@@ -915,6 +892,8 @@ impl eframe::App for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use legatorocr_engine::files::{is_image, natural_cmp};
+    use std::cmp::Ordering as Ord_;
 
     #[test]
     fn natural_order() {

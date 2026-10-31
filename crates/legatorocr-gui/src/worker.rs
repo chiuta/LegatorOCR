@@ -66,7 +66,7 @@ fn page_rgba(p: &PageImage) -> RgbaImage {
 }
 
 pub fn render(req: &PreviewRequest) -> Result<Preview, String> {
-    let img = image::open(&req.path).map_err(|e| format!("{}: {e}", req.path.display()))?;
+    let img = legatorocr_engine::load_image(&req.path).map_err(|e| format!("{}: {e}", req.path.display()))?;
     let original_size = (img.width(), img.height());
     let original = to_thumb(&img.to_rgba8(), PREVIEW_MAX);
     let pages = process_page(&img, &req.settings)

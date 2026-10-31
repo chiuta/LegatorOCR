@@ -20,7 +20,11 @@ legatorocr scan_*.png --mode bw --dpi 300 --margin 6 --page-size a5 \
 ```
 
 `--skip-blank`, `--skew DEG` (fixed correction), `--rotate 90`, `--pdf-quality N` (0 = lossless),
-`--format png|tiff|none`, `--tessdata DIR`, `--psm N`, `--min-conf N` — see `legatorocr --help`.
+`--format png|tiff|none`, `--tessdata DIR`, `--psm N`, `--min-conf N`, `--keep-going` (skip unreadable
+inputs, exit status 2) — see `legatorocr --help`. A folder can be given instead of files. Resolution is
+read from the PNG/JPEG header when it says 150–1200 dpi (otherwise 300; override with `--dpi`); camera
+EXIF rotation is applied and transparency is flattened onto white. Out-of-range numbers are rejected
+with a clear message rather than producing absurd page sizes.
 
 ## Install
 
@@ -68,9 +72,10 @@ Crates: `legatorocr-core` (pipeline) · `-pdf` (writer) · `-ocr` (Tesseract dri
   180° is not detected automatically.
 - **No manual content-box editing** and no per-page margins yet; margins/page size are global.
 - No "mixed" mode (picture zones in colour, text in B/W), no page-curl dewarping.
-- Multi-page TIFF input: first page only.
+- Multi-page TIFF input: first page only. DPI is not read from TIFF headers (set it by hand).
 - B/W PDF pages are lossless Flate, not CCITT G4/JBIG2 (larger files).
-- A scanner-bed border touching the text can enlarge the detected content box.
+- A dark scanner-bed border *touching* the text can still enlarge the detected content box
+  (borders and corner shadows separated from the text are removed).
 - GUI settings are not persisted between sessions.
 - Windows and macOS builds come from the CI workflows (`.github/workflows`); the author's
   development environment verified Linux only.

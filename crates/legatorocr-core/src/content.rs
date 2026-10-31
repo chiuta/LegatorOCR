@@ -90,6 +90,12 @@ pub fn detect_content(ink: &BitImage, dpi: u32) -> Option<Rect> {
         if touches && (cw * 8 < ch || ch * 8 < cw) {
             continue;
         }
+        // Dark frame or L-shaped corner shadow (strips along two edges): its
+        // bounding box is large but almost empty. Real content that reaches
+        // the border is filled much more densely.
+        if touches && (c.blocks.len() as f64) < 0.12 * (cw * ch) as f64 {
+            continue;
+        }
         for &p in &c.blocks {
             let (bx, by) = ((p % gw) * b, (p / gw) * b);
             // Tighten to real ink inside the block.
@@ -111,4 +117,50 @@ pub fn detect_content(ink: &BitImage, dpi: u32) -> Option<Rect> {
         w: (x1 - x0 + 1) as u32,
         h: (y1 - y0 + 1) as u32,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text_block(img: &mut BitImage, x0: u32, y0: u32, w: u32, h: u32) {
+        let mut y = y0;
+        while y + 14 < y0 + h {
+            for x in (x0..x0 + w).step_by(40) {
+                for yy in y..y + 14 {
+                    for xx in x..x + 28 {
+                        img.set(xx, yy, true);
+                    }
+                }
+            }
+            y += 36;
+        }
+    }
+
+    #[test]
+    fn dark_corner_frame_is_not_content() {
+        let mut img = BitImage::new(1200, 1600);
+        text_block(&mut img, 300, 400, 600, 800);
+        // L-shaped scanner shadow along the left and bottom edges.
+        for y in 0..1600 {
+            for x in 0..30 {
+                img.set(x, y, true);
+            }
+        }
+        for y in 1560..1600 {
+            for x in 0..1200 {
+                img.set(x, y, true);
+            }
+        }
+        let r = detect_content(&img, 300).expect("text found");
+        assert!(r.x >= 290 && r.y >= 390 && r.x + r.w <= 910 && r.y + r.h <= 1210, "{r:?}");
+    }
+
+    #[test]
+    fn dense_text_touching_the_border_is_kept() {
+        let mut img = BitImage::new(1200, 1600);
+        text_block(&mut img, 0, 0, 1200, 1600);
+        let r = detect_content(&img, 300).unwrap();
+        assert!(r.w > 1100 && r.h > 1500, "{r:?}");
+    }
 }
