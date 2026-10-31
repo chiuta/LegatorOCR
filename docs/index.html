@@ -171,7 +171,7 @@ s.addEventListener('change',ap);v.addEventListener('loadedmetadata',ap);ap();})(
 <tr><td>Windows x86-64</td><td><code>.zip</code></td><td>OpenGL 2+ (sesiunile RDP simple pot lipsi)</td></tr>
 <tr><td>macOS</td><td><code>.zip</code> cu <code>LegatorOCR.app</code></td><td>nesemnată: clic dreapta → Deschide</td></tr>
 </table></div>
-<p>Interfața grafică a fost testată manual doar pe Linux; Windows și macOS sunt verificate doar prin CI.</p>
+<p>Interfața grafică a fost testată manual doar pe Linux; pentru Windows și macOS construirea este prevăzută în CI, dar rezultatul nu a fost verificat de autor.</p>
 </section>
 
 <section id="instalare">
@@ -204,7 +204,7 @@ winget install UB-Mannheim.TesseractOCR</code></pre>
 <li>Predicția tipică la refinarea JBIG2 (TPGRON) și grilele halftone deplasate sunt verificate doar cu encoderul propriu: poppler le decodează altfel.</li>
 <li>La fișierele criptate se încearcă doar parola de utilizator goală.</li>
 <li>Desenarea zonelor de ștergere cu mouse-ul nu a fost testată vizual.</li>
-<li>Windows și macOS: verificate doar în CI, nu manual.</li>
+<li>Windows și macOS: nu au fost testate manual; construirea lor este prevăzută în CI, al cărui rezultat nu a fost verificat de autor.</li>
 </ul>
 <p>Lista completă și comparația cu alte unelte: <a href="https://github.com/chiuta/LegatorOCR/blob/main/COMPARISON.md">COMPARISON.md</a>.</p>
 </section>
