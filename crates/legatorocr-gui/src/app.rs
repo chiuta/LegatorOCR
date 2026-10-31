@@ -58,6 +58,9 @@ struct Sheet {
     name: String,
     adj: SheetAdjust,
     adj_gen: u32,
+    /// Erase-zone history for Undo / Redo (snapshots of `adj.erase_mm`).
+    zone_undo: Vec<Vec<[f32; 4]>>,
+    zone_redo: Vec<Vec<[f32; 4]>>,
     ready: Option<Ready>,
     pending: Option<u64>,
     failed: Option<(u64, String)>,
@@ -325,6 +328,8 @@ impl App {
                 ready: None,
                 pending: None,
                 used: 0,
+                zone_undo: Vec::new(),
+                zone_redo: Vec::new(),
                 failed: None,
             });
             self.next_id += 1;
@@ -1559,6 +1564,12 @@ impl App {
             .and_then(|r| r.pages.first())
             .map(|p| p.skew_deg)
             .unwrap_or(0.0);
+        let (can_undo, can_redo) = (
+            !self.sheets[i].zone_undo.is_empty(),
+            !self.sheets[i].zone_redo.is_empty(),
+        );
+        let (mut clear_zones, mut undo_zone, mut redo_zone) = (false, false, false);
+        let mut reset_snap: Option<Vec<[f32; 4]>> = None;
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(tr("adj.title")).strong());
             let adj = &mut self.sheets[i].adj;
@@ -1610,10 +1621,26 @@ impl App {
                     .changed();
             }
             if ui.button(tr("zones.clear")).clicked() && !adj.erase_mm.is_empty() {
-                adj.erase_mm.clear();
-                adj_changed = true;
+                clear_zones = true;
+            }
+            if ui
+                .add_enabled(can_undo, egui::Button::new(tr("zones.undo")))
+                .on_hover_text("Ctrl+Z")
+                .clicked()
+            {
+                undo_zone = true;
+            }
+            if ui
+                .add_enabled(can_redo, egui::Button::new(tr("zones.redo")))
+                .on_hover_text("Ctrl+Y")
+                .clicked()
+            {
+                redo_zone = true;
             }
             if ui.button(tr("adj.reset")).clicked() {
+                if !adj.erase_mm.is_empty() {
+                    reset_snap = Some(adj.erase_mm.clone());
+                }
                 *adj = SheetAdjust::default();
                 adj_changed = true;
             }
@@ -1639,6 +1666,47 @@ impl App {
         });
         if adj_changed {
             self.sheets[i].adj_gen += 1;
+        }
+        // Keyboard: Ctrl+Z undo, Ctrl+Y / Ctrl+Shift+Z redo (not while typing in a text box).
+        if !ui.ctx().egui_wants_keyboard_input() {
+            ui.input_mut(|inp| {
+                let z = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Z);
+                let zs = egui::KeyboardShortcut::new(
+                    egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                    egui::Key::Z,
+                );
+                let y = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Y);
+                if inp.consume_shortcut(&zs) || inp.consume_shortcut(&y) {
+                    redo_zone = true;
+                } else if inp.consume_shortcut(&z) {
+                    undo_zone = true;
+                }
+            });
+        }
+        {
+            let sh = &mut self.sheets[i];
+            if let Some(snap) = reset_snap {
+                sh.zone_undo.push(snap);
+                sh.zone_redo.clear();
+            }
+            if clear_zones && !sh.adj.erase_mm.is_empty() {
+                sh.zone_undo.push(sh.adj.erase_mm.clone());
+                sh.zone_redo.clear();
+                sh.adj.erase_mm.clear();
+                sh.adj_gen += 1;
+            } else if undo_zone {
+                if let Some(prev) = sh.zone_undo.pop() {
+                    sh.zone_redo
+                        .push(std::mem::replace(&mut sh.adj.erase_mm, prev));
+                    sh.adj_gen += 1;
+                }
+            } else if redo_zone {
+                if let Some(next) = sh.zone_redo.pop() {
+                    sh.zone_undo
+                        .push(std::mem::replace(&mut sh.adj.erase_mm, next));
+                    sh.adj_gen += 1;
+                }
+            }
         }
         ui.separator();
 
@@ -1810,12 +1878,18 @@ impl App {
         if let Some(z) = new_zone {
             let a = &mut self.sheets[i].adj;
             if a.erase_mm.len() < 64 {
+                let before = a.erase_mm.clone();
                 a.erase_mm.push(z);
+                self.sheets[i].zone_undo.push(before);
+                self.sheets[i].zone_redo.clear();
                 self.sheets[i].adj_gen += 1;
             }
         }
         if let Some(k) = remove_zone {
+            let before = self.sheets[i].adj.erase_mm.clone();
             self.sheets[i].adj.erase_mm.remove(k);
+            self.sheets[i].zone_undo.push(before);
+            self.sheets[i].zone_redo.clear();
             self.sheets[i].adj_gen += 1;
         }
     }
