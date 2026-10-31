@@ -410,6 +410,21 @@ fn parse_page_size(s: &str) -> Result<(f32, f32)> {
 }
 
 fn main() -> Result<()> {
+    // `legatorocr … | head` closes our stdout early: end quietly like other Unix tools
+    // instead of panicking inside println!.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let msg = info
+            .payload()
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| info.payload().downcast_ref::<&str>().copied())
+            .unwrap_or("");
+        if msg.contains("Broken pipe") {
+            std::process::exit(0);
+        }
+        default_hook(info);
+    }));
     let r = real_main();
     legatorocr_engine::archive::cleanup();
     r

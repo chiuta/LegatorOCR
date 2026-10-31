@@ -74,7 +74,8 @@ jobs:
           exe="target/${{ matrix.target }}/release/legatorocr"
           case "${{ matrix.target }}" in *windows*) exe="$exe.exe";; esac
           "$exe" --version
-          "$exe" --list-profiles | grep -q .
+          profiles=$("$exe" --list-profiles)
+          test -n "$profiles"
           python3 - <<'PY'
           import struct, zlib
           w, h = 300, 400
