@@ -28,7 +28,6 @@ impl BitImage {
         let raw: Vec<u8> = self.data.iter().map(|&b| if b != 0 { 0 } else { 255 }).collect();
         GrayImage::from_raw(self.w, self.h, raw).expect("size matches")
     }
-    /// Copy of the sub-rectangle `[x0,x1) × [0,h)`.
     /// Copy the `w`×`h` region of `src` starting at (`sx`,`sy`) to (`dx`,`dy`) in
     /// `self`; either side may extend past its image (clipped, nothing is wrapped).
     pub fn paste_region(&mut self, src: &BitImage, from: (i64, i64, u32, u32), to: (i64, i64)) {
@@ -50,6 +49,7 @@ impl BitImage {
         }
     }
 
+    /// Copy of the sub-rectangle `[x0,x1) × [0,h)`.
     pub fn crop_x(&self, x0: u32, x1: u32) -> BitImage {
         let nw = x1 - x0;
         let mut out = BitImage::new(nw, self.h);

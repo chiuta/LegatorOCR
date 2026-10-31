@@ -93,6 +93,11 @@ impl PdfWriter {
         let dpi = page.dpi.clamp(36, 2400) as f32;
         let (wpt, hpt) = (pw as f32 * 72.0 / dpi, ph as f32 * 72.0 / dpi);
 
+        if let Some(l) = &page.layers {
+            self.add_layered(l, dpi, wpt, hpt, words);
+            return;
+        }
+
         // --- image XObject -------------------------------------------
         let img_id = self.alloc();
         // JPEG cannot exceed 65535 px per side; such pages stay lossless.
@@ -139,55 +144,117 @@ impl PdfWriter {
             },
         }
 
-        // --- content stream --------------------------------------------
-        let mut cs = String::new();
-        cs.push_str(&format!("q {wpt:.3} 0 0 {hpt:.3} 0 0 cm /Im0 Do Q\n"));
-        if !words.is_empty() {
-            cs.push_str("BT 3 Tr\n");
-            for w in words {
-                if w.text.trim().is_empty() || w.w == 0 || w.h == 0 {
-                    continue;
-                }
-                let n = w.text.chars().count() as f32;
-                let size = (w.h as f32 * 72.0 / dpi).max(1.0);
-                // Glyph advance is 0.5 em; scale horizontally to the word box.
-                let tz = (w.w as f32 * 72.0 / dpi) / (n * 0.5 * size) * 100.0;
-                let x = w.x as f32 * 72.0 / dpi;
-                let y = hpt - (w.y + w.h) as f32 * 72.0 / dpi + size * 0.2;
-                let mut hex = String::new();
-                for ch in w.text.chars().chain(std::iter::once(' ')) {
-                    match self.cid(ch) {
-                        Some(id) => hex.push_str(&format!("{id:04X}")),
-                        None => {
-                            hex.clear();
-                            break;
-                        }
+        let mut cs = format!("q {wpt:.3} 0 0 {hpt:.3} 0 0 cm /Im0 Do Q\n");
+        self.text_ops(&mut cs, words, dpi, hpt);
+        self.finish_page(cs, &format!("/Im0 {img_id} 0 R"), wpt, hpt);
+    }
+
+    /// Invisible-text operators for OCR words.
+    fn text_ops(&mut self, cs: &mut String, words: &[Word], dpi: f32, hpt: f32) {
+        if words.is_empty() {
+            return;
+        }
+        cs.push_str("BT 3 Tr\n");
+        for w in words {
+            if w.text.trim().is_empty() || w.w == 0 || w.h == 0 {
+                continue;
+            }
+            let n = w.text.chars().count() as f32;
+            let size = (w.h as f32 * 72.0 / dpi).max(1.0);
+            // Glyph advance is 0.5 em; scale horizontally to the word box.
+            let tz = (w.w as f32 * 72.0 / dpi) / (n * 0.5 * size) * 100.0;
+            let x = w.x as f32 * 72.0 / dpi;
+            let y = hpt - (w.y + w.h) as f32 * 72.0 / dpi + size * 0.2;
+            let mut hex = String::new();
+            for ch in w.text.chars().chain(std::iter::once(' ')) {
+                match self.cid(ch) {
+                    Some(id) => hex.push_str(&format!("{id:04X}")),
+                    None => {
+                        hex.clear();
+                        break;
                     }
                 }
-                if hex.is_empty() {
-                    continue;
-                }
-                cs.push_str(&format!(
-                    "/F1 {size:.2} Tf {tz:.1} Tz 1 0 0 1 {x:.2} {y:.2} Tm <{hex}> Tj\n"
-                ));
             }
-            cs.push_str("ET\n");
+            if hex.is_empty() {
+                continue;
+            }
+            cs.push_str(&format!("/F1 {size:.2} Tf {tz:.1} Tz 1 0 0 1 {x:.2} {y:.2} Tm <{hex}> Tj\n"));
         }
+        cs.push_str("ET\n");
+    }
+
+    fn finish_page(&mut self, cs: String, xobjects: &str, wpt: f32, hpt: f32) {
         let cs_id = self.alloc();
         let z = deflate(cs.as_bytes());
         self.stream_obj(cs_id, "/Filter /FlateDecode", &z);
-
-        // --- page object -------------------------------------------------
         let page_id = self.alloc();
         self.plain_obj(
             page_id,
             &format!(
                 "<< /Type /Page /Parent {PAGES} 0 R /MediaBox [0 0 {wpt:.3} {hpt:.3}] \
-                 /Resources << /XObject << /Im0 {img_id} 0 R >> /Font << /F1 {FONT} 0 R >> >> \
+                 /Resources << /XObject << {xobjects} >> /Font << /F1 {FONT} 0 R >> >> \
                  /Contents {cs_id} 0 R >>"
             ),
         );
         self.page_ids.push(page_id);
+    }
+
+    fn rgb_xobject(&mut self, c: &image::RgbImage) -> u32 {
+        let (w, h) = c.dimensions();
+        let id = self.alloc();
+        match self.compress {
+            Compress::Jpeg(q) if w <= 65_000 && h <= 65_000 => {
+                let mut out = Vec::new();
+                JpegEncoder::new_with_quality(&mut out, q)
+                    .encode(c.as_raw(), w, h, ExtendedColorType::Rgb8)
+                    .expect("jpeg encode");
+                self.stream_obj(id, &image_dict(w, h, "DeviceRGB", "DCTDecode"), &out);
+            }
+            _ => {
+                let z = deflate(c.as_raw());
+                self.stream_obj(id, &image_dict(w, h, "DeviceRGB", "FlateDecode"), &z);
+            }
+        }
+        id
+    }
+
+    /// Layered page: optional low-res background, picture patches, then the
+    /// 1-bit text mask painted as a stencil in the ink colour.
+    fn add_layered(&mut self, l: &legatorocr_core::layers::Layers, dpi: f32, wpt: f32, hpt: f32, words: &[Word]) {
+        let (pw, ph) = (l.mask.w, l.mask.h);
+        let mut xo = String::new();
+        let mut cs = String::new();
+        match &l.bg {
+            Some(b) => {
+                let id = self.rgb_xobject(&b.img);
+                xo.push_str(&format!("/Bg {id} 0 R "));
+                cs.push_str(&format!("q {wpt:.3} 0 0 {hpt:.3} 0 0 cm /Bg Do Q\n"));
+            }
+            None => cs.push_str(&format!("q 1 1 1 rg 0 0 {wpt:.3} {hpt:.3} re f Q\n")),
+        }
+        for (i, p) in l.patches.iter().enumerate() {
+            let id = self.rgb_xobject(&p.img);
+            xo.push_str(&format!("/P{i} {id} 0 R "));
+            let (w, h) = (p.img.width() as f32 * 72.0 / dpi, p.img.height() as f32 * 72.0 / dpi);
+            let (x, y) = (p.x as f32 * 72.0 / dpi, hpt - (p.y as f32 * 72.0 / dpi) - h);
+            cs.push_str(&format!("q {w:.3} 0 0 {h:.3} {x:.3} {y:.3} cm /P{i} Do Q\n"));
+        }
+        let mask_id = self.alloc();
+        let z = deflate(&pack_1bit_up_predicted(&l.mask));
+        self.stream_obj(
+            mask_id,
+            &format!(
+                "/Type /XObject /Subtype /Image /Width {pw} /Height {ph} /ImageMask true \
+                 /BitsPerComponent 1 /Filter /FlateDecode \
+                 /DecodeParms << /Predictor 15 /Colors 1 /BitsPerComponent 1 /Columns {pw} >>"
+            ),
+            &z,
+        );
+        xo.push_str(&format!("/Mk {mask_id} 0 R"));
+        let [r, g, b] = l.fg.map(|c| c as f32 / 255.0);
+        cs.push_str(&format!("q {r:.3} {g:.3} {b:.3} rg {wpt:.3} 0 0 {hpt:.3} 0 0 cm /Mk Do Q\n"));
+        self.text_ops(&mut cs, words, dpi, hpt);
+        self.finish_page(cs, &xo, wpt, hpt);
     }
 
     pub fn page_count(&self) -> usize {
@@ -326,7 +393,7 @@ mod tests {
     use image::RgbImage;
 
     fn page(img: PageImage) -> Page {
-        Page { image: img, dpi: 300, skew_deg: 0.0, blank: false, split_index: None }
+        Page { image: img, dpi: 300, skew_deg: 0.0, blank: false, split_index: None, layers: None }
     }
 
     #[test]
@@ -384,7 +451,7 @@ mod unicode_file {
         let mut w = PdfWriter::new(Compress::Flate);
         let mut bw = BitImage::new(600, 300);
         bw.set(1, 1, true);
-        let page = Page { image: PageImage::Bw(bw), dpi: 150, skew_deg: 0.0, blank: false, split_index: None };
+        let page = Page { image: PageImage::Bw(bw), dpi: 150, skew_deg: 0.0, blank: false, split_index: None, layers: None };
         let words: Vec<Word> = ["Școala", "țăranului", "înființată", "Âțâră", "e", "😀ok"]
             .iter()
             .enumerate()

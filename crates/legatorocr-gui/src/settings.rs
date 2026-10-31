@@ -1,6 +1,6 @@
 //! GUI-side settings and their mapping onto the core pipeline settings.
 
-use legatorocr_core::{OutputMode, Settings, SplitMode};
+use legatorocr_core::{HAlign, OutputMode, Settings, SplitMode, Threshold, VAlign};
 use legatorocr_engine::ocr::OcrOptions;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -34,6 +34,8 @@ pub enum ModeChoice {
     Color,
     Gray,
     Bw,
+    Mixed,
+    Hybrid,
 }
 
 #[derive(Clone, Debug)]
@@ -52,6 +54,14 @@ pub struct UiSettings {
     pub mode: ModeChoice,
     pub sauvola_k: f32,
     pub despeckle: bool,
+    pub threshold: Threshold,
+    pub normalize_bg: bool,
+    pub dewarp: bool,
+    /// 0 = keep the scan resolution.
+    pub output_dpi: u32,
+    pub picture_sensitivity: f32,
+    pub hybrid_dpi: u32,
+    pub align: (HAlign, VAlign),
     pub pdf_quality: u8,
     pub skip_blank: bool,
     pub ocr: bool,
@@ -77,6 +87,13 @@ impl Default for UiSettings {
             mode: ModeChoice::Color,
             sauvola_k: 0.3,
             despeckle: true,
+            threshold: Threshold::Sauvola,
+            normalize_bg: false,
+            dewarp: false,
+            output_dpi: 0,
+            picture_sensitivity: 0.5,
+            hybrid_dpi: 100,
+            align: (HAlign::Center, VAlign::Center),
             pdf_quality: 80,
             skip_blank: false,
             ocr: false,
@@ -95,6 +112,8 @@ pub struct SheetAdjust {
     pub split: Option<SplitChoice>,
     /// Manual skew correction in degrees, clockwise positive.
     pub skew_deg: Option<f32>,
+    /// Move the detected content box outwards by this many mm per side (l, t, r, b).
+    pub content_adjust_mm: [f32; 4],
 }
 
 impl UiSettings {
@@ -123,9 +142,19 @@ impl UiSettings {
                 ModeChoice::Color => OutputMode::Color,
                 ModeChoice::Gray => OutputMode::Gray,
                 ModeChoice::Bw => OutputMode::BlackWhite,
+                ModeChoice::Mixed => OutputMode::Mixed,
+                ModeChoice::Hybrid => OutputMode::Hybrid,
             },
             sauvola_k: self.sauvola_k,
             despeckle: self.despeckle,
+            dewarp: self.dewarp,
+            content_adjust_mm: adj.content_adjust_mm,
+            align: self.align,
+            threshold: self.threshold,
+            normalize_bg: self.normalize_bg,
+            output_dpi: (self.output_dpi >= 36).then_some(self.output_dpi),
+            picture_sensitivity: self.picture_sensitivity,
+            hybrid_bg_dpi: self.hybrid_dpi,
         }
     }
 
@@ -156,7 +185,7 @@ mod tests {
     #[test]
     fn per_sheet_overrides_win() {
         let s = UiSettings { split: SplitChoice::Auto, deskew: true, ..Default::default() };
-        let c = s.to_core(&SheetAdjust { rotate_quarters: 5, split: Some(SplitChoice::Off), skew_deg: Some(-1.5) });
+        let c = s.to_core(&SheetAdjust { rotate_quarters: 5, split: Some(SplitChoice::Off), skew_deg: Some(-1.5), ..Default::default() });
         assert_eq!(c.split, SplitMode::Off);
         assert_eq!(c.rotate_quarters, 1); // 5 mod 4
         assert_eq!(c.manual_skew_deg, Some(-1.5));

@@ -1,12 +1,19 @@
-use crate::{binarize, content, deskew, orient, split, transform, BitImage, Rect};
+use crate::binarize::Threshold;
+use crate::layers::{self, Layers, Patch};
+use crate::{binarize, content, deskew, dewarp, orient, pictures, split, transform, BitImage, Rect};
 use image::{imageops, DynamicImage, GrayImage, Rgb, RgbImage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputMode {
     Color,
     Gray,
-    /// Adaptive (Sauvola) black & white.
+    /// Adaptive black & white (see [`Threshold`]).
     BlackWhite,
+    /// Text as a sharp 1-bit layer; detected pictures kept as colour patches.
+    Mixed,
+    /// Like `Mixed`, plus a low-resolution paper background: colour book pages at a
+    /// fraction of the size, text still razor sharp.
+    Hybrid,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,6 +23,22 @@ pub enum SplitMode {
     Auto,
     /// Always cut in the exact middle.
     Middle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HAlign {
+    Left,
+    #[default]
+    Center,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VAlign {
+    Top,
+    #[default]
+    Center,
+    Bottom,
 }
 
 #[derive(Debug, Clone)]
@@ -31,13 +54,30 @@ pub struct Settings {
     /// replaces the automatic estimate, even if `deskew` is off.
     pub manual_skew_deg: Option<f32>,
     pub max_skew_deg: f32,
+    /// Straighten curved text lines (page curl near the spine).
+    pub dewarp: bool,
     /// Margins around the detected content, millimetres: left, top, right, bottom.
     pub margins_mm: [f32; 4],
-    /// Fixed output page size (mm). Content is centred; grows if content is larger.
+    /// Per-page correction of the detected content box, mm: how far each side
+    /// (left, top, right, bottom) moves *outwards* (negative = inwards).
+    pub content_adjust_mm: [f32; 4],
+    /// Fixed output page size (mm). Content is placed per `align`; grows if content is larger.
     pub page_size_mm: Option<(f32, f32)>,
+    pub align: (HAlign, VAlign),
     pub mode: OutputMode,
+    /// Binarisation method for black & white / mixed / hybrid output.
+    pub threshold: Threshold,
+    /// Binarisation sensitivity 0–1 (higher = more ink).
     pub sauvola_k: f32,
     pub despeckle: bool,
+    /// Even out lighting (shadows, darkened corners) in colour/gray/hybrid output.
+    pub normalize_bg: bool,
+    /// Resample the result to this resolution when lower than the scan's.
+    pub output_dpi: Option<u32>,
+    /// Picture detection sensitivity 0–1 for `Mixed` / `Hybrid`.
+    pub picture_sensitivity: f32,
+    /// Resolution of the `Hybrid` background layer.
+    pub hybrid_bg_dpi: u32,
 }
 
 impl Default for Settings {
@@ -50,11 +90,19 @@ impl Default for Settings {
             deskew: true,
             manual_skew_deg: None,
             max_skew_deg: 7.0,
+            dewarp: false,
             margins_mm: [5.0; 4],
+            content_adjust_mm: [0.0; 4],
             page_size_mm: None,
+            align: (HAlign::Center, VAlign::Center),
             mode: OutputMode::Color,
+            threshold: Threshold::Sauvola,
             sauvola_k: 0.3,
             despeckle: true,
+            normalize_bg: false,
+            output_dpi: None,
+            picture_sensitivity: 0.5,
+            hybrid_bg_dpi: 100,
         }
     }
 }
@@ -98,7 +146,9 @@ impl PageImage {
 
 #[derive(Clone)]
 pub struct Page {
+    /// The flattened page (what you see; what OCR reads; what image export writes).
     pub image: PageImage,
+    /// Resolution of `image` (the output dpi when resampling was requested).
     pub dpi: u32,
     /// Skew that was corrected, in degrees (clockwise positive).
     pub skew_deg: f32,
@@ -106,15 +156,28 @@ pub struct Page {
     pub blank: bool,
     /// Which half of a split spread this is: `Some(0)` left, `Some(1)` right.
     pub split_index: Option<u8>,
+    /// Layered form (`Mixed`/`Hybrid`): the PDF writer stores these instead of `image`.
+    pub layers: Option<Layers>,
 }
 
 fn mm_to_px(mm: f32, dpi: u32) -> u32 {
     (mm / 25.4 * dpi as f32).round().max(0.0) as u32
 }
 
-/// Ink map used for *analysis* only (not for the final B/W output).
-fn analysis_ink(gray: &GrayImage, dpi: u32) -> BitImage {
-    binarize::sauvola(gray, (dpi / 8).max(15), 0.3)
+/// Ink map for *analysis* only, computed on a copy of at most ≈150 dpi (a 600 dpi
+/// scan is analysed on 1/16 of the pixels). Returns the map and the factor by which
+/// it is smaller than the source, plus the dpi it corresponds to.
+struct Analysis {
+    ink: BitImage,
+    factor: u32,
+    dpi: u32,
+}
+
+fn analyse(gray: &GrayImage, dpi: u32) -> Analysis {
+    let factor = (dpi / 150).max(1);
+    let small = transform::downscale_gray(gray, factor);
+    let eff = (dpi / factor).max(1);
+    Analysis { ink: binarize::sauvola(&small, (eff / 8).max(15), 0.3), factor, dpi: eff }
 }
 
 impl Settings {
@@ -132,60 +195,96 @@ impl Settings {
         for (m, dm) in s.margins_mm.iter_mut().zip(d.margins_mm) {
             *m = fin(*m, 0.0, 200.0, dm);
         }
+        for a in s.content_adjust_mm.iter_mut() {
+            *a = fin(*a, -100.0, 100.0, 0.0);
+        }
         s.page_size_mm = s.page_size_mm.and_then(|(w, h)| {
             (w.is_finite() && h.is_finite() && w >= 10.0 && h >= 10.0).then(|| (w.min(2000.0), h.min(2000.0)))
         });
         s.sauvola_k = fin(s.sauvola_k, 0.0, 1.0, d.sauvola_k);
+        s.picture_sensitivity = fin(s.picture_sensitivity, 0.0, 1.0, d.picture_sensitivity);
+        s.hybrid_bg_dpi = s.hybrid_bg_dpi.clamp(36, 300);
+        s.output_dpi = s.output_dpi.filter(|&o| o >= 36).map(|o| o.min(s.dpi));
         s
     }
 }
 
-/// Run the whole pipeline on one scanned sheet. A two-page spread yields two pages.
-pub fn process_page(src: &DynamicImage, s: &Settings) -> Vec<Page> {
-    let s = &s.sanitized();
+/// Stages shared by [`process_page`] and [`measure_page`]: orientation and page split.
+fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<(RgbImage, Option<u8>)> {
     let mut rgb = transform::rot90(&src.to_rgb8(), s.rotate_quarters);
 
     if s.auto_orient {
-        let ink = analysis_ink(&imageops::grayscale(&rgb), s.dpi);
-        if orient::needs_quarter_turn(&ink, s.dpi) {
+        let a = analyse(&imageops::grayscale(&rgb), s.dpi);
+        if orient::needs_quarter_turn(&a.ink, a.dpi) {
             rgb = transform::rot90(&rgb, 1);
         }
     }
 
-    // --- page split ---------------------------------------------------
     let mut parts: Vec<(RgbImage, Option<u8>)> = vec![(rgb.clone(), None)];
     if s.split != SplitMode::Off {
         let cut = match s.split {
-            SplitMode::Middle => (rgb.width() as f32 >= 1.15 * rgb.height() as f32)
-                .then_some(rgb.width() / 2),
+            SplitMode::Middle => (rgb.width() as f32 >= 1.15 * rgb.height() as f32).then_some(rgb.width() / 2),
             _ => {
-                let ink = analysis_ink(&imageops::grayscale(&rgb), s.dpi);
-                split::find_gutter(&ink)
+                let a = analyse(&imageops::grayscale(&rgb), s.dpi);
+                split::find_gutter(&a.ink).map(|x| (x * a.factor).min(rgb.width().saturating_sub(1)))
             }
         };
-        if let Some(x) = cut {
+        if let Some(x) = cut.filter(|&x| x > 0 && x < rgb.width()) {
             let l = imageops::crop_imm(&rgb, 0, 0, x, rgb.height()).to_image();
             let r = imageops::crop_imm(&rgb, x, 0, rgb.width() - x, rgb.height()).to_image();
             parts = vec![(l, Some(0)), (r, Some(1))];
         }
     }
-
     parts
+}
+
+/// Run the whole pipeline on one scanned sheet. A two-page spread yields two pages.
+pub fn process_page(src: &DynamicImage, s: &Settings) -> Vec<Page> {
+    let s = &s.sanitized();
+    split_sheet(src, s)
         .into_iter()
-        .map(|(img, idx)| finish_page(img, idx, s))
+        .map(|(img, idx)| render(prepare(img, s), idx, s))
         .collect()
 }
 
-fn finish_page(mut img: RgbImage, split_index: Option<u8>, s: &Settings) -> Page {
-    let mut bg = transform::estimate_background(&img);
+/// Size in millimetres (content + margins) of every page the sheet yields, or `None`
+/// for a blank page. Used to make all pages of a book the same size without keeping
+/// them in memory: measure first, render second.
+pub fn measure_page(src: &DynamicImage, s: &Settings) -> Vec<Option<(f32, f32)>> {
+    let s = &s.sanitized();
+    split_sheet(src, s)
+        .into_iter()
+        .map(|(img, _)| {
+            let p = prepare(img, s);
+            p.content.map(|r| {
+                let [ml, mt, mr, mb] = s.margins_mm;
+                let mm = |px: u32| px as f32 * 25.4 / s.dpi as f32;
+                (mm(r.w) + ml + mr, mm(r.h) + mt + mb)
+            })
+        })
+        .collect()
+}
+
+/// A deskewed (and optionally dewarped) page plus where its content is.
+struct Prepared {
+    img: RgbImage,
+    /// Paper colour estimate.
+    bg: Rgb<u8>,
+    skew_deg: f32,
+    /// Content box in `img` coordinates, after the per-page adjustment.
+    content: Option<Rect>,
+}
+
+fn prepare(mut img: RgbImage, s: &Settings) -> Prepared {
+    let bg = transform::estimate_background(&img);
     let mut skew_deg = 0.0;
 
-    // --- deskew -------------------------------------------------------
+    // --- deskew ---------------------------------------------------------
     let angle = match s.manual_skew_deg {
         Some(deg) => Some(deg.to_radians()),
         None if s.deskew => {
-            let ink = analysis_ink(&imageops::grayscale(&img), s.dpi);
-            deskew::detect_skew(&ink, s.max_skew_deg)
+            let a = analyse(&imageops::grayscale(&img), s.dpi);
+            deskew::detect_skew(&a.ink, s.max_skew_deg)
         }
         None => None,
     };
@@ -196,71 +295,181 @@ fn finish_page(mut img: RgbImage, split_index: Option<u8>, s: &Settings) -> Page
         }
     }
 
-    // --- content ------------------------------------------------------
-    let gray = imageops::grayscale(&img);
-    let ink = analysis_ink(&gray, s.dpi);
-    let content: Option<Rect> = content::detect_content(&ink, s.dpi);
-
-    let (canvas_x, canvas_y, cw, ch, blank) = match content {
-        None => (0i64, 0i64, img.width(), img.height(), true),
-        Some(r) => {
-            let [ml, mt, mr, mb] = s.margins_mm.map(|m| mm_to_px(m, s.dpi));
-            let (mut cw, mut ch) = (r.w + ml + mr, r.h + mt + mb);
-            if let Some((pw, ph)) = s.page_size_mm {
-                cw = cw.max(mm_to_px(pw, s.dpi));
-                ch = ch.max(mm_to_px(ph, s.dpi));
-            }
-            // Centre the content box (plus its own asymmetric margins) in the canvas.
-            let ox = r.x as i64 - ml as i64 - ((cw - (r.w + ml + mr)) / 2) as i64;
-            let oy = r.y as i64 - mt as i64 - ((ch - (r.h + mt + mb)) / 2) as i64;
-            (ox, oy, cw, ch, false)
+    // --- dewarp -----------------------------------------------------------
+    if s.dewarp {
+        if let Some(flat) = dewarp::dewarp(&img, s.dpi, bg) {
+            img = flat;
         }
-    };
-    if s.mode != OutputMode::Color {
-        bg = Rgb([255, 255, 255]);
     }
-    // Only the content box (plus a hair of safety) is taken from the scan;
-    // everything else — margins, scanner bed, edge shadows — is paper colour.
-    let pad = (s.dpi / 100).max(2) as i64;
-    let window = content.map(|r| (r.x as i64 - pad, r.y as i64 - pad, r.w + 2 * pad as u32, r.h + 2 * pad as u32));
 
-    let image = match s.mode {
-        OutputMode::BlackWhite => {
-            // Binarise the whole (deskewed) scan first, then cut: a window cut out of
-            // uneven paper and thresholded on a flat canvas gets a black frame.
-            let g = imageops::grayscale(&img);
-            let mut bw = binarize::sauvola(&g, (s.dpi / 3) | 1, s.sauvola_k);
-            if s.despeckle {
-                let min_px = ((s.dpi as f32 / 300.0).powi(2) * 6.0).round() as u32;
-                bw.despeckle(min_px.max(2));
-            }
-            match window {
-                None => PageImage::Bw(bw),
-                Some((wx, wy, ww, wh)) => {
-                    let mut canvas = BitImage::new(cw, ch);
-                    canvas.paste_region(&bw, (wx, wy, ww, wh), (wx - canvas_x, wy - canvas_y));
-                    PageImage::Bw(canvas)
-                }
-            }
+    // --- content ----------------------------------------------------------
+    let a = analyse(&imageops::grayscale(&img), s.dpi);
+    let content = content::detect_content(&a.ink, a.dpi).map(|r| {
+        // back to full resolution, grown by the analysis step so no ink is shaved
+        let f = a.factor;
+        let (x0, y0) = ((r.x * f).saturating_sub(f), (r.y * f).saturating_sub(f));
+        let (x1, y1) = (((r.x + r.w) * f + f).min(img.width()), ((r.y + r.h) * f + f).min(img.height()));
+        let mut rect = Rect { x: x0, y: y0, w: x1.saturating_sub(x0).max(1), h: y1.saturating_sub(y0).max(1) };
+        // per-page manual correction
+        let [al, at, ar, ab] = s.content_adjust_mm.map(|mm| (mm / 25.4 * s.dpi as f32).round() as i64);
+        let nx0 = (rect.x as i64 - al).clamp(0, img.width() as i64 - 1);
+        let ny0 = (rect.y as i64 - at).clamp(0, img.height() as i64 - 1);
+        let nx1 = ((rect.x + rect.w) as i64 + ar).clamp(nx0 + 1, img.width() as i64);
+        let ny1 = ((rect.y + rect.h) as i64 + ab).clamp(ny0 + 1, img.height() as i64);
+        rect = Rect { x: nx0 as u32, y: ny0 as u32, w: (nx1 - nx0) as u32, h: (ny1 - ny0) as u32 };
+        rect
+    });
+    Prepared { img, bg, skew_deg, content }
+}
+
+/// Where the content window lands on the output canvas (all in source pixels).
+struct Layout {
+    /// Canvas size.
+    cw: u32,
+    ch: u32,
+    /// Source-pixel position of the canvas's top-left corner.
+    cx: i64,
+    cy: i64,
+}
+
+fn layout(r: Rect, s: &Settings) -> Layout {
+    let [ml, mt, mr, mb] = s.margins_mm.map(|m| mm_to_px(m, s.dpi));
+    let (inner_w, inner_h) = (r.w + ml + mr, r.h + mt + mb);
+    let (mut cw, mut ch) = (inner_w, inner_h);
+    if let Some((pw, ph)) = s.page_size_mm {
+        cw = cw.max(mm_to_px(pw, s.dpi));
+        ch = ch.max(mm_to_px(ph, s.dpi));
+    }
+    let (extra_w, extra_h) = (cw - inner_w, ch - inner_h);
+    let dx = match s.align.0 {
+        HAlign::Left => 0,
+        HAlign::Center => extra_w / 2,
+        HAlign::Right => extra_w,
+    };
+    let dy = match s.align.1 {
+        VAlign::Top => 0,
+        VAlign::Center => extra_h / 2,
+        VAlign::Bottom => extra_h,
+    };
+    Layout { cw, ch, cx: r.x as i64 - ml as i64 - dx as i64, cy: r.y as i64 - mt as i64 - dy as i64 }
+}
+
+/// Scale a 1-bit image by `f` (< 1) the way a scanner driver would: average, then re-threshold.
+fn scale_bw(b: &BitImage, nw: u32, nh: u32) -> BitImage {
+    let g = imageops::resize(&b.to_gray(), nw.max(1), nh.max(1), imageops::FilterType::Triangle);
+    binarize::global(&g, 127)
+}
+
+fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
+    let Prepared { img, bg, skew_deg, content } = p;
+    let blank = content.is_none();
+    // Output resolution: only ever *down*-sampled.
+    let (out_dpi, f) = match s.output_dpi {
+        Some(o) if o < s.dpi => (o, o as f32 / s.dpi as f32),
+        _ => (s.dpi, 1.0),
+    };
+    let scaled = |v: u32| if f == 1.0 { v } else { ((v as f32 * f).round() as u32).max(1) };
+    let paper = if matches!(s.mode, OutputMode::Gray | OutputMode::BlackWhite | OutputMode::Mixed) {
+        Rgb([255, 255, 255])
+    } else {
+        bg
+    };
+
+    // Window taken from the scan: the content box plus a hair of safety. Everything
+    // else — margins, scanner bed, edge shadows — becomes paper.
+    let pad = (s.dpi / 100).max(2) as i64;
+    let (lay, win) = match content {
+        None => (Layout { cw: img.width(), ch: img.height(), cx: 0, cy: 0 }, (0i64, 0i64, img.width(), img.height())),
+        Some(r) => (
+            layout(r, s),
+            (r.x as i64 - pad, r.y as i64 - pad, r.w + 2 * pad as u32, r.h + 2 * pad as u32),
+        ),
+    };
+    let (cw, ch) = (scaled(lay.cw), scaled(lay.ch));
+    let (wx_out, wy_out) = (((win.0 - lay.cx) as f32 * f).round() as i64, ((win.1 - lay.cy) as f32 * f).round() as i64);
+    let (ww_out, wh_out) = (scaled(win.2), scaled(win.3));
+
+    // 1-bit ink layer for BW / Mixed / Hybrid: binarise the WHOLE deskewed scan first,
+    // then cut (a window thresholded on a flat canvas gets a black frame on uneven paper).
+    let wants_mask = matches!(s.mode, OutputMode::BlackWhite | OutputMode::Mixed | OutputMode::Hybrid);
+    let mask: Option<BitImage> = wants_mask.then(|| {
+        let g = imageops::grayscale(&img);
+        let mut bw = binarize::threshold(&g, s.threshold, (s.dpi / 3) | 1, s.sauvola_k);
+        if s.despeckle {
+            let min_px = ((s.dpi as f32 / 300.0).powi(2) * 6.0).round() as u32;
+            bw.despeckle(min_px.max(2));
         }
-        mode => {
-            let cropped = match window {
-                None => img,
-                Some((wx, wy, ww, wh)) => {
-                    let w = transform::crop_pad(&img, wx, wy, ww, wh, bg);
-                    let mut canvas = RgbImage::from_pixel(cw, ch, bg);
-                    imageops::replace(&mut canvas, &w, wx - canvas_x, wy - canvas_y);
-                    canvas
-                }
-            };
-            if mode == OutputMode::Gray {
-                PageImage::Gray(imageops::grayscale(&cropped))
+        let mut canvas = BitImage::new(cw, ch);
+        if blank {
+            return if f == 1.0 { bw } else { scale_bw(&bw, cw, ch) };
+        }
+        let mut window = BitImage::new(win.2, win.3);
+        window.paste_region(&bw, (win.0, win.1, win.2, win.3), (0, 0));
+        let window = if f == 1.0 { window } else { scale_bw(&window, ww_out, wh_out) };
+        canvas.paste_region(&window, (0, 0, window.w, window.h), (wx_out, wy_out));
+        canvas
+    });
+
+    // Colour/gray window (also the source of picture patches and the hybrid background).
+    let wants_colour = !matches!(s.mode, OutputMode::BlackWhite);
+    let canvas_rgb: Option<RgbImage> = wants_colour.then(|| {
+        let mut window = transform::crop_pad(&img, win.0, win.1, win.2, win.3, bg);
+        if s.normalize_bg && window.width() > 8 && window.height() > 8 {
+            let target = if s.mode == OutputMode::Gray { Rgb([255, 255, 255]) } else { bg };
+            window = transform::normalize_background(&window, s.dpi, target);
+        }
+        if f != 1.0 {
+            window = imageops::resize(&window, ww_out, wh_out, imageops::FilterType::Triangle);
+        }
+        let mut canvas = RgbImage::from_pixel(cw, ch, paper);
+        imageops::replace(&mut canvas, &window, wx_out, wy_out);
+        canvas
+    });
+
+    let (image, layers) = match s.mode {
+        OutputMode::BlackWhite => (PageImage::Bw(mask.expect("mask")), None),
+        OutputMode::Color => (PageImage::Rgb(canvas_rgb.expect("rgb")), None),
+        OutputMode::Gray => (PageImage::Gray(imageops::grayscale(&canvas_rgb.expect("rgb"))), None),
+        OutputMode::Mixed | OutputMode::Hybrid => {
+            let (rgb, mut mask) = (canvas_rgb.expect("rgb"), mask.expect("mask"));
+            if blank {
+                (PageImage::Bw(mask), None)
             } else {
-                PageImage::Rgb(cropped)
+                let gray = imageops::grayscale(&rgb);
+                let zones = pictures::detect(&gray, out_dpi, s.picture_sensitivity);
+                let mut patches = Vec::new();
+                for z in &zones {
+                    let r = z.rect;
+                    patches.push(Patch { x: r.x, y: r.y, img: imageops::crop_imm(&rgb, r.x, r.y, r.w, r.h).to_image() });
+                    for y in r.y..(r.y + r.h).min(mask.h) {
+                        for x in r.x..(r.x + r.w).min(mask.w) {
+                            mask.set(x, y, false); // the picture patch already shows these pixels
+                        }
+                    }
+                }
+                if s.mode == OutputMode::Mixed {
+                    if patches.is_empty() {
+                        (PageImage::Bw(mask), None)
+                    } else {
+                        let l = Layers { mask, fg: [0, 0, 0], bg: None, patches };
+                        (PageImage::Rgb(l.compose()), Some(l))
+                    }
+                } else {
+                    let fg = layers::ink_colour(&rgb, &mask);
+                    let down = (out_dpi / s.hybrid_bg_dpi.max(1)).max(1);
+                    let bg_img = layers::build_background(&rgb, &layers::dilate(&mask), down);
+                    let l = Layers {
+                        mask,
+                        fg,
+                        bg: Some(layers::Background { img: bg_img, dpi: out_dpi / down }),
+                        patches,
+                    };
+                    (PageImage::Rgb(l.compose()), Some(l))
+                }
             }
         }
     };
-    Page { image, dpi: s.dpi, skew_deg, blank, split_index }
+    Page { image, dpi: out_dpi, skew_deg, blank, split_index, layers }
 }
 
 #[cfg(test)]
@@ -559,9 +768,20 @@ mod tests {
                 max_skew_deg: rnd(20) as f32,
                 margins_mm: [rnd(30) as f32; 4],
                 page_size_mm: (rnd(2) == 0).then(|| (rnd(300) as f32, rnd(300) as f32)),
-                mode: [OutputMode::Color, OutputMode::Gray, OutputMode::BlackWhite][rnd(3) as usize],
+                mode: [OutputMode::Color, OutputMode::Gray, OutputMode::BlackWhite, OutputMode::Mixed, OutputMode::Hybrid][rnd(5) as usize],
                 sauvola_k: rnd(100) as f32 / 100.0,
                 despeckle: rnd(2) == 0,
+                dewarp: rnd(2) == 0,
+                content_adjust_mm: [rnd(40) as f32 - 20.0; 4],
+                align: (
+                    [HAlign::Left, HAlign::Center, HAlign::Right][rnd(3) as usize],
+                    [VAlign::Top, VAlign::Center, VAlign::Bottom][rnd(3) as usize],
+                ),
+                threshold: Threshold::ALL[rnd(Threshold::ALL.len() as u64) as usize],
+                normalize_bg: rnd(2) == 0,
+                output_dpi: (rnd(2) == 0).then(|| [10, 36, 72, 150][rnd(4) as usize]),
+                picture_sensitivity: rnd(100) as f32 / 100.0,
+                hybrid_bg_dpi: rnd(400) as u32,
             };
             let pages = process_page(&DynamicImage::ImageRgb8(img), &s);
             assert!(!pages.is_empty() && pages.len() <= 2, "iteration {it}");

@@ -96,6 +96,22 @@ pub fn detect_content(ink: &BitImage, dpi: u32) -> Option<Rect> {
         if touches && (c.blocks.len() as f64) < 0.12 * (cw * ch) as f64 {
             continue;
         }
+        // After deskewing, the scanner-bed wedge no longer touches the image border:
+        // it sits a few pixels inside as a long, solid, very thin strip hugging an
+        // edge. Text lines are as thin but mostly gaps; the strip is mostly ink.
+        let near = c.x0 < gw / 12 || c.y0 < gh / 12 || c.x1 + gw / 12 >= gw || c.y1 + gh / 12 >= gh;
+        let long = (cw * 5 >= gw * 3 && ch * 20 < cw) || (ch * 5 >= gh * 3 && cw * 20 < ch);
+        if near && long && c.mass as f64 > 0.3 * (cw * ch * b * b) as f64 {
+            continue;
+        }
+        // Small speck cut by the image border: the tip of a shadow wedge.
+        if touches && cw * 25 < gw && ch * 25 < gh {
+            continue;
+        }
+        // The four wedges around a deskewed page form an almost empty frame.
+        if near && cw * 20 >= gw * 17 && ch * 20 >= gh * 17 && (c.blocks.len() as f64) < 0.12 * (cw * ch) as f64 {
+            continue;
+        }
         for &p in &c.blocks {
             let (bx, by) = ((p % gw) * b, (p / gw) * b);
             // Tighten to real ink inside the block.

@@ -165,6 +165,8 @@ impl App {
             app.s.mode = match v.as_str() {
                 "bw" => ModeChoice::Bw,
                 "gray" => ModeChoice::Gray,
+                "mixed" => ModeChoice::Mixed,
+                "hybrid" => ModeChoice::Hybrid,
                 _ => ModeChoice::Color,
             };
         }
@@ -372,7 +374,7 @@ impl App {
         }
         if self.adjust_test == Some(false) {
             if let Some(sh) = self.selected.and_then(|i| self.sheets.get_mut(i)).filter(|s| s.ready.is_some()) {
-                sh.adj = SheetAdjust { rotate_quarters: 1, split: Some(SplitChoice::Off), skew_deg: Some(1.25) };
+                sh.adj = SheetAdjust { rotate_quarters: 1, split: Some(SplitChoice::Off), skew_deg: Some(1.25), ..Default::default() };
                 sh.adj_gen += 1;
                 self.adjust_test = Some(true);
             }
@@ -714,17 +716,45 @@ impl App {
             });
             egui::CollapsingHeader::new(tr("set.output")).default_open(true).show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    for (m, k) in [(ModeChoice::Color, "mode.color"), (ModeChoice::Gray, "mode.gray"), (ModeChoice::Bw, "mode.bw")] {
+                    for (m, k) in [(ModeChoice::Color, "mode.color"), (ModeChoice::Gray, "mode.gray"), (ModeChoice::Bw, "mode.bw"), (ModeChoice::Mixed, "mode.mixed"), (ModeChoice::Hybrid, "mode.hybrid")] {
                         ch |= ui.selectable_value(&mut self.s.mode, m, tr(k)).changed();
                     }
                 });
-                if self.s.mode == ModeChoice::Bw {
+                if self.s.mode != ModeChoice::Color && self.s.mode != ModeChoice::Gray {
+                    ui.horizontal(|ui| {
+                        ui.label(tr("set.threshold"));
+                        egui::ComboBox::from_id_salt("thr").selected_text(self.s.threshold.name()).show_ui(ui, |ui| {
+                            for m in legatorocr_core::Threshold::ALL {
+                                ch |= ui.selectable_value(&mut self.s.threshold, m, m.name()).changed();
+                            }
+                        });
+                    });
                     ui.horizontal(|ui| {
                         ui.label(tr("set.sauvola"));
                         ch |= ui.add(egui::Slider::new(&mut self.s.sauvola_k, 0.05..=0.6)).changed();
                     });
                     ch |= ui.checkbox(&mut self.s.despeckle, tr("set.despeckle")).changed();
                 }
+                if matches!(self.s.mode, ModeChoice::Mixed | ModeChoice::Hybrid) {
+                    ui.horizontal(|ui| {
+                        ui.label(tr("set.picture_sens"));
+                        ch |= ui.add(egui::Slider::new(&mut self.s.picture_sensitivity, 0.0..=1.0)).changed();
+                    });
+                }
+                if self.s.mode == ModeChoice::Hybrid {
+                    ui.horizontal(|ui| {
+                        ui.label(tr("set.hybrid_dpi"));
+                        ch |= ui.add(egui::Slider::new(&mut self.s.hybrid_dpi, 36..=300)).changed();
+                    });
+                }
+                if self.s.mode != ModeChoice::Bw {
+                    ch |= ui.checkbox(&mut self.s.normalize_bg, tr("set.normalize")).changed();
+                }
+                ch |= ui.checkbox(&mut self.s.dewarp, tr("set.dewarp")).changed();
+                ui.horizontal(|ui| {
+                    ui.label(tr("set.output_dpi"));
+                    ch |= ui.add(egui::DragValue::new(&mut self.s.output_dpi).range(0..=2400).custom_formatter(|v, _| if v < 36.0 { "—".into() } else { format!("{v:.0}") })).changed();
+                });
             });
             egui::CollapsingHeader::new(tr("set.pdf")).default_open(true).show(ui, |ui| {
                 ui.horizontal(|ui| {

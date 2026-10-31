@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, ValueEnum};
-use legatorocr_core::{OutputMode, Settings, SplitMode};
+use legatorocr_core::{HAlign, OutputMode, Settings, SplitMode, Threshold, VAlign};
 use legatorocr_engine::{
     check_ocr, files::{collect_images, detect_dpi}, ocr::OcrOptions, run_export, write_atomic, ExportJob, PdfExport, SheetInput,
 };
@@ -12,6 +12,10 @@ enum Mode {
     Color,
     Gray,
     Bw,
+    /// 1-bit text + colour picture patches.
+    Mixed,
+    /// 1-bit text over a low-resolution colour background (smallest colour PDFs).
+    Hybrid,
 }
 
 #[derive(Copy, Clone, ValueEnum)]
@@ -125,6 +129,34 @@ struct Cli {
     #[arg(long, default_value_t = 0.3)]
     sauvola_k: f32,
 
+    /// Binarisation method: sauvola, wolf, niblack, nick, bradley, otsu.
+    #[arg(long, default_value = "sauvola")]
+    threshold: String,
+
+    /// Even out uneven lighting / shadows in colour, gray and hybrid output.
+    #[arg(long)]
+    normalize: bool,
+
+    /// Straighten curved text lines (page curl).
+    #[arg(long)]
+    dewarp: bool,
+
+    /// Downsample output to this dpi (never upsamples).
+    #[arg(long)]
+    output_dpi: Option<u32>,
+
+    /// Picture detection sensitivity for mixed/hybrid (0–1).
+    #[arg(long, default_value_t = 0.5)]
+    picture_sensitivity: f32,
+
+    /// Resolution of the hybrid background layer.
+    #[arg(long, default_value_t = 100)]
+    hybrid_dpi: u32,
+
+    /// Where content sits on a fixed-size page: e.g. `center`, `top-left`, `bottom`.
+    #[arg(long, default_value = "center")]
+    align: String,
+
     /// Keep tiny specks in black & white output.
     #[arg(long)]
     no_despeckle: bool,
@@ -201,6 +233,10 @@ fn main() -> Result<()> {
     if let Some(s) = cli.skew {
         in_range("skew", s, -45.0, 45.0)?;
     }
+    let threshold = Threshold::from_name(&cli.threshold)
+        .with_context(|| format!("unknown --threshold '{}' (sauvola, wolf, niblack, nick, bradley, otsu)", cli.threshold))?;
+    in_range("picture-sensitivity", cli.picture_sensitivity, 0.0, 1.0)?;
+    let align = parse_align(&cli.align)?;
     let settings = Settings {
         dpi: cli.dpi.unwrap_or(300),
         rotate_quarters: (cli.rotate / 90) as u8,
@@ -219,9 +255,19 @@ fn main() -> Result<()> {
             Mode::Color => OutputMode::Color,
             Mode::Gray => OutputMode::Gray,
             Mode::Bw => OutputMode::BlackWhite,
+            Mode::Mixed => OutputMode::Mixed,
+            Mode::Hybrid => OutputMode::Hybrid,
         },
         sauvola_k: cli.sauvola_k,
         despeckle: !cli.no_despeckle,
+        dewarp: cli.dewarp,
+        content_adjust_mm: [0.0; 4],
+        align,
+        threshold,
+        normalize_bg: cli.normalize,
+        output_dpi: cli.output_dpi,
+        picture_sensitivity: cli.picture_sensitivity,
+        hybrid_bg_dpi: cli.hybrid_dpi,
     };
 
     let ocr_opts = OcrOptions {
@@ -339,6 +385,21 @@ fn main() -> Result<()> {
         std::process::exit(2);
     }
     Ok(())
+}
+
+fn parse_align(s: &str) -> Result<(HAlign, VAlign)> {
+    let (mut h, mut v) = (HAlign::Center, VAlign::Center);
+    for part in s.to_ascii_lowercase().split('-') {
+        match part {
+            "center" | "centre" => {}
+            "left" => h = HAlign::Left,
+            "right" => h = HAlign::Right,
+            "top" => v = VAlign::Top,
+            "bottom" => v = VAlign::Bottom,
+            _ => bail!("--align: '{s}' is not valid (e.g. center, top-left, bottom-right)"),
+        }
+    }
+    Ok((h, v))
 }
 
 #[cfg(test)]
