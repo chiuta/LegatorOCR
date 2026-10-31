@@ -1,0 +1,20 @@
+[package]
+name = "croitor-cli"
+description = "CROITOR command-line tool"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "croitor"
+path = "src/main.rs"
+
+[dependencies]
+croitor-core = { path = "../croitor-core" }
+croitor-pdf = { path = "../croitor-pdf" }
+croitor-ocr = { path = "../croitor-ocr" }
+image.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+rayon.workspace = true

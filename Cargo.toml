@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = ["crates/croitor-core", "crates/croitor-pdf", "crates/croitor-ocr", "crates/croitor-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Alexio <alexio@trom.tf>"]
+repository = "https://github.com/chiuta/croitor"
+
+[workspace.dependencies]
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff", "bmp"] }
+flate2 = "1"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+thiserror = "1"
+rayon = "1"
