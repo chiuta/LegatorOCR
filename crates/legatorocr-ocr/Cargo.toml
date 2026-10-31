@@ -1,0 +1,12 @@
+[package]
+name = "legatorocr-ocr"
+description = "LegatorOCR OCR: Tesseract (external engine) driver producing word boxes for the PDF text layer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+legatorocr-core = { path = "../legatorocr-core" }
+image.workspace = true
+thiserror.workspace = true

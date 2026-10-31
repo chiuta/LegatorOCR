@@ -1,8 +1,8 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, ValueEnum};
-use croitor_core::{process_page, OutputMode, Page, Settings, SplitMode};
-use croitor_ocr::OcrOptions;
-use croitor_pdf::{Compress, PdfWriter};
+use legatorocr_core::{process_page, OutputMode, Page, Settings, SplitMode};
+use legatorocr_ocr::OcrOptions;
+use legatorocr_pdf::{Compress, PdfWriter};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 
@@ -27,7 +27,7 @@ enum Fmt {
     None,
 }
 
-/// CROITOR — clean-room scan post-processor: split, deskew, crop, clean,
+/// LegatorOCR — clean-room scan post-processor: split, deskew, crop, clean,
 /// then export to PDF with optional OCR text layer.
 #[derive(Parser)]
 #[command(version, about)]
@@ -37,7 +37,7 @@ struct Cli {
     inputs: Vec<PathBuf>,
 
     /// Directory for processed page images.
-    #[arg(short = 'o', long, default_value = "croitor-out")]
+    #[arg(short = 'o', long, default_value = "legatorocr-out")]
     out_dir: PathBuf,
 
     /// Image format for processed pages (`none` = PDF only).
@@ -170,8 +170,8 @@ fn main() -> Result<()> {
         tessdata: cli.tessdata.clone(),
     };
     if cli.ocr {
-        let v = croitor_ocr::check_engine(&ocr_opts)?;
-        let installed = croitor_ocr::list_languages(&ocr_opts)?;
+        let v = legatorocr_ocr::check_engine(&ocr_opts)?;
+        let installed = legatorocr_ocr::list_languages(&ocr_opts)?;
         for l in cli.lang.split('+') {
             if !installed.iter().any(|i| i == l) {
                 bail!("OCR language '{l}' is not installed for {v} (installed: {})", installed.join(", "));
@@ -234,11 +234,11 @@ fn main() -> Result<()> {
 
     // --- OCR + PDF --------------------------------------------------------
     if let Some(pdf_path) = &cli.pdf {
-        let words: Vec<Vec<croitor_core::Word>> = if cli.ocr {
+        let words: Vec<Vec<legatorocr_core::Word>> = if cli.ocr {
             pages
                 .par_iter()
                 .map(|(name, pg)| {
-                    croitor_ocr::recognize(&pg.image, pg.dpi, &ocr_opts)
+                    legatorocr_ocr::recognize(&pg.image, pg.dpi, &ocr_opts)
                         .with_context(|| format!("OCR of {name}"))
                 })
                 .collect::<Result<_>>()?

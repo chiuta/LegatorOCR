@@ -150,45 +150,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "croitor-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "croitor-core",
- "croitor-ocr",
- "croitor-pdf",
- "image",
- "rayon",
-]
-
-[[package]]
-name = "croitor-core"
-version = "0.1.0"
-dependencies = [
- "image",
- "rayon",
-]
-
-[[package]]
-name = "croitor-ocr"
-version = "0.1.0"
-dependencies = [
- "croitor-core",
- "image",
- "thiserror",
-]
-
-[[package]]
-name = "croitor-pdf"
-version = "0.1.0"
-dependencies = [
- "croitor-core",
- "flate2",
- "image",
-]
-
-[[package]]
 name = "crossbeam-deque"
 version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -289,6 +250,45 @@ name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
+
+[[package]]
+name = "legatorocr-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "image",
+ "legatorocr-core",
+ "legatorocr-ocr",
+ "legatorocr-pdf",
+ "rayon",
+]
+
+[[package]]
+name = "legatorocr-core"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "rayon",
+]
+
+[[package]]
+name = "legatorocr-ocr"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "legatorocr-core",
+ "thiserror",
+]
+
+[[package]]
+name = "legatorocr-pdf"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "image",
+ "legatorocr-core",
+]
 
 [[package]]
 name = "miniz_oxide"

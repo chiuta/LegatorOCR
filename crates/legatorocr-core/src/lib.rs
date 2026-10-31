@@ -1,5 +1,5 @@
 #![allow(clippy::needless_range_loop)] // explicit index loops read clearer in pixel code
-//! CROITOR core — a clean-room scanned-page post-processing pipeline.
+//! LegatorOCR core — a clean-room scanned-page post-processing pipeline.
 //!
 //! Stages (same *workflow* as classic scan post-processors, independent code):
 //! orientation → page split → deskew → content selection → margins → output

@@ -1,11 +1,11 @@
-# CROITOR
+# LegatorOCR
 
 Clean-room Rust post-processor for scanned books: **split → deskew → crop →
 margins → clean/binarize → PDF with searchable OCR text layer.**
 Same *workflow* as classic scan "taylor" tools, independent code.
 
 ```
-croitor scan_001.png scan_002.png … \
+legatorocr scan_001.png scan_002.png … \
     --mode bw --dpi 300 --margin 6 --page-size a5 \
     --pdf carte.pdf --ocr --lang ron+eng
 ```
@@ -23,14 +23,14 @@ croitor scan_001.png scan_002.png … \
 | PDF | own writer: JPEG (colour/gray), or 1-bit Flate with PNG-Up predictor (B/W); real page size from DPI |
 | OCR | Tesseract run as an external process; TSV word boxes → invisible text layer (render mode 3, glyph-less Type0 font + ToUnicode, so ăâîșț and any Unicode copy/search correctly) |
 
-Layout: `croitor-core` (pipeline) · `croitor-pdf` (writer) · `croitor-ocr` (Tesseract driver) · `croitor-cli`.
+Layout: `legatorocr-core` (pipeline) · `legatorocr-pdf` (writer) · `legatorocr-ocr` (Tesseract driver) · `legatorocr-cli`.
 
 ## Install / use
 
 ```
-cargo build --release          # binary: target/release/croitor
+cargo build --release          # binary: target/release/legatorocr
 sudo apt install tesseract-ocr tesseract-ocr-ron     # for --ocr --lang ron
-croitor --help
+legatorocr --help
 ```
 
 `--skip-blank`, `--pdf-quality N` (0 = lossless), `--format png|tiff|none`,
@@ -51,6 +51,6 @@ The algorithms were written from general image-processing knowledge (Sauvola,
 projection profiles, connected components) and the publicly described workflow.
 No source code of any existing scan-processing tool was consulted or copied.
 Before commercial release, do your own due diligence (and a trademark search
-for the name CROITOR).
+for the name LegatorOCR).
 
 MIT licensed.

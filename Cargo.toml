@@ -1,13 +1,13 @@
 [workspace]
 resolver = "2"
-members = ["crates/croitor-core", "crates/croitor-pdf", "crates/croitor-ocr", "crates/croitor-cli"]
+members = ["crates/legatorocr-core", "crates/legatorocr-pdf", "crates/legatorocr-ocr", "crates/legatorocr-cli"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
 authors = ["Alexio <alexio@trom.tf>"]
-repository = "https://github.com/chiuta/croitor"
+repository = "https://github.com/chiuta/legatorocr"
 
 [workspace.dependencies]
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff", "bmp"] }

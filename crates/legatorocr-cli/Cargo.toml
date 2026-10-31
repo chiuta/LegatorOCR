@@ -1,19 +1,19 @@
 [package]
-name = "croitor-cli"
-description = "CROITOR command-line tool"
+name = "legatorocr-cli"
+description = "LegatorOCR command-line tool"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
 [[bin]]
-name = "croitor"
+name = "legatorocr"
 path = "src/main.rs"
 
 [dependencies]
-croitor-core = { path = "../croitor-core" }
-croitor-pdf = { path = "../croitor-pdf" }
-croitor-ocr = { path = "../croitor-ocr" }
+legatorocr-core = { path = "../legatorocr-core" }
+legatorocr-pdf = { path = "../legatorocr-pdf" }
+legatorocr-ocr = { path = "../legatorocr-ocr" }
 image.workspace = true
 clap.workspace = true
 anyhow.workspace = true

@@ -1,7 +1,7 @@
 //! OCR through the Tesseract command-line engine (Apache-2.0, run as a separate
 //! process — no linking, no code reuse). Output TSV is parsed into [`Word`]s.
 
-use croitor_core::{PageImage, Word};
+use legatorocr_core::{PageImage, Word};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -71,7 +71,7 @@ static COUNTER: AtomicU64 = AtomicU64::new(0);
 /// Recognise one processed page.
 pub fn recognize(page: &PageImage, dpi: u32, o: &OcrOptions) -> Result<Vec<Word>, OcrError> {
     let tmp = std::env::temp_dir().join(format!(
-        "croitor-ocr-{}-{}.png",
+        "legatorocr-ocr-{}-{}.png",
         std::process::id(),
         COUNTER.fetch_add(1, Ordering::Relaxed)
     ));

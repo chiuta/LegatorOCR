@@ -6,7 +6,7 @@
 //!   glyph-less Type0 font with a ToUnicode CMap so any Unicode text (e.g.
 //!   Romanian ăâîșț) is searchable and copy-able.
 
-use croitor_core::{BitImage, Page, PageImage, Word};
+use legatorocr_core::{BitImage, Page, PageImage, Word};
 use flate2::{write::ZlibEncoder, Compression};
 use image::{codecs::jpeg::JpegEncoder, ExtendedColorType};
 use std::collections::BTreeMap;
@@ -218,7 +218,7 @@ impl PdfWriter {
             .as_deref()
             .map(|t| format!(" /Title {}", pdf_text_string(t)))
             .unwrap_or_default();
-        self.plain_obj(info_id, &format!("<< /Producer (CROITOR {}){title} >>", env!("CARGO_PKG_VERSION")));
+        self.plain_obj(info_id, &format!("<< /Producer (LegatorOCR {}){title} >>", env!("CARGO_PKG_VERSION")));
 
         let xref_pos = self.buf.len();
         let n = self.offsets.len();
@@ -346,11 +346,11 @@ mod tests {
 mod unicode_file {
     use super::*;
     /// Writes a PDF with Romanian text for external extraction checks:
-    /// `CROITOR_TEST_PDF=/path/x.pdf cargo test -p croitor-pdf -- --ignored`
+    /// `LEGATOROCR_TEST_PDF=/path/x.pdf cargo test -p legatorocr-pdf -- --ignored`
     #[test]
     #[ignore]
     fn write_unicode_pdf() {
-        let path = std::env::var("CROITOR_TEST_PDF").expect("set CROITOR_TEST_PDF");
+        let path = std::env::var("LEGATOROCR_TEST_PDF").expect("set LEGATOROCR_TEST_PDF");
         let mut w = PdfWriter::new(Compress::Flate);
         let mut bw = BitImage::new(600, 300);
         bw.set(1, 1, true);
