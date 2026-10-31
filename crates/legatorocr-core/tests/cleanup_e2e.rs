@@ -149,3 +149,27 @@ fn sharpen_and_levels_keep_geometry() {
     assert_eq!(a[0].image.width(), b[0].image.width());
     assert_eq!(a[0].image.height(), b[0].image.height());
 }
+
+#[test]
+fn erase_zones_remove_ink_in_page_and_sheet_coordinates() {
+    let src = DynamicImage::ImageRgb8(text_page([10, 10, 10], [240, 240, 240]));
+    let plain = process_page(&src, &base());
+    let full = ink_count(&plain[0].image);
+    // 200 dpi: the first 10 text lines sit at y = 300..700 px = 38..89 mm, x = 25..114 mm
+    let zone = vec![[20.0, 36.0, 100.0, 50.0]]; // covers lines 0..~10
+    for sheet in [false, true] {
+        let mut s = base();
+        if sheet {
+            s.sheet_erase_zones = zone.clone();
+        } else {
+            s.erase_zones = zone.clone();
+        }
+        let out = process_page(&src, &s);
+        let less = ink_count(&out[0].image);
+        assert!(less < full * 3 / 4, "sheet={sheet}: {less} vs {full}");
+        assert!(
+            less > full / 8,
+            "sheet={sheet}: the other lines must survive ({less} vs {full})"
+        );
+    }
+}

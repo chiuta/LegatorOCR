@@ -96,6 +96,9 @@ pub struct Settings {
     /// Rectangles (x, y, width, height in mm from the top-left of each page) painted with
     /// the paper colour before anything else is measured (stamps, notes, scanner marks).
     pub erase_zones: Vec<[f32; 4]>,
+    /// Like `erase_zones` but in millimetres of the *scanned sheet as loaded* (before
+    /// rotation and page splitting); drawn with the mouse in the GUI, stored per sheet.
+    pub sheet_erase_zones: Vec<[f32; 4]>,
     /// Drop one printed colour (form rules, stamps).
     pub dropout: Dropout,
     /// Despeckle strength 0.25–4 (1 = default speck size).
@@ -138,6 +141,7 @@ impl Default for Settings {
             fingers: false,
             remove_lines: false,
             erase_zones: Vec::new(),
+            sheet_erase_zones: Vec::new(),
             dropout: Dropout::Off,
             despeckle_strength: 1.0,
             show_through: false,
@@ -275,6 +279,20 @@ impl Settings {
         s.hybrid_bg_dpi = s.hybrid_bg_dpi.clamp(36, 300);
         s.sharpen = fin(s.sharpen, 0.0, 2.0, 0.0);
         s.despeckle_strength = fin(s.despeckle_strength, 0.25, 4.0, 1.0);
+        s.sheet_erase_zones = s
+            .sheet_erase_zones
+            .iter()
+            .filter(|z| z.iter().all(|v| v.is_finite()) && z[2] > 0.0 && z[3] > 0.0)
+            .take(64)
+            .map(|z| {
+                [
+                    z[0].clamp(-5000.0, 5000.0),
+                    z[1].clamp(-5000.0, 5000.0),
+                    z[2].min(5000.0),
+                    z[3].min(5000.0),
+                ]
+            })
+            .collect();
         s.erase_zones = s
             .erase_zones
             .iter()
@@ -332,8 +350,20 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<(RgbImage, Option<u8>)> 
 }
 
 /// Run the whole pipeline on one scanned sheet. A two-page spread yields two pages.
+/// The sheet with its hand-drawn erase zones painted over (borrowed when there are none).
+fn erase_on_sheet<'a>(src: &'a DynamicImage, s: &Settings) -> std::borrow::Cow<'a, DynamicImage> {
+    if s.sheet_erase_zones.is_empty() {
+        return std::borrow::Cow::Borrowed(src);
+    }
+    let mut rgb = src.to_rgb8();
+    let paper = transform::estimate_background(&rgb);
+    cleanup::erase_zones(&mut rgb, s.dpi, &s.sheet_erase_zones, paper);
+    std::borrow::Cow::Owned(DynamicImage::ImageRgb8(rgb))
+}
+
 pub fn process_page(src: &DynamicImage, s: &Settings) -> Vec<Page> {
     let s = &s.sanitized();
+    let src = &*erase_on_sheet(src, s);
     split_sheet(src, s)
         .into_iter()
         .map(|(img, idx)| render(prepare(img, s), idx, s))
@@ -345,6 +375,7 @@ pub fn process_page(src: &DynamicImage, s: &Settings) -> Vec<Page> {
 /// them in memory: measure first, render second.
 pub fn measure_page(src: &DynamicImage, s: &Settings) -> Vec<Option<(f32, f32)>> {
     let s = &s.sanitized();
+    let src = &*erase_on_sheet(src, s);
     split_sheet(src, s)
         .into_iter()
         .map(|(img, _)| {
@@ -1076,6 +1107,7 @@ mod tests {
                 punch_holes: rnd(2) == 0,
                 fingers: rnd(2) == 0,
                 remove_lines: rnd(2) == 0,
+                sheet_erase_zones: vec![],
                 erase_zones: if rnd(2) == 0 {
                     vec![[
                         rnd(50) as f32,

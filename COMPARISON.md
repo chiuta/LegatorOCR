@@ -21,7 +21,7 @@ Sources read for this comparison:
 | Binarisation methods | Otsu / Sauvola / Wolf | many: Niblack, Sauvola, Wolf, N.I.C.K., Gatos, Singh, Fox, Dynamic Window, OBBPM, LAAB, LCaM … | ◐ six + **auto per page** |
 | Despeckle | ✔ | synced with original | ✔ |
 | Picture zones (mixed output) | ✔ hand-drawn zones | – | ◐ **automatic** detection (mid-tone share), no hand-drawn zones |
-| Fill / erase zones | ✔ | – | ◐ typed rectangles (mm), same on every page; no mouse drawing |
+| Fill / erase zones | ✔ | – | ✔ typed rectangles (mm) or mouse-drawn per sheet |
 | Dewarping | ✔ semi-automatic, control points | "dewarp correction parameters" | ◐ automatic from text lines; vertical bend only; no control points |
 | Lighting normalisation | colour/illumination options | colour corrections, curves, "RIS undefect", EM denoiser, deBlur5 | ◐ background normalisation; ✘ denoise/deblur filters |
 | Output resolution | ✔ | – | ✔ down-sampling to `--output-dpi` |
@@ -29,12 +29,12 @@ Sources read for this comparison:
 | PDF with text layer | ✘ (images only) | ✘ | ✔ own writer + Tesseract OCR layer |
 | Compact PDF | – | – | ✔ CCITT G4, **hybrid** layered pages (mask + low-res background + patches) |
 | Multi-page TIFF input | ✔ | – | ✔ |
-| PDF input | – | – | ✔ scanned pages incl. layered/MRC, CCITT G3/G4, JBIG2 generic regions (no JBIG2 symbol coding, no JPEG 2000, no encryption) |
+| PDF input | – | – | ✔ scanned pages incl. layered/MRC, CCITT G3/G4, JBIG2 generic + symbol/text regions, native decryption (RC4/AES), external-renderer fallback for JPEG 2000 and the rest |
 | Punch holes, fingers, ruled lines, colour drop-out, negatives, levels, sharpen | partial (fill zones) | partial | ✔ automatic, off by default |
 | Profiles | – | – | ✔ built-in + user, CLI and GUI |
 | Text / hOCR sidecar, PDF metadata | ✘ | ✘ | ✔ |
 | Show-through, halftone smoothing | ✘ | partial (filters) | ✔ |
-| Duplicate pages, separator-sheet splitting, target PDF size | ✘ | ✘ | ✔ (blank pages **and Code 128 bar-code sheets** as separators, with `--make-separator` to print them) |
+| Duplicate pages, separator-sheet splitting, target PDF size | ✘ | ✘ | ✔ (blank pages **and bar-code sheets** (Code 128, EAN-13, ITF, Code 39) as separators, with `--make-separator` to print them) |
 | OCR on enlarged low-dpi pages | – | – | ✔ |
 | Perspective correction of phone photos | – | – | ◐ automatic quad detection, conservative |
 | HTML contact-sheet report, multi-page G4 TIFF | ✘ | ✘ | ✔ |

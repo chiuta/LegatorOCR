@@ -127,7 +127,7 @@ struct Cli {
     #[arg(long)]
     split_on_blank: bool,
 
-    /// Treat pages carrying a Code 128 bar code as separators (the page is dropped) and
+    /// Treat pages carrying a bar code (Code 128, EAN-13, ITF or Code 39) as separators (the page is dropped) and
     /// write one PDF per document, named after the bar code (`name_001_<code>.pdf`).
     /// Print separators with --make-separator. Needs --pdf.
     #[arg(long)]
@@ -457,6 +457,7 @@ fn main() -> Result<()> {
         punch_holes: cli.punch_holes,
         fingers: cli.fingers,
         remove_lines: cli.remove_lines,
+        sheet_erase_zones: Vec::new(),
         erase_zones: legatorocr_core::cleanup::parse_zones(&cli.erase.join(";")).ok_or_else(
             || anyhow::anyhow!("--erase needs X,Y,WIDTH,HEIGHT in mm (width and height > 0)"),
         )?,

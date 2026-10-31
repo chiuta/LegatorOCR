@@ -119,6 +119,8 @@ pub struct App {
     has_osd: bool,
     ocr_info: String,
     show_about: bool,
+    draw_zones: bool,
+    zone_drag: Option<egui::Pos2>,
     shot: Option<Shot>,
     /// Test hook: run an export without a file dialog (env LEGATOROCR_GUI_AUTOEXPORT_PDF).
     auto_export: Option<(PathBuf, bool)>,
@@ -155,6 +157,8 @@ impl App {
             has_osd: false,
             ocr_info: String::new(),
             show_about: false,
+            draw_zones: false,
+            zone_drag: None,
             auto_export: std::env::var_os("LEGATOROCR_GUI_AUTOEXPORT_PDF")
                 .map(|p| (PathBuf::from(p), false)),
             adjust_test: std::env::var_os("LEGATOROCR_GUI_TEST_ADJUST").map(|_| false),
@@ -233,6 +237,7 @@ impl App {
                         split: a.split.map(Into::into),
                         skew_deg: a.skew_deg,
                         content_adjust_mm: a.content_adjust_mm,
+                        erase_mm: a.erase_mm.clone(),
                     },
                 )
             })
@@ -277,6 +282,7 @@ impl App {
                         split: a.split.map(Into::into),
                         skew_deg: a.skew_deg,
                         content_adjust_mm: a.content_adjust_mm,
+                        erase_mm: a.erase_mm.clone(),
                     };
                 }
                 self.settings_gen += 1;
@@ -1534,6 +1540,9 @@ impl App {
             }
             ui.separator();
             ui.checkbox(&mut self.fit, tr("view.fit"));
+            ui.separator();
+            ui.checkbox(&mut self.draw_zones, tr("zones.draw"))
+                .on_hover_text(tr("zones.hint"));
             ui.add_enabled(
                 !self.fit,
                 egui::Slider::new(&mut self.zoom, 0.2..=4.0).suffix("×"),
@@ -1597,6 +1606,10 @@ impl App {
                     )
                     .changed();
             }
+            if ui.button(tr("zones.clear")).clicked() && !adj.erase_mm.is_empty() {
+                adj.erase_mm.clear();
+                adj_changed = true;
+            }
             if ui.button(tr("adj.reset")).clicked() {
                 *adj = SheetAdjust::default();
                 adj_changed = true;
@@ -1641,7 +1654,7 @@ impl App {
             });
             return;
         };
-        let mut cells: Vec<(&TextureHandle, String)> = Vec::new();
+        let mut cells: Vec<(&TextureHandle, String, bool)> = Vec::new();
         if self.view != View::Processed {
             cells.push((
                 &ready.original,
@@ -1651,6 +1664,7 @@ impl App {
                     ready.original_size.0,
                     ready.original_size.1
                 ),
+                true,
             ));
         }
         if self.view != View::Original {
@@ -1672,6 +1686,7 @@ impl App {
                         p.skew_deg,
                         blank
                     ),
+                    false,
                 ));
             }
         }
@@ -1680,9 +1695,16 @@ impl App {
         let cell_w = (avail.x / n - ui.spacing().item_spacing.x).max(50.0);
         let cell_h = (avail.y - 24.0).max(50.0);
         let (fit, zoom) = (self.fit, self.zoom);
-        let draw = |ui: &mut egui::Ui| {
+        let draw_zones = self.draw_zones;
+        let osz = ready.original_size;
+        let mm_per_px = 25.4 / self.s.dpi.max(36) as f32;
+        let zones: Vec<[f32; 4]> = sheet.adj.erase_mm.clone();
+        let mut new_zone: Option<[f32; 4]> = None;
+        let mut remove_zone: Option<usize> = None;
+        let drag = &mut self.zone_drag;
+        let mut draw = |ui: &mut egui::Ui| {
             ui.horizontal_top(|ui| {
-                for (tex, caption) in &cells {
+                for (tex, caption, is_orig) in &cells {
                     ui.vertical(|ui| {
                         let ts = tex.size_vec2();
                         let scale = if fit {
@@ -1690,7 +1712,86 @@ impl App {
                         } else {
                             zoom
                         };
-                        ui.add(egui::Image::from_texture(*tex).fit_to_exact_size(ts * scale));
+                        let mut img = egui::Image::from_texture(*tex).fit_to_exact_size(ts * scale);
+                        if *is_orig && draw_zones {
+                            img = img.sense(egui::Sense::click_and_drag());
+                        }
+                        let resp = ui.add(img);
+                        if *is_orig {
+                            let rect = resp.rect;
+                            // image px -> screen and back
+                            let k = Vec2::new(
+                                rect.width() / osz.0.max(1) as f32,
+                                rect.height() / osz.1.max(1) as f32,
+                            );
+                            let to_screen = |x_mm: f32, y_mm: f32| {
+                                egui::pos2(
+                                    rect.min.x + x_mm / mm_per_px * k.x,
+                                    rect.min.y + y_mm / mm_per_px * k.y,
+                                )
+                            };
+                            let to_mm = |p: egui::Pos2| {
+                                (
+                                    (p.x - rect.min.x) / k.x * mm_per_px,
+                                    (p.y - rect.min.y) / k.y * mm_per_px,
+                                )
+                            };
+                            let painter = ui.painter_at(rect);
+                            for z in &zones {
+                                let r = egui::Rect::from_two_pos(
+                                    to_screen(z[0], z[1]),
+                                    to_screen(z[0] + z[2], z[1] + z[3]),
+                                );
+                                painter.rect_filled(
+                                    r,
+                                    0.0,
+                                    Color32::from_rgba_unmultiplied(220, 50, 50, 70),
+                                );
+                                painter.rect_stroke(
+                                    r,
+                                    0.0,
+                                    egui::Stroke::new(1.5, Color32::from_rgb(220, 50, 50)),
+                                    egui::StrokeKind::Inside,
+                                );
+                            }
+                            if draw_zones {
+                                if resp.drag_started() {
+                                    *drag = resp.interact_pointer_pos();
+                                }
+                                if let (Some(a), Some(b)) =
+                                    (*drag, ui.input(|i| i.pointer.latest_pos()))
+                                {
+                                    let r = egui::Rect::from_two_pos(a, b).intersect(rect);
+                                    painter.rect_stroke(
+                                        r,
+                                        0.0,
+                                        egui::Stroke::new(1.5, Color32::from_rgb(255, 160, 0)),
+                                        egui::StrokeKind::Inside,
+                                    );
+                                    if resp.drag_stopped() {
+                                        let (x0, y0) = to_mm(r.min);
+                                        let (x1, y1) = to_mm(r.max);
+                                        if x1 - x0 > 0.5 && y1 - y0 > 0.5 {
+                                            new_zone = Some([x0, y0, x1 - x0, y1 - y0]);
+                                        }
+                                        *drag = None;
+                                    }
+                                } else if resp.drag_stopped() {
+                                    *drag = None;
+                                }
+                                if resp.secondary_clicked() {
+                                    if let Some(p) = resp.interact_pointer_pos() {
+                                        let (mx, my) = to_mm(p);
+                                        remove_zone = zones.iter().rposition(|z| {
+                                            mx >= z[0]
+                                                && mx <= z[0] + z[2]
+                                                && my >= z[1]
+                                                && my <= z[1] + z[3]
+                                        });
+                                    }
+                                }
+                            }
+                        }
                         ui.label(RichText::new(caption).small());
                     });
                 }
@@ -1702,6 +1803,17 @@ impl App {
             egui::ScrollArea::both()
                 .auto_shrink([false, false])
                 .show(ui, draw);
+        }
+        if let Some(z) = new_zone {
+            let a = &mut self.sheets[i].adj;
+            if a.erase_mm.len() < 64 {
+                a.erase_mm.push(z);
+                self.sheets[i].adj_gen += 1;
+            }
+        }
+        if let Some(k) = remove_zone {
+            self.sheets[i].adj.erase_mm.remove(k);
+            self.sheets[i].adj_gen += 1;
         }
     }
 }

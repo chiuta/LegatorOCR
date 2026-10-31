@@ -11,6 +11,7 @@ use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+pub mod extpdf;
 pub mod files;
 pub mod profiles;
 pub mod project;
@@ -470,10 +471,21 @@ pub fn pdf_doc(path: &Path) -> Result<std::sync::Arc<legatorocr_pdf::reader::Pdf
 
 /// Pages in a PDF; 1 when it cannot be read (the error then shows up when the page is loaded).
 pub fn pdf_page_count(path: &Path) -> u32 {
-    pdf_doc(path).map_or(1, |d| d.page_count().max(1) as u32)
+    match pdf_doc(path) {
+        Ok(d) => d.page_count().max(1) as u32,
+        Err(_) => extpdf::page_count(path).unwrap_or(1),
+    }
 }
 
 fn load_pdf_page(path: &Path, index: u32) -> Result<DynamicImage> {
+    match load_pdf_page_builtin(path, index) {
+        Ok(i) => Ok(i),
+        Err(own) => extpdf::rasterize(path, index + 1)
+            .map_err(|ext| anyhow::anyhow!("{own:#} (and no external renderer helped: {ext:#})")),
+    }
+}
+
+fn load_pdf_page_builtin(path: &Path, index: u32) -> Result<DynamicImage> {
     let doc = pdf_doc(path)?;
     if (index as usize) >= doc.page_count() {
         bail!(
@@ -1356,6 +1368,7 @@ mod tests {
 mod pdf_input_tests {
     use super::*;
     use legatorocr_pdf::{Compress, PdfWriter};
+    use std::process::Command;
 
     fn make_pdf(path: &Path, pages: usize) {
         let mut w = PdfWriter::new(Compress::Flate);
@@ -1374,6 +1387,46 @@ mod pdf_input_tests {
             );
         }
         std::fs::write(path, w.finish()).unwrap();
+    }
+
+    #[test]
+    fn encrypted_pdf_opens_natively_and_unreadable_pages_fall_back_to_a_renderer() {
+        let have_qpdf = Command::new("qpdf").arg("--version").output().is_ok();
+        let dir = std::env::temp_dir().join(format!("lgr-enc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        make_pdf(&dir.join("plain.pdf"), 2);
+        if have_qpdf {
+            let st = Command::new("qpdf")
+                .args(["--encrypt", "", "owner", "256", "--"])
+                .arg(dir.join("plain.pdf"))
+                .arg(dir.join("enc.pdf"))
+                .status()
+                .unwrap();
+            assert!(st.success());
+            assert!(
+                pdf_doc(&dir.join("enc.pdf")).is_ok(),
+                "built-in reader decrypts"
+            );
+            let pages = files::collect_images(&[dir.join("enc.pdf")]);
+            assert_eq!(pages.len(), 2, "{pages:?}");
+            let img = load_image(&pages[1]).unwrap();
+            assert_eq!((img.width(), img.height()), (120, 160));
+        }
+        // an image in a colour space the built-in reader does not know: a renderer draws the page
+        if extpdf::renderer().is_some() {
+            let o = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 144 216] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n4 0 obj\n<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /Pattern /BitsPerComponent 8 /Length 4 >>\nstream\nabcd\nendstream\nendobj\n5 0 obj\n<< /Length 30 >>\nstream\n0.5 g 10 10 100 100 re f\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n";
+            std::fs::write(dir.join("odd.pdf"), o).unwrap();
+            assert!(load_pdf_page_builtin(&dir.join("odd.pdf"), 0).is_err());
+            let img = load_image(&dir.join("odd.pdf#1")).unwrap();
+            // 144x216 pt at 300 dpi
+            assert!(
+                img.width().abs_diff(600) <= 2 && img.height().abs_diff(900) <= 2,
+                "{}x{}",
+                img.width(),
+                img.height()
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

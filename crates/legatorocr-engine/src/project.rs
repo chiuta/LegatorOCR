@@ -27,6 +27,8 @@ pub struct SheetAdj {
     pub split: Option<SplitMode>,
     pub skew_deg: Option<f32>,
     pub content_adjust_mm: [f32; 4],
+    /// Hand-drawn erase rectangles (x, y, w, h in mm of the loaded scan).
+    pub erase_mm: Vec<[f32; 4]>,
 }
 
 impl SheetAdj {
@@ -38,6 +40,7 @@ impl SheetAdj {
         }
         s.manual_skew_deg = self.skew_deg;
         s.content_adjust_mm = self.content_adjust_mm;
+        s.sheet_erase_zones = self.erase_mm.clone();
         s
     }
 }
@@ -254,6 +257,12 @@ impl Project {
                 let [w, x, y, z] = a.content_adjust_mm;
                 out.push_str(&format!("adjust = {w},{x},{y},{z}\n"));
             }
+            if !a.erase_mm.is_empty() {
+                out.push_str(&format!(
+                    "erase = {}\n",
+                    legatorocr_core::cleanup::zones_to_string(&a.erase_mm)
+                ));
+            }
         }
         out
     }
@@ -310,6 +319,10 @@ impl Project {
                             v.parse()
                                 .map_err(|e: std::num::ParseFloatError| at(e.into()))?,
                         )
+                    }
+                    "erase" => {
+                        adj.erase_mm = legatorocr_core::cleanup::parse_zones(v)
+                            .ok_or_else(|| at(anyhow::anyhow!("invalid erase zones '{v}'")))?
                     }
                     "adjust" => {
                         adj.content_adjust_mm =
@@ -379,6 +392,7 @@ mod tests {
                 split: Some(SplitMode::Off),
                 skew_deg: Some(-1.25),
                 content_adjust_mm: [0.0, 1.0, 2.0, -3.0],
+                erase_mm: vec![[10.0, 20.5, 30.0, 40.0], [0.0, 0.0, 5.0, 5.0]],
             },
         ));
         p.sheets

@@ -6,6 +6,7 @@
 //!   glyph-less Type0 font with a ToUnicode CMap so any Unicode text (e.g.
 //!   Romanian ăâîșț) is searchable and copy-able.
 
+pub mod crypt;
 pub mod g4;
 pub mod jbig2;
 pub mod reader;

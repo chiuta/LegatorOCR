@@ -666,6 +666,9 @@ pub struct PdfDoc {
     comp: HashMap<u32, (usize, usize)>,
     stms: Vec<Vec<u8>>,
     pages: Vec<Dict>,
+    crypt: Option<crate::crypt::Crypt>,
+    /// (file offset of `N G obj`, N) sorted, to find the object a stream belongs to.
+    by_off: Vec<(usize, u32)>,
 }
 
 /// What [`PdfDoc::page_info`] reports without decoding the image.
@@ -697,8 +700,14 @@ impl PdfDoc {
             comp: HashMap::new(),
             stms: Vec::new(),
             pages: Vec::new(),
+            crypt: None,
+            by_off: Vec::new(),
         };
         doc.scan_objects();
+        doc.by_off = doc.offs.iter().map(|(n, o)| (*o, *n)).collect();
+        doc.by_off.sort_unstable();
+        let mut enc_val: Option<Val> = None;
+        let mut id0: Vec<u8> = Vec::new();
         let mut root: Option<u32> = None;
         let mut catalog: Option<u32> = None;
         let mut page_objs: Vec<u32> = Vec::new();
@@ -710,8 +719,13 @@ impl PdfDoc {
             else {
                 continue;
             };
-            if d.contains_key("Encrypt") {
-                return fail("the PDF is encrypted; decrypt it first (e.g. qpdf --decrypt)");
+            if let Some(e) = d.get("Encrypt") {
+                enc_val = Some(e.clone());
+                if let Some(Val::Arr(a)) = d.get("ID") {
+                    if let Some(Val::Str(s)) = a.first() {
+                        id0 = s.clone();
+                    }
+                }
             }
             if let Some(Val::Ref(r)) = d.get("Root") {
                 root = Some(*r);
@@ -728,13 +742,21 @@ impl PdfDoc {
         while let Some(p) = find(&doc.data, b"trailer", at) {
             at = p + 7;
             if let Some(Val::Dict(d)) = P::new(&doc.data, at).val(0) {
-                if d.contains_key("Encrypt") {
-                    return fail("the PDF is encrypted; decrypt it first (e.g. qpdf --decrypt)");
+                if let Some(e) = d.get("Encrypt") {
+                    enc_val = Some(e.clone());
+                    if let Some(Val::Arr(a)) = d.get("ID") {
+                        if let Some(Val::Str(s)) = a.first() {
+                            id0 = s.clone();
+                        }
+                    }
                 }
                 if let Some(Val::Ref(r)) = d.get("Root") {
                     root = Some(*r);
                 }
             }
+        }
+        if let Some(ev) = enc_val {
+            doc.crypt = Some(doc.setup_crypt(&ev, &id0)?);
         }
         for n in objstms {
             doc.load_objstm(n);
@@ -832,6 +854,96 @@ impl PdfDoc {
             };
             self.offs.insert(num, num_start);
         }
+    }
+
+    fn setup_crypt(&self, ev: &Val, id0: &[u8]) -> R<crate::crypt::Crypt> {
+        use crate::crypt::{Crypt, EncryptParams, Method};
+        let d = match self.resolve(ev) {
+            Val::Dict(d) => d,
+            _ => return fail("the PDF's encryption dictionary cannot be read"),
+        };
+        if let Some(f) = d.get("Filter").and_then(|f| f.name()) {
+            if f != "Standard" {
+                return fail(format!(
+                    "the PDF uses the {f} security handler, which is not supported"
+                ));
+            }
+        }
+        let int = |k: &str, dflt: i64| d.get(k).and_then(|v| self.resolve(v).int()).unwrap_or(dflt);
+        let st = |k: &str| match d.get(k).map(|v| self.resolve(v)) {
+            Some(Val::Str(s)) => s,
+            _ => Vec::new(),
+        };
+        let (v, r) = (int("V", 0), int("R", 2));
+        if !(1..=5).contains(&v) || !(2..=6).contains(&r) {
+            return fail(format!("unsupported PDF encryption (V={v}, R={r})"));
+        }
+        let stm = if v >= 4 {
+            let name = d
+                .get("StmF")
+                .and_then(|n| n.name())
+                .unwrap_or("Identity")
+                .to_string();
+            if name == "Identity" {
+                Method::None
+            } else {
+                let cfm = d
+                    .get("CF")
+                    .and_then(|c| self.dict_of(c))
+                    .and_then(|cf| cf.get(&name).and_then(|f| self.dict_of(f)))
+                    .and_then(|f| f.get("CFM").and_then(|m| m.name().map(str::to_string)));
+                match cfm.as_deref() {
+                    Some("V2") => Method::Rc4,
+                    Some("AESV2") => Method::AesV2,
+                    Some("AESV3") => Method::AesV3,
+                    Some("None") => Method::None,
+                    _ => return fail("unsupported PDF crypt filter"),
+                }
+            }
+        } else {
+            Method::Rc4
+        };
+        let em = !matches!(
+            d.get("EncryptMetadata").map(|v| self.resolve(v)),
+            Some(Val::Bool(false))
+        );
+        let (o, u, ue) = (st("O"), st("U"), st("UE"));
+        crate::crypt::Crypt::new(&EncryptParams {
+            v,
+            r,
+            length_bits: int("Length", 40),
+            o: &o,
+            u: &u,
+            ue: &ue,
+            p: int("P", 0),
+            id0,
+            encrypt_metadata: em,
+            stm,
+        })
+        .map_err(ReadError)
+        .map(|c: Crypt| c)
+    }
+
+    /// Object number and generation of the object whose stream data starts at `s`.
+    fn owner_of(&self, s: usize) -> (u32, u32) {
+        let i = self.by_off.partition_point(|(o, _)| *o < s);
+        let Some(&(off, num)) = i.checked_sub(1).and_then(|k| self.by_off.get(k)) else {
+            return (0, 0);
+        };
+        let d = &self.data;
+        let mut q = off;
+        while q < d.len() && d[q].is_ascii_digit() {
+            q += 1;
+        }
+        while q < d.len() && is_ws(d[q]) {
+            q += 1;
+        }
+        let mut gen = 0u32;
+        while q < d.len() && d[q].is_ascii_digit() {
+            gen = gen.saturating_mul(10).saturating_add((d[q] - b'0') as u32);
+            q += 1;
+        }
+        (num, gen)
     }
 
     fn load_objstm(&mut self, n: u32) {
@@ -1303,15 +1415,19 @@ impl PdfDoc {
         let (x0, y0, x1, y1) = self.media_box(page);
         // pixels per point: the sharpest image decides
         let mut ppp = 0.0f64;
+        let straight = |m: &[f64; 6]| {
+            !(m[1].abs() > 1e-3 * m[0].abs().max(1e-9)
+                || m[2].abs() > 1e-3 * m[3].abs().max(1e-9)
+                || m[0].abs() < 1e-6
+                || m[3].abs() < 1e-6)
+        };
         for q in &pl {
-            if q.m[1].abs() > 1e-3 * q.m[0].abs().max(1e-9)
-                || q.m[2].abs() > 1e-3 * q.m[3].abs().max(1e-9)
-                || q.m[0].abs() < 1e-6
-                || q.m[3].abs() < 1e-6
-            {
-                return fail("an image is drawn rotated or skewed; layered pages with rotated images are not supported");
+            let det = q.m[0] * q.m[3] - q.m[1] * q.m[2];
+            if !det.is_finite() || det.abs() < 1e-9 {
+                return fail("an image is placed with a degenerate transformation");
             }
-            ppp = ppp.max(self.num_of(&q.dict, "Width").unwrap_or(0.0) / q.m[0].abs());
+            let width_pt = q.m[0].hypot(q.m[1]);
+            ppp = ppp.max(self.num_of(&q.dict, "Width").unwrap_or(0.0) / width_pt.max(1e-6));
         }
         let (pw, ph) = ((x1 - x0).max(1.0), (y1 - y0).max(1.0));
         let mut scale = ppp.clamp(0.5, 33.4); // up to 2400 dpi
@@ -1330,6 +1446,87 @@ impl PdfDoc {
                 Some(Val::Bool(true))
             );
             let img = self.decode_image(&q.dict, q.s, q.e)?;
+            if !straight(&q.m) {
+                // rotated / skewed placement: inverse-map every canvas pixel of its bounding box
+                let m = q.m;
+                let det = m[0] * m[3] - m[1] * m[2];
+                let corners = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)].map(|(u, v)| {
+                    let (px, py) = (m[0] * u + m[2] * v + m[4], m[1] * u + m[3] * v + m[5]);
+                    ((px - x0) * scale, (y1 - py) * scale)
+                });
+                let bx0 = corners
+                    .iter()
+                    .map(|c| c.0)
+                    .fold(f64::MAX, f64::min)
+                    .floor()
+                    .max(0.0) as i64;
+                let bx1 = corners
+                    .iter()
+                    .map(|c| c.0)
+                    .fold(f64::MIN, f64::max)
+                    .ceil()
+                    .min(cw as f64) as i64;
+                let by0 = corners
+                    .iter()
+                    .map(|c| c.1)
+                    .fold(f64::MAX, f64::min)
+                    .floor()
+                    .max(0.0) as i64;
+                let by1 = corners
+                    .iter()
+                    .map(|c| c.1)
+                    .fold(f64::MIN, f64::max)
+                    .ceil()
+                    .min(ch as f64) as i64;
+                let (iw, ih) = (img.width() as f64, img.height() as f64);
+                let rgb = img.to_rgb8();
+                let g = if is_mask { Some(img.to_luma8()) } else { None };
+                for cy in by0..by1 {
+                    for cx in bx0..bx1 {
+                        let (px, py) = (
+                            x0 + (cx as f64 + 0.5) / scale,
+                            y1 - (cy as f64 + 0.5) / scale,
+                        );
+                        let (rx, ry) = (px - m[4], py - m[5]);
+                        let u = (rx * m[3] - ry * m[2]) / det;
+                        let v = (ry * m[0] - rx * m[1]) / det;
+                        if !(0.0..1.0).contains(&u) || !(0.0..1.0).contains(&v) {
+                            continue;
+                        }
+                        let (fx, fy) = (u * iw - 0.5, (1.0 - v) * ih - 0.5);
+                        if let Some(g) = &g {
+                            let (sx, sy) = (
+                                (fx + 0.5).floor().clamp(0.0, iw - 1.0) as u32,
+                                (fy + 0.5).floor().clamp(0.0, ih - 1.0) as u32,
+                            );
+                            if g.get_pixel(sx, sy).0[0] < 128 {
+                                canvas.put_pixel(cx as u32, cy as u32, image::Rgb(q.fill));
+                            }
+                        } else {
+                            let (x0i, y0i) = (fx.floor().max(0.0), fy.floor().max(0.0));
+                            let (tx, ty) = ((fx - x0i).clamp(0.0, 1.0), (fy - y0i).clamp(0.0, 1.0));
+                            let at = |x: f64, y: f64| {
+                                rgb.get_pixel(x.min(iw - 1.0) as u32, y.min(ih - 1.0) as u32)
+                                    .0
+                            };
+                            let (p00, p10, p01, p11) = (
+                                at(x0i, y0i),
+                                at(x0i + 1.0, y0i),
+                                at(x0i, y0i + 1.0),
+                                at(x0i + 1.0, y0i + 1.0),
+                            );
+                            let mut o = [0u8; 3];
+                            for k in 0..3 {
+                                let top = p00[k] as f64 * (1.0 - tx) + p10[k] as f64 * tx;
+                                let bot = p01[k] as f64 * (1.0 - tx) + p11[k] as f64 * tx;
+                                o[k] = (top * (1.0 - ty) + bot * ty).round() as u8;
+                            }
+                            canvas.put_pixel(cx as u32, cy as u32, image::Rgb(o));
+                        }
+                    }
+                }
+                continue;
+            }
             let (dx, dy) = (
                 (q.m[4].min(q.m[4] + q.m[0]) - x0) * scale,
                 (y1 - (q.m[5] + q.m[3]).max(q.m[5])) * scale,
@@ -1418,6 +1615,13 @@ impl PdfDoc {
         stop: &mut dyn FnMut((&str, &Dict)),
     ) -> R<Vec<u8>> {
         let mut data = self.data[s.min(self.data.len())..e.min(self.data.len())].to_vec();
+        if let Some(c) = &self.crypt {
+            let is_xref = dict.get("Type").and_then(|t| t.name()) == Some("XRef");
+            if !is_xref {
+                let (num, gen) = self.owner_of(s);
+                data = c.decrypt_stream(num, gen, &data);
+            }
+        }
         for (name, parms) in self.filters(dict) {
             let pi = |k: &str, dflt: i64| {
                 parms
@@ -2052,6 +2256,213 @@ mod tests {
     }
 
     #[test]
+    fn encrypted_pdfs_open_with_the_empty_password() {
+        let have = std::process::Command::new("qpdf")
+            .arg("--version")
+            .output()
+            .is_ok();
+        if !have {
+            eprintln!("qpdf missing: skipping");
+            return;
+        }
+        let src = gradient(90, 70);
+        let mut w = PdfWriter::new(Compress::Jpeg(90));
+        w.add_page(&page(PageImage::Rgb(src.clone()), 150), &[]);
+        w.add_page(&page(PageImage::Rgb(gradient(50, 50)), 150), &[]);
+        let plain = w.finish();
+        let want = PdfDoc::open(plain.clone())
+            .unwrap()
+            .page_image(0)
+            .unwrap()
+            .image
+            .to_rgb8();
+        let dir = std::env::temp_dir().join(format!("lgr-enc-r-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let inp = dir.join("in.pdf");
+        std::fs::write(&inp, &plain).unwrap();
+        let variants: [&[&str]; 7] = [
+            &["--allow-weak-crypto", "--encrypt", "", "own", "40", "--"],
+            &[
+                "--allow-weak-crypto",
+                "--encrypt",
+                "",
+                "own",
+                "128",
+                "--use-aes=n",
+                "--",
+            ],
+            &[
+                "--allow-weak-crypto",
+                "--encrypt",
+                "",
+                "own",
+                "128",
+                "--use-aes=y",
+                "--",
+            ],
+            &["--encrypt", "", "own", "256", "--force-R5", "--"],
+            &["--encrypt", "", "own", "256", "--"],
+            &[
+                "--object-streams=generate",
+                "--encrypt",
+                "",
+                "own",
+                "256",
+                "--",
+            ],
+            &[
+                "--allow-weak-crypto",
+                "--object-streams=generate",
+                "--encrypt",
+                "",
+                "own",
+                "128",
+                "--use-aes=y",
+                "--",
+            ],
+        ];
+        for (i, v) in variants.iter().enumerate() {
+            let out = dir.join(format!("out{i}.pdf"));
+            let mut cmd = std::process::Command::new("qpdf");
+            cmd.args(v.iter()).arg(&inp).arg(&out);
+            let o = cmd.output().unwrap();
+            assert!(
+                o.status.success(),
+                "qpdf variant {i}: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+            let enc = std::fs::read(&out).unwrap();
+            assert_ne!(enc, plain);
+            let doc = PdfDoc::open(enc).unwrap_or_else(|e| panic!("variant {i}: {e}"));
+            assert_eq!(doc.page_count(), 2, "variant {i}");
+            let got = doc
+                .page_image(0)
+                .unwrap_or_else(|e| panic!("variant {i}: {e}"))
+                .image
+                .to_rgb8();
+            assert_eq!(got.as_raw(), want.as_raw(), "variant {i}");
+        }
+        // a password-protected file is refused with a clear message
+        let o = std::process::Command::new("qpdf")
+            .args(["--encrypt", "secret", "own", "256", "--"])
+            .arg(&inp)
+            .arg(dir.join("pw.pdf"))
+            .output()
+            .unwrap();
+        assert!(o.status.success());
+        let e = PdfDoc::open(std::fs::read(dir.join("pw.pdf")).unwrap())
+            .err()
+            .unwrap();
+        assert!(e.0.contains("password"), "{}", e.0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rotated_and_skewed_placements_are_composited() {
+        let mut o = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n".to_vec();
+        o.extend_from_slice(b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /XObject << /A 4 0 R /B 5 0 R >> >> /Contents 6 0 R >>\nendobj\n");
+        let base = vec![200u8; 100 * 100];
+        o.extend_from_slice(b"4 0 obj\n<< /Type /XObject /Subtype /Image /Width 100 /Height 100 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 10000 >>\nstream\n");
+        o.extend_from_slice(&base);
+        o.extend_from_slice(b"\nendstream\nendobj\n");
+        let red: Vec<u8> = (0..10 * 10).flat_map(|_| [255u8, 0, 0]).collect();
+        o.extend_from_slice(b"5 0 obj\n<< /Type /XObject /Subtype /Image /Width 10 /Height 10 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 300 >>\nstream\n");
+        o.extend_from_slice(&red);
+        let c = "q 200 0 0 200 0 0 cm /A Do Q q 0 40 -40 0 100 80 cm /B Do Q q 30 0 15 30 140 20 cm /B Do Q";
+        o.extend_from_slice(format!("\nendstream\nendobj\n6 0 obj\n<< /Length {} >>\nstream\n{c}\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n", c.len()).as_bytes());
+        let doc = PdfDoc::open(o).unwrap();
+        let img = doc.page_image(0).unwrap().image.to_rgb8();
+        let at = |x: f64, y: f64| {
+            let k = img.width() as f64 / 200.0;
+            img.get_pixel((x * k) as u32, ((200.0 - y) * k) as u32).0
+        };
+        assert_eq!(at(80.0, 100.0), [255, 0, 0], "rotated square");
+        assert_eq!(at(50.0, 100.0), [200, 200, 200], "background");
+        assert_eq!(at(150.0, 30.0), [255, 0, 0], "skewed parallelogram");
+        assert_eq!(
+            at(140.0, 55.0),
+            [200, 200, 200],
+            "outside the parallelogram"
+        );
+    }
+
+    #[test]
+    fn jbig2_symbol_coding_matches_poppler() {
+        use crate::jbig2::enc::{pdf_with_stream, symbol_stream, TextCfg};
+        use crate::jbig2::tests::symbol_case;
+        if std::process::Command::new("pdfimages")
+            .arg("-v")
+            .output()
+            .is_err()
+        {
+            eprintln!("pdfimages missing: skipping");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("lgr-jbig2s-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let at0 = [(3, -1), (-3, -1), (2, -2), (-2, -2)];
+        let mut n = 0;
+        for corner in 0..4u8 {
+            for transposed in [false, true] {
+                for log_strips in [0u8, 2] {
+                    let (w, h, syms, placed, want) = symbol_case(5 + corner as u64);
+                    let cfg = TextCfg {
+                        corner,
+                        transposed,
+                        log_strips,
+                        comb: 0,
+                        dso: 0,
+                    };
+                    let data = symbol_stream(w, h, &syms, &placed, 0, at0, &cfg);
+                    let pdf = pdf_with_stream(&data, w, h);
+                    let ours = PdfDoc::open(pdf.clone())
+                        .unwrap()
+                        .page_image(0)
+                        .unwrap()
+                        .image
+                        .to_luma8();
+                    let f = dir.join(format!("s{n}.pdf"));
+                    std::fs::write(&f, &pdf).unwrap();
+                    let prefix = dir.join(format!("o{n}"));
+                    let st = std::process::Command::new("pdfimages")
+                        .arg("-png")
+                        .arg(&f)
+                        .arg(&prefix)
+                        .output()
+                        .unwrap();
+                    assert!(
+                        st.status.success(),
+                        "{}",
+                        String::from_utf8_lossy(&st.stderr)
+                    );
+                    let theirs = image::open(format!("{}-000.png", prefix.display()))
+                        .unwrap()
+                        .to_luma8();
+                    assert_eq!(theirs.dimensions(), (w as u32, h as u32));
+                    for y in 0..h {
+                        for x in 0..w {
+                            let k = want[y * w + x] == 1;
+                            let tag = format!("corner {corner} transposed {transposed} strips {log_strips} ({x},{y})");
+                            assert_eq!(
+                                ours.get_pixel(x as u32, y as u32).0[0] < 128,
+                                k,
+                                "ours {tag}"
+                            );
+                            assert_eq!(
+                                theirs.get_pixel(x as u32, y as u32).0[0] < 128,
+                                k,
+                                "poppler {tag}"
+                            );
+                        }
+                    }
+                    n += 1;
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn unsupported_things_say_so() {
         let e = |extra: &str| {
             PdfDoc::open(pdf_with_image(extra, &[0; 8], 2, 2, ""))
@@ -2070,11 +2481,7 @@ mod tests {
         );
         assert!(e("/ColorSpace /Pattern /BitsPerComponent 8").contains("colour space"));
         let enc = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R /Encrypt 5 0 R >>\n";
-        assert!(PdfDoc::open(enc.to_vec())
-            .err()
-            .unwrap()
-            .0
-            .contains("encrypted"));
+        assert!(PdfDoc::open(enc.to_vec()).is_err());
         assert!(PdfDoc::open(b"hello".to_vec()).is_err());
         assert!(PdfDoc::open(b"%PDF-1.4\n".to_vec()).is_err());
     }

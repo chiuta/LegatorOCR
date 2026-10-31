@@ -173,6 +173,8 @@ pub struct SheetAdjust {
     pub skew_deg: Option<f32>,
     /// Move the detected content box outwards by this many mm per side (l, t, r, b).
     pub content_adjust_mm: [f32; 4],
+    /// Erase rectangles drawn on the original (x, y, w, h in mm).
+    pub erase_mm: Vec<[f32; 4]>,
 }
 
 impl UiSettings {
@@ -208,6 +210,7 @@ impl UiSettings {
             despeckle: self.despeckle,
             dewarp: self.dewarp,
             content_adjust_mm: adj.content_adjust_mm,
+            sheet_erase_zones: adj.erase_mm.clone(),
             align: self.align,
             threshold: self.threshold,
             normalize_bg: self.normalize_bg,

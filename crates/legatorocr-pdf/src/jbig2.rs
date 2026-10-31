@@ -243,10 +243,23 @@ fn generic_arith(
     tpgdon: bool,
     at: [(i32, i32); 4],
 ) -> Vec<u8> {
+    let mut cx = vec![(0u8, 0u8); 1 << template(t, &at).len()];
+    let mut mq = Mq::new(data);
+    generic_with(&mut mq, &mut cx, w, h, t, tpgdon, at)
+}
+
+/// The same with a caller-owned decoder and context set (symbol dictionaries share them).
+fn generic_with(
+    mq: &mut Mq,
+    cx: &mut [(u8, u8)],
+    w: usize,
+    h: usize,
+    t: u8,
+    tpgdon: bool,
+    at: [(i32, i32); 4],
+) -> Vec<u8> {
     let offs = template(t, &at);
     let sltp: usize = [0x9B25, 0x0795, 0x00E5, 0x0195][t as usize & 3];
-    let mut cx = vec![(0u8, 0u8); 1 << offs.len()];
-    let mut mq = Mq::new(data);
     let mut bm = vec![0u8; w * h];
     let mut ltp = false;
     for y in 0..h {
@@ -273,9 +286,310 @@ fn generic_arith(
     bm
 }
 
-struct Seg<'a> {
+/// Arithmetic integer decoder (Annex A.2); `None` is the out-of-band value.
+struct IntCtx(Vec<(u8, u8)>);
+impl IntCtx {
+    fn new() -> Self {
+        IntCtx(vec![(0, 0); 512])
+    }
+    fn decode(&mut self, mq: &mut Mq) -> Option<i32> {
+        let mut prev = 1usize;
+        let mut bit = |mq: &mut Mq, cx: &mut Vec<(u8, u8)>| {
+            let d = mq.decode(&mut cx[prev]) as usize;
+            prev = if prev < 256 {
+                (prev << 1) | d
+            } else {
+                (((prev << 1) | d) & 511) | 256
+            };
+            d
+        };
+        let cx = &mut self.0;
+        let sign = bit(mq, cx);
+        let (n, off) = if bit(mq, cx) == 0 {
+            (2, 0)
+        } else if bit(mq, cx) == 0 {
+            (4, 4)
+        } else if bit(mq, cx) == 0 {
+            (6, 20)
+        } else if bit(mq, cx) == 0 {
+            (8, 84)
+        } else if bit(mq, cx) == 0 {
+            (12, 340)
+        } else {
+            (32, 4436)
+        };
+        let mut v: i64 = 0;
+        for _ in 0..n {
+            v = (v << 1) | bit(mq, cx) as i64;
+        }
+        v += off;
+        match (sign, v) {
+            (0, v) => Some(v.min(i32::MAX as i64) as i32),
+            (_, v) if v > 0 => Some((-v).max(i32::MIN as i64) as i32),
+            _ => None,
+        }
+    }
+}
+
+fn decode_iaid(mq: &mut Mq, cx: &mut [(u8, u8)], len: u32) -> usize {
+    let mut prev = 1usize;
+    for _ in 0..len {
+        let d = mq.decode(&mut cx[prev]) as usize;
+        prev = (prev << 1) | d;
+    }
+    prev - (1usize << len)
+}
+
+#[derive(Clone)]
+struct Bitmap {
+    w: usize,
+    h: usize,
+    d: Vec<u8>,
+}
+
+fn be16(b: &[u8], at: usize) -> R<u16> {
+    b.get(at..at + 2)
+        .map(|s| u16::from_be_bytes([s[0], s[1]]))
+        .ok_or_else(|| Jbig2Error("truncated JBIG2 data".into()))
+}
+
+/// Symbol dictionary (arithmetic coding, no refinement/aggregation) → exported symbols.
+fn symbol_dict(data: &[u8], inputs: &[Bitmap]) -> R<Vec<Bitmap>> {
+    let flags = be16(data, 0)?;
+    if flags & 1 != 0 {
+        return fail("JBIG2 Huffman-coded symbol dictionaries are not supported");
+    }
+    if flags & 2 != 0 {
+        return fail("JBIG2 refinement/aggregate symbol dictionaries are not supported");
+    }
+    if flags & 0x100 != 0 {
+        return fail("JBIG2 symbol dictionaries with retained contexts are not supported");
+    }
+    let t = ((flags >> 10) & 3) as u8;
+    let mut p = 2;
+    let n_at = if t == 0 { 4 } else { 1 };
+    let raw = data
+        .get(p..p + 2 * n_at)
+        .ok_or_else(|| Jbig2Error("truncated JBIG2 symbol dictionary".into()))?;
+    let mut at = [(0i32, 0i32); 4];
+    for (i, a) in at.iter_mut().enumerate().take(n_at) {
+        *a = (raw[2 * i] as i8 as i32, raw[2 * i + 1] as i8 as i32);
+    }
+    p += 2 * n_at;
+    let n_ex = be32(data, p)? as usize;
+    let n_new = be32(data, p + 4)? as usize;
+    p += 8;
+    if n_new > 65_536 || n_ex > 131_072 + inputs.len() {
+        return fail("JBIG2 symbol dictionary too large");
+    }
+    let mut mq = Mq::new(&data[p.min(data.len())..]);
+    let mut gb = vec![(0u8, 0u8); 1 << template(t, &at).len()];
+    let (mut iadh, mut iadw, mut iaex) = (IntCtx::new(), IntCtx::new(), IntCtx::new());
+    let mut news: Vec<Bitmap> = Vec::with_capacity(n_new.min(4096));
+    let mut budget = 0u64;
+    let mut hc_h: i64 = 0;
+    while news.len() < n_new {
+        let dh = iadh
+            .decode(&mut mq)
+            .ok_or_else(|| Jbig2Error("bad JBIG2 symbol height".into()))?;
+        hc_h += dh as i64;
+        if !(0..=65_535).contains(&hc_h) {
+            return fail("bad JBIG2 symbol height");
+        }
+        let mut sym_w: i64 = 0;
+        while let Some(dw) = iadw.decode(&mut mq) {
+            if news.len() >= n_new {
+                return fail("JBIG2 symbol dictionary overrun");
+            }
+            sym_w += dw as i64;
+            if !(0..=65_535).contains(&sym_w) {
+                return fail("bad JBIG2 symbol width");
+            }
+            let (w, h) = (sym_w as usize, hc_h as usize);
+            budget += w as u64 * h as u64;
+            if w as u64 * h as u64 > 16_000_000 || budget > 200_000_000 {
+                return fail("JBIG2 symbols are too large");
+            }
+            let d = if w == 0 || h == 0 {
+                Vec::new()
+            } else {
+                generic_with(&mut mq, &mut gb, w, h, t, false, at)
+            };
+            news.push(Bitmap { w, h, d });
+        }
+    }
+    let total = inputs.len() + news.len();
+    let mut out = Vec::new();
+    let (mut idx, mut flag) = (0usize, false);
+    let mut guard = 0;
+    while idx < total && guard < total + 8 {
+        guard += 1;
+        let run = iaex
+            .decode(&mut mq)
+            .ok_or_else(|| Jbig2Error("bad JBIG2 export run".into()))?;
+        if run < 0 || idx + run as usize > total {
+            return fail("bad JBIG2 export run");
+        }
+        if flag {
+            for k in idx..idx + run as usize {
+                out.push(if k < inputs.len() {
+                    inputs[k].clone()
+                } else {
+                    news[k - inputs.len()].clone()
+                });
+            }
+        }
+        idx += run as usize;
+        flag = !flag;
+    }
+    if out.len() != n_ex && n_ex != 0 {
+        // tolerate producers that count differently, but never exceed the declared total
+        if out.len() > total {
+            return fail("bad JBIG2 export table");
+        }
+    }
+    Ok(out)
+}
+
+/// Text region (arithmetic coding, no refinement) → region bitmap.
+fn text_region(data: &[u8], rw: usize, rh: usize, syms: &[Bitmap]) -> R<Vec<u8>> {
+    let flags = be16(data, 0)?;
+    if flags & 1 != 0 {
+        return fail("JBIG2 Huffman-coded text regions are not supported");
+    }
+    if flags & 2 != 0 {
+        return fail("JBIG2 text regions with refinement are not supported");
+    }
+    let log_strips = (flags >> 2) & 3;
+    let strips = 1i64 << log_strips;
+    let corner = (flags >> 4) & 3; // 0 BL, 1 TL, 2 BR, 3 TR
+    let transposed = flags & 0x40 != 0;
+    let comb = ((flags >> 7) & 3) as u8;
+    let def_pixel = ((flags >> 9) & 1) as u8;
+    let mut dso = ((flags >> 10) & 31) as i32;
+    if dso > 15 {
+        dso -= 32;
+    }
+    let n_inst = be32(data, 2)? as usize;
+    if n_inst > 4_000_000 {
+        return fail("too many JBIG2 symbol instances");
+    }
+    let mut mq = Mq::new(&data[6.min(data.len())..]);
+    let n_sym = syms.len();
+    let code_len = if n_sym <= 1 {
+        0
+    } else {
+        usize::BITS - (n_sym - 1).leading_zeros()
+    };
+    let (mut iadt, mut iafs, mut iads, mut iait) =
+        (IntCtx::new(), IntCtx::new(), IntCtx::new(), IntCtx::new());
+    let mut iaid = vec![(0u8, 0u8); 1usize << (code_len + 1)];
+    let mut bm = vec![def_pixel; rw * rh];
+    let mut stript: i64 = -(iadt
+        .decode(&mut mq)
+        .ok_or_else(|| Jbig2Error("bad JBIG2 text region".into()))?
+        as i64)
+        * strips;
+    let mut firsts: i64 = 0;
+    let mut done = 0usize;
+    let mut drawn = 0u64;
+    while done < n_inst {
+        let dt = iadt
+            .decode(&mut mq)
+            .ok_or_else(|| Jbig2Error("bad JBIG2 text region".into()))? as i64;
+        stript += dt * strips;
+        let mut curs: i64 = 0;
+        let mut first = true;
+        loop {
+            if first {
+                let dfs = iafs
+                    .decode(&mut mq)
+                    .ok_or_else(|| Jbig2Error("bad JBIG2 text region".into()))?
+                    as i64;
+                firsts += dfs;
+                curs = firsts;
+                first = false;
+            } else {
+                match iads.decode(&mut mq) {
+                    None => break,
+                    Some(ids) => curs += ids as i64 + dso as i64,
+                }
+            }
+            if done >= n_inst {
+                return fail("JBIG2 text region overrun");
+            }
+            let curt = if strips == 1 {
+                0
+            } else {
+                iait.decode(&mut mq)
+                    .ok_or_else(|| Jbig2Error("bad JBIG2 text region".into()))?
+                    as i64
+            };
+            let ti = stript + curt;
+            let id = decode_iaid(&mut mq, &mut iaid, code_len);
+            let sym = syms
+                .get(id)
+                .ok_or_else(|| Jbig2Error("JBIG2 symbol id out of range".into()))?;
+            let (wi, hi) = (sym.w as i64, sym.h as i64);
+            if !transposed && corner >= 2 {
+                curs += wi - 1;
+            } else if transposed && (corner == 0 || corner == 2) {
+                curs += hi - 1;
+            }
+            let si = curs;
+            let (x, y) = if !transposed {
+                match corner {
+                    1 => (si, ti),
+                    3 => (si - wi + 1, ti),
+                    0 => (si, ti - hi + 1),
+                    _ => (si - wi + 1, ti - hi + 1),
+                }
+            } else {
+                match corner {
+                    1 => (ti, si),
+                    3 => (ti - wi + 1, si),
+                    0 => (ti, si - hi + 1),
+                    _ => (ti - wi + 1, si - hi + 1),
+                }
+            };
+            drawn += (sym.w * sym.h) as u64 + 1;
+            if drawn > 1_000_000_000 {
+                return fail("JBIG2 text region is too expensive");
+            }
+            for yy in 0..sym.h {
+                for xx in 0..sym.w {
+                    let (px, py) = (x + xx as i64, y + yy as i64);
+                    if px < 0 || py < 0 || px >= rw as i64 || py >= rh as i64 {
+                        continue;
+                    }
+                    let (dst, src) = (
+                        &mut bm[py as usize * rw + px as usize],
+                        sym.d[yy * sym.w + xx],
+                    );
+                    *dst = match comb {
+                        0 => *dst | src,
+                        1 => *dst & src,
+                        2 => *dst ^ src,
+                        _ => 1 - (*dst ^ src),
+                    };
+                }
+            }
+            if !transposed && corner < 2 {
+                curs += wi - 1;
+            } else if transposed && (corner == 1 || corner == 3) {
+                curs += hi - 1;
+            }
+            done += 1;
+        }
+    }
+    Ok(bm)
+}
+
+struct Seg {
+    num: u32,
     kind: u8,
-    data: &'a [u8],
+    refs: Vec<u32>,
+    data: Vec<u8>,
 }
 
 fn be32(b: &[u8], at: usize) -> R<u32> {
@@ -284,7 +598,7 @@ fn be32(b: &[u8], at: usize) -> R<u32> {
         .ok_or_else(|| Jbig2Error("truncated JBIG2 data".into()))
 }
 
-fn parse_segments(mut d: &[u8], out: &mut Vec<(u8, Vec<u8>)>) -> R<()> {
+fn parse_segments(mut d: &[u8], out: &mut Vec<Seg>) -> R<()> {
     while d.len() >= 11 {
         let num = be32(d, 0)?;
         let flags = d[4];
@@ -309,9 +623,23 @@ fn parse_segments(mut d: &[u8], out: &mut Vec<(u8, Vec<u8>)>) -> R<()> {
         } else {
             4
         };
-        p += count
-            .checked_mul(ref_size)
-            .ok_or_else(|| Jbig2Error("bad segment".into()))?;
+        if count > 100_000 {
+            return fail("bad JBIG2 segment");
+        }
+        let mut refs = Vec::with_capacity(count);
+        for k in 0..count {
+            let at = p + k * ref_size;
+            let v = match ref_size {
+                1 => *d
+                    .get(at)
+                    .ok_or_else(|| Jbig2Error("truncated segment header".into()))?
+                    as u32,
+                2 => be16(d, at)? as u32,
+                _ => be32(d, at)?,
+            };
+            refs.push(v);
+        }
+        p += count * ref_size;
         p += if big_page { 4 } else { 1 };
         let len = be32(d, p)? as usize;
         p += 4;
@@ -321,13 +649,48 @@ fn parse_segments(mut d: &[u8], out: &mut Vec<(u8, Vec<u8>)>) -> R<()> {
         let body = d
             .get(p..p.saturating_add(len))
             .ok_or_else(|| Jbig2Error("truncated JBIG2 segment".into()))?;
-        out.push((kind, body.to_vec()));
+        out.push(Seg {
+            num,
+            kind,
+            refs,
+            data: body.to_vec(),
+        });
         d = &d[p + len..];
         if out.len() > 10_000 {
             return fail("too many JBIG2 segments");
         }
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn blit(
+    page: &mut [u8],
+    w: usize,
+    h: usize,
+    bm: &[u8],
+    rw: usize,
+    rh: usize,
+    rx: usize,
+    ry: usize,
+    op: u8,
+) {
+    for yy in 0..rh {
+        for xx in 0..rw {
+            let (px, py) = (rx + xx, ry + yy);
+            if px >= w || py >= h {
+                continue;
+            }
+            let (dst, src) = (&mut page[py * w + px], bm[yy * rw + xx]);
+            *dst = match op {
+                0 => *dst | src,
+                1 => *dst & src,
+                2 => *dst ^ src,
+                3 => 1 - (*dst ^ src),
+                _ => src,
+            };
+        }
+    }
 }
 
 /// Decode an embedded JBIG2 stream (plus optional globals) to a `w`×`h` bitmap, one byte
@@ -343,29 +706,27 @@ pub fn decode(data: &[u8], globals: Option<&[u8]>, w: usize, h: usize) -> R<Vec<
     parse_segments(data, &mut segs)?;
     let mut page = vec![0u8; w * h];
     let mut regions = 0;
-    for (kind, body) in &segs {
-        let s = Seg {
-            kind: *kind,
-            data: body,
-        };
+    let mut dicts: std::collections::HashMap<u32, Vec<Bitmap>> = std::collections::HashMap::new();
+    for s in &segs {
+        let data: &[u8] = &s.data;
         match s.kind {
             48 => {
                 // page information: pages w/h may be 0xFFFFFFFF (striped); the PDF dictionary wins
-                if s.data.len() >= 17 && s.data[16] & 4 != 0 {
+                if data.len() >= 17 && data[16] & 4 != 0 {
                     page.iter_mut().for_each(|p| *p = 1);
                 }
             }
             36 | 38 | 39 => {
-                if s.data.len() < 18 {
+                if data.len() < 18 {
                     return fail("truncated JBIG2 region");
                 }
-                let (rw, rh) = (be32(s.data, 0)? as usize, be32(s.data, 4)? as usize);
-                let (rx, ry) = (be32(s.data, 8)? as usize, be32(s.data, 12)? as usize);
-                let op = s.data[16] & 7;
+                let (rw, rh) = (be32(data, 0)? as usize, be32(data, 4)? as usize);
+                let (rx, ry) = (be32(data, 8)? as usize, be32(data, 12)? as usize);
+                let op = data[16] & 7;
                 if rw == 0 || rh == 0 || rw > w || rh > h {
                     return fail("invalid JBIG2 region size");
                 }
-                let f = s.data[17];
+                let f = data[17];
                 let mmr = f & 1 != 0;
                 let t = (f >> 1) & 3;
                 let tpgdon = f & 8 != 0;
@@ -378,7 +739,7 @@ pub fn decode(data: &[u8], globals: Option<&[u8]>, w: usize, h: usize) -> R<Vec<
                     [(2, -1), (0, 0), (0, 0), (0, 0)],
                 ];
                 let bm = if mmr {
-                    let (rows, _) = crate::g4::decode(&s.data[p..], rw, rh, false);
+                    let (rows, _) = crate::g4::decode(&data[p..], rw, rh, false);
                     rows.iter()
                         .flat_map(|r| r.iter().map(|&b| b as u8))
                         .collect()
@@ -387,8 +748,7 @@ pub fn decode(data: &[u8], globals: Option<&[u8]>, w: usize, h: usize) -> R<Vec<
                     if f & 0x10 != 0 {
                         return fail("JBIG2 extended templates are not supported");
                     }
-                    let raw = s
-                        .data
+                    let raw = data
                         .get(p..p + 2 * n)
                         .ok_or_else(|| Jbig2Error("truncated JBIG2 region".into()))?;
                     for (i, a) in at.iter_mut().enumerate().take(n) {
@@ -406,30 +766,43 @@ pub fn decode(data: &[u8], globals: Option<&[u8]>, w: usize, h: usize) -> R<Vec<
                     {
                         return fail("invalid JBIG2 adaptive template pixel");
                     }
-                    generic_arith(&s.data[p..], rw, rh, t, tpgdon, at)
+                    generic_arith(&data[p..], rw, rh, t, tpgdon, at)
                 };
-                for yy in 0..rh {
-                    for xx in 0..rw {
-                        let (px, py) = (rx + xx, ry + yy);
-                        if px >= w || py >= h {
-                            continue;
-                        }
-                        let (dst, src) = (&mut page[py * w + px], bm[yy * rw + xx]);
-                        *dst = match op {
-                            0 => *dst | src,
-                            1 => *dst & src,
-                            2 => *dst ^ src,
-                            3 => 1 - (*dst ^ src),
-                            _ => src,
-                        };
-                    }
-                }
+                blit(&mut page, w, h, &bm, rw, rh, rx, ry, op);
                 regions += 1;
             }
-            0 => return fail(
-                "JBIG2 symbol dictionaries are not supported (this file uses text/symbol coding)",
-            ),
-            6 | 7 => return fail("JBIG2 text regions are not supported"),
+            0 => {
+                let mut inputs: Vec<Bitmap> = Vec::new();
+                for r in &s.refs {
+                    if let Some(d) = dicts.get(r) {
+                        inputs.extend(d.iter().cloned());
+                    }
+                }
+                if inputs.len() > 131_072 {
+                    return fail("JBIG2 symbol dictionary too large");
+                }
+                dicts.insert(s.num, symbol_dict(data, &inputs)?);
+            }
+            6 | 7 => {
+                if data.len() < 17 {
+                    return fail("truncated JBIG2 region");
+                }
+                let (rw, rh) = (be32(data, 0)? as usize, be32(data, 4)? as usize);
+                let (rx, ry) = (be32(data, 8)? as usize, be32(data, 12)? as usize);
+                let op = data[16] & 7;
+                if rw == 0 || rh == 0 || rw > w || rh > h {
+                    return fail("invalid JBIG2 region size");
+                }
+                let mut syms: Vec<Bitmap> = Vec::new();
+                for r in &s.refs {
+                    if let Some(d) = dicts.get(r) {
+                        syms.extend(d.iter().cloned());
+                    }
+                }
+                let bm = text_region(&data[17..], rw, rh, &syms)?;
+                blit(&mut page, w, h, &bm, rw, rh, rx, ry, op);
+                regions += 1;
+            }
             16 | 22 | 23 => return fail("JBIG2 halftone regions are not supported"),
             40 | 42 | 43 => return fail("JBIG2 refinement regions are not supported"),
             _ => {}
@@ -557,9 +930,22 @@ pub(crate) mod enc {
         tpgdon: bool,
         at: [(i32, i32); 4],
     ) -> Vec<u8> {
+        let mut e = Mqe::new(1 << template(t, &at).len());
+        encode_generic_with(&mut e, bm, w, h, t, tpgdon, at);
+        e.finish()
+    }
+
+    pub fn encode_generic_with(
+        e: &mut Mqe,
+        bm: &[u8],
+        w: usize,
+        h: usize,
+        t: u8,
+        tpgdon: bool,
+        at: [(i32, i32); 4],
+    ) {
         let offs = template(t, &at);
         let sltp: usize = [0x9B25, 0x0795, 0x00E5, 0x0195][t as usize & 3];
-        let mut e = Mqe::new(1 << offs.len());
         let mut ltp = false;
         for y in 0..h {
             if tpgdon {
@@ -582,13 +968,74 @@ pub(crate) mod enc {
                 e.encode(bm[y * w + x], ctx);
             }
         }
-        e.finish()
     }
 
-    fn seg(num: u32, kind: u8, page: u8, body: &[u8]) -> Vec<u8> {
+    /// Arithmetic integer (Annex A.2) with contexts at `base..base+512`; `None` = OOB.
+    pub fn enc_int(e: &mut Mqe, base: usize, v: Option<i32>) {
+        let mut prev = 1usize;
+        let mut bit = |e: &mut Mqe, d: usize| {
+            e.encode(d as u8, base + prev);
+            prev = if prev < 256 {
+                (prev << 1) | d
+            } else {
+                (((prev << 1) | d) & 511) | 256
+            };
+        };
+        let (sign, a) = match v {
+            None => (1usize, 0i64),
+            Some(v) => ((v < 0) as usize, (v as i64).abs()),
+        };
+        bit(e, sign);
+        let (prefix, n, off): (&[usize], u32, i64) = if a < 4 {
+            (&[0], 2, 0)
+        } else if a < 20 {
+            (&[1, 0], 4, 4)
+        } else if a < 84 {
+            (&[1, 1, 0], 6, 20)
+        } else if a < 340 {
+            (&[1, 1, 1, 0], 8, 84)
+        } else if a < 4436 {
+            (&[1, 1, 1, 1, 0], 12, 340)
+        } else {
+            (&[1, 1, 1, 1, 1], 32, 4436)
+        };
+        for &b in prefix {
+            bit(e, b);
+        }
+        let r = a - off;
+        for i in (0..n).rev() {
+            bit(e, ((r >> i) & 1) as usize);
+        }
+    }
+
+    // context layout of the combined encoder
+    pub const IADH: usize = 1 << 16;
+    pub const IADW: usize = IADH + 512;
+    pub const IAEX: usize = IADW + 512;
+    pub const IADT: usize = IAEX + 512;
+    pub const IAFS: usize = IADT + 512;
+    pub const IADS: usize = IAFS + 512;
+    pub const IAIT: usize = IADS + 512;
+    pub const IAID: usize = IAIT + 512;
+
+    pub fn enc_iaid(e: &mut Mqe, id: usize, len: u32) {
+        let mut prev = 1usize;
+        for i in (0..len).rev() {
+            let d = (id >> i) & 1;
+            e.encode(d as u8, IAID + prev);
+            prev = (prev << 1) | d;
+        }
+    }
+
+    pub fn seg(num: u32, kind: u8, page: u8, body: &[u8]) -> Vec<u8> {
+        seg_refs(num, kind, page, &[], body)
+    }
+
+    pub fn seg_refs(num: u32, kind: u8, page: u8, refs: &[u8], body: &[u8]) -> Vec<u8> {
         let mut v = num.to_be_bytes().to_vec();
         v.push(kind);
-        v.push(0); // no referred-to segments
+        v.push((refs.len() as u8) << 5);
+        v.extend_from_slice(refs);
         v.push(page);
         v.extend((body.len() as u32).to_be_bytes());
         v.extend(body);
@@ -623,12 +1070,193 @@ pub(crate) mod enc {
         out.extend(seg(1, 38, 1, &r));
         out
     }
+
+    pub struct TextCfg {
+        pub corner: u8,
+        pub transposed: bool,
+        pub log_strips: u8,
+        pub comb: u8,
+        pub dso: i32,
+    }
+
+    /// Symbol dictionary (+ text region) stream. `syms` sorted by height; `placed` =
+    /// (symbol id, x, y) of each symbol's top-left corner on the page.
+    pub fn symbol_stream(
+        w: usize,
+        h: usize,
+        syms: &[(usize, usize, Vec<u8>)],
+        placed: &[(usize, i64, i64)],
+        t: u8,
+        at: [(i32, i32); 4],
+        cfg: &TextCfg,
+    ) -> Vec<u8> {
+        let n = syms.len();
+        let code_len = if n <= 1 {
+            0
+        } else {
+            usize::BITS - (n - 1).leading_zeros()
+        };
+        let mut e = Mqe::new(IAID + (1usize << (code_len + 1)));
+        // --- symbol dictionary
+        let mut prev_h = 0i32;
+        let mut i = 0;
+        while i < n {
+            let hh = syms[i].1 as i32;
+            enc_int(&mut e, IADH, Some(hh - prev_h));
+            prev_h = hh;
+            let mut prev_w = 0i32;
+            while i < n && syms[i].1 as i32 == hh {
+                let ww = syms[i].0 as i32;
+                enc_int(&mut e, IADW, Some(ww - prev_w));
+                prev_w = ww;
+                encode_generic_with(&mut e, &syms[i].2, syms[i].0, syms[i].1, t, false, at);
+                i += 1;
+            }
+            enc_int(&mut e, IADW, None);
+        }
+        enc_int(&mut e, IAEX, Some(0));
+        enc_int(&mut e, IAEX, Some(n as i32));
+        let sd_data = e.finish();
+        let mut sd = ((t as u16) << 10).to_be_bytes().to_vec();
+        let nat = if t == 0 { 4 } else { 1 };
+        for a in at.iter().take(nat) {
+            sd.push(a.0 as i8 as u8);
+            sd.push(a.1 as i8 as u8);
+        }
+        sd.extend((n as u32).to_be_bytes());
+        sd.extend((n as u32).to_be_bytes());
+        sd.extend(sd_data);
+
+        // --- text region (own coder: the dictionary's was flushed)
+        let mut e = Mqe::new(IAID + (1usize << (code_len + 1)));
+        let strips = 1i64 << cfg.log_strips;
+        let right = cfg.corner >= 2;
+        let bottom = cfg.corner == 0 || cfg.corner == 2;
+        let top = cfg.corner == 1 || cfg.corner == 3;
+        let left = cfg.corner < 2;
+        struct Inst {
+            strip: i64,
+            s: i64,
+            curt: i64,
+            id: usize,
+            pre: i64,
+            post: i64,
+        }
+        let mut inst: Vec<Inst> = placed
+            .iter()
+            .map(|&(id, x, y)| {
+                let (sw, sh) = (syms[id].0 as i64, syms[id].1 as i64);
+                let (s_ref, t_ref, pre, post) = if !cfg.transposed {
+                    (
+                        if right { x + sw - 1 } else { x },
+                        if bottom { y + sh - 1 } else { y },
+                        if right { sw - 1 } else { 0 },
+                        if left { sw - 1 } else { 0 },
+                    )
+                } else {
+                    (
+                        if bottom { y + sh - 1 } else { y },
+                        if right { x + sw - 1 } else { x },
+                        if bottom { sh - 1 } else { 0 },
+                        if top { sh - 1 } else { 0 },
+                    )
+                };
+                Inst {
+                    strip: t_ref.div_euclid(strips),
+                    s: s_ref,
+                    curt: t_ref.rem_euclid(strips),
+                    id,
+                    pre,
+                    post,
+                }
+            })
+            .collect();
+        inst.sort_by_key(|i| (i.strip, i.s));
+        enc_int(&mut e, IADT, Some(0));
+        let (mut cur_stript, mut firsts) = (0i64, 0i64);
+        let mut k = 0;
+        while k < inst.len() {
+            let strip = inst[k].strip;
+            enc_int(
+                &mut e,
+                IADT,
+                Some(((strip * strips - cur_stript) / strips) as i32),
+            );
+            cur_stript = strip * strips;
+            let mut prev_end = 0i64;
+            let mut first = true;
+            while k < inst.len() && inst[k].strip == strip {
+                let it = &inst[k];
+                let curs = it.s - it.pre;
+                if first {
+                    enc_int(&mut e, IAFS, Some((curs - firsts) as i32));
+                    firsts = curs;
+                    first = false;
+                } else {
+                    enc_int(
+                        &mut e,
+                        IADS,
+                        Some((curs - prev_end - cfg.dso as i64) as i32),
+                    );
+                }
+                if strips > 1 {
+                    enc_int(&mut e, IAIT, Some(it.curt as i32));
+                }
+                enc_iaid(&mut e, it.id, code_len);
+                prev_end = it.s + it.post;
+                k += 1;
+            }
+            enc_int(&mut e, IADS, None);
+        }
+        let tr_data = e.finish();
+        let mut region = (w as u32).to_be_bytes().to_vec();
+        region.extend((h as u32).to_be_bytes());
+        region.extend([0; 8]);
+        region.push(0);
+        let flags: u16 = ((cfg.log_strips as u16) << 2)
+            | ((cfg.corner as u16) << 4)
+            | ((cfg.transposed as u16) << 6)
+            | ((cfg.comb as u16) << 7)
+            | (((cfg.dso & 31) as u16) << 10);
+        region.extend(flags.to_be_bytes());
+        region.extend((placed.len() as u32).to_be_bytes());
+        region.extend(tr_data);
+
+        let mut pi = (w as u32).to_be_bytes().to_vec();
+        pi.extend((h as u32).to_be_bytes());
+        pi.extend([0; 8]);
+        pi.extend([0, 0, 0]);
+        let mut out = seg(0, 48, 1, &pi);
+        out.extend(seg(1, 0, 1, &sd));
+        out.extend(seg_refs(2, 6, 1, &[1], &region));
+        out
+    }
+
+    /// A one-page PDF whose only image is this JBIG2 stream (page = w x h points).
+    pub fn pdf_with_stream(data: &[u8], w: usize, h: usize) -> Vec<u8> {
+        let mut o = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n".to_vec();
+        o.extend_from_slice(format!("3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n").as_bytes());
+        o.extend_from_slice(format!("4 0 obj\n<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /JBIG2Decode /Length {} >>\nstream\n", data.len()).as_bytes());
+        o.extend_from_slice(data);
+        let c = format!("q {w} 0 0 {h} 0 0 cm /Im0 Do Q");
+        o.extend_from_slice(format!("\nendstream\nendobj\n5 0 obj\n<< /Length {} >>\nstream\n{c}\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n", c.len()).as_bytes());
+        o
+    }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::enc::*;
     use super::*;
+
+    /// (page w, page h, glyphs, placements, expected page bitmap)
+    pub(crate) type SymbolCase = (
+        usize,
+        usize,
+        Vec<(usize, usize, Vec<u8>)>,
+        Vec<(usize, i64, i64)>,
+        Vec<u8>,
+    );
 
     fn sample(w: usize, h: usize, seed: u64) -> Vec<u8> {
         let mut s = seed;
@@ -670,6 +1298,79 @@ mod tests {
         }
     }
 
+    /// Random glyphs sorted by height, a grid of instances and the expected page bitmap.
+    pub(crate) fn symbol_case(seed: u64) -> SymbolCase {
+        let mut s = seed;
+        let mut rnd = |n: u64| {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            s % n
+        };
+        let mut syms: Vec<(usize, usize, Vec<u8>)> = (0..9)
+            .map(|_| {
+                let (w, h) = (3 + rnd(9) as usize, 3 + rnd(9) as usize);
+                (w, h, (0..w * h).map(|_| (rnd(100) < 55) as u8).collect())
+            })
+            .collect();
+        syms.sort_by_key(|g| g.1);
+        let (pw, ph) = (150usize, 75usize);
+        let mut placed = Vec::new();
+        let mut page = vec![0u8; pw * ph];
+        for row in 0..4 {
+            for col in 0..8 {
+                let id = rnd(syms.len() as u64) as usize;
+                let (x, y) = (3 + col * 18 + rnd(4) as i64, 3 + row * 18 + rnd(4) as i64);
+                placed.push((id, x, y));
+                let g = &syms[id];
+                for yy in 0..g.1 {
+                    for xx in 0..g.0 {
+                        if g.2[yy * g.0 + xx] == 1 {
+                            page[(y as usize + yy) * pw + x as usize + xx] = 1;
+                        }
+                    }
+                }
+            }
+        }
+        (pw, ph, syms, placed, page)
+    }
+
+    #[test]
+    fn symbol_dictionary_and_text_region_all_layouts() {
+        let at0 = [(3, -1), (-3, -1), (2, -2), (-2, -2)];
+        for corner in 0..4u8 {
+            for transposed in [false, true] {
+                for log_strips in [0u8, 2] {
+                    for (t, dso) in [(0u8, 0i32), (2, 3), (1, -2)] {
+                        let (w, h, syms, placed, want) =
+                            symbol_case(17 + corner as u64 * 7 + log_strips as u64);
+                        let mut at = at0;
+                        if t == 1 {
+                            at[0] = (3, -1);
+                        } else if t >= 2 {
+                            at[0] = (2, -1);
+                        }
+                        let cfg = TextCfg {
+                            corner,
+                            transposed,
+                            log_strips,
+                            comb: 0,
+                            dso,
+                        };
+                        let data = symbol_stream(w, h, &syms, &placed, t, at, &cfg);
+                        let got = decode(&data, None, w, h).unwrap_or_else(|e| {
+                            panic!("c{corner} tr{transposed} s{log_strips} t{t}: {e}")
+                        });
+                        assert_eq!(
+                            got, want,
+                            "c{corner} tr{transposed} s{log_strips} t{t} dso{dso}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn custom_adaptive_pixels_and_blank_pages() {
         let (w, h) = (50, 30);
@@ -690,12 +1391,47 @@ mod tests {
     }
 
     #[test]
+    fn damaged_symbol_streams_never_panic_or_hang() {
+        let (w, h, syms, placed, _) = symbol_case(3);
+        let at = [(3, -1), (-3, -1), (2, -2), (-2, -2)];
+        let good = symbol_stream(
+            w,
+            h,
+            &syms,
+            &placed,
+            0,
+            at,
+            &TextCfg {
+                corner: 1,
+                transposed: false,
+                log_strips: 2,
+                comb: 0,
+                dso: 0,
+            },
+        );
+        let mut s = 0xFEED_FACEu64;
+        let t0 = std::time::Instant::now();
+        for _ in 0..3000 {
+            let mut d = good.clone();
+            for _ in 0..1 + s % 4 {
+                s ^= s << 13;
+                s ^= s >> 7;
+                s ^= s << 17;
+                let i = (s as usize) % d.len();
+                d[i] = (s >> 24) as u8;
+            }
+            let _ = decode(&d, None, w, h);
+        }
+        assert!(t0.elapsed().as_secs() < 30, "too slow: {:?}", t0.elapsed());
+    }
+
+    #[test]
     fn unsupported_and_damaged_input_is_reported_not_panicked() {
         let e = |d: &[u8]| decode(d, None, 8, 8).err().map(|e| e.0);
         // symbol dictionary segment
         let mut v = 0u32.to_be_bytes().to_vec();
         v.extend([0, 0, 1, 0, 0, 0, 0]);
-        assert!(e(&v).unwrap().contains("symbol"));
+        assert!(e(&v).is_some());
         assert!(e(&[]).unwrap().contains("no JBIG2"));
         let bm = sample(40, 20, 3);
         let good = stream(&bm, 40, 20, 0, false, DEFAULT_AT[0]);
