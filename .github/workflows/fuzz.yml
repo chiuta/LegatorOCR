@@ -36,6 +36,7 @@ jobs:
             LEGATOROCR_FUZZ_ITERS=$((N*20)) LEGATOROCR_FUZZ_SEED=$s cargo test --locked --release -p legatorocr-engine --test fuzz_inputs
             LEGATOROCR_FUZZ_ITERS=$N LEGATOROCR_FUZZ_SEED=$s cargo test --locked --release -p legatorocr-engine --test fuzz_export
             LEGATOROCR_FUZZ_ITERS=$N LEGATOROCR_FUZZ_SEED=$s cargo test --locked --release -p legatorocr-pdf --test fuzz_pdf
+            LEGATOROCR_FUZZ_ITERS=$N LEGATOROCR_FUZZ_SEED=$s cargo test --locked --release -p legatorocr-engine --test fuzz_readers
           done
           LEGATOROCR_FUZZ_ITERS=$((N*10)) cargo test --locked --release -p legatorocr-pdf g4::tests
       - name: Command line

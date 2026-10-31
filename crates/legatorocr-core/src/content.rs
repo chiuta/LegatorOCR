@@ -3,7 +3,29 @@
 
 use crate::{BitImage, Rect};
 
+/// `ink` with long straight runs removed, but only in the outer tenth of the image.
+fn edge_cleaned(ink: &BitImage, dpi: u32) -> BitImage {
+    let long = crate::orient::without_long_runs(ink, (dpi as usize * 3 / 4).max(40));
+    let (w, h) = (ink.w as usize, ink.h as usize);
+    let (mx, my) = (w / 10, h / 10);
+    let mut out = ink.clone();
+    for y in 0..h {
+        for x in 0..w {
+            if x < mx || x + mx >= w || y < my || y + my >= h {
+                out.data[y * w + x] = long.data[y * w + x];
+            }
+        }
+    }
+    out
+}
+
 pub fn detect_content(ink: &BitImage, dpi: u32) -> Option<Rect> {
+    // Scanner-edge bars sit a few pixels from the text and would otherwise join
+    // it into one component that is then rejected as a shadow, taking text along.
+    // Only within a tenth of the page width/height from the border: a large dark photo in the
+    // middle of the page has long runs too and must stay part of the content.
+    let cleaned = edge_cleaned(ink, dpi);
+    let ink = &cleaned;
     let b = (dpi / 50).max(4) as usize; // block edge in px
     let (w, h) = (ink.w as usize, ink.h as usize);
     let (gw, gh) = (w.div_ceil(b), h.div_ceil(b));
@@ -199,5 +221,49 @@ mod tests {
         text_block(&mut img, 0, 0, 1200, 1600);
         let r = detect_content(&img, 300).unwrap();
         assert!(r.w > 1100 && r.h > 1500, "{r:?}");
+    }
+}
+
+#[cfg(test)]
+mod edge_bar_tests {
+    use super::*;
+
+    #[test]
+    fn text_next_to_a_scanner_edge_bar_is_not_dropped_with_it() {
+        let (w, h) = (600usize, 800usize);
+        let mut ink = BitImage::new(w as u32, h as u32);
+        for y in 0..h {
+            for x in 0..30 {
+                ink.data[y * w + x] = 1; // solid bar on the left edge
+            }
+        }
+        for line in 0..10 {
+            let y0 = 100 + line * 40;
+            for y in y0..y0 + 14 {
+                for x in (45..400).step_by(3) {
+                    ink.data[y * w + x] = 1;
+                    ink.data[y * w + x + 1] = 1;
+                }
+            }
+        }
+        let r = detect_content(&ink, 300).expect("content");
+        assert!(r.y <= 105 && r.y + r.h >= 470, "text lost: {r:?}");
+        assert!(r.x >= 30, "bar included: {r:?}");
+    }
+
+    #[test]
+    fn a_big_dark_picture_in_the_middle_stays_in_the_content_box() {
+        let (w, h) = (1200usize, 1600usize);
+        let mut ink = BitImage::new(w as u32, h as u32);
+        for y in 500..1100 {
+            for x in 300..900 {
+                ink.data[y * w + x] = 1; // 600×600 px solid block at 300 dpi: runs of 2 inches
+            }
+        }
+        let r = detect_content(&ink, 300).expect("content");
+        assert!(
+            r.x <= 300 && r.y <= 500 && r.x + r.w >= 900 && r.y + r.h >= 1100,
+            "{r:?}"
+        );
     }
 }

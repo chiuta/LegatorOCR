@@ -96,6 +96,9 @@ pub struct Settings {
     /// Rectangles (x, y, width, height in mm from the top-left of each page) painted with
     /// the paper colour before anything else is measured (stamps, notes, scanner marks).
     pub erase_zones: Vec<[f32; 4]>,
+    /// Rectangles (x, y, width, height in mm, same frame as `erase_zones`) that are always
+    /// kept as colour pictures in mixed / hybrid output, whatever the automatic detector says.
+    pub picture_zones: Vec<[f32; 4]>,
     /// Like `erase_zones` but in millimetres of the *scanned sheet as loaded* (before
     /// rotation and page splitting); drawn with the mouse in the GUI, stored per sheet.
     pub sheet_erase_zones: Vec<[f32; 4]>,
@@ -141,6 +144,7 @@ impl Default for Settings {
             fingers: false,
             remove_lines: false,
             erase_zones: Vec::new(),
+            picture_zones: Vec::new(),
             sheet_erase_zones: Vec::new(),
             dropout: Dropout::Off,
             despeckle_strength: 1.0,
@@ -281,6 +285,20 @@ impl Settings {
         s.despeckle_strength = fin(s.despeckle_strength, 0.25, 4.0, 1.0);
         s.sheet_erase_zones = s
             .sheet_erase_zones
+            .iter()
+            .filter(|z| z.iter().all(|v| v.is_finite()) && z[2] > 0.0 && z[3] > 0.0)
+            .take(64)
+            .map(|z| {
+                [
+                    z[0].clamp(-5000.0, 5000.0),
+                    z[1].clamp(-5000.0, 5000.0),
+                    z[2].min(5000.0),
+                    z[3].min(5000.0),
+                ]
+            })
+            .collect();
+        s.picture_zones = s
+            .picture_zones
             .iter()
             .filter(|z| z.iter().all(|v| v.is_finite()) && z[2] > 0.0 && z[3] > 0.0)
             .take(64)
@@ -689,7 +707,27 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
                 (PageImage::Bw(mask), None)
             } else {
                 let gray = imageops::grayscale(&rgb);
-                let zones = pictures::detect(&gray, out_dpi, s.picture_sensitivity);
+                let mut zones = pictures::detect(&gray, out_dpi, s.picture_sensitivity);
+                // Hand-marked pictures: mm in the deskewed page → source px → canvas px.
+                for z in &s.picture_zones {
+                    let px = |mm: f32| mm / 25.4 * s.dpi as f32;
+                    let x0 = (((px(z[0]) as i64 - lay.cx) as f32 * f).round() as i64).max(0);
+                    let y0 = (((px(z[1]) as i64 - lay.cy) as f32 * f).round() as i64).max(0);
+                    let x1 = ((((px(z[0] + z[2])) as i64 - lay.cx) as f32 * f).round() as i64)
+                        .min(cw as i64);
+                    let y1 = ((((px(z[1] + z[3])) as i64 - lay.cy) as f32 * f).round() as i64)
+                        .min(ch as i64);
+                    if x1 > x0 && y1 > y0 {
+                        zones.push(pictures::Zone {
+                            rect: Rect {
+                                x: x0 as u32,
+                                y: y0 as u32,
+                                w: (x1 - x0) as u32,
+                                h: (y1 - y0) as u32,
+                            },
+                        });
+                    }
+                }
                 let mut patches = Vec::new();
                 for z in &zones {
                     let r = z.rect;
@@ -815,6 +853,39 @@ mod tests {
             // we rotated clockwise by `deg`; correction must be the opposite
             assert!((found + deg).abs() < 0.15, "deg {deg}: found {found}");
         }
+    }
+
+    #[test]
+    fn hand_marked_picture_zone_becomes_a_colour_patch() {
+        let g = text_page(1200, 900, 100, 1100);
+        let mut rgb = to_rgb(&g);
+        // a flat colour block the automatic detector has no reason to call a picture
+        for y in 700..800 {
+            for x in 150..400 {
+                rgb.put_pixel(x, y, Rgb([200, 40, 40]));
+            }
+        }
+        let src = image::DynamicImage::ImageRgb8(rgb);
+        let base = Settings {
+            mode: OutputMode::Mixed,
+            dpi: 300,
+            deskew: false,
+            auto_orient: false,
+            ..Settings::default()
+        };
+        let none = &process_page(&src, &base)[0];
+        let n0 = none.layers.as_ref().map_or(0, |l| l.patches.len());
+        let forced = Settings {
+            // 300 dpi: 25.4 mm = 300 px. Zone covers x 100..450, y 650..850 px.
+            picture_zones: vec![[8.5, 55.0, 30.0, 17.0]],
+            ..base.clone()
+        };
+        let page = &process_page(&src, &forced)[0];
+        let l = page
+            .layers
+            .as_ref()
+            .expect("layers when a picture is forced");
+        assert!(l.patches.len() > n0, "{} patches vs {n0}", l.patches.len());
     }
 
     #[test]
@@ -1125,6 +1196,16 @@ mod tests {
                 fingers: rnd(2) == 0,
                 remove_lines: rnd(2) == 0,
                 sheet_erase_zones: vec![],
+                picture_zones: if rnd(3) == 0 {
+                    vec![[
+                        rnd(200) as f32 - 20.0,
+                        rnd(200) as f32 - 20.0,
+                        rnd(150) as f32,
+                        rnd(150) as f32,
+                    ]]
+                } else {
+                    vec![]
+                },
                 erase_zones: if rnd(2) == 0 {
                     vec![[
                         rnd(50) as f32,

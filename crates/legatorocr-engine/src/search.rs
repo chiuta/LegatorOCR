@@ -128,7 +128,12 @@ fn decode_entities(s: &str) -> String {
     while let Some(i) = rest.find('&') {
         o.push_str(&rest[..i]);
         rest = &rest[i..];
-        let Some(j) = rest[..rest.len().min(12)].find(';') else {
+        // An entity is at most a dozen bytes; look only at that window, bytewise, so a
+        // multi-byte character straddling the limit cannot make the slice panic.
+        let Some(j) = rest.as_bytes()[..rest.len().min(12)]
+            .iter()
+            .position(|&b| b == b';')
+        else {
             o.push('&');
             rest = &rest[1..];
             continue;
@@ -517,7 +522,7 @@ mod tests {
     #[test]
     fn regex_zip_docx_hocr_and_limits() {
         let d = tmp("mixed");
-        let docx = crate::docx::from_pages(&["Raport anual\nBuget 2026".into()], "t");
+        let docx = crate::docx::from_pages(&["Raport anual\n\nBuget 2026".into()], "t");
         let z = zipmini::write(&[
             ("in/n.txt", "cod RO-1234 aici".as_bytes()),
             ("in/r.docx", &docx),
@@ -643,5 +648,16 @@ mod tests {
             Read::Unreadable
         ));
         assert!(matches!(read_units("x.zip", vec![1; 50]), Read::Unreadable));
+    }
+}
+
+#[cfg(test)]
+mod entity_boundary_tests {
+    #[test]
+    fn entity_window_ending_inside_a_multibyte_char_does_not_panic() {
+        // '&' followed by bytes so that byte 12 falls inside a 2-byte character
+        let s = format!("&{}\u{81}\u{81}tail", "a".repeat(10));
+        let _ = super::decode_entities(&s);
+        assert_eq!(super::decode_entities("a &amp; b"), "a & b");
     }
 }

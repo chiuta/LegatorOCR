@@ -172,6 +172,10 @@ pub fn settings_to_pairs(s: &Settings) -> Vec<(&'static str, String)> {
             "erase",
             legatorocr_core::cleanup::zones_to_string(&s.erase_zones),
         ),
+        (
+            "picture_zones",
+            legatorocr_core::cleanup::zones_to_string(&s.picture_zones),
+        ),
         ("dropout", s.dropout.name().into()),
         ("despeckle_strength", s.despeckle_strength.to_string()),
         ("show_through", s.show_through.to_string()),
@@ -222,6 +226,9 @@ pub fn apply_pair(s: &mut Settings, k: &str, v: &str) -> Result<bool> {
         "fingers" => s.fingers = b(v).ok_or_else(bad)?,
         "remove_lines" => s.remove_lines = b(v).ok_or_else(bad)?,
         "erase" => s.erase_zones = legatorocr_core::cleanup::parse_zones(v).ok_or_else(bad)?,
+        "picture_zones" => {
+            s.picture_zones = legatorocr_core::cleanup::parse_zones(v).ok_or_else(bad)?
+        }
         "dropout" => s.dropout = legatorocr_core::Dropout::from_name(v).ok_or_else(bad)?,
         "despeckle_strength" => s.despeckle_strength = v.parse().map_err(|_| bad())?,
         "show_through" => s.show_through = b(v).ok_or_else(bad)?,

@@ -1367,6 +1367,21 @@ impl App {
                             }
                             ch |= ui.add(te).changed();
                         });
+                        if matches!(self.s.mode, ModeChoice::Mixed | ModeChoice::Hybrid) {
+                            ui.horizontal(|ui| {
+                                ui.label(tr("set.picture_zones"));
+                                let bad =
+                                    legatorocr_core::cleanup::parse_zones(&self.s.picture_zones)
+                                        .is_none();
+                                let mut te = egui::TextEdit::singleline(&mut self.s.picture_zones)
+                                    .desired_width(120.0)
+                                    .hint_text("x,y,w,h;…");
+                                if bad {
+                                    te = te.text_color(egui::Color32::LIGHT_RED);
+                                }
+                                ch |= ui.add(te).changed();
+                            });
+                        }
                         if self.s.mode != ModeChoice::Color && self.s.mode != ModeChoice::Gray {
                             ch |= ui
                                 .checkbox(&mut self.s.remove_lines, tr("set.lines"))

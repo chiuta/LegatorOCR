@@ -17,17 +17,43 @@ fn esc(s: &str) -> String {
     o
 }
 
-/// `pages[i]` is the text of page *i* (lines separated by `\n`).
+/// Split page text into paragraphs: blank lines separate paragraphs, the lines of one
+/// paragraph are joined into a flowing paragraph (a line ending in `-` is joined without a space,
+/// so a hyphenated word break stays visible and nothing is silently altered).
+fn paragraphs(page: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for line in page.lines() {
+        let l = line.trim();
+        if l.is_empty() {
+            if !cur.is_empty() {
+                out.push(std::mem::take(&mut cur));
+            }
+            continue;
+        }
+        if !cur.is_empty() && !cur.ends_with('-') {
+            cur.push(' ');
+        }
+        cur.push_str(l);
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// `pages[i]` is the text of page *i*: lines separated by `\n`, paragraphs by a blank line.
+/// Text without blank lines is therefore one paragraph per page.
 pub fn from_pages(pages: &[String], title: &str) -> Vec<u8> {
     let mut body = String::new();
     for (i, p) in pages.iter().enumerate() {
         if i > 0 {
             body.push_str("<w:p><w:r><w:br w:type=\"page\"/></w:r></w:p>");
         }
-        for line in p.lines() {
+        for para in paragraphs(p) {
             body.push_str(&format!(
                 "<w:p><w:r><w:t xml:space=\"preserve\">{}</w:t></w:r></w:p>",
-                esc(line)
+                esc(&para)
             ));
         }
     }
@@ -74,6 +100,12 @@ mod tests {
         let x = String::from_utf8(zipmini::read(&z, e).unwrap()).unwrap();
         assert!(x.contains("Mobilă &amp; &lt;ț&gt;"));
         assert!(x.contains("w:type=\"page\""));
-        assert_eq!(x.matches("<w:p>").count(), 4);
+        assert_eq!(x.matches("<w:p>").count(), 3); // text page, page break, text page
+    }
+
+    #[test]
+    fn blank_lines_split_paragraphs_and_lines_are_joined() {
+        let p = super::paragraphs("alpha\nbeta con-\ntinued\n\ngamma\n\n\ndelta");
+        assert_eq!(p, vec!["alpha beta con-tinued", "gamma", "delta"]);
     }
 }

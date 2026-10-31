@@ -20,7 +20,7 @@ Sources read for this comparison:
 | Margins / page size / alignment | ✔ | manual scaling, "Sub" layout mode | ✔ margins, fixed size, alignment, **book-wide uniform size** |
 | Binarisation methods | Otsu / Sauvola / Wolf | many: Niblack, Sauvola, Wolf, N.I.C.K., Gatos, Singh, Fox, Dynamic Window, OBBPM, LAAB, LCaM … | ◐ six + **auto per page** |
 | Despeckle | ✔ | synced with original | ✔ |
-| Picture zones (mixed output) | ✔ hand-drawn zones | – | ◐ **automatic** detection (mid-tone share), no hand-drawn zones |
+| Picture zones (mixed output) | ✔ hand-drawn zones | – | ◐ **automatic** detection (mid-tone share) + typed zones (`--picture-zone`); ✘ drawing with the mouse |
 | Fill / erase zones | ✔ | – | ✔ typed rectangles (mm) or mouse-drawn per sheet |
 | Dewarping | ✔ semi-automatic, control points | "dewarp correction parameters" | ◐ automatic from text lines; vertical bend only; no control points |
 | Lighting normalisation | colour/illumination options | colour corrections, curves, "RIS undefect", EM denoiser, deBlur5 | ◐ background normalisation; ✘ denoise/deblur filters |
@@ -54,5 +54,7 @@ Sources read for this comparison:
 
 ## Not done (honest list)
 
-Mouse-drawn picture / fill zones, dewarp control points, JBIG2 Huffman coding, certified PDF/A (structure is written, no validator was available), the extra binarisers of the Experimental
-fork, EM denoise / deblur filters, and any verification on Windows or macOS.
+Mouse-drawn picture zones on the page, a draggable content box, dewarp control points, a native (non-Tesseract) OCR engine, table / column structure in the Word export, JBIG2 Huffman coding, certified PDF/A (a veraPDF job runs in CI and reports; until it passes, nothing is claimed), the extra binarisers of the Experimental
+fork, EM denoise / deblur filters, and any run of the GUI or the Windows / macOS builds by the author (CI now smoke-tests the packaged command-line binary on every release target).
+
+Measured, not claimed: `docs/OCR-BENCH.md` (synthetic OCR accuracy, 8 languages × 3 conditions).

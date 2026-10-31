@@ -1,0 +1,86 @@
+name: PDF/A validation
+# Runs the veraPDF validator over PDFs that LegatorOCR writes with --pdfa.
+# Not part of the release gate yet: it reports, so we learn what is non-conformant before claiming PDF/A.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 4 * * 2"
+
+jobs:
+  verapdf:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Tools
+        run: sudo apt-get update && sudo apt-get install -y python3-pil tesseract-ocr tesseract-ocr-eng
+      - name: Build
+        run: cargo build --locked --release -p legatorocr-cli
+      - name: Make sample PDF/A files
+        run: |
+          mkdir -p pdfa && cd pdfa
+          python3 - <<'PY'
+          from PIL import Image, ImageDraw
+          import random
+          random.seed(3)
+          for name, mode in (("bw", "L"), ("color", "RGB")):
+              im = Image.new(mode, (1240, 1754), 255 if mode == "L" else (238, 228, 205))
+              d = ImageDraw.Draw(im)
+              for i in range(25):
+                  d.text((120, 140 + i * 55), "The quick brown fox jumps over the lazy dog %d" % i, fill=0 if mode == "L" else (20, 20, 40))
+              if mode == "RGB":
+                  d.rectangle((300, 1300, 900, 1600), fill=(180, 60, 40))
+              im.save(name + ".png", dpi=(150, 150))
+          PY
+          B=../target/release/legatorocr
+          $B bw.png    --mode bw    --pdfa --pdf bw_plain.pdf  -o o1
+          $B bw.png    --mode bw    --pdfa --ocr --lang eng --pdf bw_ocr.pdf -o o2
+          $B color.png --mode mixed --pdfa --pdf color_mixed.pdf -o o3
+          $B color.png --mode color --pdfa --ocr --lang eng --pdf color_ocr.pdf -o o4
+          ls -la *.pdf
+      - name: Install veraPDF
+        run: |
+          set -x
+          curl -fsSL -o vera.zip https://software.verapdf.org/releases/verapdf-installer.zip
+          unzip -q vera.zip -d vera
+          d=$(ls -d vera/verapdf-greenfield-* | head -1)
+          cat > auto.xml <<'XML'
+          <?xml version="1.0" encoding="UTF-8" standalone="no"?>
+          <AutomatedInstallation langpack="eng">
+            <com.izforge.izpack.panels.htmlhello.HTMLHelloPanel id="welcome"/>
+            <com.izforge.izpack.panels.target.TargetPanel id="install_dir">
+              <installpath>/opt/verapdf</installpath>
+            </com.izforge.izpack.panels.target.TargetPanel>
+            <com.izforge.izpack.panels.packs.PacksPanel id="sdk_pack_select">
+              <pack index="0" name="veraPDF Runtime" selected="true"/>
+              <pack index="1" name="veraPDF Mac and *nix Scripts" selected="true"/>
+              <pack index="2" name="veraPDF Validation model" selected="false"/>
+              <pack index="3" name="veraPDF Documentation" selected="false"/>
+              <pack index="4" name="veraPDF Sample Plugins" selected="false"/>
+            </com.izforge.izpack.panels.packs.PacksPanel>
+            <com.izforge.izpack.panels.install.InstallPanel id="install"/>
+            <com.izforge.izpack.panels.finish.FinishPanel id="finish"/>
+          </AutomatedInstallation>
+          XML
+          sed -i 's/^          //' auto.xml
+          java -jar "$d"/verapdf-izpack-installer-*.jar auto.xml
+          /opt/verapdf/verapdf --version
+      - name: Validate (PDF/A-2b and 1b)
+        run: |
+          cd pdfa
+          for f in *.pdf; do
+            for fl in 2b 1b; do
+              echo "=== $f against PDF/A-$fl"
+              /opt/verapdf/verapdf --flavour $fl --format text "$f" || true
+            done
+          done
+          /opt/verapdf/verapdf --flavour 2b --format text *.pdf > ../verapdf-report.txt || true
+          /opt/verapdf/verapdf --flavour 2b --format xml  *.pdf > ../verapdf-report.xml || true
+      - uses: actions/upload-artifact@v7
+        with:
+          name: verapdf-report
+          path: |
+            verapdf-report.*
+            pdfa/*.pdf

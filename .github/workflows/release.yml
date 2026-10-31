@@ -67,6 +67,24 @@ jobs:
                 if grep -aqi 'VCRUNTIME140' "target/${{ matrix.target }}/release/$b.exe"; then echo "$b.exe depends on the VC++ runtime DLL"; exit 1; fi
               done;;
           esac
+      - name: Smoke test the packaged binary (runs it, not just links it)
+        shell: bash
+        run: |
+          set -e
+          exe="target/${{ matrix.target }}/release/legatorocr"
+          case "${{ matrix.target }}" in *windows*) exe="$exe.exe";; esac
+          "$exe" --version
+          "$exe" --list-profiles | grep -q .
+          python3 - <<'PY'
+          import struct, zlib
+          w, h = 300, 400
+          raw = b"".join(b"\x00" + bytes((0 if (x // 6 + y // 6) % 5 == 0 and 40 < x < 260 and 60 < y < 340 else 255) for x in range(w)) for y in range(h))
+          def ch(t, d): return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+          open("smoke_in.png", "wb").write(b"\x89PNG\r\n\x1a\n" + ch(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 0, 0, 0, 0)) + ch(b"IDAT", zlib.compress(raw)) + ch(b"IEND", b""))
+          PY
+          "$exe" smoke_in.png --dpi 300 --pdf smoke_out.pdf -o smoke_out
+          head -c 5 smoke_out.pdf | grep -q '%PDF-'
+          test "$(wc -c < smoke_out.pdf)" -gt 500
       - uses: actions/upload-artifact@v7
         with:
           name: LegatorOCR-${{ matrix.target }}
