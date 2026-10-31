@@ -841,7 +841,7 @@ impl App {
             ui.menu_button(self.tr("menu.file"), |ui| {
                 if ui.button(self.tr("menu.add_images")).clicked() {
                     if let Some(f) = rfd::FileDialog::new()
-                        .add_filter("images", IMAGE_EXT)
+                        .add_filter("images, PDF, archives", &all_input_ext())
                         .pick_files()
                     {
                         self.add_files(&f);
@@ -935,7 +935,7 @@ impl App {
         ui.horizontal_wrapped(|ui| {
             if ui.button(self.tr("btn.add")).clicked() {
                 if let Some(f) = rfd::FileDialog::new()
-                    .add_filter("images", IMAGE_EXT)
+                    .add_filter("images, PDF, archives", &all_input_ext())
                     .pick_files()
                 {
                     self.add_files(&f);
@@ -1477,6 +1477,23 @@ impl App {
                         } else {
                             ui.label(RichText::new(&self.ocr_info).small().weak());
                             ui.label(tr("set.ocr_langs"));
+                            let missing: Vec<&str> = legatorocr_engine::ocr::UI_LANGUAGES
+                                .iter()
+                                .filter(|(_, t, _)| !self.installed.iter().any(|i| i == t))
+                                .map(|(_, t, _)| *t)
+                                .collect();
+                            if !missing.is_empty() {
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{}: {}",
+                                        tr("set.ocr_missing_langs"),
+                                        missing.join(", ")
+                                    ))
+                                    .small()
+                                    .color(Color32::from_rgb(220, 150, 60)),
+                                )
+                                .on_hover_text(legatorocr_engine::ocr::install_hint(missing[0]));
+                            }
                             ui.horizontal_wrapped(|ui| {
                                 for l in self.installed.clone() {
                                     let mut on = self.s.ocr_langs.contains(&l);
@@ -1892,6 +1909,21 @@ impl App {
             self.sheets[i].zone_redo.clear();
             self.sheets[i].adj_gen += 1;
         }
+    }
+}
+
+/// Image, PDF and archive extensions for the "add" dialogs.
+fn all_input_ext() -> Vec<&'static str> {
+    IMAGE_EXT
+        .iter()
+        .chain(legatorocr_engine::archive::EXT.iter())
+        .copied()
+        .collect()
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        legatorocr_engine::archive::cleanup();
     }
 }
 

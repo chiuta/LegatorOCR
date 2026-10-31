@@ -118,20 +118,49 @@ fn expand(p: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// Pages of the images and PDFs inside an archive, in natural order of their member path.
+/// An unreadable archive contributes nothing (the reason goes to stderr).
+fn from_archive(p: &Path, out: &mut Vec<PathBuf>) {
+    let want = |n: &str| {
+        IMAGE_EXT.contains(
+            &n.rsplit('.')
+                .next()
+                .unwrap_or("")
+                .to_ascii_lowercase()
+                .as_str(),
+        )
+    };
+    match crate::archive::extract(p, &want) {
+        Ok(mut v) => {
+            v.sort_by(|a, b| natural_cmp(&a.0, &b.0));
+            for (_, f) in v {
+                expand(&f, out);
+            }
+        }
+        Err(e) => eprintln!("{}: {e:#}", p.display()),
+    }
+}
+
 pub fn collect_images(paths: &[PathBuf]) -> Vec<PathBuf> {
     let mut out = Vec::new();
     for p in paths {
-        if p.is_dir() {
+        if p.is_file() && crate::archive::is_archive(p) {
+            from_archive(p, &mut out);
+        } else if p.is_dir() {
             let mut v: Vec<PathBuf> = std::fs::read_dir(p)
                 .map(|rd| {
                     rd.filter_map(|e| e.ok().map(|e| e.path()))
-                        .filter(|p| is_image(p))
+                        .filter(|p| is_image(p) || crate::archive::is_archive(p))
                         .collect()
                 })
                 .unwrap_or_default();
             v.sort_by(|a, b| natural_cmp(&a.to_string_lossy(), &b.to_string_lossy()));
             for f in v {
-                expand(&f, &mut out);
+                if crate::archive::is_archive(&f) {
+                    from_archive(&f, &mut out);
+                } else {
+                    expand(&f, &mut out);
+                }
             }
         } else if split_frame(p).1.is_some() {
             out.push(p.clone()); // an explicit page of a multi-page TIFF or PDF

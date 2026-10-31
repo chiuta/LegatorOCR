@@ -11,6 +11,7 @@ use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+pub mod archive;
 pub mod docx;
 pub mod extpdf;
 pub mod files;
@@ -568,7 +569,8 @@ pub fn orient_with_osd(
 /// Check that the OCR engine runs and every requested language is installed.
 /// Returns the engine's version string.
 pub fn check_ocr(o: &OcrOptions) -> Result<String> {
-    if !legatorocr_ocr::valid_lang(&o.lang) {
+    let lang = legatorocr_ocr::canonical_lang(&o.lang);
+    if !legatorocr_ocr::valid_lang(&lang) {
         bail!(
             "invalid OCR language list '{}' (expected e.g. 'eng' or 'ron+eng')",
             o.lang
@@ -576,11 +578,12 @@ pub fn check_ocr(o: &OcrOptions) -> Result<String> {
     }
     let v = legatorocr_ocr::check_engine(o)?;
     let installed = legatorocr_ocr::list_languages(o)?;
-    for l in o.lang.split('+') {
+    for l in lang.split('+') {
         if !installed.iter().any(|i| i == l) {
             bail!(
-                "OCR language '{l}' is not installed for {v} (installed: {})",
-                installed.join(", ")
+                "OCR language '{l}' is not installed for {v} (installed: {}). To add it: {}",
+                installed.join(", "),
+                legatorocr_ocr::install_hint(l)
             );
         }
     }

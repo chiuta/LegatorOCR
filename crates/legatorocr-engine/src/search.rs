@@ -205,12 +205,14 @@ fn decode_text(b: &[u8]) -> String {
     if b.starts_with(&[0xFF, 0xFE]) || b.starts_with(&[0xFE, 0xFF]) {
         let le = b[0] == 0xFF;
         let u: Vec<u16> = b[2..]
-            .chunks_exact(2)
-            .map(|c| {
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&c| {
                 if le {
-                    u16::from_le_bytes([c[0], c[1]])
+                    u16::from_le_bytes(c)
                 } else {
-                    u16::from_be_bytes([c[0], c[1]])
+                    u16::from_be_bytes(c)
                 }
             })
             .collect();
@@ -401,7 +403,31 @@ impl Ctx<'_> {
             }
         } else if md.is_file() {
             let name = p.to_string_lossy().into_owned();
-            if !is_searchable(&name) {
+            if matches!(
+                crate::archive::kind(p),
+                Some(
+                    crate::archive::Kind::Tar
+                        | crate::archive::Kind::TarGz
+                        | crate::archive::Kind::External
+                )
+            ) {
+                // .tar/.tgz built in; .7z/.rar/… through an installed extractor.
+                match crate::archive::extract(p, &|n| is_searchable(n)) {
+                    Ok(members) => {
+                        self.sum.files += 1;
+                        for (m, f) in members {
+                            if let Ok(d) = std::fs::read(&f) {
+                                self.visit(&format!("{name}!{m}"), &m, d, 1);
+                            }
+                            let _ = std::fs::remove_file(&f);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("{name}: {e:#}");
+                        self.sum.unreadable += 1;
+                    }
+                }
+            } else if !is_searchable(&name) {
                 self.sum.skipped += 1;
             } else if md.len() > 1 << 30 {
                 self.sum.unreadable += 1;
@@ -573,6 +599,33 @@ mod tests {
             Some(2)
         );
         assert_eq!(s.image_only_pdfs, 1);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn tgz_members_are_searched() {
+        if !std::process::Command::new("tar")
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+        {
+            return;
+        }
+        let d = tmp("tgz");
+        std::fs::create_dir_all(d.join("in")).unwrap();
+        std::fs::write(d.join("in/n.txt"), "Cartea de bucate").unwrap();
+        assert!(std::process::Command::new("tar")
+            .current_dir(&d)
+            .args(["-czf", "a.tgz", "in"])
+            .status()
+            .unwrap()
+            .success());
+        std::fs::remove_dir_all(d.join("in")).unwrap();
+        let (h, s) = run(&d, "BUCATE", &SearchOptions::default());
+        assert_eq!(h.len(), 1, "{h:?}");
+        assert!(h[0].source.ends_with("a.tgz!in/n.txt"));
+        assert_eq!(s.files, 2);
+        crate::archive::cleanup();
         let _ = std::fs::remove_dir_all(&d);
     }
 

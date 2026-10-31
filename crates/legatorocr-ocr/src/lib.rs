@@ -106,6 +106,48 @@ fn base_cmd(o: &OcrOptions) -> Command {
     c
 }
 
+/// The eight languages of the interface and their recognition-model names:
+/// (ISO 639-1, Tesseract code, English name).
+pub const UI_LANGUAGES: [(&str, &str, &str); 8] = [
+    ("ro", "ron", "Romanian"),
+    ("en", "eng", "English"),
+    ("fr", "fra", "French"),
+    ("it", "ita", "Italian"),
+    ("es", "spa", "Spanish"),
+    ("pt", "por", "Portuguese"),
+    ("de", "deu", "German"),
+    ("hu", "hun", "Hungarian"),
+];
+
+/// Accept two-letter codes (`ro+en`) and return Tesseract's three-letter names
+/// (`ron+eng`); anything else passes through unchanged.
+pub fn canonical_lang(l: &str) -> String {
+    l.split('+')
+        .map(|p| {
+            UI_LANGUAGES
+                .iter()
+                .find(|(a, _, _)| p.eq_ignore_ascii_case(a))
+                .map(|(_, t, _)| *t)
+                .unwrap_or(p)
+        })
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
+/// How to get a missing recognition model, for the current system.
+pub fn install_hint(tess_code: &str) -> String {
+    if cfg!(target_os = "macos") {
+        "brew install tesseract-lang".to_string()
+    } else if cfg!(windows) {
+        format!(
+            "re-run the Tesseract installer and tick the language, or put {tess_code}.traineddata \
+             into Tesseract's tessdata folder"
+        )
+    } else {
+        format!("sudo apt install tesseract-ocr-{tess_code}   (or put {tess_code}.traineddata into the tessdata folder)")
+    }
+}
+
 /// Tesseract language list syntax: names joined by `+` (e.g. `ron+eng`, `script/Latin`).
 pub fn valid_lang(l: &str) -> bool {
     !l.is_empty()
@@ -238,12 +280,13 @@ pub fn recognize(page: &PageImage, dpi: u32, o: &OcrOptions) -> Result<Vec<Word>
         img
     };
     let png = png_bytes(&img)?;
+    let lang = canonical_lang(&o.lang);
     let mut cmd = base_cmd(o);
     cmd.args([
         "stdin",
         "stdout",
         "-l",
-        &o.lang,
+        &lang,
         "--psm",
         &o.psm.to_string(),
         "--dpi",
@@ -259,7 +302,7 @@ pub fn recognize(page: &PageImage, dpi: u32, o: &OcrOptions) -> Result<Vec<Word>
     let mut words = parse_tsv(&String::from_utf8_lossy(&out.stdout), o.min_conf);
     // Romanian: Tesseract (and old fonts) sometimes give cedilla ş/ţ; the correct letters
     // are comma-below ș/ț, and search depends on it.
-    if o.lang.split('+').any(|l| l == "ron") {
+    if lang.split('+').any(|l| l == "ron") {
         for w in &mut words {
             w.text = legatorocr_core::text::normalize_ro(&w.text);
         }
@@ -408,6 +451,21 @@ pub fn hocr_document(pages: &[String]) -> String {
     }
     o.push_str("</body>\n</html>\n");
     o
+}
+
+#[cfg(test)]
+mod lang_tests {
+    use super::*;
+
+    #[test]
+    fn two_letter_codes_map_to_tesseract_names() {
+        assert_eq!(canonical_lang("ro+en"), "ron+eng");
+        assert_eq!(canonical_lang("HU"), "hun");
+        assert_eq!(canonical_lang("ron+eng"), "ron+eng");
+        assert_eq!(canonical_lang("script/Latin"), "script/Latin");
+        assert_eq!(UI_LANGUAGES.len(), 8);
+        assert!(install_hint("ron").contains("ron"));
+    }
 }
 
 #[cfg(test)]

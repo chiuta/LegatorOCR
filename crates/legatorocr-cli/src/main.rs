@@ -43,7 +43,7 @@ enum Fmt {
 #[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -156,6 +156,11 @@ struct Cli {
     /// Print separators with --make-separator. Needs --pdf.
     #[arg(long)]
     split_on_barcode: bool,
+
+    /// Show which of the eight interface languages (ro en fr it es pt de hu) have a
+    /// recognition model installed, and how to get the missing ones; then exit.
+    #[arg(long)]
+    ocr_languages: bool,
 
     /// Add one PDF outline entry (bookmark) per source file.
     #[arg(long)]
@@ -394,10 +399,36 @@ fn parse_page_size(s: &str) -> Result<(f32, f32)> {
 }
 
 fn main() -> Result<()> {
+    let r = real_main();
+    legatorocr_engine::archive::cleanup();
+    r
+}
+
+fn real_main() -> Result<()> {
     let cli = Cli::parse();
     if cli.list_profiles {
         for (n, d) in legatorocr_engine::profiles::list() {
             println!("{n:<20} {d}");
+        }
+        return Ok(());
+    }
+    if cli.ocr_languages {
+        let o = OcrOptions {
+            lang: "eng".into(),
+            ..OcrOptions::default()
+        };
+        let v = check_ocr(&o).context("Tesseract was not found")?;
+        let have = legatorocr_engine::ocr::list_languages(&o)?;
+        println!("{v}");
+        for (iso, tess, name) in legatorocr_engine::ocr::UI_LANGUAGES {
+            if have.iter().any(|h| h == tess) {
+                println!("{iso}  {tess}  {name:<11} installed");
+            } else {
+                println!(
+                    "{iso}  {tess}  {name:<11} MISSING — {}",
+                    legatorocr_engine::ocr::install_hint(tess)
+                );
+            }
         }
         return Ok(());
     }
@@ -525,7 +556,7 @@ fn main() -> Result<()> {
     }
 
     let ocr_opts = OcrOptions {
-        lang: cli.lang.clone(),
+        lang: legatorocr_engine::ocr::canonical_lang(&cli.lang),
         psm: cli.psm,
         min_conf: cli.min_conf,
         tesseract: cli.tesseract.clone(),
@@ -851,6 +882,7 @@ fn main() -> Result<()> {
     }
     if !res.failed.is_empty() {
         eprintln!("{} input(s) could not be processed", res.failed.len());
+        legatorocr_engine::archive::cleanup();
         std::process::exit(2);
     }
     Ok(())
@@ -901,6 +933,7 @@ fn run_search(cli: &Cli, query: &str) -> Result<()> {
         eprintln!("{} file(s) could not be read", s.unreadable);
     }
     if s.hits == 0 {
+        legatorocr_engine::archive::cleanup();
         std::process::exit(1);
     }
     Ok(())
