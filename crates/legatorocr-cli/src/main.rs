@@ -110,6 +110,20 @@ struct Cli {
     #[arg(long)]
     hocr: Option<PathBuf>,
 
+    /// Drop a page that is almost identical to the previous one (double feed).
+    #[arg(long)]
+    skip_duplicates: bool,
+
+    /// Treat blank pages as separators and write one PDF per document
+    /// (`name_001.pdf`, `name_002.pdf`, …). Needs --pdf.
+    #[arg(long)]
+    split_on_blank: bool,
+
+    /// Choose the JPEG quality so the PDF stays within this many megabytes (estimated
+    /// from a sample of pages). Needs --pdf.
+    #[arg(long)]
+    target_size: Option<f32>,
+
     /// Run OCR and embed an invisible, searchable text layer in the PDF.
     #[arg(long)]
     ocr: bool,
@@ -213,6 +227,14 @@ struct Cli {
     /// Drop one printed colour: off, red, green, blue.
     #[arg(long, default_value = "off")]
     dropout: String,
+
+    /// Fade print showing through thin paper (also levels the lighting).
+    #[arg(long)]
+    show_through: bool,
+
+    /// Smooth halftone screens of printed photographs.
+    #[arg(long)]
+    descreen: bool,
 
     /// Despeckle strength 0.25–4 (1 = default).
     #[arg(long, default_value_t = 1.0)]
@@ -383,6 +405,8 @@ fn main() -> Result<()> {
         dropout: legatorocr_core::Dropout::from_name(&cli.dropout)
             .ok_or_else(|| anyhow::anyhow!("--dropout must be off, red, green or blue"))?,
         despeckle_strength: cli.despeckle_strength,
+        show_through: cli.show_through,
+        descreen: cli.descreen,
     };
 
     let project = cli.project.as_deref().map(Project::load).transpose()?;
@@ -541,10 +565,28 @@ fn main() -> Result<()> {
         _ => "tif",
     };
     let first_err: Mutex<Option<String>> = Mutex::new(None);
+    let mut pdf_quality = cli.pdf_quality;
+    if let Some(mb) = cli.target_size {
+        if cli.pdf.is_none() || !(mb.is_finite() && mb > 0.0) {
+            bail!("--target-size needs --pdf and a positive number of megabytes");
+        }
+        if pdf_quality > 0 {
+            pdf_quality = legatorocr_engine::quality_for_target(
+                &sheets,
+                cli.auto_rotate.then_some(&ocr_opts),
+                (mb as f64 * 1e6) as u64,
+                &AtomicBool::new(false),
+            )?;
+            eprintln!("target {mb} MB: JPEG quality {pdf_quality}");
+        }
+    }
+    if cli.split_on_blank && cli.pdf.is_none() {
+        bail!("--split-on-blank needs --pdf");
+    }
     let job = ExportJob {
         sheets: &sheets,
         pdf: cli.pdf.as_ref().map(|pdf_path| PdfExport {
-            quality: cli.pdf_quality,
+            quality: pdf_quality,
             ocr: cli.ocr.then(|| ocr_opts.clone()),
             title: pdf_path
                 .file_stem()
@@ -562,6 +604,8 @@ fn main() -> Result<()> {
         keep_going: cli.keep_going,
         osd: cli.auto_rotate.then(|| ocr_opts.clone()),
         uniform_size: cli.uniform_size,
+        skip_duplicates: cli.skip_duplicates,
+        split_on_blank: cli.split_on_blank,
     };
     let res = run_export(
         &job,
@@ -608,6 +652,21 @@ fn main() -> Result<()> {
             res.pages,
             cli.out_dir.display()
         );
+    }
+    if res.skipped_duplicates > 0 {
+        eprintln!("{} duplicate page(s) skipped", res.skipped_duplicates);
+    }
+    if let (Some(pdf_path), true) = (&cli.pdf, !res.docs.is_empty()) {
+        let stem = pdf_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("document")
+            .to_string();
+        for (i, bytes) in res.docs.iter().enumerate() {
+            let p = pdf_path.with_file_name(format!("{stem}_{:03}.pdf", i + 1));
+            write_atomic(&p, bytes)?;
+            eprintln!("wrote {}", p.display());
+        }
     }
     if let (Some(pdf_path), Some(bytes)) = (&cli.pdf, &res.pdf) {
         write_atomic(pdf_path, bytes)?;

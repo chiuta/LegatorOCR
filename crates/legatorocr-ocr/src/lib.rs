@@ -206,9 +206,38 @@ fn run_stdin(mut cmd: Command, png: Vec<u8>) -> Result<std::process::Output, Ocr
     Ok(out)
 }
 
-/// Recognise one processed page.
+/// Integer enlargement applied before recognition: Tesseract reads best at about
+/// 300 dpi, so a 150 dpi page is doubled. 1 = leave alone (already ≥ 250 dpi, or the
+/// enlarged page would exceed 14 000 px / 120 megapixels).
+pub fn upscale_factor(dpi: u32, w: u32, h: u32) -> u32 {
+    if dpi == 0 || dpi >= 250 {
+        return 1;
+    }
+    let k = 300u32.div_ceil(dpi).min(4);
+    let (sw, sh) = (w as u64 * k as u64, h as u64 * k as u64);
+    if sw.max(sh) > 14_000 || sw * sh > 120_000_000 {
+        1
+    } else {
+        k
+    }
+}
+
+/// Recognise one processed page. Low-resolution pages are enlarged first
+/// ([`upscale_factor`]); word boxes are mapped back to the page's own pixels.
 pub fn recognize(page: &PageImage, dpi: u32, o: &OcrOptions) -> Result<Vec<Word>, OcrError> {
-    let png = png_bytes(&page.to_dynamic())?;
+    let k = upscale_factor(dpi, page.width(), page.height());
+    let dpi = dpi * k;
+    let img = page.to_dynamic();
+    let img = if k > 1 {
+        img.resize_exact(
+            img.width() * k,
+            img.height() * k,
+            image::imageops::FilterType::CatmullRom,
+        )
+    } else {
+        img
+    };
+    let png = png_bytes(&img)?;
     let mut cmd = base_cmd(o);
     cmd.args([
         "stdin",
@@ -227,7 +256,17 @@ pub fn recognize(page: &PageImage, dpi: u32, o: &OcrOptions) -> Result<Vec<Word>
             String::from_utf8_lossy(&out.stderr).trim().to_string(),
         ));
     }
-    Ok(parse_tsv(&String::from_utf8_lossy(&out.stdout), o.min_conf))
+    let mut words = parse_tsv(&String::from_utf8_lossy(&out.stdout), o.min_conf);
+    if k > 1 {
+        for w in &mut words {
+            let (x1, y1) = (w.x + w.w, w.y + w.h);
+            w.x /= k;
+            w.y /= k;
+            w.w = (x1.div_ceil(k)).saturating_sub(w.x).max(1);
+            w.h = (y1.div_ceil(k)).saturating_sub(w.y).max(1);
+        }
+    }
+    Ok(words)
 }
 
 /// Parse Tesseract TSV (`level page block par line word left top width height conf text`).
@@ -393,6 +432,16 @@ mod tests {
         for bad in ["", "+", "eng+", "--psm", "-l", "a b", "en;g", "ron+-x"] {
             assert!(!valid_lang(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn upscale_rules() {
+        assert_eq!(upscale_factor(300, 2000, 3000), 1);
+        assert_eq!(upscale_factor(150, 1200, 1800), 2);
+        assert_eq!(upscale_factor(100, 800, 1100), 3);
+        assert_eq!(upscale_factor(36, 100, 100), 4);
+        assert_eq!(upscale_factor(150, 7000, 9000), 1, "too big to enlarge");
+        assert_eq!(upscale_factor(0, 10, 10), 1);
     }
 
     #[test]

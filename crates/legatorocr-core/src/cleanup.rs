@@ -188,6 +188,82 @@ pub fn dropout(img: &mut RgbImage, which: Dropout, paper: Rgb<u8>) {
     }
 }
 
+/// Remove show-through (print from the other side of thin paper): the lighting is
+/// levelled first (`target` becomes the paper colour), then every pixel that is
+/// only slightly darker than the paper (≥ 60 % of its local brightness, fading in up
+/// to 88 %) is pulled towards paper. Real ink is far darker and untouched.
+pub fn show_through(img: &RgbImage, dpi: u32, paper: Rgb<u8>) -> RgbImage {
+    if img.width() < 9 || img.height() < 9 {
+        return img.clone();
+    }
+    let mut out = crate::transform::normalize_background(img, dpi, paper);
+    let pl = luma(&paper.0).max(1) as f32;
+    for p in out.pixels_mut() {
+        let v = luma(&p.0) as f32 / pl;
+        let t = ((v - 0.60) / 0.28).clamp(0.0, 1.0);
+        let t = t * t * (3.0 - 2.0 * t);
+        for c in 0..3 {
+            p.0[c] = (p.0[c] as f32 + (paper.0[c] as f32 - p.0[c] as f32) * t)
+                .round()
+                .clamp(0.0, 255.0) as u8;
+        }
+    }
+    out
+}
+
+/// Smooth halftone screens (printed photographs) without touching text: tiles of
+/// ≈ 2 mm that are mostly mid-tone *and* busy at the pixel scale are replaced by a
+/// lightly blurred copy. Returns how many tiles were smoothed.
+pub fn descreen(img: &mut RgbImage, dpi: u32) -> usize {
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    let tile = ((2.0 / 25.4 * dpi as f32).round() as usize).max(6);
+    if w < tile * 2 || h < tile * 2 {
+        return 0;
+    }
+    let g: Vec<u8> = img
+        .as_raw()
+        .chunks_exact(3)
+        .map(|p| luma(p) as u8)
+        .collect();
+    let (tw, th) = (w / tile, h / tile);
+    let mut flagged = vec![false; tw * th];
+    for ty in 0..th {
+        for tx in 0..tw {
+            let (mut mid, mut busy, mut n) = (0u32, 0u32, 0u32);
+            for y in ty * tile..(ty + 1) * tile {
+                for x in tx * tile..(tx + 1) * tile {
+                    let v = g[y * w + x];
+                    mid += (60..=200).contains(&v) as u32;
+                    if x + 1 < w {
+                        busy += (v as i32 - g[y * w + x + 1] as i32).unsigned_abs();
+                    }
+                    n += 1;
+                }
+            }
+            flagged[ty * tw + tx] = mid * 2 >= n && busy / n >= 12;
+        }
+    }
+    let count = flagged.iter().filter(|&&f| f).count();
+    if count == 0 {
+        return 0;
+    }
+    let r = ((0.12 / 25.4 * dpi as f32).round() as usize).max(1);
+    let soft = blur(img, r);
+    for ty in 0..th {
+        for tx in 0..tw {
+            if !flagged[ty * tw + tx] {
+                continue;
+            }
+            for y in ty * tile..(ty + 1) * tile {
+                for x in tx * tile..(tx + 1) * tile {
+                    img.put_pixel(x as u32, y as u32, *soft.get_pixel(x as u32, y as u32));
+                }
+            }
+        }
+    }
+    count
+}
+
 // ---------------------------------------------------------------------------
 // connected components
 
@@ -648,6 +724,53 @@ mod tests {
         assert!(!b.get(100, 100) && !b.get(50, 30));
         assert!(b.get(300, 170), "thick block stays");
         assert!(b.get(401, 95) && b.get(401, 105), "stem stays");
+    }
+
+    #[test]
+    fn show_through_fades_ghosts_but_keeps_ink() {
+        let mut p = page(200, 200, [240, 240, 235]);
+        for y in 50..60 {
+            for x in 20..180 {
+                p.put_pixel(x, y, Rgb([205, 205, 200])); // ghost from the other side
+            }
+        }
+        for y in 100..110 {
+            for x in 20..180 {
+                p.put_pixel(x, y, Rgb([30, 30, 30])); // real ink
+            }
+        }
+        let out = show_through(&p, 200, Rgb([240, 240, 235]));
+        assert!(
+            out.get_pixel(100, 55).0[0] >= 232,
+            "ghost gone: {:?}",
+            out.get_pixel(100, 55)
+        );
+        assert!(out.get_pixel(100, 105).0[0] <= 60, "ink stays");
+    }
+
+    #[test]
+    fn descreen_smooths_a_halftone_patch_only() {
+        let mut p = page(300, 300, [250, 250, 250]);
+        for y in 100..200 {
+            for x in 100..200 {
+                let v = if (x + y) % 2 == 0 { 90 } else { 190 };
+                p.put_pixel(x, y, Rgb([v, v, v]));
+            }
+        }
+        for y in 20..30 {
+            for x in 20..200 {
+                p.put_pixel(x, y, Rgb([0, 0, 0])); // text-like bar
+            }
+        }
+        let n = descreen(&mut p, 150);
+        assert!(n > 10);
+        let v = p.get_pixel(150, 150).0[0];
+        let w = p.get_pixel(151, 150).0[0];
+        assert!(
+            (v as i32 - w as i32).abs() < 40,
+            "checkerboard smoothed: {v} {w}"
+        );
+        assert_eq!(p.get_pixel(50, 25).0, [0, 0, 0]);
     }
 
     #[test]

@@ -131,6 +131,8 @@ fn export_is_robust_to_bad_sheets_and_cancellation() {
             osd: None,
             uniform_size: r.below(2) == 0,
             text_ocr: None,
+            skip_duplicates: r.below(2) == 0,
+            split_on_blank: false,
         };
         let cancel = AtomicBool::new(false);
         let cancel_after = (r.below(3) == 0).then(|| r.below(3) as usize);

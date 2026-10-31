@@ -81,11 +81,17 @@ pub struct UiSettings {
     pub remove_lines: bool,
     pub dropout: legatorocr_core::Dropout,
     pub despeckle_strength: f32,
+    pub show_through: bool,
+    pub descreen: bool,
     pub align: (HAlign, VAlign),
     pub pdf_quality: u8,
     pub skip_blank: bool,
     pub uniform_size: bool,
     /// Write `<pdf>.txt` / `<pdf>.hocr` next to the PDF when OCR is on.
+    pub skip_duplicates: bool,
+    pub split_on_blank: bool,
+    /// 0 = off; otherwise the PDF should stay within this many MB.
+    pub target_mb: u32,
     pub sidecar_txt: bool,
     pub sidecar_hocr: bool,
     pub pdf_author: String,
@@ -126,10 +132,15 @@ impl Default for UiSettings {
             remove_lines: false,
             dropout: legatorocr_core::Dropout::Off,
             despeckle_strength: 1.0,
+            show_through: false,
+            descreen: false,
             align: (HAlign::Center, VAlign::Center),
             pdf_quality: 80,
             skip_blank: false,
             uniform_size: false,
+            skip_duplicates: false,
+            split_on_blank: false,
+            target_mb: 0,
             sidecar_txt: false,
             sidecar_hocr: false,
             pdf_author: String::new(),
@@ -200,6 +211,8 @@ impl UiSettings {
             remove_lines: self.remove_lines,
             dropout: self.dropout,
             despeckle_strength: self.despeckle_strength,
+            show_through: self.show_through,
+            descreen: self.descreen,
         }
     }
 
@@ -214,6 +227,9 @@ impl UiSettings {
         e.push(("pdf_quality".into(), self.pdf_quality.to_string()));
         e.push(("skip_blank".into(), self.skip_blank.to_string()));
         e.push(("uniform_size".into(), self.uniform_size.to_string()));
+        e.push(("skip_duplicates".into(), self.skip_duplicates.to_string()));
+        e.push(("split_on_blank".into(), self.split_on_blank.to_string()));
+        e.push(("target_mb".into(), self.target_mb.to_string()));
         e.push(("sidecar_txt".into(), self.sidecar_txt.to_string()));
         e.push(("sidecar_hocr".into(), self.sidecar_hocr.to_string()));
         e.push(("pdf_author".into(), self.pdf_author.clone()));
@@ -280,12 +296,19 @@ impl UiSettings {
         self.remove_lines = c.remove_lines;
         self.dropout = c.dropout;
         self.despeckle_strength = c.despeckle_strength;
+        self.show_through = c.show_through;
+        self.descreen = c.descreen;
         if let Some(v) = p.get("pdf_quality").and_then(|v| v.parse::<u8>().ok()) {
             self.pdf_quality = v.min(100);
         }
         let flag = |k: &str| p.get(k).map(|v| matches!(v, "true" | "yes" | "on" | "1"));
         self.skip_blank = flag("skip_blank").unwrap_or(self.skip_blank);
         self.uniform_size = flag("uniform_size").unwrap_or(self.uniform_size);
+        self.skip_duplicates = flag("skip_duplicates").unwrap_or(self.skip_duplicates);
+        self.split_on_blank = flag("split_on_blank").unwrap_or(self.split_on_blank);
+        if let Some(v) = p.get("target_mb").and_then(|v| v.parse::<u32>().ok()) {
+            self.target_mb = v.min(100_000);
+        }
         self.sidecar_txt = flag("sidecar_txt").unwrap_or(self.sidecar_txt);
         self.sidecar_hocr = flag("sidecar_hocr").unwrap_or(self.sidecar_hocr);
         if let Some(a) = p.get("pdf_author") {
@@ -377,6 +400,8 @@ mod tests {
             pdf_quality: 55,
             uniform_size: true,
             sidecar_hocr: true,
+            skip_duplicates: true,
+            target_mb: 25,
             pdf_author: "Ana".into(),
             auto_invert: true,
             sharpen: 0.8,
@@ -384,6 +409,7 @@ mod tests {
             remove_lines: true,
             dropout: legatorocr_core::Dropout::Blue,
             despeckle_strength: 2.5,
+            show_through: true,
             ..Default::default()
         };
         let text = s.to_project(vec![]).to_text(None);

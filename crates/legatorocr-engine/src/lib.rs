@@ -79,6 +79,25 @@ pub struct ExportJob<'a> {
     /// `Some` → run OCR for [`ExportResult::text`] / [`ExportResult::hocr`] even when no PDF
     /// text layer is wanted (the PDF's own OCR options win when both are set).
     pub text_ocr: Option<OcrOptions>,
+    /// Drop a page that is (almost) identical to the previous kept page (double feed).
+    pub skip_duplicates: bool,
+    /// Blank pages become separators: the PDF is cut there into several documents
+    /// ([`ExportResult::docs`]); the separators themselves are dropped.
+    pub split_on_blank: bool,
+}
+
+/// 96×128 grayscale thumbnail of a page, for duplicate detection.
+pub fn page_thumb(pg: &Page) -> Vec<u8> {
+    let g = pg.image.to_gray();
+    image::imageops::resize(&g, 96, 128, image::imageops::FilterType::Triangle).into_raw()
+}
+
+/// Mean absolute difference (0–255) of two thumbnails; ≤ 2 means "the same page".
+pub fn thumb_diff(a: &[u8], b: &[u8]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 255.0;
+    }
+    a.iter().zip(b).map(|(x, y)| (*x as i32 - *y as i32).unsigned_abs()).sum::<u32>() as f32 / a.len() as f32
 }
 
 /// Pass 1 of uniform sizing: the common page size in mm, from the pages' natural sizes.
@@ -133,6 +152,52 @@ pub struct ExportResult {
     pub text: Option<String>,
     /// hOCR document when OCR ran.
     pub hocr: Option<String>,
+    /// Consecutive duplicate pages dropped.
+    pub skipped_duplicates: usize,
+    /// With `split_on_blank`: one PDF per document (then `pdf` is `None`).
+    pub docs: Vec<Vec<u8>>,
+}
+
+/// Pick the JPEG quality (30–95) whose PDF is expected to stay within `target_bytes`:
+/// up to 6 evenly spaced sheets are exported at each quality of a ladder, the size is
+/// extrapolated to all sheets. Returns the best quality that fits, or 30 when none does.
+/// (1-bit pages do not depend on the quality, so they only add a fixed cost.)
+pub fn quality_for_target(
+    sheets: &[SheetInput],
+    osd: Option<&OcrOptions>,
+    target_bytes: u64,
+    cancel: &AtomicBool,
+) -> Result<u8> {
+    if sheets.is_empty() {
+        bail!("no pages to export");
+    }
+    let n = sheets.len().min(6);
+    let sample: Vec<SheetInput> = (0..n)
+        .map(|i| sheets[i * sheets.len() / n].clone())
+        .collect();
+    for q in [95u8, 90, 85, 80, 70, 60, 50, 40] {
+        let job = ExportJob {
+            sheets: &sample,
+            pdf: Some(PdfExport {
+                quality: q,
+                ..Default::default()
+            }),
+            skip_blank: false,
+            keep_going: true,
+            osd: osd.cloned(),
+            uniform_size: false,
+            text_ocr: None,
+            skip_duplicates: false,
+            split_on_blank: false,
+        };
+        let res = run_export(&job, cancel, &|_, _| {}, &|_, _| {})?;
+        let bytes = res.pdf.map_or(0, |p| p.len() as u64);
+        let est = bytes as f64 / res.pages.max(1) as f64 * sheets.len() as f64;
+        if est <= target_bytes as f64 {
+            return Ok(q);
+        }
+    }
+    Ok(30)
 }
 
 /// Sheets whose natural page size differs clearly from the book's typical size:
@@ -508,18 +573,22 @@ pub fn run_export(
     if total == 0 {
         bail!("no pages to export");
     }
-    let mut writer = job.pdf.as_ref().map(|p| {
-        let mut w = PdfWriter::new(if p.quality == 0 {
-            Compress::Flate
-        } else {
-            Compress::Jpeg(p.quality.min(100))
-        });
-        if let Some(t) = &p.title {
-            w.set_title(t);
-        }
-        w.set_meta(p.meta.clone());
-        w
-    });
+    let new_writer = || {
+        job.pdf.as_ref().map(|p| {
+            let mut w = PdfWriter::new(if p.quality == 0 {
+                Compress::Flate
+            } else {
+                Compress::Jpeg(p.quality.min(100))
+            });
+            if let Some(t) = &p.title {
+                w.set_title(t);
+            }
+            w.set_meta(p.meta.clone());
+            w
+        })
+    };
+    let mut writer = new_writer();
+    let mut last_thumb: Option<Vec<u8>> = None;
     let ocr_opts = job
         .pdf
         .as_ref()
@@ -588,6 +657,23 @@ pub fn run_export(
             };
             res.skipped_blank += skipped;
             for (pg, words) in pages {
+                if job.split_on_blank && pg.blank {
+                    if let Some(w) = writer.take().filter(|w| w.page_count() > 0) {
+                        res.docs.push(w.finish());
+                    }
+                    writer = new_writer();
+                    last_thumb = None;
+                    res.skipped_blank += 1;
+                    continue;
+                }
+                if job.skip_duplicates && !pg.blank {
+                    let t = page_thumb(&pg);
+                    if last_thumb.as_deref().is_some_and(|l| thumb_diff(l, &t) <= 2.0) {
+                        res.skipped_duplicates += 1;
+                        continue;
+                    }
+                    last_thumb = Some(t);
+                }
                 res.pages += 1;
                 res.words += words.len();
                 if ocr_opts.is_some() {
@@ -616,7 +702,13 @@ pub fn run_export(
         res.text = Some(texts.join("\n\x0c"));
         res.hocr = Some(legatorocr_ocr::hocr_document(&hocr_pages));
     }
-    res.pdf = writer.map(PdfWriter::finish);
+    if job.split_on_blank {
+        if let Some(w) = writer.filter(|w| w.page_count() > 0) {
+            res.docs.push(w.finish());
+        }
+    } else {
+        res.pdf = writer.map(PdfWriter::finish);
+    }
     Ok(res)
 }
 
@@ -770,6 +862,8 @@ mod tests {
             osd: None,
             uniform_size: false,
             text_ocr: None,
+            skip_duplicates: false,
+            split_on_blank: false,
         };
         let r = run_export(
             &job,
@@ -806,6 +900,8 @@ mod tests {
             osd: None,
             uniform_size: false,
             text_ocr: None,
+            skip_duplicates: false,
+            split_on_blank: false,
         };
         let r = run_export(&job, &AtomicBool::new(false), &|_, _| {}, &|_, _| {}).unwrap();
         assert!(r.pdf.is_none() && r.pages == 1);
@@ -822,6 +918,8 @@ mod tests {
             osd: None,
             uniform_size: false,
             text_ocr: None,
+            skip_duplicates: false,
+            split_on_blank: false,
         };
         assert!(run_export(&none, &AtomicBool::new(false), &|_, _| {}, &|_, _| {}).is_err());
         let bad = [SheetInput {
@@ -836,6 +934,8 @@ mod tests {
             osd: None,
             uniform_size: false,
             text_ocr: None,
+            skip_duplicates: false,
+            split_on_blank: false,
         };
         let e = run_export(&job, &AtomicBool::new(false), &|_, _| {}, &|_, _| {}).unwrap_err();
         assert!(format!("{e:#}").contains("file.png"), "{e:#}");
@@ -852,6 +952,8 @@ mod tests {
             osd: None,
             uniform_size: false,
             text_ocr: None,
+            skip_duplicates: false,
+            split_on_blank: false,
         };
         let e = run_export(&job, &AtomicBool::new(true), &|_, _| {}, &|_, _| {}).unwrap_err();
         assert!(e.to_string().contains("cancelled"));
@@ -926,6 +1028,8 @@ mod tests {
             osd: None,
             uniform_size: false,
             text_ocr: None,
+            skip_duplicates: false,
+            split_on_blank: false,
         };
         let ticks = AtomicUsize::new(0);
         let r = run_export(&job, &AtomicBool::new(false), &|_, _| {}, &|_, _| {
@@ -953,6 +1057,8 @@ mod tests {
             osd: None,
             uniform_size: false,
             text_ocr: None,
+            skip_duplicates: false,
+            split_on_blank: false,
         };
         let e = run_export(&job, &AtomicBool::new(false), &|_, _| {}, &|_, _| {}).unwrap_err();
         assert!(e.to_string().contains("bad.png"), "{e}");
@@ -983,6 +1089,8 @@ mod tests {
             osd: None,
             uniform_size: false,
             text_ocr: None,
+            skip_duplicates: false,
+            split_on_blank: false,
         };
         let r = run_export(
             &job,
@@ -1042,6 +1150,8 @@ mod tests {
                 osd: None,
                 uniform_size: uniform,
                 text_ocr: None,
+                skip_duplicates: false,
+                split_on_blank: false,
             };
             run_export(
                 &job,
@@ -1181,6 +1291,123 @@ mod pdf_input_tests {
         assert!(load_image(&dir.join("book.pdf#9")).is_err());
         std::fs::write(dir.join("bad.pdf"), b"%PDF-1.4 nonsense").unwrap();
         assert!(load_image(&dir.join("bad.pdf")).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod batch_features_tests {
+    use super::*;
+    use image::{Rgb, RgbImage};
+
+    fn text_img(seed: u32) -> RgbImage {
+        let mut img = RgbImage::from_pixel(600, 800, Rgb([245, 245, 245]));
+        for l in 0..12u32 {
+            let len = 200 + ((l * 37 + seed * 91) % 250);
+            for y in 0..10 {
+                for x in 0..len {
+                    img.put_pixel(100 + x, 150 + l * 45 + y, Rgb([15, 15, 15]));
+                }
+            }
+        }
+        img
+    }
+
+    fn sheets(dir: &Path, kinds: &[Option<u32>]) -> Vec<SheetInput> {
+        std::fs::create_dir_all(dir).unwrap();
+        kinds
+            .iter()
+            .enumerate()
+            .map(|(i, k)| {
+                let img = match k {
+                    Some(s) => text_img(*s),
+                    None => RgbImage::from_pixel(600, 800, Rgb([245, 245, 245])),
+                };
+                let path = dir.join(format!("{i:02}.png"));
+                img.save(&path).unwrap();
+                SheetInput {
+                    path,
+                    settings: Settings {
+                        dpi: 150,
+                        split: legatorocr_core::SplitMode::Off,
+                        deskew: false,
+                        auto_orient: false,
+                        ..Default::default()
+                    },
+                }
+            })
+            .collect()
+    }
+
+    fn job<'a>(s: &'a [SheetInput], dup: bool, split: bool) -> ExportJob<'a> {
+        ExportJob {
+            sheets: s,
+            pdf: Some(PdfExport::default()),
+            skip_blank: false,
+            keep_going: false,
+            osd: None,
+            uniform_size: false,
+            text_ocr: None,
+            skip_duplicates: dup,
+            split_on_blank: split,
+        }
+    }
+
+    #[test]
+    fn duplicates_and_separators() {
+        let dir = std::env::temp_dir().join(format!("lgr-batch-{}", std::process::id()));
+        // A, A (duplicate), B, blank, C, C, blank, blank, D
+        let s = sheets(
+            &dir,
+            &[
+                Some(1),
+                Some(1),
+                Some(2),
+                None,
+                Some(3),
+                Some(3),
+                None,
+                None,
+                Some(4),
+            ],
+        );
+        let no = AtomicBool::new(false);
+        let r = run_export(&job(&s, true, false), &no, &|_, _| {}, &|_, _| {}).unwrap();
+        assert_eq!((r.pages, r.skipped_duplicates), (7, 2));
+        let r = run_export(&job(&s, true, true), &no, &|_, _| {}, &|_, _| {}).unwrap();
+        assert!(r.pdf.is_none());
+        assert_eq!(r.docs.len(), 3, "A B | C | D");
+        assert_eq!(r.pages, 4);
+        let count = |b: &Vec<u8>| {
+            legatorocr_pdf::reader::PdfDoc::open(b.clone())
+                .unwrap()
+                .page_count()
+        };
+        assert_eq!(r.docs.iter().map(count).collect::<Vec<_>>(), vec![2, 1, 1]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn target_size_lowers_quality_only_when_needed() {
+        let dir = std::env::temp_dir().join(format!("lgr-target-{}", std::process::id()));
+        let mut s = sheets(&dir, &[Some(1), Some(2), Some(3)]);
+        // noisy colour page so JPEG size depends on quality
+        let mut img = RgbImage::new(600, 800);
+        let mut z = 12345u32;
+        for p in img.pixels_mut() {
+            z = z.wrapping_mul(1664525).wrapping_add(1013904223);
+            *p = Rgb([(z >> 24) as u8, (z >> 16) as u8, (z >> 8) as u8]);
+        }
+        img.save(dir.join("noise.png")).unwrap();
+        s.push(SheetInput {
+            path: dir.join("noise.png"),
+            settings: s[0].settings.clone(),
+        });
+        let no = AtomicBool::new(false);
+        assert_eq!(quality_for_target(&s, None, 100_000_000, &no).unwrap(), 95);
+        let q = quality_for_target(&s, None, 400_000, &no).unwrap();
+        assert!(q < 95, "got {q}");
+        assert_eq!(quality_for_target(&s, None, 1_000, &no).unwrap(), 30);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

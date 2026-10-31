@@ -167,6 +167,8 @@ pub fn settings_to_pairs(s: &Settings) -> Vec<(&'static str, String)> {
         ("remove_lines", s.remove_lines.to_string()),
         ("dropout", s.dropout.name().into()),
         ("despeckle_strength", s.despeckle_strength.to_string()),
+        ("show_through", s.show_through.to_string()),
+        ("descreen", s.descreen.to_string()),
     ]
 }
 
@@ -213,6 +215,8 @@ pub fn apply_pair(s: &mut Settings, k: &str, v: &str) -> Result<bool> {
         "remove_lines" => s.remove_lines = b(v).ok_or_else(bad)?,
         "dropout" => s.dropout = legatorocr_core::Dropout::from_name(v).ok_or_else(bad)?,
         "despeckle_strength" => s.despeckle_strength = v.parse().map_err(|_| bad())?,
+        "show_through" => s.show_through = b(v).ok_or_else(bad)?,
+        "descreen" => s.descreen = b(v).ok_or_else(bad)?,
         _ => return Ok(false),
     }
     Ok(true)

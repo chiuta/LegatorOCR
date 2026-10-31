@@ -33,6 +33,9 @@ Sources read for this comparison:
 | Punch holes, fingers, ruled lines, colour drop-out, negatives, levels, sharpen | partial (fill zones) | partial | ✔ automatic, off by default |
 | Profiles | – | – | ✔ built-in + user, CLI and GUI |
 | Text / hOCR sidecar, PDF metadata | ✘ | ✘ | ✔ |
+| Show-through, halftone smoothing | ✘ | partial (filters) | ✔ |
+| Duplicate pages, separator-sheet splitting, target PDF size | ✘ | ✘ | ✔ (blank pages as separators; no barcodes) |
+| OCR on enlarged low-dpi pages | – | – | ✔ |
 | Outlier page report | – | – | ✔ `--report-outliers` |
 | GUI languages | many | many | 8 (ro en fr it es pt de hu) |
 | Platforms | Win / macOS / Linux | same | same (Windows/macOS from CI, unverified here) |

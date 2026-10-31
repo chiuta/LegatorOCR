@@ -78,6 +78,9 @@ Without Tesseract everything else works; the OCR switch is disabled and says why
 | Output | colour, gray, B/W, **mixed** (1-bit text + colour patches) or **hybrid** (+ low-res background layer); optional down-sampling to `--output-dpi`; fixed or book-wide uniform page size with alignment |
 | PDF | own writer: JPEG (colour/gray), CCITT Group 4 for 1-bit (falls back to Flate when smaller), layered pages (stencil mask + background + patches); true page size from DPI |
 | Images | PNG with resolution, TIFF Group 4 for black & white |
+| Paper problems | `--show-through` (levels the lighting, then pulls pixels only slightly darker than the paper back to paper; real ink is untouched), `--descreen` (≈2 mm tiles that are mostly mid-tone and busy at pixel scale are lightly blurred; text tiles are left alone) |
+| Batch | `--skip-duplicates` (consecutive pages with a 96×128 thumbnail difference ≤ 2/255), `--split-on-blank` (blank pages separate documents → `name_001.pdf`, …), `--target-size MB` (JPEG quality chosen from a sample of pages so the PDF fits) |
+| OCR input | pages below 250 dpi are enlarged ×2–×4 (Catmull-Rom) before Tesseract; word boxes are mapped back |
 | Text output | `--txt` (plain text), `--hocr` (word boxes + confidences), PDF author/subject/keywords/dates |
 | PDF input | own tolerant reader: pages of scanned PDFs become `book.pdf#N` (Flate/LZW/ASCII85/RunLength, PNG/TIFF predictors, JPEG, CCITT G4, Gray/RGB/CMYK/Indexed, /Rotate, DPI from the page size); object streams and damaged cross-reference tables are fine; encrypted, JBIG2, JPEG 2000 and layered (multi-image) pages are refused with a clear message |
 | Profiles | `--profile NAME` / `--list-profiles` / `--save-profile NAME` (8 built in: book-bw, book-small-color, document-text, photo-archive, newspaper, form-dropout-red, negatives, phone-photos; user profiles in the config folder) and a GUI selector |

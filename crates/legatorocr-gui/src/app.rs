@@ -672,6 +672,11 @@ impl App {
             self.s.sidecar_hocr && self.s.ocr,
         );
         let skip_blank = self.s.skip_blank;
+        let (skip_duplicates, split_on_blank, target_mb) = (
+            self.s.skip_duplicates,
+            self.s.split_on_blank && kind == JobKind::Pdf,
+            self.s.target_mb,
+        );
         let uniform_size = self.s.uniform_size;
         let osd = self.osd_options();
         let (cancel, done) = (
@@ -695,6 +700,18 @@ impl App {
                         check_ocr(o).map_err(|e| e.to_string())?;
                     }
                     let first_err: Mutex<Option<String>> = Mutex::new(None);
+                    let mut pdf = pdf;
+                    if let (Some(p), true) = (pdf.as_mut(), target_mb > 0) {
+                        if p.quality > 0 {
+                            p.quality = legatorocr_engine::quality_for_target(
+                                &sheets,
+                                osd.as_ref(),
+                                target_mb as u64 * 1_000_000,
+                                &c2,
+                            )
+                            .map_err(|e| format!("{e:#}"))?;
+                        }
+                    }
                     let job = ExportJob {
                         sheets: &sheets,
                         pdf,
@@ -703,6 +720,8 @@ impl App {
                         osd,
                         uniform_size,
                         text_ocr: None,
+                        skip_duplicates,
+                        split_on_blank,
                     };
                     let res = run_export(
                         &job,
@@ -736,6 +755,17 @@ impl App {
                     .map_err(|e| format!("{e:#}"))?;
                     if let Some(e) = first_err.into_inner().unwrap() {
                         return Err(e);
+                    }
+                    let stem = target2
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    for (i, bytes) in res.docs.iter().enumerate() {
+                        write_atomic(
+                            &target2.with_file_name(format!("{stem}_{:03}.pdf", i + 1)),
+                            bytes,
+                        )
+                        .map_err(|e| e.to_string())?;
                     }
                     if let Some(bytes) = &res.pdf {
                         write_atomic(&target2, bytes).map_err(|e| e.to_string())?;

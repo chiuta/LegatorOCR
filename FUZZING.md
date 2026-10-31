@@ -37,3 +37,4 @@ absurd coordinates in the OCR text layer.
 - `pdf` reader: byte-level mutation of valid PDFs plus random bodies (`reader::tests::garbage_never_panics`);
   production CCITT G4 decoder checked against the encoder (300 random pages, damaged streams) and against the independent test decoder.
 - `engine/tests/pdf_qpdf.rs`: reads files rewritten by qpdf (`--object-streams=generate`, `--qdf`, `--linearize`).
+- Round 2: fuzz_extreme also randomises `show_through` and `descreen`; engine tests cover duplicates, blank-separator splitting and target-size quality; OCR upscaling rules are unit-tested.

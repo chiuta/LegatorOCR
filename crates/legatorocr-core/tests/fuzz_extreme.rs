@@ -328,6 +328,8 @@ fn gen_settings(r: &mut Rng) -> Settings {
     s.remove_lines = r.chance(40);
     s.dropout = r.pick(&legatorocr_core::Dropout::ALL);
     s.despeckle_strength = wild_f(r, 0.0, 6.0);
+    s.show_through = r.chance(40);
+    s.descreen = r.chance(40);
     s
 }
 

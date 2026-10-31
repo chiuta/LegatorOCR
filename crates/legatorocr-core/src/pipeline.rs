@@ -97,6 +97,10 @@ pub struct Settings {
     pub dropout: Dropout,
     /// Despeckle strength 0.25–4 (1 = default speck size).
     pub despeckle_strength: f32,
+    /// Fade print showing through thin paper (also levels the lighting).
+    pub show_through: bool,
+    /// Smooth halftone screens of printed photographs.
+    pub descreen: bool,
 }
 
 impl Default for Settings {
@@ -130,6 +134,8 @@ impl Default for Settings {
             remove_lines: false,
             dropout: Dropout::Off,
             despeckle_strength: 1.0,
+            show_through: false,
+            descreen: false,
         }
     }
 }
@@ -347,6 +353,13 @@ fn prepare(mut img: RgbImage, s: &Settings) -> Prepared {
     if s.dropout != Dropout::Off {
         let paper = transform::estimate_background(&img);
         cleanup::dropout(&mut img, s.dropout, paper);
+    }
+    if s.descreen {
+        cleanup::descreen(&mut img, s.dpi);
+    }
+    if s.show_through {
+        let paper = transform::estimate_background(&img);
+        img = cleanup::show_through(&img, s.dpi, paper);
     }
     if s.punch_holes {
         cleanup::remove_punch_holes(&mut img, s.dpi);
@@ -1035,6 +1048,8 @@ mod tests {
                 remove_lines: rnd(2) == 0,
                 dropout: Dropout::ALL[rnd(4) as usize],
                 despeckle_strength: rnd(500) as f32 / 100.0,
+                show_through: rnd(2) == 0,
+                descreen: rnd(2) == 0,
             };
             let pages = process_page(&DynamicImage::ImageRgb8(img), &s);
             assert!(!pages.is_empty() && pages.len() <= 2, "iteration {it}");
