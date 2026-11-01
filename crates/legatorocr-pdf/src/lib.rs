@@ -9,6 +9,7 @@
 pub mod crypt;
 pub mod g4;
 pub mod jbig2;
+pub mod jbig2huff;
 pub mod jpx;
 pub mod pdfa;
 pub mod reader;

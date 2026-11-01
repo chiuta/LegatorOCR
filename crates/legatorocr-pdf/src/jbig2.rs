@@ -6,6 +6,7 @@
 //!
 //! Written from the standard's description of the MQ arithmetic coder and templates.
 
+use crate::jbig2huff::{Bits, Table};
 use std::fmt;
 
 #[derive(Debug)]
@@ -709,6 +710,262 @@ fn symbol_dict(data: &[u8], inputs: &[Bitmap]) -> R<Vec<Bitmap>> {
     Ok(out)
 }
 
+fn herr(e: crate::jbig2huff::HuffError) -> Jbig2Error {
+    Jbig2Error(e.to_string())
+}
+
+/// Pick a Huffman table by its selection value: the standard ones listed, or the next
+/// user-supplied table (selection 3 / 1 for the single-bit fields).
+fn pick(sel: u16, std: &[(u16, u8)], ct: &[Table], used: &mut usize) -> R<Table> {
+    if let Some(&(_, n)) = std.iter().find(|(v, _)| *v == sel) {
+        return Ok(Table::standard(n));
+    }
+    let t = ct
+        .get(*used)
+        .ok_or_else(|| Jbig2Error("JBIG2 refers to a Huffman table that is missing".into()))?;
+    *used += 1;
+    Ok(t.clone())
+}
+
+/// Symbol dictionary, Huffman coding without refinement or aggregation (T.88 6.5, 7.4.2).
+fn symbol_dict_huff(data: &[u8], inputs: &[Bitmap], ct: &[Table]) -> R<Vec<Bitmap>> {
+    let flags = be16(data, 0)?;
+    if flags & 2 != 0 {
+        return fail(
+            "JBIG2 Huffman symbol dictionaries with refinement or aggregation are not supported",
+        );
+    }
+    if flags & 0x100 != 0 {
+        return fail("JBIG2 symbol dictionaries with retained contexts are not supported");
+    }
+    let mut used = 0usize;
+    let dh_t = pick((flags >> 2) & 3, &[(0, 4), (1, 5)], ct, &mut used)?;
+    let dw_t = pick((flags >> 4) & 3, &[(0, 2), (1, 3)], ct, &mut used)?;
+    let bm_t = pick((flags >> 6) & 1, &[(0, 1)], ct, &mut used)?;
+    let _agg = pick((flags >> 7) & 1, &[(0, 1)], ct, &mut used)?;
+    // no adaptive-template bytes with Huffman coding
+    let n_ex = be32(data, 2)? as usize;
+    let n_new = be32(data, 6)? as usize;
+    if n_new > 65_536 || n_ex > 131_072 + inputs.len() {
+        return fail("JBIG2 symbol dictionary too large");
+    }
+    let mut r = Bits::new(&data[10.min(data.len())..]);
+    let mut pool: Vec<Bitmap> = inputs.to_vec();
+    let mut hc_h: i64 = 0;
+    let mut budget = 0u64;
+    let mut idle_rounds = 0u32;
+    while pool.len() - inputs.len() < n_new {
+        idle_rounds += 1;
+        if idle_rounds > 100_000 {
+            return fail("JBIG2 symbol dictionary makes no progress");
+        }
+        hc_h += dh_t.int(&mut r).map_err(herr)?;
+        if !(0..=65_535).contains(&hc_h) {
+            return fail("bad JBIG2 symbol height");
+        }
+        let (mut sym_w, mut tot_w) = (0i64, 0i64);
+        let mut widths: Vec<usize> = Vec::new();
+        while let Some(dw) = dw_t.decode(&mut r).map_err(herr)? {
+            if pool.len() - inputs.len() + widths.len() >= n_new {
+                return fail("JBIG2 symbol dictionary overrun");
+            }
+            sym_w += dw;
+            if !(0..=65_535).contains(&sym_w) {
+                return fail("bad JBIG2 symbol width");
+            }
+            tot_w += sym_w;
+            widths.push(sym_w as usize);
+        }
+        let bmsize = bm_t.int(&mut r).map_err(herr)?;
+        r.align();
+        let (tw, h) = (tot_w as usize, hc_h as usize);
+        budget += tw as u64 * h as u64;
+        if tw as u64 * h as u64 > 16_000_000 || budget > 200_000_000 {
+            return fail("JBIG2 symbols are too large");
+        }
+        let rows: Vec<Vec<bool>> = if tw == 0 || h == 0 {
+            vec![Vec::new(); h]
+        } else if bmsize == 0 {
+            // uncompressed: rows padded to whole bytes
+            let stride = tw.div_ceil(8);
+            let mut rows = Vec::with_capacity(h);
+            for _ in 0..h {
+                let mut row = Vec::with_capacity(tw);
+                for _ in 0..tw {
+                    row.push(r.bit().map_err(herr)? != 0);
+                }
+                for _ in tw..stride * 8 {
+                    r.bit().map_err(herr)?;
+                }
+                rows.push(row);
+            }
+            rows
+        } else {
+            let n =
+                usize::try_from(bmsize).map_err(|_| Jbig2Error("bad JBIG2 bitmap size".into()))?;
+            let body = r
+                .rest()
+                .get(..n)
+                .ok_or_else(|| Jbig2Error("truncated JBIG2 bitmap".into()))?;
+            let (rows, _) = crate::g4::decode(body, tw, h, false);
+            r.skip_bytes(n).map_err(herr)?;
+            rows
+        };
+        let mut x0 = 0usize;
+        for &wd in &widths {
+            let mut d = Vec::with_capacity(wd * h);
+            if wd > 0 {
+                for row in rows.iter().take(h) {
+                    for x in x0..x0 + wd {
+                        d.push(u8::from(row.get(x).copied().unwrap_or(false)));
+                    }
+                }
+            }
+            x0 += wd;
+            pool.push(Bitmap {
+                w: wd,
+                h,
+                d: if wd == 0 { Vec::new() } else { d },
+            });
+        }
+    }
+    // export flags: alternating run lengths coded with table B.1
+    let run_t = Table::standard(1);
+    let total = pool.len();
+    let mut out = Vec::new();
+    let (mut idx, mut flag, mut guard) = (0usize, false, 0usize);
+    while idx < total && guard < total + 8 {
+        guard += 1;
+        let run = run_t.int(&mut r).map_err(herr)?;
+        if run < 0 || idx + run as usize > total {
+            return fail("bad JBIG2 export run");
+        }
+        if flag {
+            out.extend(pool[idx..idx + run as usize].iter().cloned());
+        }
+        idx += run as usize;
+        flag = !flag;
+    }
+    Ok(out)
+}
+
+/// Text region, Huffman coding without refinement (T.88 6.4, 7.4.3).
+fn text_region_huff(
+    data: &[u8],
+    rw: usize,
+    rh: usize,
+    syms: &[Bitmap],
+    ct: &[Table],
+) -> R<Vec<u8>> {
+    let flags = be16(data, 0)?;
+    if flags & 2 != 0 {
+        return fail("JBIG2 Huffman text regions with refinement are not supported");
+    }
+    let hf = be16(data, 2)?;
+    let mut dso = ((flags >> 10) & 31) as i32;
+    if dso > 15 {
+        dso -= 32;
+    }
+    let n_inst = be32(data, 4)? as usize;
+    if n_inst > 4_000_000 {
+        return fail("too many JBIG2 symbol instances");
+    }
+    let mut used = 0usize;
+    let fs_t = pick(hf & 3, &[(0, 6), (1, 7)], ct, &mut used)?;
+    let ds_t = pick((hf >> 2) & 3, &[(0, 8), (1, 9), (2, 10)], ct, &mut used)?;
+    let dt_t = pick((hf >> 4) & 3, &[(0, 11), (1, 12), (2, 13)], ct, &mut used)?;
+    let tp = TextP {
+        rw,
+        rh,
+        strips: 1i64 << ((flags >> 2) & 3),
+        corner: ((flags >> 4) & 3) as u32,
+        transposed: flags & 0x40 != 0,
+        comb: ((flags >> 7) & 3) as u8,
+        def_pixel: ((flags >> 9) & 1) as u8,
+        dso,
+        n_inst,
+        refine: false,
+        rt: 0,
+        rat: [(-1, -1); 2],
+        code_len: 0,
+    };
+    let log_strips = (flags >> 2) & 3;
+    let mut r = Bits::new(&data[8.min(data.len())..]);
+    // symbol-ID codes: 35 run-code lengths, then one code length per symbol (7.4.3.1.7)
+    let mut runlens = [0u8; 35];
+    for l in runlens.iter_mut() {
+        *l = r.bits(4).map_err(herr)? as u8;
+    }
+    let run_t = Table::from_lengths(&runlens).map_err(herr)?;
+    let mut lens: Vec<u8> = Vec::with_capacity(syms.len());
+    while lens.len() < syms.len() {
+        let c = run_t.int(&mut r).map_err(herr)?;
+        let (val, n) = match c {
+            0..=31 => (c as u8, 1usize),
+            32 => (
+                *lens
+                    .last()
+                    .ok_or_else(|| Jbig2Error("JBIG2 symbol code repeat without a code".into()))?,
+                3 + r.bits(2).map_err(herr)? as usize,
+            ),
+            33 => (0, 3 + r.bits(3).map_err(herr)? as usize),
+            34 => (0, 11 + r.bits(7).map_err(herr)? as usize),
+            _ => return fail("bad JBIG2 symbol code length"),
+        };
+        if lens.len() + n > syms.len() {
+            return fail("JBIG2 symbol code lengths overrun");
+        }
+        lens.extend(std::iter::repeat_n(val, n));
+    }
+    r.align();
+    let id_t = Table::from_lengths(&lens).map_err(herr)?;
+
+    let strips = tp.strips;
+    let mut bm = vec![tp.def_pixel; rw * rh];
+    let mut stript: i64 = -dt_t.int(&mut r).map_err(herr)? * strips;
+    let (mut firsts, mut done, mut drawn) = (0i64, 0usize, 0u64);
+    while done < n_inst {
+        stript += dt_t.int(&mut r).map_err(herr)? * strips;
+        let mut curs = 0i64;
+        let mut first = true;
+        loop {
+            if first {
+                firsts += fs_t.int(&mut r).map_err(herr)?;
+                curs = firsts;
+                first = false;
+            } else {
+                match ds_t.decode(&mut r).map_err(herr)? {
+                    None => break,
+                    Some(v) => curs += v + dso as i64,
+                }
+            }
+            if done >= n_inst {
+                return fail("JBIG2 text region overrun");
+            }
+            let curt = if strips == 1 {
+                0
+            } else {
+                r.bits(log_strips as u32).map_err(herr)? as i64
+            };
+            let id = id_t.int(&mut r).map_err(herr)? as usize;
+            let sym = syms
+                .get(id)
+                .ok_or_else(|| Jbig2Error("JBIG2 symbol id out of range".into()))?;
+            place_instance(
+                &mut bm,
+                (rw, rh),
+                &tp,
+                sym,
+                &mut curs,
+                stript + curt,
+                &mut drawn,
+            )?;
+            done += 1;
+        }
+    }
+    Ok(bm)
+}
+
 /// Text region (arithmetic coding) → region bitmap.
 fn text_region(data: &[u8], rw: usize, rh: usize, syms: &[Bitmap]) -> R<Vec<u8>> {
     let flags = be16(data, 0)?;
@@ -759,8 +1016,72 @@ fn text_region(data: &[u8], rw: usize, rh: usize, syms: &[Bitmap]) -> R<Vec<u8>>
     text_decode(&mut mq, &mut tc, &tp, syms)
 }
 
+/// Draw one symbol instance into the region bitmap, advancing the strip position `curs` the way
+/// the reference corner and orientation require (T.88 6.4.5, steps 3c vi to x).
+fn place_instance(
+    bm: &mut [u8],
+    (rw, rh): (usize, usize),
+    tp: &TextP,
+    sym: &Bitmap,
+    curs: &mut i64,
+    ti: i64,
+    drawn: &mut u64,
+) -> R<()> {
+    let (transposed, corner) = (tp.transposed, tp.corner);
+    let (wi, hi) = (sym.w as i64, sym.h as i64);
+    if !transposed && corner >= 2 {
+        *curs += wi - 1;
+    } else if transposed && (corner == 0 || corner == 2) {
+        *curs += hi - 1;
+    }
+    let si = *curs;
+    let (x, y) = if !transposed {
+        match corner {
+            1 => (si, ti),
+            3 => (si - wi + 1, ti),
+            0 => (si, ti - hi + 1),
+            _ => (si - wi + 1, ti - hi + 1),
+        }
+    } else {
+        match corner {
+            1 => (ti, si),
+            3 => (ti - wi + 1, si),
+            0 => (ti, si - hi + 1),
+            _ => (ti - wi + 1, si - hi + 1),
+        }
+    };
+    *drawn += (sym.w * sym.h) as u64 + 1;
+    if *drawn > 1_000_000_000 {
+        return fail("JBIG2 text region is too expensive");
+    }
+    for yy in 0..sym.h {
+        for xx in 0..sym.w {
+            let (px, py) = (x + xx as i64, y + yy as i64);
+            if px < 0 || py < 0 || px >= rw as i64 || py >= rh as i64 {
+                continue;
+            }
+            let (dst, src) = (
+                &mut bm[py as usize * rw + px as usize],
+                sym.d[yy * sym.w + xx],
+            );
+            *dst = match tp.comb {
+                0 => *dst | src,
+                1 => *dst & src,
+                2 => *dst ^ src,
+                _ => 1 - (*dst ^ src),
+            };
+        }
+    }
+    if !transposed && corner < 2 {
+        *curs += wi - 1;
+    } else if transposed && (corner == 1 || corner == 3) {
+        *curs += hi - 1;
+    }
+    Ok(())
+}
+
 fn text_decode(mq: &mut Mq, tc: &mut TextCtx, tp: &TextP, syms: &[Bitmap]) -> R<Vec<u8>> {
-    let (rw, rh, strips, corner, transposed) = (tp.rw, tp.rh, tp.strips, tp.corner, tp.transposed);
+    let (rw, rh, strips) = (tp.rw, tp.rh, tp.strips);
     let mut bm = vec![tp.def_pixel; rw * rh];
     let mut stript: i64 = -int_or_fail(tc.iadt.decode(mq))? * strips;
     let mut firsts: i64 = 0;
@@ -828,55 +1149,7 @@ fn text_decode(mq: &mut Mq, tc: &mut TextCtx, tp: &TextP, syms: &[Bitmap]) -> R<
                 refined = Some(Bitmap { w: nw, h: nh, d });
             }
             let sym = refined.as_ref().unwrap_or(base);
-            let (wi, hi) = (sym.w as i64, sym.h as i64);
-            if !transposed && corner >= 2 {
-                curs += wi - 1;
-            } else if transposed && (corner == 0 || corner == 2) {
-                curs += hi - 1;
-            }
-            let si = curs;
-            let (x, y) = if !transposed {
-                match corner {
-                    1 => (si, ti),
-                    3 => (si - wi + 1, ti),
-                    0 => (si, ti - hi + 1),
-                    _ => (si - wi + 1, ti - hi + 1),
-                }
-            } else {
-                match corner {
-                    1 => (ti, si),
-                    3 => (ti - wi + 1, si),
-                    0 => (ti, si - hi + 1),
-                    _ => (ti - wi + 1, si - hi + 1),
-                }
-            };
-            drawn += (sym.w * sym.h) as u64 + 1;
-            if drawn > 1_000_000_000 {
-                return fail("JBIG2 text region is too expensive");
-            }
-            for yy in 0..sym.h {
-                for xx in 0..sym.w {
-                    let (px, py) = (x + xx as i64, y + yy as i64);
-                    if px < 0 || py < 0 || px >= rw as i64 || py >= rh as i64 {
-                        continue;
-                    }
-                    let (dst, src) = (
-                        &mut bm[py as usize * rw + px as usize],
-                        sym.d[yy * sym.w + xx],
-                    );
-                    *dst = match tp.comb {
-                        0 => *dst | src,
-                        1 => *dst & src,
-                        2 => *dst ^ src,
-                        _ => 1 - (*dst ^ src),
-                    };
-                }
-            }
-            if !transposed && corner < 2 {
-                curs += wi - 1;
-            } else if transposed && (corner == 1 || corner == 3) {
-                curs += hi - 1;
-            }
+            place_instance(&mut bm, (rw, rh), tp, sym, &mut curs, ti, &mut drawn)?;
             done += 1;
         }
     }
@@ -1039,6 +1312,8 @@ pub fn decode(data: &[u8], globals: Option<&[u8]>, w: usize, h: usize) -> R<Vec<
     // describe a region of 400 million pixels, and 10 000 segments are allowed.
     let mut region_px: u64 = 0;
     let mut dict_px: u64 = 0;
+    // user-supplied Huffman tables (segment type 53)
+    let mut tables: std::collections::HashMap<u32, Table> = std::collections::HashMap::new();
     for s in &segs {
         let data: &[u8] = &s.data;
         if matches!(
@@ -1053,7 +1328,18 @@ pub fn decode(data: &[u8], globals: Option<&[u8]>, w: usize, h: usize) -> R<Vec<
                 return fail("JBIG2 stream describes too much image data");
             }
         }
+        let ct: Vec<Table> = s
+            .refs
+            .iter()
+            .filter_map(|r| tables.get(r).cloned())
+            .collect();
         match s.kind {
+            53 => {
+                let t = Table::parse_custom(data).map_err(|e| Jbig2Error(e.to_string()))?;
+                if tables.len() < 256 {
+                    tables.insert(s.num, t);
+                }
+            }
             48 => {
                 // page information: pages w/h may be 0xFFFFFFFF (striped); the PDF dictionary wins
                 if data.len() >= 17 && data[16] & 4 != 0 {
@@ -1130,7 +1416,11 @@ pub fn decode(data: &[u8], globals: Option<&[u8]>, w: usize, h: usize) -> R<Vec<
                 }
                 // dictionaries that re-export their inputs copy every symbol: bound the total
                 // pixel count of everything exported by this stream
-                let exported = symbol_dict(data, &inputs)?;
+                let exported = if be16(data, 0)? & 1 != 0 {
+                    symbol_dict_huff(data, &inputs, &ct)?
+                } else {
+                    symbol_dict(data, &inputs)?
+                };
                 dict_px = exported
                     .iter()
                     .fold(dict_px, |a, b| a.saturating_add(b.w as u64 * b.h as u64));
@@ -1158,7 +1448,11 @@ pub fn decode(data: &[u8], globals: Option<&[u8]>, w: usize, h: usize) -> R<Vec<
                         syms.extend(d.iter().cloned());
                     }
                 }
-                let bm = text_region(&data[17..], rw, rh, &syms)?;
+                let bm = if be16(&data[17..], 0)? & 1 != 0 {
+                    text_region_huff(&data[17..], rw, rh, &syms, &ct)?
+                } else {
+                    text_region(&data[17..], rw, rh, &syms)?
+                };
                 place(&mut page, &mut inter, s, w, h, bm, rw, rh, rx, ry, op);
                 regions += 1;
             }
@@ -2275,6 +2569,215 @@ pub(crate) mod tests {
         Vec<(usize, i64, i64)>,
         Vec<u8>,
     );
+
+    /// Huffman-coded JBIG2 streams made by an independent encoder (a Python script written from
+    /// the T.88 text): (stream, expected page rows). Vectors 0, 1 and 3 also decode identically in
+    /// pdfium; vector 2 (collective bitmap coded with MMR) could not be cross-checked there
+    /// (pdfium renders it blank), so it rests on this decoder and the G4 decoder alone.
+    const HUFFMAN_VECTORS: [(&str, &[&str]); 4] = [
+        (
+            "000000003000010000001300000040000000280000000000000000000000000000010000010000002800010000000500000005e5c83f00279fef80546118008fa11f00fc6118008c6118008f9fef800140000000020620010100000038000000400000002800000000000000000000110000000000080011000000000000000000000000000000030074051a75b5f53e600a078190",
+            &[
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "............#...####...####.####..#####.........................",
+                "...........#.#..#...#.#.....#...#.#.............................",
+                "..........#...#.####..#.....#...#.####..........................",
+                "..........#####.#...#.#.....#...#.#.............................",
+                "..........#...#.#...#.#.....#...#.#.............................",
+                "..........#...#.####...####.####..#####.........................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "..........#####...####.....####.................................",
+                "..........#.......#...#...#.....................................",
+                "..........####....#...#...#.....................................",
+                "..........#.......#...#...#.....................................",
+                "..........#.......#...#...#.....................................",
+                "..........#####...####.....####.................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+            ],
+        ),
+        (
+            "000000003000010000001300000040000000280000000000000000000000000000010000010000002800010000000500000005e5c83f00279fef80546118008fa11f00fc6118008c6118008f9fef8001400000000206200101000000390000004000000028000000000000000000000900000000000800110000000000000000000000000000000300505069756d7f44e000a03e0590",
+            &[
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "............#.....................#####.........................",
+                "...........#.#..####..............#.............................",
+                "..........#...#.#...#..####.......####..........................",
+                "..........#####.####..#.....####..#.............................",
+                "..........#...#.#...#.#.....#...#.#.............................",
+                "..........#...#.#...#.#.....#...#.#####.........................",
+                "................####..#.....#...#...............................",
+                ".......................####.#...#...............................",
+                "............................####................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "..........#####.................................................",
+                "..........#.......####..........................................",
+                "..........####....#...#....####.................................",
+                "..........#.......#...#...#.....................................",
+                "..........#.......#...#...#.....................................",
+                "..........#####...#...#...#.....................................",
+                "..................####....#.....................................",
+                "...........................####.................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+            ],
+        ),
+        (
+            "000000003000010000001300000040000000280000000000000000000000000000010000010000003100010000000500000005e5c83f84002e8bb2e291cd208a1c1047b048f69306475c1e209782ca8ffe0cb8a4730010010140000000020620010100000038000000400000002800000000000000000000110000000000080011000000000000000000000000000000030074051a75b5f53e600a078190",
+            &[
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "............#...####...####.####..#####.........................",
+                "...........#.#..#...#.#.....#...#.#.............................",
+                "..........#...#.####..#.....#...#.####..........................",
+                "..........#####.#...#.#.....#...#.#.............................",
+                "..........#...#.#...#.#.....#...#.#.............................",
+                "..........#...#.####...####.####..#####.........................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "..........#####...####.....####.................................",
+                "..........#.......#...#...#.....................................",
+                "..........####....#...#...#.....................................",
+                "..........#.......#...#...#.....................................",
+                "..........#.......#...#...#.....................................",
+                "..........#####...####.....####.................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+            ],
+        ),
+        (
+            "000000003000010000001300000040000000280000000000000000000000000000010000010000002800010000000500000005e5c83f00279fef80546118008fa11f00fc6118008c6118008f9fef8001400000000206200101000000380000004000000028000000000000000000001500000000000800010000000000000000000000000000100568141a9d16af48f20048170090",
+            &[
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "............#..........####.......#####.........................",
+                "...........#.#..####..#.....####..#.............................",
+                "..........#...#.#...#.#.....#...#.####..........................",
+                "..........#####.####..#.....#...#.#.............................",
+                "..........#...#.#...#.#.....#...#.#.............................",
+                "..........#...#.#...#..####.#...#.#####.........................",
+                "................####........####................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "..........#####............####.................................",
+                "..........#.......####....#.....................................",
+                "..........####....#...#...#.....................................",
+                "..........#.......#...#...#.....................................",
+                "..........#.......#...#...#.....................................",
+                "..........#####...#...#....####.................................",
+                "..................####..........................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+                "................................................................",
+            ],
+        ),
+    ];
+
+    fn hex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn huffman_streams_decode_like_the_reference_decoder() {
+        for (i, (stream, rows)) in HUFFMAN_VECTORS.iter().enumerate() {
+            let (w, h) = (rows[0].len(), rows.len());
+            let expected: Vec<u8> = rows
+                .iter()
+                .flat_map(|r| r.bytes().map(|c| u8::from(c == b'#')))
+                .collect();
+            match decode(&hex(stream), None, w, h) {
+                Ok(got) => assert_eq!(got, expected, "vector {i}"),
+                Err(e) => panic!("vector {i}: {e}"),
+            }
+        }
+    }
 
     fn sample(w: usize, h: usize, seed: u64) -> Vec<u8> {
         let mut s = seed;

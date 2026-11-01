@@ -22,7 +22,7 @@ Sources read for this comparison:
 | Despeckle | ✔ | synced with original | ✔ |
 | Picture zones (mixed output) | ✔ hand-drawn zones | – | ◐ **automatic** detection (mid-tone share) + typed zones (`--picture-zone`) + **mouse-drawn zones** in the GUI (followed through rotate / split / deskew) |
 | Fill / erase zones | ✔ | – | ✔ typed rectangles (mm) or mouse-drawn per sheet |
-| Dewarping | ✔ semi-automatic, control points | "dewarp correction parameters" | ◐ automatic from text lines, or guide lines you give (`--dewarp-guide`, typed; not drawn with the mouse); vertical bend only |
+| Dewarping | ✔ semi-automatic, control points | "dewarp correction parameters" | ◐ automatic from text lines, or guide lines you draw with the mouse or type (`--dewarp-guide`); vertical bend only |
 | Lighting normalisation | colour/illumination options | colour corrections, curves, "RIS undefect", EM denoiser, deBlur5 | ◐ background normalisation; ✘ denoise/deblur filters |
 | Output resolution | ✔ | – | ✔ down-sampling to `--output-dpi` |
 | Project files | `.ScanTailor` (XML) | relative paths in project files | ✔ plain-text `.lgr`, relative paths |
@@ -54,7 +54,7 @@ Sources read for this comparison:
 
 ## Not done (honest list)
 
-Drawing dewarp guides with the mouse, multi-column structure (sections) in the Word export, JBIG2 Huffman coding (needs a reference encoder to verify against), certified PDF/A (veraPDF validates our generated sample files against PDF/A-2b in CI; that covers the samples, not every input), the extra binarisers of the Experimental
+JBIG2 Huffman refinement/aggregation, certified PDF/A (veraPDF validates our generated sample files against PDF/A-2b in CI; that covers the samples, not every input), the extra binarisers of the Experimental
 fork, EM denoise / deblur filters, and any run of the GUI or the Windows / macOS builds by the author (CI now smoke-tests the packaged command-line binary on every release target).
 
 Measured, not claimed: `docs/OCR-BENCH.md` (synthetic OCR accuracy, 8 languages × 3 conditions).
