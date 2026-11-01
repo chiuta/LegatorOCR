@@ -144,7 +144,7 @@ mod tests {
     fn records_carry_hash_hold_and_escape_names() {
         let d = std::env::temp_dir().join(format!("lo_audit_{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
-        let f = d.join("a\"b.pdf");
+        let f = d.join("ab.pdf");
         std::fs::write(&f, b"abc").unwrap();
         let o = Options {
             retain_until: Some("2040-01-01".into()),
@@ -153,7 +153,7 @@ mod tests {
         };
         let t = render(
             "T 1",
-            &[PathBuf::from("in.tif")],
+            &[PathBuf::from("in\"x.tif")],
             std::slice::from_ref(&f),
             0,
             &o,
@@ -162,7 +162,7 @@ mod tests {
         assert!(t.starts_with("{\"time\":\"1970-01-01T00:00:00Z\""));
         assert!(t.contains("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"));
         assert!(t.contains("\"legal_hold\":true"));
-        assert!(t.contains("a\\\"b.pdf"));
+        assert!(t.contains("in\\\"x.tif"));
         assert!(t.contains("\"retain_until\":\"2040-01-01\""));
         assert_eq!(t.matches('\n').count(), 1);
         let log = d.join("audit.jsonl");

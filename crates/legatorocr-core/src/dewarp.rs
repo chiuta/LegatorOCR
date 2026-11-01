@@ -174,7 +174,6 @@ pub fn dewarp(img: &RgbImage, dpi: u32, fill: Rgb<u8>) -> Option<RgbImage> {
 
     // --- full-resolution offset table per line ---------------------------------------
     let fw = img.width() as usize;
-    let fh = img.height() as usize;
     let scale = f as f32;
     let table: Vec<(f32, Vec<f32>)> = lines
         .iter()
@@ -191,6 +190,14 @@ pub fn dewarp(img: &RgbImage, dpi: u32, fill: Rgb<u8>) -> Option<RgbImage> {
         })
         .collect();
 
+    Some(resample(img, &table, fill))
+}
+
+/// Resample the page so that each guide line (target row in pixels, offset of its actual
+/// position at every column) becomes straight; between guides the correction is interpolated.
+fn resample(img: &RgbImage, table: &[(f32, Vec<f32>)], fill: Rgb<u8>) -> RgbImage {
+    let fw = img.width() as usize;
+    let fh = img.height() as usize;
     let mut out = RgbImage::from_pixel(fw as u32, fh as u32, fill);
     let src = img.as_raw();
     out.as_mut()
@@ -226,7 +233,102 @@ pub fn dewarp(img: &RgbImage, dpi: u32, fill: Rgb<u8>) -> Option<RgbImage> {
                 }
             }
         });
-    Some(out)
+    out
+}
+
+/// Straighten the page along lines the user marked: each guide is a polyline of points
+/// `(x, y)` in fractions of the image width and height that should become a horizontal text
+/// line. Needs at least one guide with two points; returns `None` for unusable input
+/// (non-finite or out-of-range points, a guide that is already straight).
+pub fn dewarp_guides(
+    img: &RgbImage,
+    guides: &[Vec<(f32, f32)>],
+    fill: Rgb<u8>,
+) -> Option<RgbImage> {
+    let (fw, fh) = (img.width() as usize, img.height() as usize);
+    if fw < 8 || fh < 8 {
+        return None;
+    }
+    let mut table: Vec<(f32, Vec<f32>)> = Vec::new();
+    let mut bent = false;
+    for g in guides.iter().take(64) {
+        let mut pts: Vec<(f32, f32)> = g
+            .iter()
+            .filter(|p| p.0.is_finite() && p.1.is_finite())
+            .map(|p| {
+                (
+                    p.0.clamp(0.0, 1.0) * (fw - 1) as f32,
+                    p.1.clamp(0.0, 1.0) * (fh - 1) as f32,
+                )
+            })
+            .collect();
+        pts.sort_by(|a, b| a.0.total_cmp(&b.0));
+        pts.dedup_by(|b, a| (b.0 - a.0).abs() < 1.0);
+        if pts.len() < 2 {
+            continue;
+        }
+        let mean = pts.iter().map(|p| p.1).sum::<f32>() / pts.len() as f32;
+        let row: Vec<f32> = (0..fw)
+            .map(|x| {
+                let x = x as f32;
+                let k = pts.partition_point(|p| p.0 <= x);
+                let y = if k == 0 {
+                    pts[0].1
+                } else if k >= pts.len() {
+                    pts[pts.len() - 1].1
+                } else {
+                    let (p, q) = (pts[k - 1], pts[k]);
+                    p.1 + (q.1 - p.1) * (x - p.0) / (q.0 - p.0)
+                };
+                y - mean
+            })
+            .collect();
+        let range = row.iter().cloned().fold(f32::MIN, f32::max)
+            - row.iter().cloned().fold(f32::MAX, f32::min);
+        bent |= range >= 1.0;
+        table.push((mean, row));
+    }
+    if !bent {
+        return None;
+    }
+    table.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // guides on (almost) the same row would make the interpolation singular
+    table.dedup_by(|b, a| (b.0 - a.0).abs() < 4.0);
+    Some(resample(img, &table, fill))
+}
+
+/// `x,y x,y …;x,y x,y …` (fractions 0–1) → guides. `None` on any malformed, non-finite or
+/// out-of-range point, a guide with fewer than two points, or more than 64 guides.
+pub fn parse_guides(s: &str) -> Option<Vec<Vec<(f32, f32)>>> {
+    let mut out = Vec::new();
+    for g in s.split(';').map(str::trim).filter(|g| !g.is_empty()) {
+        let mut pts = Vec::new();
+        for p in g.split_whitespace() {
+            let (x, y) = p.split_once(',')?;
+            let (x, y): (f32, f32) = (x.trim().parse().ok()?, y.trim().parse().ok()?);
+            if !(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y) {
+                return None;
+            }
+            pts.push((x, y));
+        }
+        if pts.len() < 2 || pts.len() > 256 {
+            return None;
+        }
+        out.push(pts);
+    }
+    (out.len() <= 64).then_some(out)
+}
+
+pub fn guides_to_string(g: &[Vec<(f32, f32)>]) -> String {
+    g.iter()
+        .map(|l| {
+            l.iter()
+                .map(|p| format!("{},{}", p.0, p.1))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join(";")
 }
 
 #[cfg(test)]
@@ -282,6 +384,42 @@ mod tests {
         assert_eq!(flat.dimensions(), img.dimensions());
         let after = sharp(&flat);
         assert!(after > before * 1.4, "sharpness {before} → {after}");
+    }
+
+    #[test]
+    fn user_guides_straighten_a_bend_and_bad_input_is_ignored() {
+        let bend = |u: f32| 26.0 * (u - 0.5) * (u - 0.5) * 4.0 - 8.0 * (u - 0.5);
+        let img = page(900, 1200, bend);
+        // two guides following the first and the third line (y0 = 120, 212)
+        let guide = |y0: f32| -> Vec<(f32, f32)> {
+            (0..=10)
+                .map(|i| {
+                    let u = i as f32 / 10.0;
+                    (u, (y0 + 6.0 + bend(u)) / 1200.0)
+                })
+                .collect()
+        };
+        let before = sharp(&img);
+        let flat = dewarp_guides(&img, &[guide(120.0), guide(212.0)], Rgb([238; 3])).unwrap();
+        assert_eq!(flat.dimensions(), img.dimensions());
+        assert!(sharp(&flat) > before * 1.2, "{before} → {}", sharp(&flat));
+        let straight = vec![(0.0, 0.5), (1.0, 0.5)];
+        assert!(dewarp_guides(&img, &[straight], Rgb([238; 3])).is_none());
+        assert!(dewarp_guides(&img, &[], Rgb([238; 3])).is_none());
+        let junk = vec![(f32::NAN, 0.5), (2.0, f32::INFINITY), (-3.0, 9.0)];
+        let _ = dewarp_guides(&img, &[junk], Rgb([238; 3]));
+    }
+
+    #[test]
+    fn guide_text_round_trips_and_rejects_junk() {
+        let g = parse_guides("0,0.5 0.5,0.52 1,0.5; 0,0.8 1,0.8").unwrap();
+        assert_eq!(g.len(), 2);
+        assert_eq!(parse_guides(&guides_to_string(&g)).unwrap(), g);
+        assert!(parse_guides("0,0.5").is_none());
+        assert!(parse_guides("0,0.5 1.5,0.5").is_none());
+        assert!(parse_guides("0,a 1,0.5").is_none());
+        assert!(parse_guides("0,nan 1,0.5").is_none());
+        assert_eq!(parse_guides("").unwrap().len(), 0);
     }
 
     #[test]

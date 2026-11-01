@@ -1400,6 +1400,18 @@ impl App {
                         }
                         ch |= ui.checkbox(&mut self.s.dewarp, tr("set.dewarp")).changed();
                         ui.horizontal(|ui| {
+                            ui.label(tr("set.dewarp_guides"));
+                            let bad = legatorocr_core::dewarp::parse_guides(&self.s.dewarp_guides)
+                                .is_none();
+                            let mut te = egui::TextEdit::singleline(&mut self.s.dewarp_guides)
+                                .desired_width(150.0)
+                                .hint_text("0,0.5 0.5,0.52 1,0.5;…");
+                            if bad {
+                                te = te.text_color(egui::Color32::LIGHT_RED);
+                            }
+                            ch |= ui.add(te).changed();
+                        });
+                        ui.horizontal(|ui| {
                             ui.label(tr("set.output_dpi"));
                             ch |= ui
                                 .add(

@@ -82,6 +82,8 @@ pub struct UiSettings {
     /// `x,y,w,h;…` in mm (see `legatorocr_core::cleanup::parse_zones`).
     pub erase: String,
     pub picture_zones: String,
+    /// `x,y x,y;…` guide lines for dewarping (see `legatorocr_core::dewarp::parse_guides`).
+    pub dewarp_guides: String,
     pub dropout: legatorocr_core::Dropout,
     pub despeckle_strength: f32,
     pub show_through: bool,
@@ -139,6 +141,7 @@ impl Default for UiSettings {
             fingers: false,
             remove_lines: false,
             erase: String::new(),
+            dewarp_guides: String::new(),
             picture_zones: String::new(),
             dropout: legatorocr_core::Dropout::Off,
             despeckle_strength: 1.0,
@@ -229,6 +232,8 @@ impl UiSettings {
             punch_holes: self.punch_holes,
             fingers: self.fingers,
             remove_lines: self.remove_lines,
+            dewarp_guides: legatorocr_core::dewarp::parse_guides(&self.dewarp_guides)
+                .unwrap_or_default(),
             erase_zones: legatorocr_core::cleanup::parse_zones(&self.erase).unwrap_or_default(),
             picture_zones: legatorocr_core::cleanup::parse_zones(&self.picture_zones)
                 .unwrap_or_default(),
@@ -323,6 +328,7 @@ impl UiSettings {
         self.fingers = c.fingers;
         self.remove_lines = c.remove_lines;
         self.erase = legatorocr_core::cleanup::zones_to_string(&c.erase_zones);
+        self.dewarp_guides = legatorocr_core::dewarp::guides_to_string(&c.dewarp_guides);
         self.picture_zones = legatorocr_core::cleanup::zones_to_string(&c.picture_zones);
         self.dropout = c.dropout;
         self.despeckle_strength = c.despeckle_strength;

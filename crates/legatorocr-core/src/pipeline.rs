@@ -59,6 +59,10 @@ pub struct Settings {
     pub max_skew_deg: f32,
     /// Straighten curved text lines (page curl near the spine).
     pub dewarp: bool,
+    /// User-marked guide lines for dewarping: each polyline of `(x, y)` points (fractions of the
+    /// deskewed page's width and height) becomes a straight horizontal line. When present they
+    /// replace the automatic estimate, even if `dewarp` is off.
+    pub dewarp_guides: Vec<Vec<(f32, f32)>>,
     /// Margins around the detected content, millimetres: left, top, right, bottom.
     pub margins_mm: [f32; 4],
     /// Per-page correction of the detected content box, mm: how far each side
@@ -130,6 +134,7 @@ impl Default for Settings {
             manual_skew_deg: None,
             max_skew_deg: 7.0,
             dewarp: false,
+            dewarp_guides: Vec::new(),
             margins_mm: [5.0; 4],
             content_adjust_mm: [0.0; 4],
             page_size_mm: None,
@@ -262,6 +267,10 @@ impl Settings {
         let mut s = self.clone();
         s.dpi = s.dpi.clamp(36, 2400);
         s.rotate_quarters %= 4;
+        s.dewarp_guides.truncate(64);
+        for g in &mut s.dewarp_guides {
+            g.truncate(256);
+        }
         s.manual_skew_deg = s
             .manual_skew_deg
             .filter(|v| v.is_finite())
@@ -584,7 +593,11 @@ fn prepare(mut img: RgbImage, s: &Settings, mut pictures: Vec<[f32; 4]>) -> Prep
     }
 
     // --- dewarp -----------------------------------------------------------
-    if s.dewarp {
+    if !s.dewarp_guides.is_empty() {
+        if let Some(flat) = dewarp::dewarp_guides(&img, &s.dewarp_guides, bg) {
+            img = flat;
+        }
+    } else if s.dewarp {
         if let Some(flat) = dewarp::dewarp(&img, s.dpi, bg) {
             img = flat;
         }
@@ -1472,6 +1485,13 @@ mod tests {
                 sauvola_k: rnd(100) as f32 / 100.0,
                 despeckle: rnd(2) == 0,
                 dewarp: rnd(2) == 0,
+                dewarp_guides: if rnd(3) == 0 {
+                    vec![(0..3)
+                        .map(|k| (k as f32 / 2.0, rnd(100) as f32 / 50.0 - 0.5))
+                        .collect()]
+                } else {
+                    Vec::new()
+                },
                 content_adjust_mm: [rnd(40) as f32 - 20.0; 4],
                 align: (
                     [HAlign::Left, HAlign::Center, HAlign::Right][rnd(3) as usize],

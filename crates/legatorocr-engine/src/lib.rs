@@ -191,6 +191,8 @@ pub struct ExportResult {
     pub json: Option<String>,
     /// Consecutive duplicate pages dropped.
     pub skipped_duplicates: usize,
+    /// Per page, tables and paragraphs found from the word positions (for the Word export).
+    pub docx_blocks: Option<Vec<Vec<docx::Block>>>,
     /// With `split_on_blank`: one PDF per document (then `pdf` is `None`).
     pub docs: Vec<Vec<u8>>,
     /// Bar-code text that opened each entry of `docs` (None before the first separator).
@@ -647,6 +649,7 @@ pub fn run_export(
     let mut par_texts: Vec<String> = Vec::new();
     let mut hocr_pages: Vec<String> = Vec::new();
     let mut json_pages: Vec<String> = Vec::new();
+    let mut block_pages: Vec<Vec<docx::Block>> = Vec::new();
     // Pass 1 (optional): a common page size for the whole book.
     let uniform = if job.uniform_size {
         measure_uniform_size(job.sheets, job.osd.as_ref(), cancel)?
@@ -773,6 +776,7 @@ pub fn run_export(
                 res.words += words.len();
                 if ocr_opts.is_some() {
                     texts.push(legatorocr_ocr::words_to_text(&words));
+                    block_pages.push(docx::blocks_from_words(&words));
                     par_texts.push(legatorocr_ocr::words_to_paragraphs(&words));
                     json_pages.push(legatorocr_ocr::json_page(
                         &words,
@@ -820,6 +824,7 @@ pub fn run_export(
         res.paragraph_text = Some(par_texts.join("\n\x0c"));
         res.hocr = Some(legatorocr_ocr::hocr_document(&hocr_pages));
         res.json = Some(legatorocr_ocr::json_document(&json_pages));
+        res.docx_blocks = Some(block_pages);
     }
     if job.split_on_blank || job.split_on_barcode {
         if let Some(w) = writer.filter(|w| w.page_count() > 0) {

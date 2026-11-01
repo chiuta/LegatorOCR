@@ -375,6 +375,12 @@ struct Cli {
     #[arg(long, value_name = "X,Y,W,H")]
     picture_zone: Vec<String>,
 
+    /// Straighten a bent text line you point out: "X,Y X,Y …" with X and Y as fractions 0–1 of
+    /// the deskewed page's width and height (at least two points; repeat for several lines).
+    /// Replaces the automatic --dewarp estimate.
+    #[arg(long, value_name = "X,Y X,Y …")]
+    dewarp_guide: Vec<String>,
+
     /// Drop one printed colour: off, red, green, blue.
     #[arg(long, default_value = "off")]
     dropout: String,
@@ -831,6 +837,12 @@ fn real_main() -> Result<()> {
         remove_lines: cli.remove_lines,
         sheet_erase_zones: Vec::new(),
         sheet_picture_zones: Vec::new(),
+        dewarp_guides: legatorocr_core::dewarp::parse_guides(&cli.dewarp_guide.join(";"))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--dewarp-guide needs at least two X,Y points (fractions 0-1) separated by spaces"
+                )
+            })?,
         erase_zones: legatorocr_core::cleanup::parse_zones(&cli.erase.join(";")).ok_or_else(
             || anyhow::anyhow!("--erase needs X,Y,WIDTH,HEIGHT in mm (width and height > 0)"),
         )?,
@@ -1349,7 +1361,11 @@ fn real_main() -> Result<()> {
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("LegatorOCR");
-        write_atomic(p, &legatorocr_engine::docx::from_pages(&pages, title))?;
+        let bytes = match &res.docx_blocks {
+            Some(b) if !b.is_empty() => legatorocr_engine::docx::from_blocks(b, title),
+            _ => legatorocr_engine::docx::from_pages(&pages, title),
+        };
+        write_atomic(p, &bytes)?;
         eprintln!("wrote {}", p.display());
         written.push(p.clone());
     }
