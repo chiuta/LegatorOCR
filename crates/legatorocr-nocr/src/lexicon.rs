@@ -106,13 +106,20 @@ pub fn repair(
     let (a, b) = Lexicon::core(text)?;
     let core = &text[a..b];
     let n = core.chars().count();
-    if n < 3 || core.chars().any(|c| c.is_ascii_digit()) || known(lexicons, text) {
+    // Only plain words are judged. The lists hold no apostrophes or hyphens, so "l'ordre",
+    // "don't" or "e-mail" are unknown to them although they are right; a word cut at the end of
+    // a line ("informa-") is a fragment, not a misread word.
+    if n < 3
+        || core.chars().any(|c| !c.is_alphabetic())
+        || text[b..].starts_with('-')
+        || known(lexicons, text)
+    {
         return None;
     }
     // names, acronyms and camel-case are out of vocabulary by nature
     let upper = core.chars().filter(|c| c.is_uppercase()).count();
     let first_upper = core.chars().next().is_some_and(|c| c.is_uppercase());
-    if upper > 1 || (first_upper && !first_in_line) {
+    if upper > 1 || (first_upper && !first_in_line) || (upper == 1 && !first_upper) {
         return None;
     }
     let chars: Vec<char> = text.chars().collect();
@@ -126,6 +133,9 @@ pub fn repair(
             continue;
         }
         let Some((alt, ap)) = g.alt else { continue };
+        if !chars[i].is_alphabetic() {
+            continue;
+        }
         // only where the network was itself unsure, and the alternative is a real contender
         if g.p > 0.9 || ap < 0.08 || !alt.is_alphabetic() {
             continue;

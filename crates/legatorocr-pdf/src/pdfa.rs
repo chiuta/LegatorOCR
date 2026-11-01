@@ -313,7 +313,15 @@ pub fn glyphless_ttf(n_glyphs: usize) -> Vec<u8> {
 }
 
 fn esc(s: &str) -> String {
-    s.replace('&', "&amp;")
+    // XML 1.0 forbids most control characters and U+FFFE/FFFF: drop them so the packet stays well-formed
+    let clean: String = s
+        .chars()
+        .filter(|&c| {
+            matches!(c, '\t' | '\n' | '\r') || (c >= ' ' && c != '\u{FFFE}' && c != '\u{FFFF}')
+        })
+        .collect();
+    clean
+        .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
 }

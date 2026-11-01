@@ -94,7 +94,9 @@ struct Cli {
     #[arg(long)]
     multitiff: Option<PathBuf>,
 
-    /// Write all processed pages into one PDF.
+    /// Write all processed pages into one PDF. Output paths (also --txt, --hocr, --json,
+    /// --docx, --package) may use {date}, {year}, {month}, {day} and {name} (the first input's
+    /// name); folders are created: --pdf "archive/{year}/{month}/{date}_{name}.pdf".
     #[arg(long)]
     pdf: Option<PathBuf>,
 
@@ -131,7 +133,7 @@ struct Cli {
     /// SEARCH instead of processing: find this phrase in the given files and folders (PDF
     /// text layers, .txt, .hocr/.html, .docx, and all of these inside .zip). Ignores case
     /// and diacritics (`mobila` finds `Mobilă`, also across a line break). Exit status 1
-    /// when nothing is found.
+    /// when nothing is found (2 when, in addition, some files could not be read).
     #[arg(long, value_name = "TEXT")]
     search: Option<String>,
 
@@ -145,15 +147,15 @@ struct Cli {
     search_help: bool,
 
     /// With --search: TEXT is a regular expression, matched line by line.
-    #[arg(long, requires = "search")]
+    #[arg(long)]
     search_regex: bool,
 
     /// With --search: match case and diacritics exactly.
-    #[arg(long, requires = "search")]
+    #[arg(long)]
     search_exact: bool,
 
     /// With --search: stop after this many hits.
-    #[arg(long, requires = "search", value_name = "N", default_value_t = 0)]
+    #[arg(long, value_name = "N", default_value_t = 0)]
     search_max: usize,
 
     /// Drop a page that is almost identical to the previous one (double feed).
@@ -326,6 +328,13 @@ struct Cli {
     #[arg(long, value_name = "FOLDER|FILE.zip|FILE.iso")]
     package: Option<PathBuf>,
 
+    /// Encrypt a `.zip` --package with AES-256 (WinZip format, opens in 7-Zip and others). The
+    /// password is read from the first line of this file, or from the environment variable
+    /// LEGATOROCR_PACKAGE_PASSWORD when the file is `-`; never from the command line, where
+    /// other users could see it. File names stay visible; only the contents are encrypted.
+    #[arg(long, value_name = "FILE", requires = "package")]
+    package_password_file: Option<PathBuf>,
+
     /// Rights statement written into the PDF (copyright holder, licence, contract reference):
     /// XMP `dc:rights` with --pdfa, otherwise the `/Rights` info key plus a visible note icon on
     /// page 2. Needs --pdf.
@@ -446,6 +455,45 @@ fn output_stems(paths: &[PathBuf]) -> Vec<String> {
         .collect()
 }
 
+/// Canonical, lower-cased paths of the real files behind the inputs. A page of a multi-page
+/// file (`book.tif#2`) stands for `book.tif`; the first form never exists on disk.
+fn canonical_inputs(inputs: &[PathBuf]) -> Vec<String> {
+    inputs
+        .iter()
+        .filter_map(|p| {
+            legatorocr_engine::files::split_frame(p)
+                .0
+                .canonicalize()
+                .ok()
+        })
+        .map(|p| p.to_string_lossy().to_lowercase())
+        .collect()
+}
+
+/// Canonical form of a file that may not exist yet: its folder, canonicalised, plus its name.
+fn canonical_target(p: &Path) -> Option<String> {
+    let parent = p
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .canonicalize()
+        .ok()?;
+    Some(parent.join(p.file_name()?).to_string_lossy().to_lowercase())
+}
+
+/// The first named output file (`--pdf`, `--txt` …) that is also an input.
+fn named_output_clobbers_input(
+    outputs: &[&Option<PathBuf>],
+    inputs: &[PathBuf],
+) -> Option<PathBuf> {
+    let canon = canonical_inputs(inputs);
+    outputs
+        .iter()
+        .filter_map(|o| o.as_ref())
+        .find(|o| canonical_target(o).is_some_and(|t| canon.contains(&t)))
+        .cloned()
+}
+
 /// The first page-image path (`stem`, `stem_L`, `stem_R` + extension, in `out_dir`) that is one of
 /// the input files themselves, compared by canonical path (and case-insensitively, for the
 /// case-folding file systems of Windows and macOS).
@@ -456,11 +504,7 @@ fn output_clobbers_input(
     inputs: &[PathBuf],
 ) -> Option<PathBuf> {
     let dir = out_dir.canonicalize().ok()?;
-    let canon: Vec<String> = inputs
-        .iter()
-        .filter_map(|p| p.canonicalize().ok())
-        .map(|p| p.to_string_lossy().to_lowercase())
-        .collect();
+    let canon = canonical_inputs(inputs);
     for stem in stems {
         for suffix in ["", "_L", "_R"] {
             let cand = dir.join(format!("{stem}{suffix}.{ext}"));
@@ -505,13 +549,68 @@ fn main() -> Result<()> {
         }
         default_hook(info);
     }));
-    let r = real_main();
-    legatorocr_engine::archive::cleanup();
-    r
+    // The folder with extracted archives is removed on every way out that unwinds, a panic
+    // included (`process::exit` paths call `cleanup` themselves).
+    struct Scratch;
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            legatorocr_engine::archive::cleanup();
+        }
+    }
+    let _scratch = Scratch;
+    real_main()
+}
+
+/// Expand `{date}`, `{year}`, `{month}`, `{day}`, `{name}` in an output path and create the
+/// folders of a templated path.
+fn expand_path(p: &mut Option<PathBuf>, name: &str) -> Result<()> {
+    let Some(path) = p.as_ref() else {
+        return Ok(());
+    };
+    let text = path.to_string_lossy().into_owned();
+    if !text.contains(['{', '}']) {
+        return Ok(());
+    }
+    let done = legatorocr_engine::naming::expand(&text, name, legatorocr_engine::now_unix())?;
+    let path = PathBuf::from(done);
+    if let Some(parent) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("{}: cannot create the folder", parent.display()))?;
+    }
+    *p = Some(path);
+    Ok(())
 }
 
 fn real_main() -> Result<()> {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    {
+        let first = cli.inputs.first().cloned();
+        let name = first
+            .as_deref()
+            .and_then(|f| f.file_stem().or_else(|| f.file_name()))
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "scan".into());
+        for p in [
+            &mut cli.pdf,
+            &mut cli.txt,
+            &mut cli.hocr,
+            &mut cli.json,
+            &mut cli.docx,
+            &mut cli.package,
+        ] {
+            expand_path(p, &name)?;
+        }
+        if let Some(stem) = cli
+            .pdf
+            .as_deref()
+            .and_then(|p| p.file_stem())
+            .map(|s| s.to_string_lossy().into_owned())
+        {
+            if legatorocr_engine::naming::is_generic(&stem) {
+                eprintln!("note: {stem:?} says nothing about the content; a name such as \"{{date}}_{{name}}.pdf\" or \"{{year}}/{{month}}/contract_ACME.pdf\" keeps an archive in order");
+            }
+        }
+    }
     if cli.list_profiles {
         for (n, d) in legatorocr_engine::profiles::list() {
             println!("{n:<20} {d}");
@@ -578,6 +677,14 @@ fn real_main() -> Result<()> {
             }
         }
         return Ok(());
+    }
+    if (cli.search_regex || cli.search_exact || cli.search_max > 0)
+        && cli.search.is_none()
+        && cli.search_preset.is_none()
+    {
+        bail!(
+            "--search-regex, --search-exact and --search-max go with --search or --search-preset"
+        );
     }
     if cli.search_help {
         for (name, what, pat) in legatorocr_engine::search::PRESETS {
@@ -962,8 +1069,28 @@ fn real_main() -> Result<()> {
             );
         }
     }
-    if cli.multitiff.is_some() && !matches!(cli.mode, Mode::Bw) {
-        bail!("--multitiff needs black & white pages (use --mode bw)");
+    if let Some(o) = named_output_clobbers_input(
+        &[
+            &cli.pdf,
+            &cli.txt,
+            &cli.hocr,
+            &cli.json,
+            &cli.docx,
+            &cli.multitiff,
+            &cli.package,
+            &cli.report,
+            &cli.save_project,
+        ],
+        &inputs,
+    ) {
+        bail!(
+            "{} is also an input; choose another output name, it would replace the original scan",
+            o.display()
+        );
+    }
+    if cli.multitiff.is_some() && !matches!(settings.mode, legatorocr_core::OutputMode::BlackWhite)
+    {
+        bail!("--multitiff needs black & white pages (use --mode bw, or a profile / project that is black & white)");
     }
     let first_err: Mutex<Option<String>> = Mutex::new(None);
     if cli.multitiff.is_some()
@@ -976,7 +1103,28 @@ fn real_main() -> Result<()> {
         Mutex::new(Vec::new());
     let tiff_pages: Mutex<Vec<(Key, Option<legatorocr_engine::g4::G4Strip>)>> =
         Mutex::new(Vec::new());
+    // A profile or project carries the PDF quality and two export switches; an explicit
+    // command-line flag still wins.
+    let given = |flag: &str| {
+        std::env::args()
+            .skip(1)
+            .any(|a| a == flag || a.starts_with(&format!("{flag}=")))
+    };
+    let carried = |k: &str| {
+        project
+            .as_ref()
+            .and_then(|p| p.get(k))
+            .or_else(|| profile.as_ref().and_then(|p| p.get(k)))
+            .map(str::to_string)
+    };
     let mut pdf_quality = cli.pdf_quality;
+    if !given("--pdf-quality") {
+        if let Some(q) = carried("pdf_quality").and_then(|v| v.parse::<u8>().ok()) {
+            pdf_quality = q.min(100);
+        }
+    }
+    let skip_blank = cli.skip_blank || carried("skip_blank").as_deref() == Some("true");
+    let uniform_size = cli.uniform_size || carried("uniform_size").as_deref() == Some("true");
     if let Some(mb) = cli.target_size {
         if cli.pdf.is_none() || !(mb.is_finite() && mb > 0.0) {
             bail!("--target-size needs --pdf and a positive number of megabytes");
@@ -1015,10 +1163,10 @@ fn real_main() -> Result<()> {
             pdfa: cli.pdfa,
         }),
         text_ocr: cli.ocr.then(|| ocr_opts.clone()),
-        skip_blank: cli.skip_blank,
+        skip_blank,
         keep_going: cli.keep_going,
         osd: cli.auto_rotate.then(|| ocr_opts.clone()),
-        uniform_size: cli.uniform_size,
+        uniform_size,
         skip_duplicates: cli.skip_duplicates,
         split_on_blank: cli.split_on_blank,
         split_on_barcode: cli.split_on_barcode,
@@ -1187,11 +1335,27 @@ fn real_main() -> Result<()> {
         written.push(p.clone());
     }
     if let Some(dest) = &cli.package {
-        let p = legatorocr_engine::package::build(
+        let password: Option<String> = match &cli.package_password_file {
+            None => None,
+            Some(f) if f.as_os_str() == "-" => Some(
+                std::env::var("LEGATOROCR_PACKAGE_PASSWORD")
+                    .context("--package-password-file -: LEGATOROCR_PACKAGE_PASSWORD is not set")?,
+            ),
+            Some(f) => Some(
+                std::fs::read_to_string(f)
+                    .with_context(|| format!("{}: cannot read the password file", f.display()))?
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .to_string(),
+            ),
+        };
+        let p = legatorocr_engine::package::build_with(
             dest,
             &written,
             legatorocr_engine::now_unix(),
             cli.rights_notice.as_deref().unwrap_or(""),
+            password.as_deref(),
         )?;
         eprintln!(
             "package: {} ({} files, {} bytes of content)",
@@ -1205,10 +1369,27 @@ fn real_main() -> Result<()> {
             .parent()
             .filter(|d| !d.as_os_str().is_empty())
             .unwrap_or_else(|| std::path::Path::new("."));
-        let sums = legatorocr_engine::checksums::render(base, &written)?;
+        let (inside, outside) = legatorocr_engine::checksums::below(base, &written);
+        for f in &outside {
+            eprintln!(
+                "note: {} is outside {}: not listed in SHA256SUMS.txt",
+                f.display(),
+                base.display()
+            );
+        }
+        let sums = legatorocr_engine::checksums::render(base, &inside)?;
         let sp = base.join("SHA256SUMS.txt");
-        write_atomic(&sp, sums.as_bytes())?;
-        eprintln!("wrote {} ({} file(s))", sp.display(), written.len());
+        // a folder that collects several documents keeps the hashes of the earlier ones
+        let merged = match std::fs::read_to_string(&sp) {
+            Ok(old) => legatorocr_engine::checksums::merge(&old, &sums),
+            Err(_) => sums,
+        };
+        write_atomic(&sp, merged.as_bytes())?;
+        eprintln!(
+            "wrote {} ({} file(s) added or updated)",
+            sp.display(),
+            inside.len()
+        );
     }
     if let Some(e) = save_error {
         legatorocr_engine::archive::cleanup();
@@ -1268,7 +1449,8 @@ fn run_search(cli: &Cli, query: &str) -> Result<()> {
     }
     if s.hits == 0 {
         legatorocr_engine::archive::cleanup();
-        std::process::exit(1);
+        // 1: looked everywhere, nothing there; 2: nothing found, but some files were not read
+        std::process::exit(if s.unreadable > 0 { 2 } else { 1 });
     }
     Ok(())
 }

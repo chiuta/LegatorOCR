@@ -18,11 +18,13 @@ pub mod eval;
 pub mod extpdf;
 pub mod files;
 pub mod iso;
+pub mod naming;
 pub mod package;
 pub mod profiles;
 pub mod project;
 pub mod report;
 pub mod search;
+pub mod zipcrypt;
 pub mod zipmini;
 pub use legatorocr_ocr as ocr;
 

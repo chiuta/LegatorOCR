@@ -146,26 +146,26 @@ fn values_to_text(v: &[usize]) -> Option<String> {
     let mut set = v[0];
     let mut out = String::new();
     for &x in data {
-        match x {
-            99 => set = START_C,
-            100 => set = START_B,
-            101 => set = START_A,
-            102 | 98 | 103..=105 => return None, // FNC1/shift/start inside: not supported
-            _ => match set {
-                START_C => {
-                    if x > 99 {
-                        return None;
-                    }
-                    out.push_str(&format!("{x:02}"));
-                }
-                START_B => out.push((32 + x as u8) as char),
-                _ => {
-                    if x < 64 {
-                        out.push((32 + x as u8) as char);
-                    } else {
-                        return None;
-                    }
-                }
+        match set {
+            // set C: 00–99 are digit pairs (so 99 is "99", not a code change); 100 / 101 change set
+            START_C => match x {
+                0..=99 => out.push_str(&format!("{x:02}")),
+                100 => set = START_B,
+                101 => set = START_A,
+                _ => return None,
+            },
+            START_B => match x {
+                0..=95 => out.push((32 + x as u8) as char),
+                99 => set = START_C,
+                101 => set = START_A,
+                // FNC3 / FNC2 / shift / FNC4 / FNC1 / starts: not supported
+                _ => return None,
+            },
+            _ => match x {
+                0..=63 => out.push((32 + x as u8) as char),
+                99 => set = START_C,
+                100 => set = START_B,
+                _ => return None, // control characters, FNC and shifts: not supported
             },
         }
     }
@@ -611,6 +611,14 @@ pub fn decode(img: &GrayImage) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn numeric_pairs_containing_99_survive_a_round_trip() {
+        for t in ["1299", "99", "991299", "0099", "SEP-99-12", "12345699"] {
+            let img = render(t, 3, 80).unwrap_or_else(|| panic!("render {t}"));
+            assert_eq!(decode(&img).as_deref(), Some(t), "{t}");
+        }
+    }
 
     #[test]
     fn known_symbol_widths() {

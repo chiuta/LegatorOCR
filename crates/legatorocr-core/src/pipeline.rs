@@ -553,7 +553,9 @@ fn prepare(mut img: RgbImage, s: &Settings, mut pictures: Vec<[f32; 4]>) -> Prep
         None => None,
     };
     if let Some(a) = angle {
-        if a.abs() > 0.05f32.to_radians() {
+        // (an image too large to turn is left as it is, and nothing records a skew correction)
+        if a.abs() > 0.05f32.to_radians() && transform::rotation_fits(img.width(), img.height(), a)
+        {
             let (w, h) = img.dimensions();
             img = transform::rotate_cw(&img, a, bg);
             skew_deg = a.to_degrees();

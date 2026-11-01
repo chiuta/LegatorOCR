@@ -127,7 +127,11 @@ impl Model {
             let data = raw
                 .chunks_exact(4)
                 .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                .collect();
+                .collect::<Vec<f32>>();
+            // NaN / infinite weights would turn every output into NaN and hide as "no text"
+            if data.iter().any(|v| !v.is_finite()) {
+                return Err(ModelError::Corrupt("non-finite weight"));
+            }
             t.insert(name, Tensor { dims, data });
         }
         let get = |n: &str, nd: usize| -> Result<&Tensor, ModelError> {
@@ -144,6 +148,10 @@ impl Model {
             let (cout, cin) = (w.dims[0], w.dims[1]);
             if w.dims[2] != 3 || w.dims[3] != 3 || b.data.len() != cout {
                 return Err(ModelError::Corrupt("conv shape"));
+            }
+            // activations are sized from these: a hostile file must not ask for gigabytes
+            if cout == 0 || cin == 0 || cout > 512 || cin > 512 {
+                return Err(ModelError::Corrupt("conv channels"));
             }
             let mut wt = vec![0.0; w.data.len()];
             for o in 0..cout {

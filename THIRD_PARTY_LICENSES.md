@@ -8,7 +8,7 @@ Optical character recognition uses either the built-in native engine (`legatoroc
 was trained on text rendered from DejaVu, Liberation, GNU FreeFont, Carlito/Caladea and Inter fonts, none of which
 is embedded) or the separately installed **Tesseract** program (Apache-2.0); nothing from Tesseract is linked or
 bundled. The native engine's word lists (`crates/legatorocr-nocr/lexicons`) derive from the `wordfreq` data and are
-licensed **CC BY-SA 4.0** — see the README there.
+licensed **CC BY-SA 4.0** — see `LEXICONS-NOTICE.md` (in the release archives; `crates/legatorocr-nocr/lexicons/README.md` in the source), which also says that the model was trained on text sampled from those lists and that the licence consequence for the weights is not settled.
 
 | Crate | Version | Licence |
 |---|---|---|

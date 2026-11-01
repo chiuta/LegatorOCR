@@ -56,10 +56,24 @@ fn manifest_text(names: &[(String, u64, String)], when: u64, note: &str) -> Stri
 /// (`.iso` makes a Joliet ISO 9660 image, `.zip` a zip, anything else a folder). `note` goes into the manifest
 /// (for example the rights statement).
 pub fn build(dest: &Path, files: &[PathBuf], when: u64, note: &str) -> Result<Packaged> {
+    build_with(dest, files, when, note, None)
+}
+
+/// [`build`] with an optional password: a `.zip` is then encrypted (WinZip AES-256).
+pub fn build_with(
+    dest: &Path,
+    files: &[PathBuf],
+    when: u64,
+    note: &str,
+    password: Option<&str>,
+) -> Result<Packaged> {
     if dest.exists() {
         bail!("{}: already exists, not overwriting", dest.display());
     }
-    let mut seen = std::collections::HashSet::new();
+    // the two generated files own their names; file systems on Windows and macOS compare names
+    // without regard to case, so `A.pdf` and `a.PDF` are the same file there
+    let mut seen: std::collections::HashSet<String> =
+        ["sha256sums.txt".to_string(), "manifest.txt".to_string()].into();
     let mut entries: Vec<(String, PathBuf)> = Vec::new();
     for f in files {
         let name = f
@@ -67,8 +81,8 @@ pub fn build(dest: &Path, files: &[PathBuf], when: u64, note: &str) -> Result<Pa
             .and_then(|n| n.to_str())
             .with_context(|| format!("{}: unusable file name", f.display()))?
             .to_string();
-        if !seen.insert(name.clone()) {
-            bail!("two files are called {name}: cannot package them flat");
+        if !seen.insert(name.to_lowercase()) {
+            bail!("{name}: this name is already taken (two files called alike, or one of SHA256SUMS.txt / MANIFEST.txt): cannot package them flat");
         }
         entries.push((name, f.clone()));
     }
@@ -85,6 +99,12 @@ pub fn build(dest: &Path, files: &[PathBuf], when: u64, note: &str) -> Result<Pa
         total += size;
     }
     let manifest = manifest_text(&listing, when, note);
+    let is_zip_ext = dest
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("zip"));
+    if password.is_some() && !is_zip_ext {
+        bail!("a password only applies to a .zip package");
+    }
     let is_iso = dest
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("iso"));
@@ -127,15 +147,33 @@ pub fn build(dest: &Path, files: &[PathBuf], when: u64, note: &str) -> Result<Pa
             .iter()
             .map(|(n, d)| (n.as_str(), d.as_slice()))
             .collect();
-        let z = crate::zipmini::write(&refs);
-        std::fs::write(dest, &z).with_context(|| format!("{}: cannot write", dest.display()))?;
+        let z = match password {
+            Some(pw) => crate::zipcrypt::write_encrypted(&refs, pw)?,
+            None => crate::zipmini::write(&refs),
+        };
+        // written under a temporary name and renamed: a failure never leaves a truncated zip
+        let part = dest.with_extension("zip.part");
+        std::fs::write(&part, &z).with_context(|| format!("{}: cannot write", part.display()))?;
+        std::fs::rename(&part, dest).map_err(|e| {
+            let _ = std::fs::remove_file(&part);
+            anyhow::anyhow!("{}: cannot finish: {e}", dest.display())
+        })?;
     } else {
         std::fs::create_dir_all(dest)?;
-        for (n, p) in &entries {
-            std::fs::copy(p, dest.join(n)).with_context(|| format!("copying {}", p.display()))?;
+        // a folder that could not be completed is removed again, not left half full
+        let filled = (|| -> Result<()> {
+            for (n, p) in &entries {
+                std::fs::copy(p, dest.join(n))
+                    .with_context(|| format!("copying {}", p.display()))?;
+            }
+            std::fs::write(dest.join("SHA256SUMS.txt"), &sums)?;
+            std::fs::write(dest.join("MANIFEST.txt"), &manifest)?;
+            Ok(())
+        })();
+        if let Err(e) = filled {
+            let _ = std::fs::remove_dir_all(dest);
+            return Err(e);
         }
-        std::fs::write(dest.join("SHA256SUMS.txt"), sums)?;
-        std::fs::write(dest.join("MANIFEST.txt"), manifest)?;
     }
     Ok(Packaged {
         dest: dest.to_path_buf(),
@@ -180,6 +218,14 @@ mod tests {
             ""
         )
         .is_err());
+        // reserved names and names that differ only in case collide too
+        std::fs::write(d.join("manifest.TXT"), b"x").unwrap();
+        assert!(build(&d.join("o3"), &[d.join("manifest.TXT")], 0, "").is_err());
+        std::fs::write(d.join("A.PDF"), b"x").unwrap();
+        assert!(build(&d.join("o4"), &[d.join("a.pdf"), d.join("A.PDF")], 0, "").is_err());
+        // a vanished source leaves no half-made folder behind
+        assert!(build(&d.join("o5"), &[d.join("gone.pdf")], 0, "").is_err());
+        assert!(!d.join("o5").exists());
         let _ = std::fs::remove_dir_all(&d);
     }
 }

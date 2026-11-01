@@ -33,7 +33,7 @@ More: `--threshold sauvola|wolf|niblack|nick|bradley|otsu`, `--normalize` (even 
 (`scan.tif#3` addresses one page).
 
 `--skip-blank`, `--skew DEG` (fixed correction), `--rotate 90`, `--pdf-quality N` (0 = lossless),
-`--format png|tiff|none`, `--tessdata DIR`, `--psm N`, `--min-conf N`, `--keep-going` (skip unreadable
+`--format png|jpeg|tiff|none`, `--tessdata DIR`, `--psm N`, `--min-conf N`, `--keep-going` (skip unreadable
 inputs, exit status 2) — see `legatorocr --help`. A folder can be given instead of files. Resolution is
 read from the PNG/JPEG header when it says 150–1200 dpi (otherwise 300; override with `--dpi`); camera
 EXIF rotation is applied and transparency is flattened onto white. Out-of-range numbers are rejected
@@ -105,12 +105,12 @@ Without Tesseract the native engine is used (the OCR switch stays enabled).
 | PDF input | own tolerant reader: pages of scanned PDFs become `book.pdf#N` (Flate/LZW/ASCII85/RunLength, PNG/TIFF predictors, JPEG, CCITT G4, Gray/RGB/CMYK/Indexed, /Rotate, DPI from the page size); object streams and damaged cross-reference tables are fine; **layered / scanner-MRC pages** (several images placed by their transformation matrices, stencil masks in the fill colour, form XObjects) are composited at the sharpest image's resolution; CCITT **Group 3** (1-D, 2-D and byte-aligned) and **JBIG2 generic regions** (arithmetic templates 0–3 with adaptive pixels and typical prediction, MMR) are decoded; **encrypted files** (RC4 40/128, AES-128, AES-256 R5/R6, empty user password) are opened natively; JBIG2 **symbol dictionaries and text regions** (arithmetic coding) and **rotated/skewed placements** are handled; **JPEG 2000** (JP2 or raw codestream: tiles, all five progression orders, layers, precincts, 5/3 and 9/7 wavelets, RCT/ICT) and JBIG2 **generic refinement, refinement/aggregate symbols and halftone regions** are decoded natively; what is still outside the built-in reader (JBIG2 Huffman coding, JPEG 2000 bypass/termall code-block styles, POC/PPM/PPT) is rendered through an installed `pdftoppm`, `mutool` or Ghostscript when one exists, otherwise refused with a clear message |
 | Profiles | `--profile NAME` / `--list-profiles` / `--save-profile NAME` (14 built in: doc-birou, schite-desene, registre-manuscrise, book-bw, book-small-color, document-text, photo-archive, newspaper, form-dropout-red, negatives, flux-1-optim, flux-2-draft, flux-3-volum, phone-photos; user profiles in the config folder) and a GUI selector |
 | Page-size check | `--report-outliers` lists pages whose size differs clearly from the rest (median/MAD) |
-| OCR | Tesseract word boxes → invisible text layer (render mode 3, glyph-less Type0 font + ToUnicode, so ăâîșț and any Unicode copy/search correctly) |
+| OCR | word boxes from the built-in engine or Tesseract → invisible text layer (render mode 3, glyph-less Type0 font + ToUnicode, so ăâîșț and any Unicode copy/search correctly) |
 
 Export streams in bounded batches (process → OCR → write), so a several-hundred-page colour book
 does not have to fit in memory.
 
-Crates: `legatorocr-core` (pipeline) · `-pdf` (writer) · `-ocr` (Tesseract driver) ·
+Crates: `legatorocr-core` (pipeline) · `-pdf` (writer) · `-ocr` (engine choice, Tesseract driver, hOCR / JSON output) · `-nocr` (built-in OCR engine) ·
 `-engine` (shared export orchestration) · `-cli` · `-gui` (egui/eframe).
 
 Quality gates: see `FUZZING.md` (10 fuzz/property suites, run weekly in CI with qpdf/poppler cross-checks).
@@ -124,8 +124,8 @@ See `COMPARISON.md` for what other tools do that this one does not. In short:
   installed, otherwise with the built-in engine, which reads a reduced copy in all four turns and keeps the one whose
   words are found in the language word lists (needs about a dozen letters of printed text; otherwise the page is left
   alone). Manual fallback: *Rotate left/right 90°* / `--rotate`.
-- Erase zones: typed in millimetres (same on every page) or drawn with the mouse per sheet (drag on the Original view, right-click removes; stored in the project; GUI drag not visually tested); picture
-  zones and dewarp control points cannot be drawn at all. Pictures are detected automatically
+- Erase zones: typed in millimetres (same on every page) or drawn with the mouse per sheet (drag on the Original view, right-click removes; stored in the project); picture zones are drawn the same way (blue); dewarp control points cannot be drawn.
+  Pictures are also detected automatically
   (sensitivity adjustable) and the content box can be nudged per page (numeric fields or by dragging its green edges in the GUI; on a split spread the nudge applies to both pages).
 - Dewarp corrects vertical bending of text lines only (no perspective / horizontal stretch).
 - `--pdfa` writes the PDF/A-2b *structure* (embedded glyph-less TrueType text font, XMP packet matching the Info dictionary, embedded sRGB output-intent profile, CIE-based grey, trailer ID). The font, ICC profile and XMP were checked with fontTools, LittleCMS and an XML parser, and the file with qpdf and poppler, and the CI job `PDF/A validation` runs veraPDF (greenfield 1.30.x, PDF/A-2b profile) over generated sample files — black & white, mixed, hybrid, grey, with and without an OCR layer, one and two pages — and fails when any is rejected. That is a test of those samples, **not a certification** of every possible output. PDF input: no native JBIG2 Huffman coding (external-renderer fallback only), JPEG 2000 bypass/termall code-block styles unsupported, JBIG2 typical prediction for refinement regions (TPGRON) and shifted halftone grids verified only against our own encoder (poppler decodes them differently); only the empty user password is tried; bar codes: Code 128 (sets A/B/C), EAN-13, ITF, Code 39 are read, only Code 128 is printed. JBIG2 and Group 3 were verified against poppler / libtiff output; layered-page compositing only against our own writer's pages.

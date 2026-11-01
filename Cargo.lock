@@ -1213,6 +1213,7 @@ version = "0.2.0-pre.5"
 dependencies = [
  "anyhow",
  "flate2",
+ "getrandom 0.3.4",
  "image",
  "legatorocr-core",
  "legatorocr-ocr",

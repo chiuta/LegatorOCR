@@ -2,6 +2,11 @@
 resolver = "2"
 members = ["crates/legatorocr-nocr", "crates/legatorocr-core", "crates/legatorocr-pdf", "crates/legatorocr-ocr", "crates/legatorocr-engine", "crates/legatorocr-cli", "crates/legatorocr-gui"]
 
+# Shipped binaries keep integer-overflow checks: hostile files must stop with an error, not wrap
+# silently into wrong sizes.
+[profile.release]
+overflow-checks = true
+
 [workspace.package]
 version = "0.2.0-pre.5"
 edition = "2021"

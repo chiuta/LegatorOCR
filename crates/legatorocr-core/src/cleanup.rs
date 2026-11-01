@@ -68,7 +68,10 @@ pub fn invert_if_negative(img: &mut RgbImage) -> bool {
         return false;
     }
     let h = luma_hist(img);
-    if percentile(&h, 0.5) < 90 && percentile(&h, 0.97) > 150 {
+    // Light text on a dark page: dark median, a bright tail, and the bright part stays a small
+    // share (text). A light sheet that fills a third of a black scanner lid has a dark median
+    // too, but its bright share is over a third — that is a page on a dark bed, not a negative.
+    if percentile(&h, 0.5) < 90 && percentile(&h, 0.97) > 150 && percentile(&h, 0.67) < 120 {
         for v in img.as_mut() {
             *v = 255 - *v;
         }
@@ -995,5 +998,28 @@ mod tests {
             let mut b = BitImage::new(w, h);
             remove_lines(&mut b, 300);
         }
+    }
+
+    #[test]
+    fn a_pale_sheet_on_a_dark_scanner_lid_is_not_taken_for_a_negative() {
+        // 60 % black lid, 40 % light paper (with a little text)
+        let mut img = RgbImage::from_pixel(100, 100, image::Rgb([15, 15, 15]));
+        for y in 0..100 {
+            for x in 60..100 {
+                let v = if (x + y) % 17 == 0 { 40 } else { 225 };
+                img.put_pixel(x, y, image::Rgb([v, v, v]));
+            }
+        }
+        assert!(!invert_if_negative(&mut img));
+        // light text on a dark page still is
+        let mut neg = RgbImage::from_pixel(100, 100, image::Rgb([20, 20, 20]));
+        for y in (10..90).step_by(8) {
+            for x in 10..90 {
+                if (x / 3) % 2 == 0 {
+                    neg.put_pixel(x, y, image::Rgb([230, 230, 230]));
+                }
+            }
+        }
+        assert!(invert_if_negative(&mut neg));
     }
 }

@@ -207,6 +207,34 @@ fn choose_auto(g: &GrayImage, window: u32, k: f32) -> Threshold {
     best.1
 }
 
+/// No tonal range worth separating: the 0.01 % darkest and lightest pixels lie within 40 grey
+/// levels (noise spreads that far; even one short word of text is farther than that).
+fn is_flat(g: &GrayImage) -> bool {
+    let mut hist = [0u64; 256];
+    for &p in g.as_raw() {
+        hist[p as usize] += 1;
+    }
+    let total: u64 = hist.iter().sum();
+    let cut = (total / 10_000).max(1);
+    let (mut acc, mut lo) = (0u64, 0usize);
+    for (v, &n) in hist.iter().enumerate() {
+        acc += n;
+        if acc > cut {
+            lo = v;
+            break;
+        }
+    }
+    let (mut acc, mut hi) = (0u64, 255usize);
+    for (v, &n) in hist.iter().enumerate().rev() {
+        acc += n;
+        if acc > cut {
+            hi = v;
+            break;
+        }
+    }
+    hi.saturating_sub(lo) < 40
+}
+
 /// Binarise with the chosen local method. `window` ≈ one third of an inch is a good size.
 /// Ink = 1. Rows are processed in parallel bands.
 pub fn threshold(g: &GrayImage, method: Threshold, window: u32, k: f32) -> BitImage {
@@ -214,6 +242,12 @@ pub fn threshold(g: &GrayImage, method: Threshold, window: u32, k: f32) -> BitIm
     let (w, h) = (g.width() as usize, g.height() as usize);
     let mut out = BitImage::new(w as u32, h as u32);
     if w == 0 || h == 0 {
+        return out;
+    }
+    // A page with no tonal range at all (blank paper with sensor noise, a uniform fill) has
+    // nothing to separate: every method would invent ink from the noise (Otsu splits it at its
+    // mean, Wolf's threshold equals the flat mean). Leave it all paper.
+    if is_flat(g) {
         return out;
     }
     if method == Threshold::Otsu {
@@ -394,5 +428,40 @@ mod tests {
         }
         assert_eq!(Threshold::from_name("SAUVOLA"), Some(Threshold::Sauvola));
         assert_eq!(Threshold::from_name("x"), None);
+    }
+
+    #[test]
+    fn blank_and_uniform_pages_stay_paper_for_every_method() {
+        use image::Luma;
+        // noisy blank paper, a flat dark fill, a flat white page
+        let mut noisy = GrayImage::from_pixel(300, 300, Luma([235]));
+        let mut seed = 12345u32;
+        for p in noisy.pixels_mut() {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            p.0[0] = (235 + ((seed >> 24) % 9) as i32 - 4) as u8;
+        }
+        let dark = GrayImage::from_pixel(300, 300, Luma([60]));
+        let white = GrayImage::from_pixel(300, 300, Luma([255]));
+        for m in [
+            Threshold::Otsu,
+            Threshold::Wolf,
+            Threshold::Sauvola,
+            Threshold::Niblack,
+            Threshold::Nick,
+            Threshold::Auto,
+        ] {
+            for (name, g) in [("noisy", &noisy), ("dark", &dark), ("white", &white)] {
+                assert_eq!(threshold(g, m, 31, 0.3).count_ink(), 0, "{m:?} {name}");
+            }
+        }
+        // one short word on paper is still found
+        let mut word = GrayImage::from_pixel(300, 300, Luma([235]));
+        for y in 140..150 {
+            for x in 100..140 {
+                word.put_pixel(x, y, Luma([30]));
+            }
+        }
+        assert!(threshold(&word, Threshold::Sauvola, 31, 0.3).count_ink() > 100);
+        assert!(threshold(&word, Threshold::Otsu, 31, 0.3).count_ink() > 100);
     }
 }

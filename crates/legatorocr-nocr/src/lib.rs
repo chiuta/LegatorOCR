@@ -90,20 +90,31 @@ fn recognize_inner(page: &PageImage, dpi: u32, model: &Model, o: &NativeOptions)
     if prep.med == 0 {
         return Vec::new();
     }
-    let lines: Vec<layout::Line> = layout::find_lines(&prep.ink, prep.med)
+    // each piece remembers the source line it was cut from: the halves of one long line are
+    // one line of text (same `line` id), not two
+    let lines: Vec<(usize, layout::Line)> = layout::find_lines(&prep.ink, prep.med)
         .iter()
-        .flat_map(|l| layout::split_long(&prep.ink, l, 2000))
+        .enumerate()
+        .flat_map(|(i, l)| {
+            layout::split_long(&prep.ink, l, 2000)
+                .into_iter()
+                .map(move |piece| (i, piece))
+        })
         .collect();
     let lexicons = lexicons_for(&o.lang);
     let ro = lexicon::codes(&o.lang).contains(&"ro");
-    // `line` ids follow reading order of the *source* lines, so cut halves of one line stay apart
-    let per_line: Vec<Vec<Word>> = lines
+    let per_line: Vec<(usize, Vec<Word>)> = lines
         .par_iter()
-        .map(|ln| recognise_line(&prep.gray, &prep.ink, ln, model, o, &lexicons, ro))
+        .map(|(i, ln)| {
+            (
+                *i,
+                recognise_line(&prep.gray, &prep.ink, ln, model, o, &lexicons, ro),
+            )
+        })
         .collect();
     let (pw, ph) = (page.width(), page.height());
     let mut words = Vec::new();
-    for (i, mut ws) in per_line.into_iter().enumerate() {
+    for (i, mut ws) in per_line {
         for w in &mut ws {
             w.line = i as u32;
             if prep.skew != 0.0 {
@@ -296,7 +307,13 @@ fn orientation_score(
     lines.sort_by_key(|l| std::cmp::Reverse(l.w));
     lines.truncate(10);
     let mut score = 0.0;
-    for ln in &lines {
+    // very long lines (small print on a wide page) are read in pieces, like in recognition:
+    // the model refuses a single line longer than its width limit
+    let pieces: Vec<layout::Line> = lines
+        .iter()
+        .flat_map(|l| layout::split_long(&prep.ink, l, 2000))
+        .collect();
+    for ln in &pieces {
         let Some(d) = decode_line(&prep.gray, &prep.ink, ln, model) else {
             continue;
         };

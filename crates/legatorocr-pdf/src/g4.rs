@@ -497,7 +497,9 @@ fn row_2d(
     let mut cur = vec![false; width];
     let mut a0: isize = -1;
     let mut colour = false;
+    let mut stalled = 0u32;
     while a0 < width as isize {
+        let before = a0;
         let mut x = (a0 + 1).max(0) as usize;
         let b1 = loop {
             if x >= width {
@@ -574,6 +576,15 @@ fn row_2d(
                 colour = !colour;
             }
         }
+        // every step rescans the reference row: a stream of zero-length steps would be quadratic
+        if a0 <= before {
+            stalled += 1;
+            if stalled > 4 {
+                return None;
+            }
+        } else {
+            stalled = 0;
+        }
     }
     Some(cur)
 }
@@ -617,6 +628,30 @@ fn take_eol(r: &mut BitReader) -> bool {
     }
     r.pos = save;
     false
+}
+
+/// Linear scan for the next EOL (>= 11 zeros then a 1); leaves the reader at the start of it.
+fn find_eol(r: &mut BitReader) -> bool {
+    let mut zeros = 0usize;
+    let mut at = r.pos;
+    loop {
+        match r.bit() {
+            Some(0) => {
+                if zeros == 0 {
+                    at = r.pos - 1;
+                }
+                zeros += 1;
+            }
+            Some(_) => {
+                if zeros >= 11 {
+                    r.pos = at;
+                    return true;
+                }
+                zeros = 0;
+            }
+            None => return false,
+        }
+    }
 }
 
 /// One-dimensional (modified Huffman) line.
@@ -697,17 +732,7 @@ pub fn decode_g3(
             }
             None => {
                 // resynchronise: skip to the next EOL, emit a blank line for the lost one
-                let mut found = false;
-                while r.pos < data.len() * 8 {
-                    let save = r.pos;
-                    if take_eol(&mut r) {
-                        r.pos = save;
-                        found = true;
-                        break;
-                    }
-                    r.pos = save + 1;
-                }
-                if !found {
+                if !find_eol(&mut r) {
                     break;
                 }
                 reference = vec![false; width];

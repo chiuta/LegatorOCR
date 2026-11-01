@@ -1,5 +1,5 @@
 name: Security audit
-# Known-vulnerability check of the dependency tree (RustSec advisory database) + licence/source policy.
+# Known-vulnerability check of the dependency tree (RustSec advisory database).
 on:
   push:
     paths: ["Cargo.lock", "**/Cargo.toml", ".github/workflows/audit.yml"]
@@ -23,4 +23,4 @@ jobs:
       - name: cargo-audit
         run: |
           cargo install cargo-audit --locked
-          cargo audit
+          cargo audit --deny warnings

@@ -82,6 +82,8 @@ struct Done {
     pages: usize,
     words: usize,
     skipped: usize,
+    /// With a split export: how many PDFs were written (the target name itself is not a file).
+    docs: usize,
     /// Sheets that could not be processed: (file name, reason).
     failed: Vec<(String, String)>,
 }
@@ -279,8 +281,17 @@ impl App {
         else {
             return;
         };
-        let r = self.s.to_project(self.project_sheets()).save(&path);
+        let sheets = self.project_sheets();
+        let work = std::fs::canonicalize(legatorocr_engine::archive::work_dir()).ok();
+        let temp = work
+            .as_ref()
+            .is_some_and(|w| sheets.iter().any(|(p, _)| p.starts_with(w)));
+        let r = self.s.to_project(sheets).save(&path);
         match r {
+            Ok(()) if temp => {
+                let m = self.tr("status.project_temp").to_string();
+                self.say(format!("{m}: {}", path.display()), true)
+            }
             Ok(()) => self.say(
                 format!("{}: {}", self.tr("status.project_saved"), path.display()),
                 false,
@@ -298,12 +309,37 @@ impl App {
         };
         match legatorocr_engine::project::Project::load(&path) {
             Ok(p) => {
+                // The project's resolution decides what its millimetre values mean, and OCR stays
+                // opt-in per session: neither may be changed by what happens while loading.
+                let ocr = self.s.ocr;
                 self.s.apply_project(&p);
+                let (dpi, ocr_now) = (self.s.dpi, ocr);
                 self.sheets.clear();
                 self.selected = None;
                 let files: Vec<PathBuf> = p.sheets.iter().map(|(f, _)| f.clone()).collect();
                 self.add_files(&files);
-                for (sh, (_, a)) in self.sheets.iter_mut().zip(&p.sheets) {
+                self.s.dpi = dpi;
+                self.s.ocr = ocr_now;
+                // adjustments follow their file, not the position: files that were dropped or
+                // expanded while loading must not shift them onto other pages
+                let mut by_path: std::collections::HashMap<&PathBuf, Vec<&_>> =
+                    std::collections::HashMap::new();
+                for (f, a) in &p.sheets {
+                    by_path.entry(f).or_default().push(a);
+                }
+                let same_len = self.sheets.len() == p.sheets.len();
+                let mut used: std::collections::HashMap<PathBuf, usize> =
+                    std::collections::HashMap::new();
+                for (n, sh) in self.sheets.iter_mut().enumerate() {
+                    let k = used.entry(sh.path.clone()).or_insert(0);
+                    let a = match by_path.get(&sh.path).and_then(|v| v.get(*k)) {
+                        Some(a) => {
+                            *k += 1;
+                            *a
+                        }
+                        None if same_len => &p.sheets[n].1,
+                        None => continue,
+                    };
                     sh.adj = SheetAdjust {
                         rotate_quarters: a.rotate_quarters,
                         split: a.split.map(Into::into),
@@ -498,7 +534,9 @@ impl App {
                     self.job = None;
                     match r {
                         Ok(d) => {
-                            let key = if d.kind == JobKind::Pdf {
+                            let key = if d.docs > 0 {
+                                "status.split_saved"
+                            } else if d.kind == JobKind::Pdf {
                                 "status.pdf_saved"
                             } else {
                                 "status.images_saved"
@@ -704,6 +742,21 @@ impl App {
         if self.job.is_some() || self.sheets.is_empty() {
             return;
         }
+        // never replace a page that is being read: the export target may not be one of the inputs
+        {
+            let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+            let t = canon(&target);
+            let hit = self.sheets.iter().any(|s| {
+                let src = s.path.to_string_lossy();
+                let src = src.split('#').next().unwrap_or("");
+                canon(Path::new(src)) == t
+            });
+            if hit {
+                let m = self.tr("status.export_into_input").to_string();
+                self.say(m, true);
+                return;
+            }
+        }
         let sheets = self.sheet_inputs();
         let names: Vec<String> = self
             .sheets
@@ -836,15 +889,16 @@ impl App {
                     }
                     if let Some(bytes) = &res.pdf {
                         write_atomic(&target2, bytes).map_err(|e| e.to_string())?;
-                        if kind == JobKind::Pdf {
-                            if let (true, Some(t)) = (side_txt, &res.text) {
-                                write_atomic(&target2.with_extension("txt"), t.as_bytes())
-                                    .map_err(|e| e.to_string())?;
-                            }
-                            if let (true, Some(t)) = (side_hocr, &res.hocr) {
-                                write_atomic(&target2.with_extension("hocr"), t.as_bytes())
-                                    .map_err(|e| e.to_string())?;
-                            }
+                    }
+                    // the text sidecars belong to the export whether or not it was split
+                    if kind == JobKind::Pdf {
+                        if let (true, Some(t)) = (side_txt, &res.text) {
+                            write_atomic(&target2.with_extension("txt"), t.as_bytes())
+                                .map_err(|e| e.to_string())?;
+                        }
+                        if let (true, Some(t)) = (side_hocr, &res.hocr) {
+                            write_atomic(&target2.with_extension("hocr"), t.as_bytes())
+                                .map_err(|e| e.to_string())?;
                         }
                     }
                     let failed = res
@@ -865,6 +919,7 @@ impl App {
                         pages: res.pages,
                         words: res.words,
                         skipped: res.skipped_blank,
+                        docs: res.docs.len(),
                         failed,
                     })
                 },
@@ -1065,6 +1120,9 @@ impl App {
                             .clicked()
                         {
                             self.selected = Some(i);
+                            // a failed preview (timeout, transient read error) is tried again
+                            // when the page is selected again
+                            self.sheets[i].failed = None;
                         }
                     });
                 }
@@ -1560,6 +1618,10 @@ impl App {
                                 for l in self.installed.clone() {
                                     let mut on = self.s.ocr_langs.contains(&l);
                                     if ui.checkbox(&mut on, &l).changed() {
+                                        // saved with the settings; the preview only depends on
+                                        // them when orientation is read by OCR
+                                        self.config_dirty = true;
+                                        ch |= self.s.use_osd;
                                         if on {
                                             self.s.ocr_langs.push(l.clone());
                                         } else {
@@ -1570,6 +1632,7 @@ impl App {
                             });
                             ui.horizontal(|ui| {
                                 ui.label(tr("set.psm"));
+                                let psm0 = self.s.psm;
                                 egui::ComboBox::from_id_salt("psm")
                                     .selected_text(self.s.psm.to_string())
                                     .show_ui(ui, |ui| {
@@ -1577,6 +1640,10 @@ impl App {
                                             ui.selectable_value(&mut self.s.psm, p, p.to_string());
                                         }
                                     });
+                                if self.s.psm != psm0 {
+                                    self.config_dirty = true;
+                                    ch |= self.s.use_osd;
+                                }
                             });
                         }
                     });
@@ -1947,7 +2014,14 @@ impl App {
                             }
                             if draw_zones {
                                 if resp.drag_started() {
-                                    *drag = resp.interact_pointer_pos();
+                                    // egui reports the start only after the pointer has moved a
+                                    // little: the rectangle begins where the button went down
+                                    *drag = ui
+                                        .input(|i| i.pointer.press_origin())
+                                        .or_else(|| resp.interact_pointer_pos());
+                                }
+                                if !ui.input(|i| i.pointer.any_down()) && !resp.drag_stopped() {
+                                    *drag = None;
                                 }
                                 if let (Some(a), Some(b)) =
                                     (*drag, ui.input(|i| i.pointer.latest_pos()))

@@ -17,20 +17,43 @@ pub fn file_hash(p: &Path) -> Result<String> {
     Ok(sha256_hex(&d))
 }
 
-/// One line per file, names relative to `base` (file name only when it is not below it).
+/// One line per file, names relative to `base`. A file that is not below `base` has no
+/// honest relative name (the sums file would point at something that is not next to it), so
+/// it is an error; callers split their list with [`below`] first.
 pub fn render(base: &Path, files: &[PathBuf]) -> Result<String> {
     let mut out = String::new();
     for f in files {
-        let name = f
+        let rel = f
             .strip_prefix(base)
-            .ok()
-            .or_else(|| f.file_name().map(Path::new))
-            .unwrap_or(f)
-            .to_string_lossy()
-            .replace('\\', "/");
+            .with_context(|| format!("{}: is not inside {}", f.display(), base.display()))?;
+        let name = rel.to_string_lossy().replace('\\', "/");
         out.push_str(&format!("{}  {name}\n", file_hash(f)?));
     }
     Ok(out)
+}
+
+/// The files of `files` that lie below `base`, and those that do not.
+pub fn below(base: &Path, files: &[PathBuf]) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    files
+        .iter()
+        .cloned()
+        .partition(|f| f.strip_prefix(base).is_ok())
+}
+
+/// Add `new` lines to an `existing` sums file: an entry for the same name is replaced, the other
+/// entries stay, so a folder that collects many documents keeps all their hashes.
+pub fn merge(existing: &str, new: &str) -> String {
+    let name_of = |l: &str| l.split_once("  ").map(|(_, n)| n.to_string());
+    let fresh: std::collections::HashSet<String> = new.lines().filter_map(name_of).collect();
+    let mut out = String::new();
+    for l in existing.lines().filter(|l| !l.trim().is_empty()) {
+        if !name_of(l).is_some_and(|n| fresh.contains(&n)) {
+            out.push_str(l);
+            out.push('\n');
+        }
+    }
+    out.push_str(new);
+    out
 }
 
 /// Result of checking a sums file.
@@ -65,7 +88,11 @@ pub fn verify(sums: &Path) -> Result<Verification> {
         let n = Path::new(name);
         // Rejected on every platform alike: a leading slash is not "absolute" on Windows, and a
         // drive letter or `\\server` prefix is not one on Unix, so the text is checked as well.
-        let unsafe_text = name.starts_with(['/', '\\']) || name.contains(':');
+        // (a ':' elsewhere in a name is an ordinary character: "Vol 1: Intro.pdf")
+        let drive_letter = name.len() >= 2
+            && name.as_bytes()[1] == b':'
+            && name.as_bytes()[0].is_ascii_alphabetic();
+        let unsafe_text = name.starts_with(['/', '\\']) || drive_letter;
         let unsafe_path = n.is_absolute()
             || n.components().any(|c| {
                 matches!(
@@ -129,6 +156,7 @@ mod tests {
             format!("{h}  ../etc/passwd\n"),
             format!("{h}  /etc/passwd\n"),
             format!("{h}  C:\\Windows\\win.ini\n"),
+            format!("{h}  c:evil.txt\n"),
             format!("{h}  \\\\server\\share\\x\n"),
             "xyz  a\n".to_string(),
             String::new(),
@@ -136,6 +164,30 @@ mod tests {
             std::fs::write(d.join("S.txt"), bad).unwrap();
             assert!(verify(&d.join("S.txt")).is_err());
         }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn colons_inside_names_are_fine_and_sums_files_merge() {
+        let d = std::env::temp_dir().join(format!("lgr-sums3-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("Vol 1: Intro.pdf"), b"x").unwrap();
+        let sums = render(&d, &[d.join("Vol 1: Intro.pdf")]).unwrap();
+        std::fs::write(d.join("S.txt"), &sums).unwrap();
+        assert!(verify(&d.join("S.txt")).unwrap().all_good());
+        // a file elsewhere is not given a misleading short name
+        let other = std::env::temp_dir().join("elsewhere.txt");
+        assert!(render(&d, std::slice::from_ref(&other)).is_err());
+        let (inside, outside) = below(&d, &[d.join("a"), other.clone()]);
+        assert_eq!((inside.len(), outside.len()), (1, 1));
+        // merge keeps old entries and replaces same-named ones
+        let h = "0".repeat(64);
+        let g = "1".repeat(64);
+        let m = merge(
+            &format!("{h}  a.pdf\n{h}  b.pdf\n"),
+            &format!("{g}  b.pdf\n"),
+        );
+        assert_eq!(m, format!("{h}  a.pdf\n{g}  b.pdf\n"));
         let _ = std::fs::remove_dir_all(&d);
     }
 }

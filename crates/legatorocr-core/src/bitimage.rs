@@ -85,10 +85,16 @@ impl BitImage {
             }
             stack.clear();
             comp.clear();
+            let mut size = 0usize;
             stack.push(start);
             seen[start] = true;
             while let Some(p) = stack.pop() {
-                comp.push(p);
+                size += 1;
+                // only a component that stays small can be removed: do not hold the pixels
+                // of a huge one (a dark scanner bed) in memory
+                if comp.len() < min_px as usize {
+                    comp.push(p);
+                }
                 let (px, py) = (p % w, p / w);
                 for dy in -1i64..=1 {
                     for dx in -1i64..=1 {
@@ -107,7 +113,7 @@ impl BitImage {
                     }
                 }
             }
-            if (comp.len() as u32) < min_px {
+            if size < min_px as usize {
                 for &p in &comp {
                     self.data[p] = 0;
                 }

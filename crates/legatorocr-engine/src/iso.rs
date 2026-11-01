@@ -118,19 +118,54 @@ fn ucs2(s: &str, max_units: usize) -> Vec<u8> {
         .collect()
 }
 
-/// Joliet forbids `* / : ; ? \` in names.
-fn joliet_name(n: &str) -> Vec<u8> {
-    let clean: String = n
-        .chars()
-        .map(|c| {
-            if "*/:;?\\".contains(c) || (c as u32) < 0x20 {
-                '_'
-            } else {
-                c
+/// UTF-16 length limit of a Joliet name.
+const JOLIET_MAX: usize = 64;
+
+/// Joliet forbids `* / : ; ? \` in names, allows 64 UTF-16 units and is compared without regard
+/// to case. Names are cleaned, cut so the extension survives, and made unique (`~2`, `~3` …),
+/// so two long names sharing a prefix, or `a:b.pdf` and `a_b.pdf`, never end up identical.
+fn joliet_names(names: &[&str]) -> Vec<Vec<u8>> {
+    let mut used = std::collections::HashSet::new();
+    names
+        .iter()
+        .map(|n| {
+            let clean: String = n
+                .chars()
+                .map(|c| {
+                    if "*/:;?\\".contains(c) || (c as u32) < 0x20 {
+                        '_'
+                    } else {
+                        c
+                    }
+                })
+                .collect();
+            let (stem, ext) = match clean.rfind('.') {
+                Some(i) if i > 0 && clean[i..].encode_utf16().count() <= 20 => {
+                    (clean[..i].to_string(), clean[i..].to_string())
+                }
+                _ => (clean.clone(), String::new()),
+            };
+            let units = |s: &str| s.encode_utf16().count();
+            let fit = |stem: &str, tag: &str| -> String {
+                let room = JOLIET_MAX.saturating_sub(units(&ext) + units(tag)).max(1);
+                let mut out = String::new();
+                for c in stem.chars() {
+                    if units(&out) + c.len_utf16() > room {
+                        break;
+                    }
+                    out.push(c);
+                }
+                format!("{out}{tag}{ext}")
+            };
+            let mut cand = fit(&stem, "");
+            let mut k = 2;
+            while !used.insert(cand.to_lowercase()) {
+                cand = fit(&stem, &format!("~{k}"));
+                k += 1;
             }
+            ucs2(&cand, JOLIET_MAX)
         })
-        .collect();
-    ucs2(&clean, 64)
+        .collect()
 }
 
 fn record(lba: u32, size: u32, flags: u8, name: &[u8], when: u64) -> Vec<u8> {
@@ -290,7 +325,7 @@ pub fn write_iso(dest: &std::path::Path, label: &str, when: u64, files: &[IsoFil
     };
     let names: Vec<&str> = files.iter().map(|f| f.name.as_str()).collect();
     let iso_n = iso_names(&names);
-    let jol_n: Vec<Vec<u8>> = names.iter().map(|n| joliet_name(n)).collect();
+    let jol_n: Vec<Vec<u8>> = joliet_names(&names);
 
     // directory entries in each tree's own sort order
     let mut iso_order: Vec<usize> = (0..files.len()).collect();
@@ -339,6 +374,16 @@ pub fn write_iso(dest: &std::path::Path, label: &str, when: u64, files: &[IsoFil
     let root2 = record(dir2, n2 * SECTOR as u32, 2, &[0], when);
 
     let tmp = dest.with_extension("iso.part");
+    // an unfinished image never stays behind, whatever makes the writing stop
+    struct Part(PathBuf, bool);
+    impl Drop for Part {
+        fn drop(&mut self) {
+            if !self.1 {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+    }
+    let mut part = Part(tmp.clone(), false);
     let mut out = std::io::BufWriter::new(
         std::fs::File::create(&tmp).with_context(|| format!("{}: cannot create", tmp.display()))?,
     );
@@ -392,6 +437,7 @@ pub fn write_iso(dest: &std::path::Path, label: &str, when: u64, files: &[IsoFil
     out.flush()?;
     drop(out);
     std::fs::rename(&tmp, dest).with_context(|| format!("{}: cannot finish", dest.display()))?;
+    part.1 = true;
     Ok(total as u64 * SECTOR as u64)
 }
 
@@ -489,5 +535,31 @@ mod tests {
             .collect();
         assert_eq!(find(17, true, &j).unwrap(), b"hello");
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn joliet_names_stay_unique_and_keep_their_extension() {
+        let long = "x".repeat(70);
+        let (n1, n2) = (format!("{long}_001.pdf"), format!("{long}_002.pdf"));
+        let names = vec![n1.as_str(), n2.as_str(), "a:b.pdf", "a_b.pdf", "A_B.PDF"];
+        let out = joliet_names(&names);
+        let text: Vec<String> = out
+            .iter()
+            .map(|b| {
+                let u: Vec<u16> = b
+                    .chunks(2)
+                    .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                    .collect();
+                String::from_utf16(&u).unwrap()
+            })
+            .collect();
+        let lower: std::collections::HashSet<_> = text.iter().map(|t| t.to_lowercase()).collect();
+        assert_eq!(lower.len(), names.len(), "{text:?}");
+        assert!(text.iter().all(|t| t.encode_utf16().count() <= 64));
+        assert!(
+            text.iter()
+                .all(|t| t.ends_with(".pdf") || t.ends_with(".PDF")),
+            "{text:?}"
+        );
     }
 }

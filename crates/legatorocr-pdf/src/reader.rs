@@ -226,6 +226,11 @@ impl<'a> P<'a> {
                 let mut out = Vec::new();
                 let mut nest = 1;
                 loop {
+                    // an unterminated string would otherwise be re-read to the end of the file
+                    // for every object marker that follows it
+                    if out.len() > 256 * 1024 {
+                        return None;
+                    }
                     let b = self.peek()?;
                     self.pos += 1;
                     match b {
@@ -385,24 +390,39 @@ fn find(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
 /// Position of the first `endstream` at or after `from`. All positions are found once per
 /// buffer (and kept), so a file full of streams with wrong /Length does not rescan to the end
 /// for every one of them.
+/// ToUnicode targets are a few characters; a hostile one must not be multiplied by 65 536 codes.
+fn short_dest(s: String) -> String {
+    s.chars().take(16).collect()
+}
+
 fn next_endstream(d: &[u8], from: usize) -> Option<usize> {
     use std::cell::RefCell;
+    type Index = Option<(usize, usize, u64, Vec<usize>)>;
     thread_local! {
-        static INDEX: RefCell<Option<(usize, usize, Vec<usize>)>> = const { RefCell::new(None) };
+        static INDEX: RefCell<Index> = const { RefCell::new(None) };
     }
     INDEX.with(|c| {
         let mut c = c.borrow_mut();
+        // address + length alone can repeat for a different file that lands in the same
+        // allocation, so a sampled content fingerprint joins the key
+        let mut fp: u64 = 0xcbf2_9ce4_8422_2325;
+        let step = (d.len() / 257).max(1);
+        for b in d.iter().step_by(step) {
+            fp = (fp ^ *b as u64).wrapping_mul(0x100_0000_01b3);
+        }
         let key = (d.as_ptr() as usize, d.len());
-        if c.as_ref().is_none_or(|(p, l, _)| (*p, *l) != key) {
+        if c.as_ref()
+            .is_none_or(|(p, l, f, _)| (*p, *l, *f) != (key.0, key.1, fp))
+        {
             let mut v = Vec::new();
             let mut i = 0;
             while let Some(p) = find(d, b"endstream", i) {
                 v.push(p);
                 i = p + 9;
             }
-            *c = Some((key.0, key.1, v));
+            *c = Some((key.0, key.1, fp, v));
         }
-        let v = &c.as_ref().unwrap().2;
+        let v = &c.as_ref().unwrap().3;
         let k = v.partition_point(|&p| p < from);
         v.get(k).copied()
     })
@@ -819,8 +839,13 @@ impl PdfDoc {
         }
         // trailers of classic files
         let mut at = 0;
+        let mut seen = 0;
         while let Some(p) = find(&doc.data, b"trailer", at) {
             at = p + 7;
+            seen += 1;
+            if seen > 4096 {
+                break;
+            }
             if let Some(Val::Dict(d)) = P::new(&doc.data, at).val(0) {
                 if let Some(e) = d.get("Encrypt") {
                     enc_val = Some(e.clone());
@@ -890,6 +915,7 @@ impl PdfDoc {
     fn scan_objects(&mut self) {
         let d = &self.data;
         let mut i = 0;
+        let mut failed = 0usize;
         while let Some(p) = find(d, b"obj", i) {
             i = p + 3;
             // "endobj" and "objstm"-like words are not markers
@@ -937,10 +963,19 @@ impl PdfDoc {
             self.offs.insert(num, num_start);
             // binary stream data may contain text that looks like `N G obj`: step over the body of
             // a stream (when its `endstream` really follows) instead of scanning it for objects
-            if let Some(Val::Stream(_, _, e)) = parse_object(d, num_start) {
-                let tail = &d[e.min(d.len())..(e + 16).min(d.len())];
-                if tail.trim_ascii_start().starts_with(b"endstream") && e > i {
-                    i = e;
+            match parse_object(d, num_start) {
+                Some(Val::Stream(_, _, e)) => {
+                    let tail = &d[e.min(d.len())..(e + 16).min(d.len())];
+                    if tail.trim_ascii_start().starts_with(b"endstream") && e > i {
+                        i = e;
+                    }
+                }
+                Some(_) => {}
+                None => {
+                    failed += 1;
+                    if failed > 4096 {
+                        break;
+                    }
                 }
             }
         }
@@ -1464,7 +1499,11 @@ impl PdfDoc {
                 continue;
             }
             match word {
-                b"q" => stack.push((ctm, *fill)),
+                b"q" => {
+                    if stack.len() < 256 {
+                        stack.push((ctm, *fill));
+                    }
+                }
                 b"Q" => {
                     if let Some((c, f)) = stack.pop() {
                         ctm = c;
@@ -2281,13 +2320,13 @@ fn parse_to_unicode(cmap: &[u8]) -> (HashMap<u32, String>, bool) {
                     let mut k = i + 2;
                     let mut code = lo;
                     while k < toks.len() && toks[k].0 < close && code <= hi && code - lo < 65_536 {
-                        map.insert(code, utf16_be(&toks[k].1));
+                        map.insert(code, short_dest(utf16_be(&toks[k].1)));
                         code += 1;
                         k += 1;
                     }
                     i = k;
                 } else {
-                    let base = utf16_be(&toks[i + 2].1);
+                    let base = short_dest(utf16_be(&toks[i + 2].1));
                     let mut chars: Vec<char> = base.chars().collect();
                     for code in lo..=hi.min(lo.saturating_add(65_535)) {
                         map.insert(code, chars.iter().collect());
@@ -2304,7 +2343,7 @@ fn parse_to_unicode(cmap: &[u8]) -> (HashMap<u32, String>, bool) {
                 if toks[i].1.len() > 1 {
                     wide = true;
                 }
-                map.insert(be_num(&toks[i].1), utf16_be(&toks[i + 1].1));
+                map.insert(be_num(&toks[i].1), short_dest(utf16_be(&toks[i + 1].1)));
                 i += 2;
             }
         }
@@ -2366,12 +2405,18 @@ impl PdfDoc {
                         if let Some(t) = f.map.get(&code) {
                             out.push_str(t);
                         }
+                        if out.len() > 8_000_000 {
+                            break;
+                        }
                     }
                 } else {
                     for &b in bytes {
                         match f.map.get(&(b as u32)) {
                             Some(t) => out.push_str(t),
                             None => out.push(b as char),
+                        }
+                        if out.len() > 8_000_000 {
+                            break;
                         }
                     }
                 }

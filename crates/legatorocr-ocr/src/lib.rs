@@ -199,9 +199,9 @@ pub fn valid_lang(l: &str) -> bool {
 }
 
 /// The engine that will really run for these options (`Auto` resolved). Probing Tesseract costs
-/// two process launches, so the answer is cached per program path and language list: a positive
-/// answer for the life of the process, a fall-back to the native engine only for 30 s (Tesseract
-/// may have been installed meanwhile, or a launch may just have been slow).
+/// two process launches, so the answer is cached per program path and language list: answers
+/// are kept for 60 s (Tesseract may have been installed or removed meanwhile, or a launch may
+/// just have been slow).
 pub fn effective_engine(o: &OcrOptions) -> Engine {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
@@ -215,33 +215,38 @@ pub fn effective_engine(o: &OcrOptions) -> Engine {
                 return Engine::Tesseract;
             }
             #[allow(clippy::type_complexity)]
-            static CACHE: OnceLock<Mutex<HashMap<(PathBuf, String), (Engine, Instant)>>> =
-                OnceLock::new();
-            let key = (o.tesseract.clone(), lang);
-            // the lock is held while probing, so parallel page workers probe once, not N times
-            let mut cache = CACHE
-                .get_or_init(Default::default)
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
-            if let Some(&(e, at)) = cache.get(&key) {
-                if e == Engine::Tesseract || at.elapsed() < Duration::from_secs(30) {
+            static CACHE: OnceLock<
+                Mutex<HashMap<(PathBuf, Option<PathBuf>, String), (Engine, Instant)>>,
+            > = OnceLock::new();
+            // the data folder is part of the question: it decides which languages exist
+            let key = (o.tesseract.clone(), o.tessdata.clone(), lang.clone());
+            let lock = || {
+                CACHE
+                    .get_or_init(Default::default)
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+            };
+            if let Some(&(e, at)) = lock().get(&key) {
+                if at.elapsed() < Duration::from_secs(60) {
                     return e;
                 }
             }
+            // probed OUTSIDE the lock: a slow Tesseract must not stall every page worker (two
+            // workers may probe at once at worst; they get the same answer)
             let to = OcrOptions {
                 engine: Engine::Tesseract,
                 ..o.clone()
             };
             let ok = check_tesseract(&to).is_ok()
                 && list_tesseract_languages(&to)
-                    .map(|have| key.1.split('+').all(|l| have.iter().any(|h| h == l)))
+                    .map(|have| lang.split('+').all(|l| have.iter().any(|h| h == l)))
                     .unwrap_or(false);
             let e = if ok {
                 Engine::Tesseract
             } else {
                 Engine::Native
             };
-            cache.insert(key, (e, Instant::now()));
+            lock().insert(key, (e, Instant::now()));
             e
         }
     }
@@ -272,10 +277,17 @@ pub fn check_engine(o: &OcrOptions) -> Result<String, OcrError> {
 }
 
 fn check_tesseract(o: &OcrOptions) -> Result<String, OcrError> {
-    let out = base_cmd(o)
-        .arg("--version")
-        .output()
-        .map_err(|e| OcrError::NotFound(e.to_string()))?;
+    let mut c = base_cmd(o);
+    c.arg("--version");
+    let out = run_limited(c, None, PROBE_TIMEOUT)?;
+    // a program that fails to say its version is not a working Tesseract
+    if !out.status.success() {
+        return Err(OcrError::NotFound(format!(
+            "`{} --version` exited with {}",
+            o.tesseract.display(),
+            out.status
+        )));
+    }
     let txt = String::from_utf8_lossy(if out.stdout.is_empty() {
         &out.stderr
     } else {
@@ -293,10 +305,15 @@ pub fn list_languages(o: &OcrOptions) -> Result<Vec<String>, OcrError> {
 }
 
 fn list_tesseract_languages(o: &OcrOptions) -> Result<Vec<String>, OcrError> {
-    let out = base_cmd(o)
-        .arg("--list-langs")
-        .output()
-        .map_err(|e| OcrError::NotFound(e.to_string()))?;
+    let mut c = base_cmd(o);
+    c.arg("--list-langs");
+    let out = run_limited(c, None, PROBE_TIMEOUT)?;
+    if !out.status.success() {
+        return Err(OcrError::Failed(format!(
+            "`tesseract --list-langs` exited with {}",
+            out.status
+        )));
+    }
     let txt = String::from_utf8_lossy(&out.stdout);
     Ok(txt
         .lines()
@@ -404,24 +421,75 @@ fn png_bytes(img: &image::DynamicImage) -> Result<Vec<u8>, OcrError> {
     Ok(buf.into_inner())
 }
 
-/// Run Tesseract reading the image from stdin; returns its output.
-fn run_stdin(mut cmd: Command, png: Vec<u8>) -> Result<std::process::Output, OcrError> {
-    use std::io::Write;
+/// How long one page may take before Tesseract is considered hung.
+const PAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+/// How long a probe (`--version`, `--list-langs`) may take.
+const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Run `cmd` to completion, but not past `limit`: a program that hangs is killed and reaped, so
+/// neither the export nor a page worker waits forever and no zombie is left. `input` goes to its
+/// stdin from a thread, and stdout / stderr are drained from threads, so no pipe can fill up.
+fn run_limited(
+    mut cmd: Command,
+    input: Option<Vec<u8>>,
+    limit: std::time::Duration,
+) -> Result<std::process::Output, OcrError> {
+    use std::io::{Read, Write};
     let mut child = cmd
-        .stdin(Stdio::piped())
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| OcrError::NotFound(e.to_string()))?;
-    let mut stdin = child.stdin.take().expect("piped");
-    // Feed from a thread so a full output pipe can never deadlock us; a write
-    // error just means Tesseract stopped reading (its exit status tells why).
-    let feeder = std::thread::spawn(move || {
-        let _ = stdin.write_all(&png);
+    let feeder = input.map(|data| {
+        let mut stdin = child.stdin.take().expect("piped");
+        // a write error just means the program stopped reading (its exit status tells why)
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(&data);
+        })
     });
-    let out = child.wait_with_output()?;
-    let _ = feeder.join();
-    Ok(out)
+    let drain = |mut r: Box<dyn Read + Send>| {
+        std::thread::spawn(move || {
+            let mut v = Vec::new();
+            let _ = r.read_to_end(&mut v);
+            v
+        })
+    };
+    let out_t = drain(Box::new(child.stdout.take().expect("piped")));
+    let err_t = drain(Box::new(child.stderr.take().expect("piped")));
+    let deadline = std::time::Instant::now() + limit;
+    let status = loop {
+        match child.try_wait()? {
+            Some(s) => break s,
+            None if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                // the pipes are closed now, so the helper threads end by themselves
+                return Err(OcrError::Failed(format!(
+                    "no answer within {} s; the program was stopped",
+                    limit.as_secs()
+                )));
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(15)),
+        }
+    };
+    if let Some(f) = feeder {
+        let _ = f.join();
+    }
+    Ok(std::process::Output {
+        status,
+        stdout: out_t.join().unwrap_or_default(),
+        stderr: err_t.join().unwrap_or_default(),
+    })
+}
+
+/// Run Tesseract reading the image from stdin; returns its output.
+fn run_stdin(cmd: Command, png: Vec<u8>) -> Result<std::process::Output, OcrError> {
+    run_limited(cmd, Some(png), PAGE_TIMEOUT)
 }
 
 /// Integer enlargement applied before recognition: Tesseract reads best at about
@@ -461,17 +529,12 @@ pub fn recognize(page: &PageImage, dpi: u32, o: &OcrOptions) -> Result<Vec<Word>
     let png = png_bytes(&img)?;
     let lang = canonical_lang(&o.lang);
     let mut cmd = base_cmd(o);
-    cmd.args([
-        "stdin",
-        "stdout",
-        "-l",
-        &lang,
-        "--psm",
-        &o.psm.to_string(),
-        "--dpi",
-        &dpi.to_string(),
-        "tsv",
-    ]);
+    cmd.args(["stdin", "stdout", "-l", &lang, "--psm", &o.psm.to_string()]);
+    // an unknown resolution is left for Tesseract to estimate; "--dpi 0" would only make it complain
+    if dpi > 0 {
+        cmd.args(["--dpi", &dpi.to_string()]);
+    }
+    cmd.arg("tsv");
     let out = run_stdin(cmd, png)?;
     if !out.status.success() {
         return Err(OcrError::Failed(
@@ -701,7 +764,7 @@ pub fn json_document(pages: &[String]) -> String {
 pub fn hocr_page(words: &[Word], width: u32, height: u32, dpi: u32, page_no: usize) -> String {
     let mut o = format!(
         "<div class='ocr_page' id='page_{page_no}' title='bbox 0 0 {width} {height}; ppageno {}; scan_res {dpi} {dpi}'>\n",
-        page_no - 1
+        page_no.saturating_sub(1)
     );
     let mut i = 0;
     let mut line_no = 0;
@@ -752,7 +815,7 @@ pub fn hocr_document(pages: &[String]) -> String {
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">\n\
          <html xmlns=\"http://www.w3.org/1999/xhtml\" xml:lang=\"en\" lang=\"en\">\n<head>\n<title></title>\n\
          <meta http-equiv=\"Content-Type\" content=\"text/html;charset=utf-8\" />\n\
-         <meta name='ocr-system' content='LegatorOCR (Tesseract engine)' />\n\
+         <meta name='ocr-system' content='LegatorOCR' />\n\
          <meta name='ocr-capabilities' content='ocr_page ocr_line ocrx_word' />\n</head>\n<body>\n",
     );
     for p in pages {
@@ -891,6 +954,27 @@ mod tests {
 #[cfg(test)]
 mod engine_choice_tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_hung_program_is_stopped_and_a_quick_one_is_read() {
+        let t = std::time::Instant::now();
+        let mut hung = Command::new("sleep");
+        hung.arg("30");
+        let r = run_limited(hung, None, std::time::Duration::from_millis(300));
+        assert!(matches!(r, Err(OcrError::Failed(_))));
+        assert!(t.elapsed().as_secs() < 10);
+        let mut quick = Command::new("cat");
+        quick.arg("-");
+        let out = run_limited(
+            quick,
+            Some(b"hello".to_vec()),
+            std::time::Duration::from_secs(10),
+        )
+        .unwrap();
+        assert!(out.status.success());
+        assert_eq!(out.stdout, b"hello");
+    }
 
     #[test]
     fn json_export_escapes_and_keeps_boxes() {

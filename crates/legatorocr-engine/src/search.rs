@@ -239,7 +239,7 @@ impl Matcher {
                     }
                     let lo = i.saturating_sub(*n);
                     let hi = (i + n + 1).min(ws.len());
-                    if (lo..hi).any(|j| j != i && is(&ws[j].0, b)) && !out.contains(line) {
+                    if (lo..hi).any(|j| j != i && is(&ws[j].0, b)) && out.last() != Some(line) {
                         out.push(*line);
                     }
                 }
@@ -270,20 +270,26 @@ impl Matcher {
                         dehyph.push(' ');
                     }
                 }
-                let mut out: Vec<usize> = Vec::new();
+                // a query that folds to nothing (only combining marks) matches nothing
+                if needle.is_empty() {
+                    return Vec::new();
+                }
+                let mut seen = vec![false; starts.len() + 2];
                 for (hay, st) in [(&joined, &starts), (&dehyph, &starts_d)] {
                     let mut pos = 0;
                     while let Some(i) = hay[pos..].find(needle.as_str()) {
                         let at = pos + i;
                         let line = st.partition_point(|&s| s <= at); // 1-based
-                        if !out.contains(&line) {
-                            out.push(line);
+                        if let Some(f) = seen.get_mut(line) {
+                            *f = true;
                         }
-                        pos = at + needle.len().max(1);
+                        pos = at + needle.len();
                     }
                 }
-                out.sort_unstable();
-                out
+                seen.iter()
+                    .enumerate()
+                    .filter_map(|(l, &f)| (f && l > 0).then_some(l))
+                    .collect()
             }
         }
     }
@@ -929,5 +935,19 @@ mod entity_boundary_tests {
         assert_eq!(m("mobila NEAR/2 veche", false).lines(text), vec![5]);
         assert!(m("mobila NEAR/1 frumoasa", false).lines(text).is_empty());
         assert_eq!(m("mobila NEAR/10 ambalajul", false).lines(text), vec![5, 6]);
+    }
+
+    #[test]
+    fn a_query_of_combining_marks_and_huge_line_counts_are_handled() {
+        let m = Matcher::new("\u{301}\u{301}", &SearchOptions::default());
+        // either refused or matching nothing: never a panic
+        if let Ok(m) = m {
+            assert!(m.lines("é ü ö\nabc").is_empty());
+        }
+        let text = "a\n".repeat(300_000);
+        let m = Matcher::new("a", &SearchOptions::default()).unwrap();
+        let t = std::time::Instant::now();
+        assert_eq!(m.lines(&text).len(), 300_000);
+        assert!(t.elapsed().as_secs() < 5);
     }
 }

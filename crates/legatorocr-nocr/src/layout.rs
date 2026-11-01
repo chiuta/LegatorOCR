@@ -474,14 +474,28 @@ fn attach_floating_marks(lines: &mut Vec<Line>, med: u32) {
     let thin = |l: &Line| l.h * 2 < med;
     let n = lines.len();
     let mut gone = vec![false; n];
+    // Only a thin piece close above or below a body line can join it, so the candidates are found
+    // by position (the lines of a page are sorted by y) instead of testing every pair: a dusty
+    // scan has tens of thousands of specks and the pairwise test took minutes.
+    let mut order: Vec<usize> = (0..n).filter(|&j| !thin(&lines[j])).collect();
+    order.sort_by_key(|&j| lines[j].y);
+    // the sort keys are frozen: a line that grows by a join must not unsort the search
+    let ys: Vec<u32> = order.iter().map(|&j| lines[j].y).collect();
+    let max_h = order.iter().map(|&j| lines[j].h).max().unwrap_or(0);
+    let reach = med * 2; // vertical reach of a piece (0.4 med) plus slack for lines grown by a join
     for i in 0..n {
         if !thin(&lines[i]) {
             continue;
         }
         let t = lines[i].clone();
         let mut target: Option<(usize, u32)> = None;
-        for (j, l) in lines.iter().enumerate() {
-            if j == i || gone[j] || thin(l) {
+        let lo = t.y.saturating_sub(reach + max_h);
+        let hi = t.y + t.h + reach;
+        let a = ys.partition_point(|&y| y < lo);
+        let b = ys.partition_point(|&y| y <= hi);
+        for &j in &order[a..b.max(a)] {
+            let l = &lines[j];
+            if j == i || gone[j] {
                 continue;
             }
             let vgap = if t.y + t.h <= l.y {

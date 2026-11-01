@@ -39,17 +39,24 @@ jobs:
       TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-tags: true
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-        with:
-          key: ${{ matrix.target }}
+      # no build cache here: what ships is built from the checked-out sources only
       - name: Package
         shell: bash
         run: |
-          case "$TAG" in v[0-9]*) ;; *) echo "bad tag: $TAG"; exit 1;; esac
+          # same strict shape as the release job; the tag becomes part of a path below
+          [[ "$TAG" =~ ^v[0-9][0-9A-Za-z.+-]*$ ]] || { echo "refusing unusual tag: $TAG"; exit 1; }
+          # the tag must name the version in the code, and (for a re-run on an existing tag) its commit
+          ver=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          [ "${TAG#v}" = "$ver" ] || { echo "tag $TAG does not match Cargo.toml version $ver"; exit 1; }
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            [ "$(git rev-parse "refs/tags/$TAG^{commit}")" = "$GITHUB_SHA" ] || { echo "tag $TAG points at another commit than the one built"; exit 1; }
+          fi
           scripts/package.sh "${{ matrix.target }}" "${TAG#v}"
       - name: Portability checks (fail the release instead of shipping an unrunnable binary)
         shell: bash
@@ -108,7 +115,9 @@ jobs:
           # the tag reaches the shell only through the environment, and only in a safe shape
           [[ "$TAG" =~ ^v[0-9][0-9A-Za-z.+-]*$ ]] || { echo "refusing unusual tag"; exit 1; }
           f=".github/release-notes/${TAG}.md"
-          if [ -f "$f" ]; then echo "path=$f" >> "$GITHUB_OUTPUT"; else echo "path=" >> "$GITHUB_OUTPUT"; fi
+          # notes carry the known-limits statements: a release without them is not drafted
+          [ -f "$f" ] || { echo "missing $f"; exit 1; }
+          echo "path=$f" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           path: dist
@@ -117,7 +126,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag || github.ref_name }}
-          PRE: ${{ inputs.prerelease != false }}
+          PRE: ${{ github.event_name != 'workflow_dispatch' || inputs.prerelease }}
           NOTES: ${{ steps.notes.outputs.path }}
         run: |
           set -euo pipefail
@@ -133,7 +142,8 @@ jobs:
             fi
           done < existing.txt
           args=(--draft --target "$GITHUB_SHA" --title "LegatorOCR ${TAG#v}")
-          [ "$PRE" = true ] && args+=(--prerelease)
-          if [ -n "$NOTES" ]; then args+=(--notes-file "$NOTES"); else args+=(--generate-notes); fi
+          # a version with a hyphen (0.2.0-pre.5) is always a pre-release
+          if [ "$PRE" = true ] || [[ "$TAG" == *-* ]]; then args+=(--prerelease); fi
+          args+=(--notes-file "$NOTES")
           gh release create "$TAG" "${args[@]}" dist/LegatorOCR-*
           gh release view "$TAG" --json assets --jq '.assets|length' || true

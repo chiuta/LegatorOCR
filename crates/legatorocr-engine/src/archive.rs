@@ -150,7 +150,8 @@ fn cap_name(name: &str, max: usize) -> String {
 /// Total size of the files below `dir` (symlinks not followed, depth-limited).
 fn dir_size(dir: &Path, depth: u32) -> u64 {
     if depth > 32 {
-        return 0;
+        // deeper than any real scan archive: count it as over every limit rather than as empty
+        return u64::MAX / 4;
     }
     let Ok(rd) = std::fs::read_dir(dir) else {
         return 0;
@@ -161,7 +162,7 @@ fn dir_size(dir: &Path, depth: u32) -> u64 {
             Ok(t) if t.is_file() => e.metadata().map(|m| m.len()).unwrap_or(0),
             _ => 0,
         })
-        .sum()
+        .fold(0u64, u64::saturating_add)
 }
 
 struct Sink {
@@ -231,7 +232,11 @@ fn tar_extract(mut r: impl Read, want: &dyn Fn(&str) -> bool, sink: &mut Sink) -
                 name = format!("{prefix}/{name}");
             }
         }
-        let padded = size.div_ceil(512) * 512;
+        // a hostile base-256 size near u64::MAX must not overflow the rounding
+        let Some(padded) = size.checked_add(511).map(|v| v & !511) else {
+            eprintln!("warning: damaged tar header (absurd size); keeping what was read");
+            break;
+        };
         let wanted_type = matches!(typ, b'0' | 0);
         let meta_type = matches!(typ, b'L' | b'x');
         if (wanted_type && want(long_name.as_deref().unwrap_or(&name)) && size <= MAX_MEMBER)
@@ -667,6 +672,38 @@ mod tests {
         assert_eq!(std::fs::read(&v[1].1).unwrap(), b"A");
         assert!(v[0].1.starts_with(work_dir()));
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_tar_member_of_absurd_size_ends_the_archive_instead_of_overflowing() {
+        // base-256 size 0xFFFF_FFFF_FFFF_FFFF: rounding up to 512 used to overflow u64
+        let mut f = [0u8; 12];
+        f[0] = 0x80;
+        f[4..].copy_from_slice(&[0xFF; 8]);
+        let mut t = Vec::new();
+        t.extend_from_slice(&tar_header("big.png", f, b'0'));
+        let d = tmp("tar_huge");
+        let mut sink = Sink {
+            dir: d.clone(),
+            out: Vec::new(),
+            total: 0,
+        };
+        let _ = tar_extract(&t[..], &|_| true, &mut sink);
+        assert!(sink.out.is_empty());
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn folders_nested_deeper_than_the_limit_count_as_over_the_size_cap() {
+        let d = tmp("deep");
+        let mut p = d.clone();
+        for _ in 0..40 {
+            p = p.join("d");
+        }
+        std::fs::create_dir_all(&p).unwrap();
+        std::fs::write(p.join("x.png"), b"1").unwrap();
+        assert!(dir_size(&d, 0) > MAX_TOTAL);
+        let _ = std::fs::remove_dir_all(d);
     }
 
     #[test]

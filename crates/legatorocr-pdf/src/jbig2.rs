@@ -1119,6 +1119,9 @@ pub fn decode(data: &[u8], globals: Option<&[u8]>, w: usize, h: usize) -> R<Vec<
                 let mut inputs: Vec<Bitmap> = Vec::new();
                 for r in &s.refs {
                     if let Some(d) = dicts.get(r) {
+                        if inputs.len() + d.len() > 131_072 {
+                            return fail("JBIG2 symbol dictionary too large");
+                        }
                         inputs.extend(d.iter().cloned());
                     }
                 }
@@ -1149,6 +1152,9 @@ pub fn decode(data: &[u8], globals: Option<&[u8]>, w: usize, h: usize) -> R<Vec<
                 let mut syms: Vec<Bitmap> = Vec::new();
                 for r in &s.refs {
                     if let Some(d) = dicts.get(r) {
+                        if syms.len() + d.len() > 131_072 {
+                            return fail("JBIG2 too many symbols");
+                        }
                         syms.extend(d.iter().cloned());
                     }
                 }

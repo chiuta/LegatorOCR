@@ -55,6 +55,18 @@ pub fn estimate_background(img: &RgbImage) -> Rgb<u8> {
     Rgb([(r / c) as u8, (g / c) as u8, (b / c) as u8])
 }
 
+/// Whether [`rotate_cw`] will really rotate an image of this size by `rad` (it refuses when the
+/// enlarged canvas would need gigabytes, or the angle is not a number).
+pub fn rotation_fits(w: u32, h: u32, rad: f32) -> bool {
+    if !rad.is_finite() {
+        return false;
+    }
+    let (s, c) = (rad.sin(), rad.cos());
+    let nw = ((w as f32 * c.abs() + h as f32 * s.abs()).ceil() as u64).max(1);
+    let nh = ((w as f32 * s.abs() + h as f32 * c.abs()).ceil() as u64).max(1);
+    nw * nh <= 500_000_000
+}
+
 /// Rotate clockwise by `rad` (visual sense, image y axis pointing down),
 /// enlarging the canvas so nothing is clipped. Bilinear interpolation;
 /// uncovered area is filled with `fill`.
@@ -64,7 +76,9 @@ pub fn rotate_cw(img: &RgbImage, rad: f32, fill: Rgb<u8>) -> RgbImage {
     let nw = ((w as f32 * c.abs() + h as f32 * s.abs()).ceil() as u32).max(1);
     let nh = ((w as f32 * s.abs() + h as f32 * c.abs()).ceil() as u32).max(1);
     // a huge scan turned by a large angle would need gigabytes for the enlarged canvas: leave it
-    if (nw as u64) * (nh as u64) > 500_000_000 || !rad.is_finite() {
+    // (callers ask [`rotation_fits`] first, so that they do not record a rotation that did not
+    // happen)
+    if !rotation_fits(w, h, rad) {
         return img.clone();
     }
     let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0);

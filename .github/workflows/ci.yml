@@ -38,3 +38,14 @@ jobs:
             sed 's/\x1b\[[0-9;]*m//g' clippy.txt | grep -E '(error|warning)|--> ' | head -40 | while IFS= read -r l; do echo "::error::$l"; done
           fi
           exit "$rc"
+
+  msrv:
+    # the declared minimum Rust version must really build the workspace
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: "1.95"
+      - name: Check with the minimum supported Rust version
+        run: cargo check --locked --workspace

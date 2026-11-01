@@ -9,9 +9,15 @@ on:
         description: "iterations per fuzz test"
         default: "3000"
 
+permissions:
+  contents: read
+
 jobs:
   fuzz:
     runs-on: ubuntu-latest
+    env:
+      # through the environment, never pasted into a script
+      ITERS: ${{ inputs.iterations || '3000' }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -19,12 +25,14 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: Check the iteration count
+        run: '[[ "$ITERS" =~ ^[0-9]{1,6}$ ]] || { echo "iterations must be a number"; exit 1; }'
       - name: Tools used for cross-checking output
         run: sudo apt-get update && sudo apt-get install -y poppler-utils qpdf python3-pil
       - name: Core pipeline, release (3 seeds)
         run: |
           for s in 1 2 3; do
-            LEGATOROCR_FUZZ_ITERS=${{ inputs.iterations || '3000' }} LEGATOROCR_FUZZ_SEED=$s \
+            LEGATOROCR_FUZZ_ITERS=$ITERS LEGATOROCR_FUZZ_SEED=$s \
               cargo test --locked --release -p legatorocr-core --test fuzz_extreme
           done
       - name: Core pipeline, debug build (integer-overflow checks on)
@@ -33,7 +41,7 @@ jobs:
         run: cargo test --locked --release -p legatorocr-core --test metamorphic
       - name: Parsers, loaders, export, PDF writer, G4 codec
         run: |
-          N=${{ inputs.iterations || '3000' }}
+          N=$ITERS
           for s in 1 2 3; do
             LEGATOROCR_FUZZ_ITERS=$((N*20)) LEGATOROCR_FUZZ_SEED=$s cargo test --locked --release -p legatorocr-engine --test fuzz_inputs
             LEGATOROCR_FUZZ_ITERS=$N LEGATOROCR_FUZZ_SEED=$s cargo test --locked --release -p legatorocr-engine --test fuzz_export
@@ -41,6 +49,8 @@ jobs:
             LEGATOROCR_FUZZ_ITERS=$N LEGATOROCR_FUZZ_SEED=$s cargo test --locked --release -p legatorocr-engine --test fuzz_readers
           done
           LEGATOROCR_FUZZ_ITERS=$((N*10)) cargo test --locked --release -p legatorocr-pdf g4::tests
+      - name: Native OCR engine on hostile pages
+        run: cargo test --locked --release -p legatorocr-nocr --test fuzz_pages
       - name: Command line
         run: |
           cargo build --locked --release -p legatorocr-cli
