@@ -357,7 +357,12 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<(RgbImage, Option<u8>)> 
             }
             _ => {
                 let a = analyse(&imageops::grayscale(&rgb), s.dpi);
-                split::find_gutter(&a.ink)
+                // a spread scanned crooked has a leaning gutter: look for it on the levelled ink
+                let ink = match crate::deskew::detect_skew(&a.ink, s.max_skew_deg) {
+                    Some(ang) if ang.abs() > 0.1f32.to_radians() => split::level(&a.ink, ang),
+                    _ => a.ink,
+                };
+                split::find_gutter(&ink)
                     .map(|x| (x * a.factor).min(rgb.width().saturating_sub(1)))
             }
         };
@@ -583,7 +588,9 @@ fn scale_bw(b: &BitImage, nw: u32, nh: u32) -> BitImage {
         nh.max(1),
         imageops::FilterType::Triangle,
     );
-    binarize::global(&g, 127)
+    // a 1-px rule or hairline serif averages to well above mid-grey when shrunk: threshold at
+    // 200 so that anything with a quarter of its coverage left is still ink
+    binarize::global(&g, 200)
 }
 
 fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
@@ -618,7 +625,14 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
     // Window taken from the scan: the content box plus a hair of safety. Everything
     // else — margins, scanner bed, edge shadows — becomes paper.
     let pad = (s.dpi / 100).max(2) as i64;
+    // A blank sheet with a fixed page size becomes an empty page of exactly that size (so a PDF
+    // keeps uniform pages); without one it stays the whole scan, as before.
+    let blank_canvas = blank && s.page_size_mm.is_some();
     let (lay, win) = match content {
+        None if blank_canvas => (
+            layout(Rect { x: 0, y: 0, w: 0, h: 0 }, s),
+            (0i64, 0i64, 0u32, 0u32),
+        ),
         None => (
             Layout {
                 cw: img.width(),
@@ -663,6 +677,9 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
             cleanup::remove_lines(&mut bw, s.dpi);
         }
         let mut canvas = BitImage::new(cw, ch);
+        if blank_canvas {
+            return canvas; // empty page of the requested size
+        }
         if blank {
             return if f == 1.0 { bw } else { scale_bw(&bw, cw, ch) };
         }
@@ -680,7 +697,11 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
     // Colour/gray window (also the source of picture patches and the hybrid background).
     let wants_colour = !matches!(s.mode, OutputMode::BlackWhite);
     let canvas_rgb: Option<RgbImage> = wants_colour.then(|| {
-        let mut window = transform::crop_pad(&img, win.0, win.1, win.2, win.3, bg);
+        if blank_canvas {
+            return RgbImage::from_pixel(cw, ch, paper);
+        }
+        // the strip beyond the scan's edge is paper, not (possibly tinted) page colour
+        let mut window = transform::crop_pad(&img, win.0, win.1, win.2, win.3, paper);
         if s.normalize_bg && window.width() > 8 && window.height() > 8 {
             let target = if s.mode == OutputMode::Gray {
                 Rgb([255, 255, 255])
@@ -834,6 +855,31 @@ mod tests {
     use image::{imageops, Rgb};
 
     const DPI: u32 = 300;
+
+    #[test]
+    fn blank_sheet_with_a_page_size_becomes_an_empty_page_of_that_size() {
+        let blank = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(900, 1300, Rgb([240, 240, 240])));
+        for mode in [OutputMode::BlackWhite, OutputMode::Color, OutputMode::Gray] {
+            let s = Settings { dpi: DPI, mode, page_size_mm: Some((100.0, 150.0)), ..Settings::default() };
+            let pages = process_page(&blank, &s);
+            assert_eq!(pages.len(), 1);
+            let (w, h) = (pages[0].image.width(), pages[0].image.height());
+            // 100 × 150 mm at 300 dpi
+            assert!((1180..=1182).contains(&w) && (1771..=1773).contains(&h), "{mode:?}: {w}x{h}");
+            assert!(pages[0].blank);
+        }
+    }
+
+    #[test]
+    fn shrinking_a_bilevel_page_keeps_one_pixel_rules() {
+        let mut b = BitImage::new(400, 400);
+        for x in 20..380 {
+            b.set(x, 200, true); // a 1-px horizontal rule
+        }
+        let small = scale_bw(&b, 200, 200);
+        let ink: u32 = (0..200).map(|x| small.get(x, 100) as u32 + small.get(x, 99) as u32).sum();
+        assert!(ink > 120, "the rule must survive halving, kept {ink} px");
+    }
 
     #[test]
     fn sauvola_finds_text_on_uneven_light() {

@@ -333,6 +333,14 @@ fn gmul(mut a: u8, mut b: u8) -> u8 {
 struct Tables {
     sbox: [u8; 256],
     inv: [u8; 256],
+    /// Multiplication tables of GF(2^8) by the MixColumns constants: a table lookup instead of
+    /// a bitwise loop per byte (AES of a 100 MB scan took tens of seconds with `gmul`).
+    m2: [u8; 256],
+    m3: [u8; 256],
+    m9: [u8; 256],
+    m11: [u8; 256],
+    m13: [u8; 256],
+    m14: [u8; 256],
 }
 fn tables() -> &'static Tables {
     static T: std::sync::OnceLock<Tables> = std::sync::OnceLock::new();
@@ -355,7 +363,14 @@ fn tables() -> &'static Tables {
             sbox[x] = s;
             inv[s as usize] = x as u8;
         }
-        Tables { sbox, inv }
+        let mul = |k: u8| -> [u8; 256] {
+            let mut t = [0u8; 256];
+            for (x, v) in t.iter_mut().enumerate() {
+                *v = gmul(x as u8, k);
+            }
+            t
+        };
+        Tables { sbox, inv, m2: mul(2), m3: mul(3), m9: mul(9), m11: mul(11), m13: mul(13), m14: mul(14) }
     })
 }
 
@@ -430,10 +445,11 @@ impl Aes {
             if r != nr {
                 for col in 0..4 {
                     let a = [b[4 * col], b[4 * col + 1], b[4 * col + 2], b[4 * col + 3]];
-                    b[4 * col] = gmul(a[0], 2) ^ gmul(a[1], 3) ^ a[2] ^ a[3];
-                    b[4 * col + 1] = a[0] ^ gmul(a[1], 2) ^ gmul(a[2], 3) ^ a[3];
-                    b[4 * col + 2] = a[0] ^ a[1] ^ gmul(a[2], 2) ^ gmul(a[3], 3);
-                    b[4 * col + 3] = gmul(a[0], 3) ^ a[1] ^ a[2] ^ gmul(a[3], 2);
+                    let (x, y, z, w) = (a[0] as usize, a[1] as usize, a[2] as usize, a[3] as usize);
+                    b[4 * col] = t.m2[x] ^ t.m3[y] ^ a[2] ^ a[3];
+                    b[4 * col + 1] = a[0] ^ t.m2[y] ^ t.m3[z] ^ a[3];
+                    b[4 * col + 2] = a[0] ^ a[1] ^ t.m2[z] ^ t.m3[w];
+                    b[4 * col + 3] = t.m3[x] ^ a[1] ^ a[2] ^ t.m2[w];
                 }
             }
             Self::add(b, &self.rk[r]);
@@ -457,13 +473,11 @@ impl Aes {
             if r != 0 {
                 for col in 0..4 {
                     let a = [b[4 * col], b[4 * col + 1], b[4 * col + 2], b[4 * col + 3]];
-                    b[4 * col] = gmul(a[0], 14) ^ gmul(a[1], 11) ^ gmul(a[2], 13) ^ gmul(a[3], 9);
-                    b[4 * col + 1] =
-                        gmul(a[0], 9) ^ gmul(a[1], 14) ^ gmul(a[2], 11) ^ gmul(a[3], 13);
-                    b[4 * col + 2] =
-                        gmul(a[0], 13) ^ gmul(a[1], 9) ^ gmul(a[2], 14) ^ gmul(a[3], 11);
-                    b[4 * col + 3] =
-                        gmul(a[0], 11) ^ gmul(a[1], 13) ^ gmul(a[2], 9) ^ gmul(a[3], 14);
+                    let (x, y, z, w) = (a[0] as usize, a[1] as usize, a[2] as usize, a[3] as usize);
+                    b[4 * col] = t.m14[x] ^ t.m11[y] ^ t.m13[z] ^ t.m9[w];
+                    b[4 * col + 1] = t.m9[x] ^ t.m14[y] ^ t.m11[z] ^ t.m13[w];
+                    b[4 * col + 2] = t.m13[x] ^ t.m9[y] ^ t.m14[z] ^ t.m11[w];
+                    b[4 * col + 3] = t.m11[x] ^ t.m13[y] ^ t.m9[z] ^ t.m14[w];
                 }
             }
         }
@@ -659,6 +673,12 @@ impl Crypt {
             return Err("the PDF is password-protected (it needs a user password)".into());
         }
         Ok(Crypt { key, stm: p.stm })
+    }
+
+    /// Decrypt a literal string that belongs to object `num gen` (strings use the string
+    /// filter; streams and strings share the key derivation).
+    pub fn decrypt_string(&self, num: u32, gen: u32, data: &[u8]) -> Vec<u8> {
+        self.decrypt_stream(num, gen, data)
     }
 
     pub fn decrypt_stream(&self, num: u32, gen: u32, data: &[u8]) -> Vec<u8> {

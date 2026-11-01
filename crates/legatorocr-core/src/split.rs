@@ -2,6 +2,25 @@
 
 use crate::BitImage;
 
+/// The ink of a skewed spread turned back by `rad` (clockwise, nearest neighbour, same size):
+/// a gutter that leans by `h·tan(skew)` becomes a clean vertical valley again.
+pub fn level(ink: &BitImage, rad: f32) -> BitImage {
+    let (w, h) = (ink.w as i64, ink.h as i64);
+    let (cx, cy) = ((w as f32 - 1.0) / 2.0, (h as f32 - 1.0) / 2.0);
+    let (s, c) = rad.sin_cos();
+    let mut out = BitImage::new(ink.w, ink.h);
+    for y in 0..h {
+        for x in 0..w {
+            let (dx, dy) = (x as f32 - cx, y as f32 - cy);
+            let (sx, sy) = ((cx + dx * c + dy * s).round() as i64, (cy - dx * s + dy * c).round() as i64);
+            if sx >= 0 && sy >= 0 && sx < w && sy < h && ink.data[(sy * w + sx) as usize] != 0 {
+                out.data[(y * w + x) as usize] = 1;
+            }
+        }
+    }
+    out
+}
+
 /// Returns the x coordinate at which to cut a two-page spread, or `None`
 /// when the image looks like a single page.
 pub fn find_gutter(ink: &BitImage) -> Option<u32> {
@@ -130,5 +149,38 @@ mod tests {
         body(&mut img, 1300, 2250);
         let cut = find_gutter(&img).unwrap();
         assert!((1100..1300).contains(&cut));
+    }
+}
+
+#[cfg(test)]
+mod level_tests {
+    use super::*;
+
+    /// Two text columns (rows of dashes) with a clean gutter between them.
+    fn spread(w: u32, h: u32) -> BitImage {
+        let mut b = BitImage::new(w, h);
+        for y in (60..h - 60).step_by(18) {
+            for x in 80..w - 80 {
+                let in_gutter = (w / 2 - 40..w / 2 + 40).contains(&x);
+                if !in_gutter && (x / 7) % 4 != 0 && (y / 18) % 6 != 5 {
+                    for dy in 0..9 {
+                        b.set(x, y + dy, true);
+                    }
+                }
+            }
+        }
+        b
+    }
+
+    #[test]
+    fn a_leaning_gutter_is_found_after_levelling() {
+        let (w, h) = (1500u32, 900u32);
+        let flat = spread(w, h);
+        let theta = 3.0f32.to_radians();
+        let skewed = level(&flat, -theta); // the same sheet scanned 3° crooked
+        let ang = crate::deskew::detect_skew(&skewed, 6.0).expect("lines give an angle");
+        assert!((ang - theta).abs() < 0.8f32.to_radians(), "estimated {}°", ang.to_degrees());
+        let cut = find_gutter(&level(&skewed, ang)).expect("gutter after levelling");
+        assert!((cut as i64 - (w / 2) as i64).abs() < 60, "cut at {cut}");
     }
 }

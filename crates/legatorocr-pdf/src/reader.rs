@@ -743,6 +743,8 @@ pub struct PdfDoc {
     /// Objects stored in object streams: number → (stream index, byte offset in that stream's data).
     comp: HashMap<u32, (usize, usize)>,
     stms: Vec<Vec<u8>>,
+    /// File offset of each object stream in `stms` (later revisions win over earlier ones).
+    stm_offs: Vec<usize>,
     pages: Vec<Dict>,
     crypt: Option<crate::crypt::Crypt>,
     /// (file offset of `N G obj`, N) sorted, to find the object a stream belongs to.
@@ -778,6 +780,7 @@ impl PdfDoc {
             offs: HashMap::new(),
             comp: HashMap::new(),
             stms: Vec::new(),
+            stm_offs: Vec::new(),
             pages: Vec::new(),
             crypt: None,
             by_off: Vec::new(),
@@ -837,6 +840,9 @@ impl PdfDoc {
         if let Some(ev) = enc_val {
             doc.crypt = Some(doc.setup_crypt(&ev, &id0)?);
         }
+        // oldest first: an object redefined in a later object stream replaces the earlier one
+        let mut objstms = objstms;
+        objstms.sort_by_key(|n| doc.offs[n]);
         for n in objstms {
             doc.load_objstm(n);
         }
@@ -932,6 +938,14 @@ impl PdfDoc {
                 continue;
             };
             self.offs.insert(num, num_start);
+            // binary stream data may contain text that looks like `N G obj`: step over the body of
+            // a stream (when its `endstream` really follows) instead of scanning it for objects
+            if let Some(Val::Stream(_, _, e)) = parse_object(d, num_start) {
+                let tail = &d[e.min(d.len())..(e + 16).min(d.len())];
+                if tail.trim_ascii_start().starts_with(b"endstream") && e > i {
+                    i = e;
+                }
+            }
         }
     }
 
@@ -1056,18 +1070,25 @@ impl PdfDoc {
         }
         for (num, off) in entries {
             if off < body.len() {
-                self.comp.entry(num).or_insert((idx, off));
+                self.comp.insert(num, (idx, off));
             }
         }
+        self.stm_offs.push(self.offs[&n]);
         self.stms.push(body);
     }
 
     fn get(&self, n: u32) -> Option<Val> {
-        if let Some(&off) = self.offs.get(&n) {
-            return parse_object(&self.data, off);
+        let direct = self.offs.get(&n).copied();
+        let packed = self.comp.get(&n).copied();
+        match (direct, packed) {
+            // defined both ways (an incremental update): the later one in the file is current
+            (Some(off), Some((i, o))) if self.stm_offs.get(i).is_some_and(|&so| so > off) => {
+                P::new(&self.stms[i], o).val(0)
+            }
+            (Some(off), _) => parse_object(&self.data, off),
+            (None, Some((i, off))) => P::new(&self.stms[i], off).val(0),
+            (None, None) => None,
         }
-        let &(i, off) = self.comp.get(&n)?;
-        P::new(&self.stms[i], off).val(0)
     }
 
     /// Follow references (bounded).
@@ -1766,7 +1787,14 @@ impl PdfDoc {
         let mut data = self.data[s.min(self.data.len())..e.min(self.data.len())].to_vec();
         if let Some(c) = &self.crypt {
             let is_xref = dict.get("Type").and_then(|t| t.name()) == Some("XRef");
-            if !is_xref {
+            // `/Filter [/Crypt]` with `/Name /Identity` (or no name) marks a stream stored in the clear
+            let identity = self.filters(dict).iter().any(|(n, parms)| {
+                n == "Crypt"
+                    && parms
+                        .get("Name")
+                        .map_or(true, |v| self.resolve(v).name() == Some("Identity"))
+            });
+            if !is_xref && !identity {
                 let (num, gen) = self.owner_of(s);
                 data = c.decrypt_stream(num, gen, &data);
             }
@@ -1806,8 +1834,13 @@ impl PdfDoc {
         Ok(data)
     }
 
-    fn colour_space(&self, v: Option<&Val>, depth: u32) -> R<Cs> {
+    fn colour_space(&self, v: Option<&Val>, depth: u32, owner: Option<(u32, u32)>) -> R<Cs> {
         let Some(v) = v else { return Ok(Cs::Gray) };
+        // a colour space stored as its own object owns its strings
+        let owner = match v {
+            Val::Ref(n) => Some((*n, 0)),
+            _ => owner,
+        };
         if depth > 4 {
             return fail("colour space nesting too deep");
         }
@@ -1835,10 +1868,14 @@ impl PdfDoc {
                     }
                 }
                 "Indexed" | "I" if a.len() >= 4 => {
-                    let base = self.colour_space(a.get(1), depth + 1)?;
+                    let base = self.colour_space(a.get(1), depth + 1, owner)?;
                     let hival = self.resolve(&a[2]).int().unwrap_or(255).clamp(0, 255) as usize;
                     let table = match self.resolve(&a[3]) {
-                        Val::Str(s) => s,
+                        // a literal palette in an encrypted file is encrypted with its object's key
+                        Val::Str(s) => match (&self.crypt, owner) {
+                            (Some(c), Some((n, g))) => c.decrypt_string(n, g, &s),
+                            _ => s,
+                        },
                         Val::Stream(d, s, e) => self.decode_stream(&d, s, e, &mut |_| {})?,
                         _ => return fail("bad palette"),
                     };
@@ -1876,7 +1913,7 @@ impl PdfDoc {
         let mut cs = if is_mask {
             Cs::Gray
         } else {
-            self.colour_space(dict.get("ColorSpace").or_else(|| dict.get("CS")), 0)
+            self.colour_space(dict.get("ColorSpace").or_else(|| dict.get("CS")), 0, Some(self.owner_of(s)))
                 .or_else(|err| {
                     // a JPEG / JPEG 2000 / CCITT stream carries its own colour information;
                     // for any other filter an unknown colour space must not be guessed as RGB
@@ -2541,6 +2578,20 @@ mod tests {
             let img = doc.page_image(0).unwrap().image.to_luma8();
             assert_eq!(img.as_raw().as_slice(), &want, "matrix {cm}");
         }
+    }
+
+    #[test]
+    fn object_markers_inside_stream_data_do_not_replace_real_objects() {
+        // an embedded attachment whose bytes contain a fake page object 3 (with a huge MediaBox)
+        let fake = "3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 9999 9999]>>endobj";
+        let mut v = b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n".to_vec();
+        v.extend_from_slice(b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 100 10]/Resources<</XObject<</Im0 4 0 R>>>>/Contents 5 0 R>>endobj\n");
+        v.extend_from_slice(b"4 0 obj<</Type/XObject/Subtype/Image/Width 2/Height 2/BitsPerComponent 8/ColorSpace/DeviceGray/Length 4>>stream\n\x01\x02\x03\x04\nendstream endobj\n5 0 obj<</Length 27>>stream\nq 100 0 0 10 0 0 cm /Im0 Do Q\nendstream endobj\n");
+        // the attachment comes LAST: with "last definition wins" its fake object 3 would take over
+        v.extend_from_slice(format!("6 0 obj<</Length {}>>stream\n{fake}\nendstream endobj\ntrailer<</Root 1 0 R/Size 7>>\n", fake.len()).as_bytes());
+        let doc = PdfDoc::open(v).unwrap();
+        let info = doc.page_info(0).unwrap();
+        assert_eq!((info.width_px, info.height_px), (2, 2), "the real page 3 must win");
     }
 
     #[test]

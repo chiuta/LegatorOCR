@@ -120,6 +120,8 @@ pub struct App {
     installed: Vec<String>,
     /// Tesseract has the `osd` data (orientation detection).
     has_osd: bool,
+    /// When the running preview was started (watchdog for a hung decode).
+    preview_started: Option<std::time::Instant>,
     ocr_info: String,
     show_about: bool,
     draw_zones: bool,
@@ -158,6 +160,7 @@ impl App {
             langs_rx: None,
             installed: Vec::new(),
             has_osd: false,
+            preview_started: None,
             ocr_info: String::new(),
             show_about: false,
             draw_zones: false,
@@ -585,7 +588,22 @@ impl App {
         }
     }
 
+    /// A preview still running after two minutes is given up: its thread cannot be stopped, but
+    /// a late answer is ignored (`pending` no longer matches), so one hung scan cannot freeze
+    /// every later preview.
+    fn preview_watchdog(&mut self) {
+        if self.preview_started.is_some_and(|t| t.elapsed() > std::time::Duration::from_secs(120)) {
+            for s in self.sheets.iter_mut() {
+                if let Some(k) = s.pending.take() {
+                    s.failed = Some((k, "preview timed out".to_string()));
+                }
+            }
+            self.preview_started = None;
+        }
+    }
+
     fn request_preview(&mut self, ctx: &egui::Context) {
+        self.preview_watchdog();
         let Some(i) = self.selected else { return };
         let Some(sheet) = self.sheets.get(i) else {
             return;
@@ -611,6 +629,7 @@ impl App {
             osd: self.osd_options(),
         };
         self.sheets[i].pending = Some(key);
+        self.preview_started = Some(std::time::Instant::now());
         let (tx, ctx) = (self.pv_tx.clone(), ctx.clone());
         std::thread::spawn(move || {
             let outcome = std::panic::catch_unwind(|| worker::render(&req)).unwrap_or_else(|_| {

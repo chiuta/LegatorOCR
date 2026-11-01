@@ -98,59 +98,80 @@ pub fn auto_levels(img: &mut RgbImage) {
 }
 
 /// Blur every channel with two box passes per axis (≈ Gaussian), radius `r` px.
+///
+/// Works in horizontal bands (in parallel) that overlap by the filter's vertical reach (2·r
+/// rows), so memory is proportional to a band, not to the whole page (the old version held two
+/// `f32` copies of the image: 24 bytes per pixel), and the result is identical to blurring the
+/// whole image at once.
 fn blur(img: &RgbImage, r: usize) -> RgbImage {
+    use rayon::prelude::*;
     let (w, h) = (img.width() as usize, img.height() as usize);
-    let mut cur: Vec<f32> = img.as_raw().iter().map(|&v| v as f32).collect();
-    let mut tmp = vec![0f32; cur.len()];
-    for _ in 0..2 {
-        // horizontal
-        for y in 0..h {
-            for c in 0..3 {
-                let at = |x: usize| (y * w + x) * 3 + c;
-                let mut sum = 0f32;
-                let mut lo = 0usize;
-                let mut hi = 0usize; // window [lo, hi)
-                for x in 0..w {
-                    let (nlo, nhi) = (x.saturating_sub(r), (x + r + 1).min(w));
+    if w == 0 || h == 0 {
+        return img.clone();
+    }
+    const BAND: usize = 256;
+    let margin = 2 * r;
+    let src = img.as_raw();
+    let starts: Vec<usize> = (0..h).step_by(BAND).collect();
+    let bands: Vec<Vec<u8>> = starts
+        .par_iter()
+        .map(|&y0| {
+            let y1 = (y0 + BAND).min(h);
+            let (s, e) = (y0.saturating_sub(margin), (y1 + margin).min(h));
+            let hb = e - s;
+            let mut cur: Vec<f32> = src[s * w * 3..e * w * 3].iter().map(|&v| v as f32).collect();
+            let mut tmp = vec![0f32; cur.len()];
+            let mut col = vec![0f32; w * 3];
+            for _ in 0..2 {
+                // horizontal: sliding window along each row
+                for y in 0..hb {
+                    for c in 0..3 {
+                        let at = |x: usize| (y * w + x) * 3 + c;
+                        let (mut sum, mut lo, mut hi) = (0f32, 0usize, 0usize);
+                        for x in 0..w {
+                            let (nlo, nhi) = (x.saturating_sub(r), (x + r + 1).min(w));
+                            while hi < nhi {
+                                sum += cur[at(hi)];
+                                hi += 1;
+                            }
+                            while lo < nlo {
+                                sum -= cur[at(lo)];
+                                lo += 1;
+                            }
+                            tmp[at(x)] = sum / (hi - lo) as f32;
+                        }
+                    }
+                }
+                // vertical: running per-column sums, whole rows added and dropped (sequential memory)
+                col.iter_mut().for_each(|v| *v = 0.0);
+                let (mut lo, mut hi) = (0usize, 0usize);
+                for y in 0..hb {
+                    let (nlo, nhi) = (y.saturating_sub(r), (y + r + 1).min(hb));
                     while hi < nhi {
-                        sum += cur[at(hi)];
+                        for (c, v) in col.iter_mut().zip(&tmp[hi * w * 3..(hi + 1) * w * 3]) {
+                            *c += v;
+                        }
                         hi += 1;
                     }
                     while lo < nlo {
-                        sum -= cur[at(lo)];
+                        for (c, v) in col.iter_mut().zip(&tmp[lo * w * 3..(lo + 1) * w * 3]) {
+                            *c -= v;
+                        }
                         lo += 1;
                     }
-                    tmp[at(x)] = sum / (hi - lo) as f32;
+                    let n = (hi - lo) as f32;
+                    for (o, c) in cur[y * w * 3..(y + 1) * w * 3].iter_mut().zip(&col) {
+                        *o = c / n;
+                    }
                 }
             }
-        }
-        // vertical
-        for x in 0..w {
-            for c in 0..3 {
-                let at = |y: usize| (y * w + x) * 3 + c;
-                let mut sum = 0f32;
-                let mut lo = 0usize;
-                let mut hi = 0usize;
-                for y in 0..h {
-                    let (nlo, nhi) = (y.saturating_sub(r), (y + r + 1).min(h));
-                    while hi < nhi {
-                        sum += tmp[at(hi)];
-                        hi += 1;
-                    }
-                    while lo < nlo {
-                        sum -= tmp[at(lo)];
-                        lo += 1;
-                    }
-                    cur[at(y)] = sum / (hi - lo) as f32;
-                }
-            }
-        }
-    }
-    let mut out = RgbImage::new(w as u32, h as u32);
-    for (o, &v) in out.as_mut().iter_mut().zip(&cur) {
-        *o = v.round().clamp(0.0, 255.0) as u8;
-    }
-    out
+            cur[(y0 - s) * w * 3..(y1 - s) * w * 3]
+                .iter()
+                .map(|v| v.round().clamp(0.0, 255.0) as u8)
+                .collect()
+        })
+        .collect();
+    RgbImage::from_raw(w as u32, h as u32, bands.concat()).expect("size matches")
 }
 
 /// Unsharp mask: `out = img + amount·(img − blur(img, ≈0.3 mm))`. `amount` ≤ 0 → unchanged.
@@ -630,6 +651,81 @@ pub fn remove_lines(bw: &mut BitImage, dpi: u32) -> u64 {
 
 #[cfg(test)]
 mod tests {
+/// Blur every channel with two box passes per axis (≈ Gaussian), radius `r` px.
+fn blur_reference(img: &RgbImage, r: usize) -> RgbImage {
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    let mut cur: Vec<f32> = img.as_raw().iter().map(|&v| v as f32).collect();
+    let mut tmp = vec![0f32; cur.len()];
+    for _ in 0..2 {
+        // horizontal
+        for y in 0..h {
+            for c in 0..3 {
+                let at = |x: usize| (y * w + x) * 3 + c;
+                let mut sum = 0f32;
+                let mut lo = 0usize;
+                let mut hi = 0usize; // window [lo, hi)
+                for x in 0..w {
+                    let (nlo, nhi) = (x.saturating_sub(r), (x + r + 1).min(w));
+                    while hi < nhi {
+                        sum += cur[at(hi)];
+                        hi += 1;
+                    }
+                    while lo < nlo {
+                        sum -= cur[at(lo)];
+                        lo += 1;
+                    }
+                    tmp[at(x)] = sum / (hi - lo) as f32;
+                }
+            }
+        }
+        // vertical
+        for x in 0..w {
+            for c in 0..3 {
+                let at = |y: usize| (y * w + x) * 3 + c;
+                let mut sum = 0f32;
+                let mut lo = 0usize;
+                let mut hi = 0usize;
+                for y in 0..h {
+                    let (nlo, nhi) = (y.saturating_sub(r), (y + r + 1).min(h));
+                    while hi < nhi {
+                        sum += tmp[at(hi)];
+                        hi += 1;
+                    }
+                    while lo < nlo {
+                        sum -= tmp[at(lo)];
+                        lo += 1;
+                    }
+                    cur[at(y)] = sum / (hi - lo) as f32;
+                }
+            }
+        }
+    }
+    let mut out = RgbImage::new(w as u32, h as u32);
+    for (o, &v) in out.as_mut().iter_mut().zip(&cur) {
+        *o = v.round().clamp(0.0, 255.0) as u8;
+    }
+    out
+}
+
+
+    #[test]
+    fn banded_blur_equals_whole_image_blur() {
+        let (w, h) = (97u32, 613u32); // several bands, odd sizes
+        let img = RgbImage::from_fn(w, h, |x, y| {
+            image::Rgb([(x * 7 + y * 3) as u8, (x ^ y) as u8, ((x * y) % 251) as u8])
+        });
+        for r in [1usize, 3, 9, 40] {
+            let (a, b) = (super::blur(&img, r), blur_reference(&img, r));
+            // identical up to f32 rounding: the running sums start at the band, not at row 0
+            let worst = a.as_raw().iter().zip(b.as_raw()).map(|(x, y)| x.abs_diff(*y)).max().unwrap();
+            let off = a.as_raw().iter().zip(b.as_raw()).filter(|(x, y)| x != y).count();
+            assert!(worst <= 1, "radius {r}: differs by {worst}");
+            assert!(off * 1000 < a.as_raw().len(), "radius {r}: {off} samples differ");
+        }
+        let thin = RgbImage::from_fn(5, 3, |x, y| image::Rgb([(x * 50) as u8, (y * 80) as u8, 7]));
+        assert_eq!(super::blur(&thin, 2), blur_reference(&thin, 2));
+    }
+
     use super::*;
 
     #[test]

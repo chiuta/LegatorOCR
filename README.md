@@ -116,10 +116,11 @@ Quality gates: see `FUZZING.md` (10 fuzz/property suites, run weekly in CI with 
 
 See `COMPARISON.md` for what other tools do that this one does not. In short:
 
-- **Orientation**: the built-in test only finds "page lies on its side", not *which way*. With
-  Tesseract's `osd` data installed, enable **Orientation via OCR (OSD)** (GUI) or `--auto-rotate`
-  (CLI): it also resolves 90° vs 270° and upside-down pages (needs enough printed text on the page;
-  otherwise it leaves the page alone). Manual fallback: *Rotate left/right 90°* / `--rotate`.
+- **Orientation**: the built-in test only finds "page lies on its side", not *which way*. **Orientation via OCR**
+  (GUI switch / `--auto-rotate`) resolves 90° vs 270° and upside-down pages: with Tesseract's `osd` data when that is
+  installed, otherwise with the built-in engine, which reads a reduced copy in all four turns and keeps the one whose
+  words are found in the language word lists (needs about a dozen letters of printed text; otherwise the page is left
+  alone). Manual fallback: *Rotate left/right 90°* / `--rotate`.
 - Erase zones: typed in millimetres (same on every page) or drawn with the mouse per sheet (drag on the Original view, right-click removes; stored in the project; GUI drag not visually tested); picture
   zones and dewarp control points cannot be drawn at all. Pictures are detected automatically
   (sensitivity adjustable) and the content box can be nudged per page.

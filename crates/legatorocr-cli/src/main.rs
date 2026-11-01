@@ -631,6 +631,33 @@ fn real_main() -> Result<()> {
         .as_deref()
         .map(legatorocr_engine::profiles::load)
         .transpose()?;
+    if project.is_some() || profile.is_some() {
+        // the loaded settings replace the processing options: say so for those given explicitly
+        const PROCESSING: &[&str] = &[
+            "--mode", "--dpi", "--margin", "--page-size", "--split", "--no-deskew", "--skew",
+            "--max-skew", "--threshold", "--sauvola-k", "--sharpen", "--despeckle-strength",
+            "--output-dpi", "--hybrid-dpi", "--dropout", "--descreen", "--perspective", "--dewarp",
+            "--fingers", "--punch-holes", "--remove-lines", "--erase", "--picture-zone",
+        ];
+        let given: Vec<String> = std::env::args()
+            .skip(1)
+            .filter_map(|a| {
+                let name = a.split('=').next().unwrap_or("").to_string();
+                PROCESSING.contains(&name.as_str()).then_some(name)
+            })
+            .collect();
+        if !given.is_empty() {
+            eprintln!(
+                "warning: --{} settings replace the processing options given on the command line ({}); change them in the {} instead",
+                if project.is_some() { "project" } else { "profile" },
+                given.join(", "),
+                if project.is_some() { "project file" } else { "profile" }
+            );
+        }
+    }
+    if cli.skew.is_some() && cli.no_deskew {
+        eprintln!("warning: --skew sets the angle by hand and is applied even though --no-deskew is given");
+    }
     let settings = match (&project, &profile) {
         (Some(p), _) => p.settings.clone(),
         (None, Some(p)) => p.settings.clone(),
