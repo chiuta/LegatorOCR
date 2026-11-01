@@ -3,3 +3,4 @@ dist/
 legatorocr-out/
 *.lgr.bak
 __pycache__/
+.claude/
