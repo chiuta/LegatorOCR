@@ -556,6 +556,19 @@ fn real_main() -> Result<()> {
         )
     })?;
     in_range("picture-sensitivity", cli.picture_sensitivity, 0.0, 1.0)?;
+    in_range("sharpen", cli.sharpen, 0.0, 2.0)?;
+    in_range("despeckle-strength", cli.despeckle_strength, 0.25, 4.0)?;
+    if let Some(d) = cli.output_dpi {
+        if !(36..=1200).contains(&d) {
+            bail!("--output-dpi must be between 36 and 1200 (got {d})");
+        }
+    }
+    if !(36..=300).contains(&cli.hybrid_dpi) {
+        bail!("--hybrid-dpi must be between 36 and 300 (got {})", cli.hybrid_dpi);
+    }
+    if !(1..=100).contains(&cli.jpeg_quality) {
+        bail!("--jpeg-quality must be between 1 and 100 (got {})", cli.jpeg_quality);
+    }
     let align = parse_align(&cli.align)?;
     let settings = Settings {
         dpi: cli.dpi.unwrap_or(300),

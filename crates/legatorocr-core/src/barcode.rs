@@ -404,7 +404,7 @@ fn decode_itf(runs: &[f32], first_dark: bool) -> Option<String> {
                     wid.push(runs[j]);
                     nar.push(runs[j + 1]);
                     nar.push(runs[j + 2]);
-                    if out.len() >= 4 && uniform(&nar, &wid) {
+                    if out.len() >= 6 && uniform(&nar, &wid) {
                         return Some(out);
                     }
                     break;
