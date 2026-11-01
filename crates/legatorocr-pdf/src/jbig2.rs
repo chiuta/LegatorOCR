@@ -1193,6 +1193,9 @@ pub fn decode(data: &[u8], globals: Option<&[u8]>, w: usize, h: usize) -> R<Vec<
                     Jbig2Error("JBIG2 halftone without a pattern dictionary".into())
                 })?;
                 let np = pats.len();
+                if np == 0 || pats[0].w == 0 || pats[0].h == 0 {
+                    return fail("JBIG2 halftone with an empty pattern dictionary");
+                }
                 let mut bpp = 0;
                 while (1usize << bpp) < np {
                     bpp += 1;

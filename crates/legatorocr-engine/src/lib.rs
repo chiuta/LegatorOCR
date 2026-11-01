@@ -138,8 +138,8 @@ pub fn measure_uniform_size(
             if cancel.load(Ordering::Relaxed) {
                 bail!("cancelled");
             }
-            let img = load_image(&sheet.path)
-                .with_context(|| format!("reading {}", sheet.path.display()))?;
+            // an unreadable sheet is reported by the main pass (honouring keep_going), not here
+            let Ok(img) = load_image(&sheet.path) else { return Ok(Vec::new()) };
             let (img, settings) = orient_with_osd(img, &sheet.settings, osd);
             Ok(legatorocr_core::measure_page(&img, &settings)
                 .into_iter()
@@ -676,7 +676,8 @@ pub fn run_export(
                 let mut kept = Vec::new();
                 let mut skipped = 0;
                 for pg in process_page(&img, &settings) {
-                    if job.skip_blank && pg.blank {
+                    // with split_on_blank a blank sheet is a separator: it must reach the splitter
+                    if job.skip_blank && pg.blank && !job.split_on_blank {
                         skipped += 1;
                         continue;
                     }
@@ -799,8 +800,9 @@ pub fn run_export(
 
 /// Bookmark title for a sheet: its file name without the `#page` suffix or extension.
 fn source_key(p: &Path) -> String {
-    let s = p.to_string_lossy();
-    let base = s.split('#').next().unwrap_or("");
+    // only the file name carries the `#page` suffix: a folder called "Book #2" must not cut the path
+    let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let base = name.rsplit_once('#').map_or(name.as_str(), |(b, _)| b);
     Path::new(base)
         .file_stem()
         .map(|x| x.to_string_lossy().into_owned())
@@ -883,6 +885,13 @@ mod tests {
     use super::*;
     use image::{GrayImage, Luma};
     use std::sync::Mutex;
+
+    #[test]
+    fn bookmark_titles_survive_hash_characters_in_folder_names() {
+        assert_eq!(source_key(Path::new("/scans/Book #2/001.png")), "001");
+        assert_eq!(source_key(Path::new("/scans/Book #2/book.pdf#7")), "book");
+        assert_eq!(source_key(Path::new("a/b.tif")), "b");
+    }
 
     fn tmpdir(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("lgr-engine-{tag}-{}", std::process::id()));

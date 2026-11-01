@@ -208,6 +208,7 @@ impl App {
         };
         if let Ok(p) = legatorocr_engine::project::Project::parse(&text, None) {
             self.s.apply_project(&p);
+            self.s.apply_machine(&p);
             self.s.ocr = false; // OCR is slow: always opt in per session
             if let Some(l) = p.get("lang").and_then(Lang::from_code) {
                 self.lang = l;

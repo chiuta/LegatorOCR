@@ -92,8 +92,10 @@ fn flat_name(i: usize, member: &str) -> String {
                 c
             }
         })
-        .take(120)
         .collect();
+    // Cap by bytes (NAME_MAX is 255 bytes, not characters) but keep the extension: later code
+    // decides pdf / tiff / image by it.
+    let clean = cap_name(&clean, 180);
     let clean = if clean.trim_matches('.').is_empty() {
         "member".into()
     } else {
@@ -101,6 +103,22 @@ fn flat_name(i: usize, member: &str) -> String {
     };
     // The running number keeps archive order and makes equal names unique.
     format!("{i:06}_{clean}")
+}
+
+/// Shorten `name` to at most `max` bytes by cutting the stem, never the extension.
+fn cap_name(name: &str, max: usize) -> String {
+    if name.len() <= max {
+        return name.to_string();
+    }
+    let (stem, ext) = match name.rfind('.') {
+        Some(i) if name.len() - i <= 12 => (&name[..i], &name[i..]),
+        _ => (name, ""),
+    };
+    let mut keep = max.saturating_sub(ext.len());
+    while keep > 0 && !stem.is_char_boundary(keep) {
+        keep -= 1;
+    }
+    format!("{}{ext}", &stem[..keep])
 }
 
 struct Sink {
@@ -390,6 +408,17 @@ pub fn extract(archive: &Path, want: &dyn Fn(&str) -> bool) -> Result<Vec<(Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_member_names_keep_their_extension_and_stay_under_name_max() {
+        let long = format!("{}.pdf", "é".repeat(300));
+        let n = flat_name(7, &long);
+        assert!(n.len() <= 6 + 1 + 180 + 4, "{} bytes", n.len());
+        assert!(n.ends_with(".pdf"), "{n}");
+        assert!(n.starts_with("000007_"));
+        assert_eq!(cap_name("short.png", 180), "short.png");
+        assert_eq!(cap_name(&"x".repeat(400), 100).len(), 100);
+    }
 
     fn tmp(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("lgr-arch-{tag}-{}", std::process::id()));

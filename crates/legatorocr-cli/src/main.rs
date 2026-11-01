@@ -8,7 +8,7 @@ use legatorocr_engine::{
     ocr::OcrOptions,
     run_export, write_atomic, ExportJob, PdfExport, SheetInput,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{atomic::AtomicBool, Mutex};
 
 #[derive(Copy, Clone, ValueEnum)]
@@ -397,6 +397,27 @@ fn output_stems(paths: &[PathBuf]) -> Vec<String> {
         .collect()
 }
 
+/// The first page-image path (`stem`, `stem_L`, `stem_R` + extension, in `out_dir`) that is one of
+/// the input files themselves, compared by canonical path (and case-insensitively, for the
+/// case-folding file systems of Windows and macOS).
+fn output_clobbers_input(out_dir: &Path, stems: &[String], ext: &str, inputs: &[PathBuf]) -> Option<PathBuf> {
+    let dir = out_dir.canonicalize().ok()?;
+    let canon: Vec<String> = inputs
+        .iter()
+        .filter_map(|p| p.canonicalize().ok())
+        .map(|p| p.to_string_lossy().to_lowercase())
+        .collect();
+    for stem in stems {
+        for suffix in ["", "_L", "_R"] {
+            let cand = dir.join(format!("{stem}{suffix}.{ext}"));
+            if canon.contains(&cand.to_string_lossy().to_lowercase()) {
+                return Some(cand);
+            }
+        }
+    }
+    None
+}
+
 fn parse_page_size(s: &str) -> Result<(f32, f32)> {
     Ok(match s.to_ascii_lowercase().as_str() {
         "a4" => (210.0, 297.0),
@@ -487,6 +508,12 @@ fn real_main() -> Result<()> {
         let Some(bc) = legatorocr_core::barcode::render(text, 4, 500) else {
             bail!("--make-separator: use 1–80 printable ASCII characters");
         };
+        if bc.width() > 2480 {
+            bail!(
+                "--make-separator: this text needs a {}-px wide code, more than the 2480-px page; use at most about 45 characters",
+                bc.width()
+            );
+        }
         let mut sheet = image::GrayImage::from_pixel(2480, 3508, image::Luma([255]));
         let (ox, oy) = (
             2480u32.saturating_sub(bc.width()) / 2,
@@ -744,6 +771,17 @@ fn real_main() -> Result<()> {
         Fmt::Jpeg => "jpg",
         _ => "tif",
     };
+    if save_images {
+        if let Some(clash) = output_clobbers_input(&cli.out_dir, &stems, ext, &inputs) {
+            bail!(
+                "the page image {} would overwrite an input scan; choose another folder with -o (or --format none)",
+                clash.display()
+            );
+        }
+    }
+    if cli.multitiff.is_some() && !matches!(cli.mode, Mode::Bw) {
+        bail!("--multitiff needs black & white pages (use --mode bw)");
+    }
     let first_err: Mutex<Option<String>> = Mutex::new(None);
     if cli.multitiff.is_some()
         && (cli.skip_duplicates || cli.split_on_blank || cli.split_on_barcode || cli.skip_blank)
@@ -847,9 +885,7 @@ fn real_main() -> Result<()> {
         },
         &|_, _| {},
     )?;
-    if let Some(e) = first_err.into_inner().unwrap() {
-        bail!("saving image failed: {e}");
-    }
+    let save_error = first_err.into_inner().unwrap();
     for (p, e) in &res.failed {
         eprintln!("SKIPPED {}: {e}", p.display());
     }
@@ -889,6 +925,7 @@ fn real_main() -> Result<()> {
     if res.skipped_duplicates > 0 {
         eprintln!("{} duplicate page(s) skipped", res.skipped_duplicates);
     }
+    let _ = &save_error; // reported after every other output is written
     if let (Some(pdf_path), true) = (&cli.pdf, !res.docs.is_empty()) {
         let stem = pdf_path
             .file_stem()
@@ -934,6 +971,10 @@ fn real_main() -> Result<()> {
             .unwrap_or("LegatorOCR");
         write_atomic(p, &legatorocr_engine::docx::from_pages(&pages, title))?;
         eprintln!("wrote {}", p.display());
+    }
+    if let Some(e) = save_error {
+        legatorocr_engine::archive::cleanup();
+        bail!("saving page image failed (the PDF and text outputs above were written): {e}");
     }
     if !res.failed.is_empty() {
         eprintln!("{} input(s) could not be processed", res.failed.len());

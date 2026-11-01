@@ -574,8 +574,15 @@ fn unpredict(data: Vec<u8>, predictor: i64, colors: usize, bpc: usize, columns: 
     if predictor < 2 || colors == 0 || columns == 0 || !matches!(bpc, 1 | 2 | 4 | 8 | 16) {
         return data;
     }
+    // hostile /Colors and /Columns must not overflow or ask for gigabytes per row
+    let Some(bits_per_row) = colors.checked_mul(bpc).and_then(|b| b.checked_mul(columns)) else {
+        return data;
+    };
+    let row_bytes = bits_per_row.div_ceil(8);
+    if row_bytes == 0 || row_bytes > (1 << 26) || colors > 64 {
+        return data;
+    }
     let bpp = (colors * bpc).div_ceil(8).max(1);
-    let row_bytes = (colors * bpc * columns).div_ceil(8);
     if predictor == 2 {
         if bpc != 8 {
             return data; // sub-byte and 16-bit TIFF prediction are not supported; leave as is
@@ -1633,7 +1640,7 @@ impl PdfDoc {
                 unpredict(
                     data,
                     pi("Predictor", 1),
-                    pi("Colors", 1).max(1) as usize,
+                    pi("Colors", 1).clamp(1, 64) as usize,
                     pi("BitsPerComponent", 8) as usize,
                     pi("Columns", 1).clamp(1, 1 << 24) as usize,
                 )
@@ -1760,7 +1767,8 @@ impl PdfDoc {
                             .unwrap_or(d)
                     };
                     let k = pi("K", 0);
-                    let columns = pi("Columns", 1728).clamp(1, 1 << 20) as usize;
+                    // the decoder allocates rows × columns: tie it to the declared width
+                    let columns = (pi("Columns", 1728).clamp(1, 1 << 20) as usize).min(w.saturating_add(64));
                     let black_is_1 = matches!(
                         parms.get("BlackIs1").map(|v| self.resolve(v)),
                         Some(Val::Bool(true))
@@ -1778,7 +1786,9 @@ impl PdfDoc {
                     } else {
                         crate::g4::decode_g3(&raw, columns, rows, k, align)
                     };
-                    let stride = columns.div_ceil(8);
+                    // rows are at least as wide as the image, whatever /Columns said
+                    let out_cols = columns.max(w);
+                    let stride = out_cols.div_ceil(8);
                     let mut packed = vec![if black_is_1 { 0x00 } else { 0xFF }; stride * h];
                     for (y, row) in bits.iter().enumerate() {
                         for (x, &black) in row.iter().enumerate() {
@@ -1796,7 +1806,7 @@ impl PdfDoc {
                     raw = packed;
                     bpc = 1;
                     cs = Cs::Gray;
-                    row_pixels = columns;
+                    row_pixels = out_cols;
                 }
                 "JBIG2Decode" => {
                     let globals =
@@ -2274,6 +2284,50 @@ mod tests {
                 ((x + y) % 256) as u8,
             ])
         })
+    }
+
+    #[test]
+    fn hostile_predictor_parameters_neither_panic_nor_allocate_gigabytes() {
+        let d = vec![1u8, 2, 3, 4, 5, 6, 7, 8];
+        for (pred, colors, bpc, columns) in [
+            (12i64, 1_000_000_000usize, 8usize, 1usize << 24),
+            (2, 1usize << 61, 8, 1),
+            (15, 64, 16, 1 << 24),
+            (12, 1, 8, usize::MAX),
+            (12, 3, 8, 0),
+        ] {
+            let out = unpredict(d.clone(), pred, colors, bpc, columns);
+            assert!(out.len() <= d.len() * 2 + 64, "{pred} {colors} {columns}");
+        }
+    }
+
+    fn tiny_pdf_with_image(dict: &str, data: &[u8]) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n");
+        v.extend_from_slice(b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n");
+        v.extend_from_slice(b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 100 10]/Resources<</XObject<</Im0 4 0 R>>>>/Contents 5 0 R>>endobj\n");
+        v.extend_from_slice(format!("4 0 obj<</Type/XObject/Subtype/Image{dict}/Length {}>>stream\n", data.len()).as_bytes());
+        v.extend_from_slice(data);
+        v.extend_from_slice(b"\nendstream endobj\n5 0 obj<</Length 27>>stream\nq 100 0 0 10 0 0 cm /Im0 Do Q\nendstream endobj\ntrailer<</Root 1 0 R/Size 6>>\n");
+        v
+    }
+
+    #[test]
+    fn ccitt_columns_narrower_than_width_do_not_overrun_the_row() {
+        for cols in [1, 8, 33, 100, 5000, 1 << 20] {
+            let dict = format!("/Width 100/Height 10/BitsPerComponent 1/ColorSpace/DeviceGray/Filter/CCITTFaxDecode/DecodeParms<</K -1/Columns {cols}>>");
+            let doc = PdfDoc::open(tiny_pdf_with_image(&dict, &[0x00, 0x10, 0x01, 0x00, 0x55, 0xAA])).unwrap();
+            if let Ok(p) = doc.page_image(0) {
+                assert_eq!((p.image.width(), p.image.height()), (100, 10), "columns {cols}");
+            }
+        }
+    }
+
+    #[test]
+    fn hostile_flate_predictor_in_a_pdf_is_survived() {
+        let dict = "/Width 8/Height 8/BitsPerComponent 8/ColorSpace/DeviceGray/Filter/FlateDecode/DecodeParms<</Predictor 12/Colors 1000000000/Columns 16777216>>";
+        let doc = PdfDoc::open(tiny_pdf_with_image(dict, b"x\x9c\x03\x00\x00\x00\x00\x01")).unwrap();
+        let _ = doc.page_image(0);
     }
 
     #[test]

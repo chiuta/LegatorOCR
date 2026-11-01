@@ -153,7 +153,7 @@ fn unwrap_jp2(d: &[u8]) -> R<(&[u8], Option<u32>)> {
             } else {
                 (8, l)
             };
-            if len < hdr || p + len > d.len() {
+            if len < hdr || p.checked_add(len).is_none_or(|end| end > d.len()) {
                 return fail("damaged JP2 box");
             }
             let body = &d[p + hdr..p + len];
@@ -1730,6 +1730,15 @@ pub fn decode(data: &[u8]) -> R<Image> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn jp2_box_length_overflow_is_an_error_not_a_panic() {
+        let mut d = vec![0, 0, 0, 12, b'j', b'P', b' ', b' ', 0x0d, 0x0a, 0x87, 0x0a];
+        d.extend_from_slice(&[0, 0, 0, 1, b'j', b'p', b'2', b'h']);
+        d.extend_from_slice(&0xFFFF_FFFF_FFFF_FFF4u64.to_be_bytes());
+        d.extend_from_slice(&[0u8; 32]);
+        assert!(super::decode(&d).is_err());
+    }
+
     use super::*;
 
     macro_rules! fx {

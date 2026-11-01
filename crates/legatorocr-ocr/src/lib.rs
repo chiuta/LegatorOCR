@@ -307,8 +307,7 @@ pub fn detect_rotation(img: &image::DynamicImage, o: &OcrOptions) -> Result<Opti
     if o.engine != Engine::Tesseract {
         // Tesseract's OSD when it is installed with its `osd` data, otherwise the native detector
         let to = OcrOptions { engine: Engine::Tesseract, ..o.clone() };
-        let tess_osd = check_tesseract(&to).is_ok()
-            && list_tesseract_languages(&to).map(|l| l.iter().any(|x| x == "osd")).unwrap_or(false);
+        let tess_osd = tesseract_has_osd(&to);
         if !tess_osd {
             return Ok(native_rotation(img, o));
         }
@@ -318,6 +317,27 @@ pub fn detect_rotation(img: &image::DynamicImage, o: &OcrOptions) -> Result<Opti
         };
     }
     detect_rotation_tesseract(img, o)
+}
+
+/// Does the installed Tesseract have its `osd` data? Probed once per program path and then
+/// remembered for a minute: orientation detection runs once per sheet, and a 300-page book
+/// must not launch Tesseract twice more for every page just to ask.
+fn tesseract_has_osd(o: &OcrOptions) -> bool {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+    static CACHE: OnceLock<Mutex<HashMap<(PathBuf, Option<PathBuf>), (bool, Instant)>>> = OnceLock::new();
+    let key = (o.tesseract.clone(), o.tessdata.clone());
+    let mut c = CACHE.get_or_init(Default::default).lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(&(v, at)) = c.get(&key) {
+        if at.elapsed() < Duration::from_secs(60) {
+            return v;
+        }
+    }
+    let v = check_tesseract(o).is_ok()
+        && list_tesseract_languages(o).map(|l| l.iter().any(|x| x == "osd")).unwrap_or(false);
+    c.insert(key, (v, Instant::now()));
+    v
 }
 
 /// Native orientation test: which turn makes the words dictionary words (needs ≥ ~12 letters
@@ -586,7 +606,7 @@ fn xml_escape(s: &str) -> String {
             '>' => o.push_str("&gt;"),
             '"' => o.push_str("&quot;"),
             '\'' => o.push_str("&#39;"),
-            c if (c as u32) < 0x20 && c != '\t' => {} // not allowed in XML 1.0
+            c if ((c as u32) < 0x20 && c != '\t') || c == '\u{FFFE}' || c == '\u{FFFF}' => {} // not allowed in XML 1.0
             c => o.push(c),
         }
     }

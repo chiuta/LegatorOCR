@@ -38,17 +38,35 @@ fn run(prog: &Path, args: &[&std::ffi::OsStr]) -> Result<std::process::Output> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
+    // Drain both pipes on their own threads: a child that prints more than a pipe buffer holds
+    // (hundreds of warnings on a damaged file) would otherwise block until the timeout.
+    fn drain<R: std::io::Read + Send + 'static>(r: Option<R>) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(r) = r {
+                let _ = std::io::Read::read_to_end(&mut std::io::Read::take(r, 64 << 20), &mut buf);
+            }
+            buf
+        })
+    }
+    let (out, err) = (drain(child.stdout.take()), drain(child.stderr.take()));
     let start = Instant::now();
-    loop {
-        if child.try_wait()?.is_some() {
-            return Ok(child.wait_with_output()?);
+    let status = loop {
+        if let Some(s) = child.try_wait()? {
+            break s;
         }
         if start.elapsed() > Duration::from_secs(180) {
             let _ = child.kill();
+            let _ = child.wait();
             bail!("timed out");
         }
         std::thread::sleep(Duration::from_millis(20));
-    }
+    };
+    Ok(std::process::Output {
+        status,
+        stdout: out.join().unwrap_or_default(),
+        stderr: err.join().unwrap_or_default(),
+    })
 }
 
 fn first_working(names: &[&str], probe: &[&str]) -> Option<(String, PathBuf)> {
@@ -103,12 +121,19 @@ pub fn page_count(path: &Path) -> Option<u32> {
 
 /// Rasterise page `page` (1-based) at [`DPI`].
 pub fn rasterize(path: &Path, page: u32) -> Result<DynamicImage> {
+    // unique per call (pid + counter + time): two PDFs rasterised at once must never share a folder
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!(
-        "legatorocr-ext-{}-{page}-{:x}",
+        "legatorocr-ext-{}-{page}-{}-{:x}",
         std::process::id(),
-        crate::now_unix() ^ (page as u64) << 32
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        crate::now_unix()
     ));
-    std::fs::create_dir_all(&dir)?;
+    std::fs::create_dir(&dir).or_else(|_| {
+        // a stale folder of a crashed run with the same name: start clean
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir)
+    })?;
     let result = (|| -> Result<DynamicImage> {
         let out = dir.join("page.png");
         let dpi = DPI.to_string();
