@@ -313,3 +313,38 @@ fn huge_blank_page_does_not_allocate_per_pixel_labels() {
     let b = BitImage::new(9000, 9000);
     assert_eq!(layout::median_component_height(&b), 0);
 }
+
+#[test]
+fn tilted_lines_are_levelled_and_boxes_map_back() {
+    // seven text-like bands tilted by 2.4° (one pixel row drops every 24 columns)
+    let (w, h) = (900u32, 700u32);
+    let th = 2.4f32.to_radians();
+    let (sn, cs) = th.sin_cos();
+    let mut g = image::GrayImage::from_pixel(w, h, image::Luma([245]));
+    // rigid rotation of an upright page: bands of 16 px every 70 px, broken into 5-px "letters"
+    for y in 0..h {
+        for x in 0..w {
+            let (dx, dy) = (x as f32 - 450.0, y as f32 - 350.0);
+            let u = dx * cs + dy * sn + 450.0;
+            let v = -dx * sn + dy * cs + 350.0;
+            if (60.0..840.0).contains(&u) && (u as u32 / 5) % 3 != 0 {
+                let r = (v - 90.0).rem_euclid(70.0);
+                if (0.0..16.0).contains(&r) && (90.0..580.0).contains(&v) {
+                    g.put_pixel(x, y, image::Luma([25]));
+                }
+            }
+        }
+    }
+    let prep = layout::prepare(&PageImage::Gray(g), 300);
+    let deg = prep.skew.to_degrees();
+    assert!((deg.abs() - 2.4).abs() < 0.5, "estimated {deg}°");
+    assert_eq!(layout::find_lines(&prep.ink, prep.med).len(), 7);
+    // a box on the levelled page maps back inside the original page, near the same spot
+    let (x, y, bw, bh) = layout::unrotate_box((450, 300, 40, 20), prep.skew, w, h);
+    assert!((430..470).contains(&x) && (280..320).contains(&y) && bw >= 40 && bh >= 20, "{x},{y},{bw},{bh}");
+    // an untilted page stays untouched
+    let flat = layout::prepare(&PageImage::Gray(image::GrayImage::from_fn(w, h, |x, y| {
+        image::Luma([if (y / 70) % 2 == 0 && (y % 70) < 16 && (x / 5) % 3 != 0 && x > 60 && x < 840 { 25 } else { 245 }])
+    })), 300);
+    assert_eq!(flat.skew, 0.0);
+}

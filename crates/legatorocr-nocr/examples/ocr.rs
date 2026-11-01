@@ -27,6 +27,12 @@ fn main() {
     }
     let t = std::time::Instant::now();
     let words = recognize(&PageImage::Gray(img), dpi, &model, &NativeOptions { lang: std::env::var("NOCR_LANG").unwrap_or_default(), ..Default::default() });
+    if std::env::var_os("NOCR_BOXES").is_some() {
+        for w in &words {
+            println!("{}\t{}\t{}\t{}\t{}", w.x, w.y, w.w, w.h, w.text);
+        }
+        return;
+    }
     let mut line = u32::MAX;
     for w in &words {
         if w.line != line {

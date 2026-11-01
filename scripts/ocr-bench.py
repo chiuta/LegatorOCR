@@ -2,7 +2,10 @@
 """Synthetic OCR benchmark: raw Tesseract vs LegatorOCR (clean-up + Tesseract) on pages
 rendered from known text in the eight interface languages, under three scan conditions.
 
-    python3 scripts/ocr-bench.py [path/to/legatorocr] [--out DIR]
+    python3 scripts/ocr-bench.py [path/to/legatorocr] [--out DIR] [--engine auto|native|tesseract]
+
+`--engine native` runs LegatorOCR with its built-in engine; the raw-Tesseract column is then
+filled only when `tesseract` is installed ("n/a" otherwise).
 
 Needs Pillow, tesseract with eng/ron/fra/ita/spa/por/deu/hun models and DejaVu Serif.
 The text is ground truth, so CER/WER are exact; but the pages are SYNTHETIC (one font, no
@@ -16,6 +19,9 @@ OUT = tempfile.mkdtemp(prefix="lgr-bench-")
 if "--out" in sys.argv:
     OUT = sys.argv[sys.argv.index("--out") + 1]
     os.makedirs(OUT, exist_ok=True)
+ENGINE = sys.argv[sys.argv.index("--engine") + 1] if "--engine" in sys.argv else "auto"
+import shutil
+HAVE_TESS = shutil.which("tesseract") is not None
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf"
 
 TEXT = {
@@ -88,14 +94,15 @@ for lang, (tess, text) in TEXT.items():
         img, dpi = render(text, cond, hash((lang, cond)) & 0xFFFF)
         png = os.path.join(OUT, f"{lang}_{cond}.png"); img.save(png, dpi=(dpi, dpi))
         raw = os.path.join(OUT, f"{lang}_{cond}.raw.txt")
-        open(raw, "w").write(run(["tesseract", png, "stdout", "-l", tess, "--psm", "3"]).stdout)
+        if HAVE_TESS:
+            open(raw, "w").write(run(["tesseract", png, "stdout", "-l", tess, "--psm", "3"]).stdout)
         out = os.path.join(OUT, f"{lang}_{cond}.lgr.txt")
-        r = run([BIN, png, "--mode", "bw", "--ocr", "--lang", tess, "--txt", out, "--format", "none", "-o", os.path.join(OUT, "o")])
+        r = run([BIN, png, "--mode", "bw", "--ocr", "--engine", ENGINE, "--lang", tess, "--txt", out, "--format", "none", "-o", os.path.join(OUT, "o")])
         if r.returncode != 0:
             print(lang, cond, r.stderr[-200:], file=sys.stderr); continue
-        rows.append((lang, cond, cer(ref, raw), cer(ref, out)))
+        rows.append((lang, cond, cer(ref, raw) if HAVE_TESS else "n/a", cer(ref, out)))
 
-print("| lang | scan | raw Tesseract | LegatorOCR (clean-up + Tesseract) |")
+print("| lang | scan | raw Tesseract | LegatorOCR (clean-up + %s) |" % ("native engine" if ENGINE == "native" else "OCR engine: " + ENGINE))
 print("|---|---|---|---|")
 for r in rows:
     print("| %s | %s | %s | %s |" % r)

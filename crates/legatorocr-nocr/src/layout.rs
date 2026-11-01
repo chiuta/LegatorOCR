@@ -22,6 +22,60 @@ pub struct Prepared {
     pub ink: BitImage,
     /// Median height of letter-like components (0 = nothing found).
     pub med: u32,
+    /// Clockwise angle (radians) the page was turned to level its text lines; 0 = untouched.
+    /// Boxes found on `gray`/`ink` must go through [`unrotate_box`] to match the input page.
+    pub skew: f32,
+}
+
+/// Skew below this is left alone (the line cut tolerates it).
+const MIN_SKEW: f32 = 0.3 * std::f32::consts::PI / 180.0;
+
+/// Turn a grey image clockwise by `rad` about its centre (bilinear, paper-coloured corners).
+fn rotate_gray(g: &GrayImage, rad: f32, fill: u8) -> GrayImage {
+    let (w, h) = (g.width() as i64, g.height() as i64);
+    let (cx, cy) = ((w as f32 - 1.0) / 2.0, (h as f32 - 1.0) / 2.0);
+    let (s, c) = rad.sin_cos();
+    let mut out = GrayImage::from_pixel(g.width(), g.height(), image::Luma([fill]));
+    for y in 0..h {
+        for x in 0..w {
+            // source = inverse rotation of the output position
+            let (dx, dy) = (x as f32 - cx, y as f32 - cy);
+            let sx = cx + dx * c + dy * s;
+            let sy = cy - dx * s + dy * c;
+            if sx < 0.0 || sy < 0.0 || sx > w as f32 - 1.0 || sy > h as f32 - 1.0 {
+                continue;
+            }
+            let (x0, y0) = (sx.floor() as i64, sy.floor() as i64);
+            let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
+            let (fx, fy) = (sx - x0 as f32, sy - y0 as f32);
+            let px = |xx: i64, yy: i64| g.get_pixel(xx as u32, yy as u32).0[0] as f32;
+            let v = px(x0, y0) * (1.0 - fx) * (1.0 - fy)
+                + px(x1, y0) * fx * (1.0 - fy)
+                + px(x0, y1) * (1.0 - fx) * fy
+                + px(x1, y1) * fx * fy;
+            out.put_pixel(x as u32, y as u32, image::Luma([v.round().clamp(0.0, 255.0) as u8]));
+        }
+    }
+    out
+}
+
+/// Map a box from the levelled page back to the page that was given (`w`×`h` pixels).
+pub fn unrotate_box(b: (u32, u32, u32, u32), rad: f32, w: u32, h: u32) -> (u32, u32, u32, u32) {
+    let (cx, cy) = ((w as f32 - 1.0) / 2.0, (h as f32 - 1.0) / 2.0);
+    let (s, c) = rad.sin_cos();
+    let (x0, y0, x1, y1) = (b.0 as f32, b.1 as f32, (b.0 + b.2) as f32, (b.1 + b.3) as f32);
+    let mut lo = (f32::MAX, f32::MAX);
+    let mut hi = (f32::MIN, f32::MIN);
+    for (px, py) in [(x0, y0), (x1, y0), (x0, y1), (x1, y1)] {
+        // the levelling turned the page by +rad; undo it
+        let (dx, dy) = (px - cx, py - cy);
+        let (ox, oy) = (cx + dx * c + dy * s, cy - dx * s + dy * c);
+        lo = (lo.0.min(ox), lo.1.min(oy));
+        hi = (hi.0.max(ox), hi.1.max(oy));
+    }
+    let x = lo.0.max(0.0).floor() as u32;
+    let y = lo.1.max(0.0).floor() as u32;
+    (x, y, (hi.0.ceil().max(0.0) as u32).saturating_sub(x).max(1), (hi.1.ceil().max(0.0) as u32).saturating_sub(y).max(1))
 }
 
 pub fn to_ink(page: &PageImage, dpi: u32) -> (GrayImage, BitImage) {
@@ -66,11 +120,36 @@ pub fn prepare(page: &PageImage, dpi: u32) -> Prepared {
         }
         ink = threshold_ink(&gray, dpi);
     }
-    let med = median_component_height(&ink);
+    let mut med = median_component_height(&ink);
     if med >= 6 {
         remove_rules(&mut ink, &mut gray, med);
     }
-    Prepared { gray, ink, med }
+    let mut skew = 0.0;
+    if med >= 6 {
+        if let Some(a) = legatorocr_core::deskew::detect_skew(&ink, 6.0) {
+            if a.abs() > MIN_SKEW {
+                // level the lines so the cut sees horizontal rows; paper level = a light percentile
+                let mut hist = [0u64; 256];
+                for p in gray.pixels() {
+                    hist[p.0[0] as usize] += 1;
+                }
+                let (mut acc, mut paper) = (0u64, 255u8);
+                for (v, &c) in hist.iter().enumerate() {
+                    acc += c;
+                    if acc * 100 >= total * 85 {
+                        paper = v as u8;
+                        break;
+                    }
+                }
+                gray = rotate_gray(&gray, a, paper);
+                ink = threshold_ink(&gray, dpi);
+                med = median_component_height(&ink).max(1);
+                remove_rules(&mut ink, &mut gray, med);
+                skew = a;
+            }
+        }
+    }
+    Prepared { gray, ink, med, skew }
 }
 
 /// 3×3 median filter: removes single-pixel scanner noise before thresholding, keeps edges.

@@ -94,10 +94,15 @@ fn recognize_inner(page: &PageImage, dpi: u32, model: &Model, o: &NativeOptions)
         .par_iter()
         .map(|ln| recognise_line(&prep.gray, &prep.ink, ln, model, o, &lexicons, ro))
         .collect();
+    let (pw, ph) = (page.width(), page.height());
     let mut words = Vec::new();
     for (i, mut ws) in per_line.into_iter().enumerate() {
         for w in &mut ws {
             w.line = i as u32;
+            if prep.skew != 0.0 {
+                let (x, y, bw, bh) = layout::unrotate_box((w.x, w.y, w.w, w.h), prep.skew, pw, ph);
+                (w.x, w.y, w.w, w.h) = (x, y, bw, bh);
+            }
         }
         words.append(&mut ws);
     }
