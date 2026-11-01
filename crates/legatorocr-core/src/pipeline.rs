@@ -63,6 +63,9 @@ pub struct Settings {
     /// deskewed page's width and height) becomes a straight horizontal line. When present they
     /// replace the automatic estimate, even if `dewarp` is off.
     pub dewarp_guides: Vec<Vec<(f32, f32)>>,
+    /// Like `dewarp_guides` but drawn on the *scanned sheet as loaded* (fractions of its width
+    /// and height); they follow rotation, page split and deskew.
+    pub sheet_dewarp_guides: Vec<Vec<(f32, f32)>>,
     /// Margins around the detected content, millimetres: left, top, right, bottom.
     pub margins_mm: [f32; 4],
     /// Per-page correction of the detected content box, mm: how far each side
@@ -135,6 +138,7 @@ impl Default for Settings {
             max_skew_deg: 7.0,
             dewarp: false,
             dewarp_guides: Vec::new(),
+            sheet_dewarp_guides: Vec::new(),
             margins_mm: [5.0; 4],
             content_adjust_mm: [0.0; 4],
             page_size_mm: None,
@@ -268,6 +272,11 @@ impl Settings {
         s.dpi = s.dpi.clamp(36, 2400);
         s.rotate_quarters %= 4;
         s.dewarp_guides.truncate(64);
+        s.sheet_dewarp_guides.truncate(64);
+        for g in s.sheet_dewarp_guides.iter_mut() {
+            g.truncate(256);
+            g.retain(|p| p.0.is_finite() && p.1.is_finite());
+        }
         for g in &mut s.dewarp_guides {
             g.truncate(256);
         }
@@ -366,7 +375,8 @@ impl Settings {
 /// Stages shared by [`process_page`] and [`measure_page`]: orientation and page split.
 /// One page cut from a sheet: the image, which half it is, and the hand-marked picture zones
 /// (x, y, width, height in pixels of this image).
-type SheetPart = (RgbImage, Option<u8>, Vec<[f32; 4]>);
+type Guides = Vec<Vec<(f32, f32)>>;
+type SheetPart = (RgbImage, Option<u8>, Vec<[f32; 4]>, Guides);
 
 /// Rotate a pixel rectangle together with an image of `w`×`h` by `turns` quarter turns
 /// clockwise; returns the new image size too.
@@ -382,6 +392,19 @@ fn rot90_rects(rects: &mut [[f32; 4]], w: u32, h: u32, turns: u8) -> (u32, u32) 
     (w, h)
 }
 
+/// The same quarter turns for points: (x, y) -> (H - y, x).
+fn rot90_points(g: &mut Guides, w: u32, h: u32, turns: u8) {
+    let (mut w, mut h) = (w, h);
+    for _ in 0..turns % 4 {
+        for l in g.iter_mut() {
+            for p in l.iter_mut() {
+                *p = (h as f32 - p.1, p.0);
+            }
+        }
+        std::mem::swap(&mut w, &mut h);
+    }
+}
+
 fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
     let base = src.to_rgb8();
     let (w0, h0) = base.dimensions();
@@ -392,6 +415,17 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
         .map(|z| [px(z[0]), px(z[1]), px(z[2]), px(z[3])])
         .collect();
     rot90_rects(&mut zones, w0, h0, s.rotate_quarters);
+    // mouse-drawn dewarp guides: fractions of the sheet as loaded -> pixels, then followed
+    let mut guides: Guides = s
+        .sheet_dewarp_guides
+        .iter()
+        .map(|g| {
+            g.iter()
+                .map(|p| (p.0 * w0 as f32, p.1 * h0 as f32))
+                .collect()
+        })
+        .collect();
+    rot90_points(&mut guides, w0, h0, s.rotate_quarters);
     let mut rgb = if s.rotate_quarters.is_multiple_of(4) {
         base // nothing turned: no copy at all
     } else {
@@ -401,6 +435,7 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
         if let Some(flat) = crate::perspective::correct(&rgb) {
             rgb = flat;
             zones.clear(); // a projective warp is not followed
+            guides.clear();
         }
     }
 
@@ -408,6 +443,7 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
         let a = analyse(&imageops::grayscale(&rgb), s.dpi);
         if orient::needs_quarter_turn(&a.ink, a.dpi) {
             rot90_rects(&mut zones, rgb.width(), rgb.height(), 1);
+            rot90_points(&mut guides, rgb.width(), rgb.height(), 1);
             rgb = transform::rot90(&rgb, 1);
         }
     }
@@ -444,9 +480,23 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
                 .iter()
                 .filter_map(|z| clip(z, xf, rgb.width() as f32))
                 .collect();
-            vec![(l, Some(0), lz), (r, Some(1), rz)]
+            // keep the points that fall on each half (a guide needs two of them)
+            let part = |x0: f32, x1: f32| -> Guides {
+                guides
+                    .iter()
+                    .map(|g| {
+                        g.iter()
+                            .filter(|p| p.0 >= x0 && p.0 < x1)
+                            .map(|p| (p.0 - x0, p.1))
+                            .collect::<Vec<_>>()
+                    })
+                    .filter(|g| g.len() >= 2)
+                    .collect()
+            };
+            let (lg, rg) = (part(0.0, xf), part(xf, rgb.width() as f32));
+            vec![(l, Some(0), lz, lg), (r, Some(1), rz, rg)]
         }
-        None => vec![(rgb, None, zones)],
+        None => vec![(rgb, None, zones, guides)],
     }
 }
 
@@ -467,7 +517,7 @@ pub fn process_page(src: &DynamicImage, s: &Settings) -> Vec<Page> {
     let src = &*erase_on_sheet(src, s);
     split_sheet(src, s)
         .into_iter()
-        .map(|(img, idx, zones)| render(prepare(img, s, zones), idx, s))
+        .map(|(img, idx, zones, guides)| render(prepare(img, s, zones, guides), idx, s))
         .collect()
 }
 
@@ -479,8 +529,8 @@ pub fn measure_page(src: &DynamicImage, s: &Settings) -> Vec<Option<(f32, f32)>>
     let src = &*erase_on_sheet(src, s);
     split_sheet(src, s)
         .into_iter()
-        .map(|(img, _, zones)| {
-            let p = prepare(img, s, zones);
+        .map(|(img, _, zones, guides)| {
+            let p = prepare(img, s, zones, guides);
             p.content.map(|r| {
                 let [ml, mt, mr, mb] = s.margins_mm;
                 let mm = |px: u32| px as f32 * 25.4 / s.dpi as f32;
@@ -502,7 +552,12 @@ struct Prepared {
     pictures: Vec<[f32; 4]>,
 }
 
-fn prepare(mut img: RgbImage, s: &Settings, mut pictures: Vec<[f32; 4]>) -> Prepared {
+fn prepare(
+    mut img: RgbImage,
+    s: &Settings,
+    mut pictures: Vec<[f32; 4]>,
+    mut guides: Guides,
+) -> Prepared {
     // --- clean-up: fixes that make every later stage's job easier ----------
     if s.auto_invert {
         cleanup::invert_if_negative(&mut img);
@@ -589,12 +644,24 @@ fn prepare(mut img: RgbImage, s: &Settings, mut pictures: Vec<[f32; 4]>) -> Prep
                 let y1 = pts.iter().map(|p| p.1).fold(f32::MIN, f32::max);
                 *z = [x0, y0, x1 - x0, y1 - y0];
             }
+            for p in guides.iter_mut().flat_map(|g| g.iter_mut()) {
+                let (dx, dy) = (p.0 - cx, p.1 - cy);
+                *p = (ncx + dx * cs - dy * sn, ncy + dx * sn + dy * cs);
+            }
         }
     }
 
     // --- dewarp -----------------------------------------------------------
-    if !s.dewarp_guides.is_empty() {
-        if let Some(flat) = dewarp::dewarp_guides(&img, &s.dewarp_guides, bg) {
+    // typed guides are fractions of the deskewed page, drawn ones follow the sheet to here
+    let (iw, ih) = (img.width().max(1) as f32, img.height().max(1) as f32);
+    let mut all: Guides = s.dewarp_guides.clone();
+    all.extend(guides.iter().map(|g| {
+        g.iter()
+            .map(|p| ((p.0 / iw).clamp(0.0, 1.0), (p.1 / ih).clamp(0.0, 1.0)))
+            .collect()
+    }));
+    if !all.is_empty() {
+        if let Some(flat) = dewarp::dewarp_guides(&img, &all, bg) {
             img = flat;
         }
     } else if s.dewarp {
@@ -977,6 +1044,59 @@ pub(crate) mod testutil {
 #[cfg(test)]
 mod tests {
     use super::testutil::*;
+
+    #[test]
+    fn drawn_guide_points_follow_quarter_turns_like_pixels() {
+        for turns in 1..4u8 {
+            let mut img = RgbImage::from_pixel(40, 24, Rgb([255, 255, 255]));
+            img.put_pixel(7, 5, Rgb([0, 0, 0]));
+            let mut g: Guides = vec![vec![(7.5, 5.5), (7.5, 5.5)]];
+            rot90_points(&mut g, 40, 24, turns);
+            let turned = transform::rot90(&img, turns);
+            let (x, y) = (g[0][0].0.floor() as u32, g[0][0].1.floor() as u32);
+            assert_eq!(turned.get_pixel(x, y)[0], 0, "turns {turns}: ({x},{y})");
+        }
+    }
+
+    #[test]
+    fn sheet_guides_straighten_after_rotation_and_junk_is_ignored() {
+        let bend = |u: f32| 26.0 * (u - 0.5) * (u - 0.5) * 4.0 - 8.0 * (u - 0.5);
+        let mut page = RgbImage::from_pixel(900, 1200, Rgb([238, 238, 238]));
+        for k in 0..10 {
+            let y0 = 120.0 + k as f32 * 100.0;
+            for x in (60..840).step_by(21) {
+                let dy = bend(x as f32 / 900.0);
+                for yy in 0..13 {
+                    for xx in 0..14 {
+                        page.put_pixel(x + xx, (y0 + dy) as u32 + yy, Rgb([25, 25, 25]));
+                    }
+                }
+            }
+        }
+        let src = DynamicImage::ImageRgb8(page);
+        let guide: Vec<(f32, f32)> = (0..=10)
+            .map(|i| {
+                let u = i as f32 / 10.0;
+                (u, (126.0 + bend(u)) / 1200.0)
+            })
+            .collect();
+        let base = Settings {
+            split: SplitMode::Off,
+            deskew: false,
+            ..Settings::default()
+        };
+        let with = Settings {
+            sheet_dewarp_guides: vec![guide, vec![(f32::NAN, 0.5), (0.2, 9.0)]],
+            ..base.clone()
+        };
+        let a = process_page(&src, &base);
+        let b = process_page(&src, &with);
+        assert_eq!((a.len(), b.len()), (1, 1));
+        let (PageImage::Rgb(x), PageImage::Rgb(y)) = (&a[0].image, &b[0].image) else {
+            panic!("colour output expected");
+        };
+        assert_ne!(x.as_raw(), y.as_raw(), "guides had no effect");
+    }
     use super::*;
     use crate::{binarize, content, deskew, orient, split, transform};
     use image::{imageops, Rgb};
@@ -1509,6 +1629,13 @@ mod tests {
                 fingers: rnd(2) == 0,
                 remove_lines: rnd(2) == 0,
                 sheet_erase_zones: vec![],
+                sheet_dewarp_guides: if rnd(3) == 0 {
+                    vec![(0..3)
+                        .map(|k| (k as f32 / 2.0, rnd(100) as f32 / 50.0 - 0.5))
+                        .collect()]
+                } else {
+                    Vec::new()
+                },
                 sheet_picture_zones: if rnd(3) == 0 {
                     vec![[
                         rnd(300) as f32 - 50.0,

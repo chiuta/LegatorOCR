@@ -183,6 +183,8 @@ pub struct SheetAdjust {
     /// Erase rectangles drawn on the original (x, y, w, h in mm).
     pub erase_mm: Vec<[f32; 4]>,
     pub picture_mm: Vec<[f32; 4]>,
+    /// Dewarp guide lines drawn on the original (fractions 0–1 of the scan).
+    pub dewarp_guides: Vec<Vec<(f32, f32)>>,
 }
 
 impl UiSettings {
@@ -220,6 +222,7 @@ impl UiSettings {
             content_adjust_mm: adj.content_adjust_mm,
             sheet_erase_zones: adj.erase_mm.clone(),
             sheet_picture_zones: adj.picture_mm.clone(),
+            sheet_dewarp_guides: adj.dewarp_guides.clone(),
             align: self.align,
             threshold: self.threshold,
             normalize_bg: self.normalize_bg,

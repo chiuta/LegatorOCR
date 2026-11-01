@@ -129,6 +129,9 @@ pub struct App {
     ocr_info: String,
     show_about: bool,
     draw_zones: bool,
+    /// With `draw_zones`: the mouse draws dewarp guide lines (freehand along a bent text line).
+    draw_guide: bool,
+    guide_path: Vec<egui::Pos2>,
     /// What the mouse draws when `draw_zones` is on: picture zones instead of erase zones.
     draw_pictures: bool,
     /// Processed pages show the content box with draggable edges.
@@ -182,6 +185,8 @@ impl App {
             ocr_info: String::new(),
             show_about: false,
             draw_zones: false,
+            draw_guide: false,
+            guide_path: Vec::new(),
             draw_pictures: false,
             edit_box: false,
             box_drag: None,
@@ -267,6 +272,7 @@ impl App {
                         content_adjust_mm: a.content_adjust_mm,
                         erase_mm: a.erase_mm.clone(),
                         picture_mm: a.picture_mm.clone(),
+                        dewarp_guides: a.dewarp_guides.clone(),
                     },
                 )
             })
@@ -347,6 +353,7 @@ impl App {
                         content_adjust_mm: a.content_adjust_mm,
                         erase_mm: a.erase_mm.clone(),
                         picture_mm: a.picture_mm.clone(),
+                        dewarp_guides: a.dewarp_guides.clone(),
                     };
                 }
                 self.settings_gen += 1;
@@ -1712,8 +1719,26 @@ impl App {
             ui.checkbox(&mut self.edit_box, tr("box.edit"))
                 .on_hover_text(tr("box.hint"));
             if self.draw_zones {
-                ui.selectable_value(&mut self.draw_pictures, false, tr("zones.kind_erase"));
-                ui.selectable_value(&mut self.draw_pictures, true, tr("zones.kind_picture"));
+                if ui
+                    .selectable_label(
+                        !self.draw_guide && !self.draw_pictures,
+                        tr("zones.kind_erase"),
+                    )
+                    .clicked()
+                {
+                    (self.draw_guide, self.draw_pictures) = (false, false);
+                }
+                if ui
+                    .selectable_label(
+                        !self.draw_guide && self.draw_pictures,
+                        tr("zones.kind_picture"),
+                    )
+                    .clicked()
+                {
+                    (self.draw_guide, self.draw_pictures) = (false, true);
+                }
+                ui.selectable_value(&mut self.draw_guide, true, tr("zones.kind_guide"))
+                    .on_hover_text(tr("zones.guide_hint"));
             }
             ui.add_enabled(
                 !self.fit,
@@ -1958,6 +1983,11 @@ impl App {
         let zones: Vec<[f32; 4]> = sheet.adj.erase_mm.clone();
         let pic_zones: Vec<[f32; 4]> = sheet.adj.picture_mm.clone();
         let draw_pictures = self.draw_pictures;
+        let draw_guide = self.draw_guide;
+        let guide_list: Vec<Vec<(f32, f32)>> = sheet.adj.dewarp_guides.clone();
+        let mut new_guide: Option<Vec<(f32, f32)>> = None;
+        let mut remove_guide: Option<usize> = None;
+        let gpath = &mut self.guide_path;
         let edit_box = self.edit_box;
         let mut box_delta: Option<(usize, f32)> = None;
         let bdrag = &mut self.box_drag;
@@ -2036,7 +2066,97 @@ impl App {
                                     egui::StrokeKind::Inside,
                                 );
                             }
-                            if draw_zones {
+                            for g in &guide_list {
+                                let pts: Vec<egui::Pos2> = g
+                                    .iter()
+                                    .map(|p| {
+                                        egui::pos2(
+                                            rect.min.x + p.0 * rect.width(),
+                                            rect.min.y + p.1 * rect.height(),
+                                        )
+                                    })
+                                    .collect();
+                                painter.add(egui::Shape::line(
+                                    pts,
+                                    egui::Stroke::new(2.0, Color32::from_rgb(40, 170, 80)),
+                                ));
+                            }
+                            if draw_zones && draw_guide {
+                                if resp.drag_started() {
+                                    gpath.clear();
+                                    if let Some(p) = ui
+                                        .input(|i| i.pointer.press_origin())
+                                        .or_else(|| resp.interact_pointer_pos())
+                                    {
+                                        gpath.push(p);
+                                    }
+                                }
+                                if resp.dragged() {
+                                    if let Some(p) = ui.input(|i| i.pointer.latest_pos()) {
+                                        let p = p.clamp(rect.min, rect.max);
+                                        if gpath.last().is_none_or(|l| l.distance(p) >= 4.0)
+                                            && gpath.len() < 4000
+                                        {
+                                            gpath.push(p);
+                                        }
+                                    }
+                                }
+                                if gpath.len() >= 2 {
+                                    painter.add(egui::Shape::line(
+                                        gpath.clone(),
+                                        egui::Stroke::new(2.0, Color32::from_rgb(255, 160, 0)),
+                                    ));
+                                }
+                                if resp.drag_stopped() {
+                                    // thin the path to at most 24 points, fractions of the image
+                                    let n = gpath.len();
+                                    if n >= 2 && (gpath[0] - gpath[n - 1]).length() >= 12.0 {
+                                        let step = n.div_ceil(24).max(1);
+                                        let mut v: Vec<(f32, f32)> = gpath
+                                            .iter()
+                                            .step_by(step)
+                                            .map(|p| {
+                                                (
+                                                    (p.x - rect.min.x) / rect.width().max(1.0),
+                                                    (p.y - rect.min.y) / rect.height().max(1.0),
+                                                )
+                                            })
+                                            .collect();
+                                        let l = gpath[n - 1];
+                                        v.push((
+                                            (l.x - rect.min.x) / rect.width().max(1.0),
+                                            (l.y - rect.min.y) / rect.height().max(1.0),
+                                        ));
+                                        new_guide = Some(v);
+                                    }
+                                    gpath.clear();
+                                }
+                                if resp.secondary_clicked() {
+                                    if let Some(p) = resp.interact_pointer_pos() {
+                                        let (fx, fy) = (
+                                            (p.x - rect.min.x) / rect.width().max(1.0),
+                                            (p.y - rect.min.y) / rect.height().max(1.0),
+                                        );
+                                        // nearest guide (by its closest point), within 4 % of the page
+                                        let best = guide_list
+                                            .iter()
+                                            .enumerate()
+                                            .map(|(k, g)| {
+                                                let d = g
+                                                    .iter()
+                                                    .map(|q| (q.0 - fx).hypot(q.1 - fy))
+                                                    .fold(f32::MAX, f32::min);
+                                                (k, d)
+                                            })
+                                            .min_by(|a, b| a.1.total_cmp(&b.1));
+                                        if let Some((k, d)) = best {
+                                            if d < 0.04 {
+                                                remove_guide = Some(k);
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if draw_zones {
                                 if resp.drag_started() {
                                     // egui reports the start only after the pointer has moved a
                                     // little: the rectangle begins where the button went down
@@ -2202,6 +2322,20 @@ impl App {
             let a = &mut self.sheets[i].adj.content_adjust_mm[e];
             *a = (*a + mm).clamp(-100.0, 100.0);
             self.sheets[i].adj_gen += 1;
+        }
+        if let Some(g) = new_guide {
+            let a = &mut self.sheets[i].adj;
+            if a.dewarp_guides.len() < 64 {
+                a.dewarp_guides.push(g);
+                self.sheets[i].adj_gen += 1;
+            }
+        }
+        if let Some(k) = remove_guide {
+            let a = &mut self.sheets[i].adj;
+            if k < a.dewarp_guides.len() {
+                a.dewarp_guides.remove(k);
+                self.sheets[i].adj_gen += 1;
+            }
         }
         if let Some(z) = new_zone {
             let a = &mut self.sheets[i].adj;

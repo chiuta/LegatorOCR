@@ -31,6 +31,8 @@ pub struct SheetAdj {
     pub erase_mm: Vec<[f32; 4]>,
     /// Hand-drawn picture rectangles (x, y, w, h in mm of the loaded scan).
     pub picture_mm: Vec<[f32; 4]>,
+    /// Hand-drawn dewarp guide lines: points as fractions (0–1) of the loaded scan.
+    pub dewarp_guides: Vec<Vec<(f32, f32)>>,
 }
 
 impl SheetAdj {
@@ -44,6 +46,7 @@ impl SheetAdj {
         s.content_adjust_mm = self.content_adjust_mm;
         s.sheet_erase_zones = self.erase_mm.clone();
         s.sheet_picture_zones = self.picture_mm.clone();
+        s.sheet_dewarp_guides = self.dewarp_guides.clone();
         s
     }
 }
@@ -326,6 +329,12 @@ impl Project {
                     legatorocr_core::cleanup::zones_to_string(&a.picture_mm)
                 ));
             }
+            if !a.dewarp_guides.is_empty() {
+                out.push_str(&format!(
+                    "guides = {}\n",
+                    legatorocr_core::dewarp::guides_to_string(&a.dewarp_guides)
+                ));
+            }
             if !a.erase_mm.is_empty() {
                 out.push_str(&format!(
                     "erase = {}\n",
@@ -392,6 +401,10 @@ impl Project {
                     "picture" => {
                         adj.picture_mm = legatorocr_core::cleanup::parse_zones(v)
                             .ok_or_else(|| at(anyhow::anyhow!("invalid picture zones '{v}'")))?
+                    }
+                    "guides" => {
+                        adj.dewarp_guides = legatorocr_core::dewarp::parse_guides(v)
+                            .ok_or_else(|| at(anyhow::anyhow!("invalid dewarp guides '{v}'")))?
                     }
                     "erase" => {
                         adj.erase_mm = legatorocr_core::cleanup::parse_zones(v)
@@ -467,6 +480,7 @@ mod tests {
                 content_adjust_mm: [0.0, 1.0, 2.0, -3.0],
                 erase_mm: vec![[10.0, 20.5, 30.0, 40.0], [0.0, 0.0, 5.0, 5.0]],
                 picture_mm: vec![[50.0, 60.0, 70.5, 80.0]],
+                dewarp_guides: vec![vec![(0.0, 0.25), (0.5, 0.3), (1.0, 0.25)]],
             },
         ));
         p.sheets

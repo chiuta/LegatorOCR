@@ -48,6 +48,8 @@ fn paragraphs(page: &str) -> Vec<String> {
 pub enum Block {
     Para(String),
     Table(Vec<Vec<String>>),
+    /// A section laid out in columns (left to right), each a list of blocks.
+    Columns(Vec<Vec<Block>>),
 }
 
 /// Tables and paragraphs from the positioned words of one page. Text is cut into cells where a
@@ -57,6 +59,129 @@ pub enum Block {
 /// a table. Everything else is flowing text in the order the OCR gave. Nothing is invented: cell
 /// text is the recognised words, in order.
 pub fn blocks_from_words(words: &[legatorocr_core::text::Word]) -> Vec<Block> {
+    match split_columns(words) {
+        Some((head, cols)) => {
+            let mut out = blocks_flat(&head);
+            out.push(Block::Columns(
+                cols.iter().map(|c| blocks_flat(c)).collect(),
+            ));
+            out
+        }
+        None => blocks_flat(words),
+    }
+}
+
+/// A page set in two columns: a gutter of at least 2.5 line heights, free of text on nearly
+/// every line, between two bands that each hold a fifth or more of the words. Lines that run
+/// across the gutter (a title) must all sit above the columns. Returns the words of those
+/// heading lines and of each column.
+fn split_columns(
+    words: &[legatorocr_core::text::Word],
+) -> Option<(
+    Vec<legatorocr_core::text::Word>,
+    Vec<Vec<legatorocr_core::text::Word>>,
+)> {
+    let ws: Vec<&legatorocr_core::text::Word> = words
+        .iter()
+        .filter(|w| !w.text.trim().is_empty() && w.w > 0 && w.h > 0)
+        .collect();
+    if ws.len() < 40 {
+        return None;
+    }
+    let mut hs: Vec<f32> = ws.iter().map(|w| w.h as f32).collect();
+    hs.sort_by(|a, b| a.total_cmp(b));
+    let med = hs[hs.len() / 2];
+    let x0 = ws.iter().map(|w| w.x as f32).fold(f32::MAX, f32::min);
+    let x1 = ws
+        .iter()
+        .map(|w| w.x as f32 + w.w as f32)
+        .fold(f32::MIN, f32::max);
+    let width = x1 - x0;
+    if !(width.is_finite()) || width < 12.0 * med {
+        return None;
+    }
+    // lines (by id) and the x extent of their words
+    let mut ids: Vec<u32> = ws.iter().map(|w| w.line).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    let nl = ids.len();
+    if nl < 6 {
+        return None;
+    }
+    // how many lines have a word over each probe position of the central band
+    let probes = 200usize;
+    let mut cover = vec![0usize; probes];
+    for (p, c) in cover.iter_mut().enumerate() {
+        let x = x0 + width * (0.3 + 0.4 * p as f32 / probes as f32);
+        let mut hit: Vec<u32> = ws
+            .iter()
+            .filter(|w| (w.x as f32) <= x && x < w.x as f32 + w.w as f32)
+            .map(|w| w.line)
+            .collect();
+        hit.sort_unstable();
+        hit.dedup();
+        *c = hit.len();
+    }
+    let limit = (nl / 8).max(1);
+    // widest run of probes crossed by few lines
+    let (mut best, mut cur_start, mut best_run) = (0usize, 0usize, (0usize, 0usize));
+    for p in 0..=probes {
+        if cover.get(p).is_some_and(|&c| c <= limit) {
+            if best == 0 {
+                cur_start = p;
+            }
+            best += 1;
+            if best > best_run.1 - best_run.0 {
+                best_run = (cur_start, p + 1);
+            }
+        } else {
+            best = 0;
+        }
+    }
+    let gutter_w = (best_run.1 - best_run.0) as f32 * 0.4 * width / probes as f32;
+
+    if gutter_w < 2.5 * med {
+        return None;
+    }
+    let (gl, gr) = (
+        x0 + width * (0.3 + 0.4 * best_run.0 as f32 / probes as f32),
+        x0 + width * (0.3 + 0.4 * best_run.1 as f32 / probes as f32),
+    );
+    // the run's end probes touch text: pull the gutter in by one probe on each side
+    let step = 0.4 * width / probes as f32;
+    let (gl, gr) = (gl + step, gr - 1.5 * step);
+    let mid = (gl + gr) / 2.0;
+    let crosses =
+        |w: &legatorocr_core::text::Word| (w.x as f32) < gr && (w.x as f32 + w.w as f32) > gl;
+    let crossing: Vec<u32> = ws.iter().filter(|w| crosses(w)).map(|w| w.line).collect();
+    let center = |w: &legatorocr_core::text::Word| w.x as f32 + w.w as f32 / 2.0;
+    let (mut head, mut left, mut right) = (Vec::new(), Vec::new(), Vec::new());
+    let mut first_col_top = f32::MAX;
+    for w in &ws {
+        if !crossing.contains(&w.line) {
+            first_col_top = first_col_top.min(w.y as f32);
+        }
+    }
+    for w in &ws {
+        if crossing.contains(&w.line) {
+            // a heading line must lie above every column line
+            if w.y as f32 + w.h as f32 > first_col_top + 0.5 * med {
+                return None;
+            }
+            head.push((*w).clone());
+        } else if center(w) < mid {
+            left.push((*w).clone());
+        } else {
+            right.push((*w).clone());
+        }
+    }
+    if left.len() * 5 < ws.len() || right.len() * 5 < ws.len() {
+        return None;
+    }
+    Some((head, vec![left, right]))
+}
+
+fn blocks_flat(words: &[legatorocr_core::text::Word]) -> Vec<Block> {
     struct Cell {
         l: f32,
         r: f32,
@@ -224,6 +349,26 @@ fn blocks_xml(blocks: &[Block]) -> String {
                 "<w:p><w:r><w:t xml:space=\"preserve\">{}</w:t></w:r></w:p>",
                 esc(t)
             )),
+            Block::Columns(cols) => {
+                // the single-column part so far ends here; the columns form a continuous
+                // section of their own, closed by the paragraph that carries its properties
+                body.push_str(
+                    "<w:p><w:pPr><w:sectPr><w:type w:val=\"continuous\"/>\
+                     <w:pgSz w:w=\"11906\" w:h=\"16838\"/></w:sectPr></w:pPr></w:p>",
+                );
+                for (k, c) in cols.iter().enumerate() {
+                    if k > 0 {
+                        body.push_str("<w:p><w:r><w:br w:type=\"column\"/></w:r></w:p>");
+                    }
+                    body.push_str(&blocks_xml(c));
+                }
+                body.push_str(&format!(
+                    "<w:p><w:pPr><w:sectPr><w:type w:val=\"continuous\"/>\
+                     <w:pgSz w:w=\"11906\" w:h=\"16838\"/>\
+                     <w:cols w:num=\"{}\" w:space=\"567\"/></w:sectPr></w:pPr></w:p>",
+                    cols.len().clamp(1, 8)
+                ));
+            }
             Block::Table(rows) => {
                 body.push_str(
                     "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/><w:tblBorders>\
@@ -360,6 +505,67 @@ mod tests {
         let text = String::from_utf8_lossy(&doc).into_owned();
         assert!(doc.starts_with(b"PK"));
         assert!(text.len() > 100);
+    }
+
+    #[test]
+    fn two_column_page_becomes_a_columns_section_and_one_column_does_not() {
+        let mut v = vec![w("Titlu", 100, 40, 900, 0)];
+        let mut id = 1;
+        for r in 0..14u32 {
+            for (k, x0) in [100u32, 700].iter().enumerate() {
+                for c in 0..4u32 {
+                    v.push(w(
+                        &format!("c{k}r{r}w{c}"),
+                        x0 + c * 130,
+                        120 + r * 30,
+                        110,
+                        id,
+                    ));
+                }
+                id += 1;
+            }
+        }
+        let b = blocks_from_words(&v);
+        assert_eq!(b.len(), 2, "{b:?}");
+        assert!(matches!(&b[0], Block::Para(t) if t == "Titlu"));
+        let Block::Columns(cols) = &b[1] else {
+            panic!("{b:?}")
+        };
+        assert_eq!(cols.len(), 2);
+        let text = |c: &Vec<Block>| match &c[0] {
+            Block::Para(t) => t.clone(),
+            other => format!("{other:?}"),
+        };
+        assert!(text(&cols[0]).starts_with("c0r0w0"), "{}", text(&cols[0]));
+        assert!(text(&cols[1]).starts_with("c1r0w0"));
+        let docx = from_blocks(&[b], "t");
+        let xml = zipmini_text(&docx);
+        assert!(xml.contains("w:cols w:num=\"2\""));
+        assert!(xml.contains("w:type=\"column\""));
+        // a single wide column of text is left alone
+        let one: Vec<_> = (0..60u32)
+            .map(|i| {
+                w(
+                    &format!("t{i}"),
+                    100 + (i % 10) * 90,
+                    100 + (i / 10) * 30,
+                    80,
+                    i / 10,
+                )
+            })
+            .collect();
+        assert!(blocks_from_words(&one)
+            .iter()
+            .all(|b| !matches!(b, Block::Columns(_))));
+    }
+
+    fn zipmini_text(zip: &[u8]) -> String {
+        let list = crate::zipmini::list(zip).expect("zip");
+        let e = list
+            .iter()
+            .find(|e| e.name == "word/document.xml")
+            .expect("entry");
+        String::from_utf8_lossy(&crate::zipmini::read(zip, e).expect("read")).into_owned()
     }
 
     #[test]

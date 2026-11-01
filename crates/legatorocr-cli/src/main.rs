@@ -836,6 +836,7 @@ fn real_main() -> Result<()> {
         fingers: cli.fingers,
         remove_lines: cli.remove_lines,
         sheet_erase_zones: Vec::new(),
+        sheet_dewarp_guides: Vec::new(),
         sheet_picture_zones: Vec::new(),
         dewarp_guides: legatorocr_core::dewarp::parse_guides(&cli.dewarp_guide.join(";"))
             .ok_or_else(|| {
