@@ -240,6 +240,48 @@ struct Analysis {
     dpi: u32,
 }
 
+/// Ink map for very faint writing (soft pencil, a pale photocopy) that the normal analysis
+/// takes for paper: per tile, a pixel counts as ink when it is darker than the tile's paper
+/// level by more than a few times the tile's own noise. Only consulted for pages that came out
+/// blank, so ordinary scans are not affected; speckle is left to `detect_content`, which needs
+/// clustered ink.
+fn faint_ink(small: &GrayImage) -> BitImage {
+    let (w, h) = (small.width() as usize, small.height() as usize);
+    let mut out = BitImage::new(w as u32, h as u32);
+    let t = 48usize;
+    let mut y0 = 0;
+    while y0 < h {
+        let y1 = (y0 + t).min(h);
+        let mut x0 = 0;
+        while x0 < w {
+            let x1 = (x0 + t).min(w);
+            let mut v: Vec<u8> = Vec::with_capacity((x1 - x0) * (y1 - y0));
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    v.push(small.get_pixel(x as u32, y as u32)[0]);
+                }
+            }
+            v.sort_unstable();
+            let med = v[v.len() / 2] as i32;
+            let paper = v[v.len() * 9 / 10] as i32;
+            let mut dev: Vec<i32> = v.iter().map(|&p| (p as i32 - med).abs()).collect();
+            dev.sort_unstable();
+            let sigma = 1.4826 * dev[dev.len() / 2] as f32;
+            let thr = (5.0 * sigma).max(12.0) as i32;
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    if paper - small.get_pixel(x as u32, y as u32)[0] as i32 > thr {
+                        out.data[y * w + x] = 1;
+                    }
+                }
+            }
+            x0 = x1;
+        }
+        y0 = y1;
+    }
+    out
+}
+
 fn analyse(gray: &GrayImage, dpi: u32) -> Analysis {
     let factor = (dpi / 150).max(1);
     let small = transform::downscale_gray(gray, factor);
@@ -675,8 +717,19 @@ fn prepare(
     }
 
     // --- content ----------------------------------------------------------
-    let a = analyse(&imageops::grayscale(&img), s.dpi);
-    let content = content::detect_content(&a.ink, a.dpi).map(|r| {
+    let gray_full = imageops::grayscale(&img);
+    let mut a = analyse(&gray_full, s.dpi);
+    let mut found = content::detect_content(&a.ink, a.dpi);
+    if found.is_none() {
+        // a page that looks blank may carry very faint writing: look again with a gentler test
+        let small = transform::downscale_gray(&gray_full, a.factor);
+        let faint = faint_ink(&small);
+        if let Some(r) = content::detect_content(&faint, a.dpi) {
+            a.ink = faint;
+            found = Some(r);
+        }
+    }
+    let content = found.map(|r| {
         // back to full resolution, grown by the analysis step so no ink is shaved
         let f = a.factor;
         let (x0, y0) = ((r.x * f).saturating_sub(f), (r.y * f).saturating_sub(f));
@@ -1060,6 +1113,40 @@ mod tests {
             let (x, y) = (g[0][0].0.floor() as u32, g[0][0].1.floor() as u32);
             assert_eq!(turned.get_pixel(x, y)[0], 0, "turns {turns}: ({x},{y})");
         }
+    }
+
+    #[test]
+    fn faint_pencil_is_not_blank_but_noisy_paper_is() {
+        let mut seed = 99u64;
+        let mut noise = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % 7) as i32 - 3
+        };
+        let mut mk = |strokes: bool| {
+            let mut g = image::GrayImage::new(900, 1200);
+            let mut n = 0;
+            for y in 0..1200u32 {
+                for x in 0..900u32 {
+                    let mut v = 236 + noise();
+                    // pale pencil lines of text-like bars
+                    if strokes && (y / 40) % 2 == 1 && (150..750).contains(&x) && (x / 13) % 3 != 2
+                    {
+                        v -= 26;
+                        n += 1;
+                    }
+                    g.put_pixel(x, y, image::Luma([v.clamp(0, 255) as u8]));
+                }
+            }
+            let _ = n;
+            image::DynamicImage::ImageRgb8(image::DynamicImage::ImageLuma8(g).to_rgb8())
+        };
+        let s = Settings::default();
+        let blank = process_page(&mk(false), &s);
+        assert!(blank[0].blank, "noisy paper must stay blank");
+        let pencil = process_page(&mk(true), &s);
+        assert!(!pencil[0].blank, "faint pencil must not count as blank");
     }
 
     #[test]

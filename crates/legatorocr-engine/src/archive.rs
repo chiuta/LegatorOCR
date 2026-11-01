@@ -738,6 +738,65 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    /// A real 7z archive made by 7-Zip itself, read through the installed extractor (skipped
+    /// when there is none; in CI the Linux runners have `7z`).
+    #[test]
+    fn real_7z_archive_with_system_extractor() {
+        let Some(tool) = ["7zz", "7z", "7za"].into_iter().find(|t| {
+            Command::new(t)
+                .output()
+                .map(|o| o.status.success() || !o.stdout.is_empty())
+                .unwrap_or(false)
+        }) else {
+            return;
+        };
+        let d = tmp("7z");
+        std::fs::create_dir_all(d.join("in/sub")).unwrap();
+        std::fs::write(d.join("in/sub/p1.png"), b"one").unwrap();
+        std::fs::write(d.join("in/p2.png"), b"two").unwrap();
+        std::fs::write(d.join("in/n.txt"), b"nope").unwrap();
+        let ok = Command::new(tool)
+            .current_dir(&d)
+            .args(["a", "-t7z", "a.7z", "in"])
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ok);
+        let v = extract(&d.join("a.7z"), &|n| n.ends_with(".png")).unwrap();
+        let mut data: Vec<Vec<u8>> = v.iter().map(|x| std::fs::read(&x.1).unwrap()).collect();
+        data.sort();
+        assert_eq!(data, vec![b"one".to_vec(), b"two".to_vec()], "{v:?}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A hand-built RAR4 archive (stored, three members) read through 7-Zip's RAR support. The
+    /// bytes were checked with `7z t`; skipped where no installed tool lists the Rar format.
+    #[test]
+    fn rar_archive_with_system_extractor() {
+        let can = ["7zz", "7z"].into_iter().any(|t| {
+            Command::new(t)
+                .arg("i")
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).contains("Rar"))
+                .unwrap_or(false)
+        });
+        if !can {
+            return;
+        }
+        const RAR: &str = "526172211a0700cf907300000d000000000000000d097400802900030000000300000003f1866c7a00a0215a1430090020000000696e2f70312e706e676f6e65ae597400802600030000000300000003668aca1100a0215a143006002000000070322e706e6774776f2cb27400802500040000000400000003103fd1ab00a0215a14300500200000006e2e7478746e6f7065c43d7b00400700";
+        let bytes: Vec<u8> = (0..RAR.len() / 2)
+            .map(|i| u8::from_str_radix(&RAR[2 * i..2 * i + 2], 16).unwrap())
+            .collect();
+        let d = tmp("rar");
+        std::fs::write(d.join("t.rar"), &bytes).unwrap();
+        let v = extract(&d.join("t.rar"), &|n| n.ends_with(".png")).unwrap();
+        let mut data: Vec<Vec<u8>> = v.iter().map(|x| std::fs::read(&x.1).unwrap()).collect();
+        data.sort();
+        assert_eq!(data, vec![b"one".to_vec(), b"two".to_vec()], "{v:?}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     #[test]
     fn damaged_archives_error_cleanly() {
         let d = tmp("bad");

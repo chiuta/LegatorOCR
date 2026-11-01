@@ -109,6 +109,8 @@ pub struct App {
     tick: u64,
     lang: Lang,
     s: UiSettings,
+    /// Password for encrypted PDFs; kept for this session only, never written to the settings.
+    pdf_password: String,
     settings_gen: u32,
     sheets: Vec<Sheet>,
     selected: Option<usize>,
@@ -167,6 +169,7 @@ impl App {
             tick: 0,
             lang: Lang::detect(),
             s: UiSettings::default(),
+            pdf_password: String::new(),
             settings_gen: 1,
             sheets: Vec::new(),
             selected: None,
@@ -1419,6 +1422,20 @@ impl App {
                             ch |= ui.add(te).changed();
                         });
                         ui.horizontal(|ui| {
+                            ui.label(tr("set.pdf_password"));
+                            if ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut self.pdf_password)
+                                        .password(true)
+                                        .desired_width(120.0),
+                                )
+                                .changed()
+                            {
+                                legatorocr_engine::set_pdf_password(&self.pdf_password);
+                                ch = true;
+                            }
+                        });
+                        ui.horizontal(|ui| {
                             ui.label(tr("set.output_dpi"));
                             ch |= ui
                                 .add(
@@ -1702,8 +1719,8 @@ impl App {
             });
             return;
         };
-        // --- toolbar: view + zoom
-        ui.horizontal(|ui| {
+        // --- toolbar: view + zoom (wraps: the zone kinds must stay reachable on narrow windows)
+        ui.horizontal_wrapped(|ui| {
             for (v, k) in [
                 (View::Both, "view.both"),
                 (View::Original, "view.original"),
@@ -1771,7 +1788,7 @@ impl App {
                 adj_changed = true;
             }
             // 45° steps: quarter turns plus the manual skew together make the total angle
-            for (label, step) in [("↺45°", -45.0f32), ("↻45°", 45.0)] {
+            for (label, step) in [("-45°", -45.0f32), ("+45°", 45.0)] {
                 if ui.button(label).clicked() {
                     let total =
                         adj.rotate_quarters as f32 * 90.0 + adj.skew_deg.unwrap_or(0.0) + step;

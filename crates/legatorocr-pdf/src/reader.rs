@@ -765,6 +765,7 @@ pub struct PdfDoc {
     stm_offs: Vec<usize>,
     pages: Vec<Dict>,
     crypt: Option<crate::crypt::Crypt>,
+    password: Vec<u8>,
     /// (file offset of `N G obj`, N) sorted, to find the object a stream belongs to.
     by_off: Vec<(usize, u32)>,
 }
@@ -789,6 +790,11 @@ pub struct PdfPage {
 
 impl PdfDoc {
     pub fn open(data: Vec<u8>) -> R<PdfDoc> {
+        Self::open_with_password(data, b"")
+    }
+
+    /// Open a file that may need a user or owner password (the empty one is always tried too).
+    pub fn open_with_password(data: Vec<u8>, password: &[u8]) -> R<PdfDoc> {
         budget_reset();
         if find(&data[..data.len().min(1024)], b"%PDF-", 0).is_none() {
             return fail("not a PDF file (no %PDF- header)");
@@ -801,6 +807,7 @@ impl PdfDoc {
             stm_offs: Vec::new(),
             pages: Vec::new(),
             crypt: None,
+            password: password.to_vec(),
             by_off: Vec::new(),
         };
         doc.scan_objects();
@@ -1032,7 +1039,7 @@ impl PdfDoc {
             d.get("EncryptMetadata").map(|v| self.resolve(v)),
             Some(Val::Bool(false))
         );
-        let (o, u, ue) = (st("O"), st("U"), st("UE"));
+        let (o, u, ue, oe) = (st("O"), st("U"), st("UE"), st("OE"));
         crate::crypt::Crypt::new(&EncryptParams {
             v,
             r,
@@ -1041,6 +1048,8 @@ impl PdfDoc {
             o: &o,
             u: &u,
             ue: &ue,
+            oe: &oe,
+            password: &self.password,
             p: int("P", 0),
             id0,
             encrypt_metadata: em,
@@ -3256,6 +3265,92 @@ mod tests {
                         );
                     }
                 }
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn encrypted_pdfs_open_with_user_and_owner_passwords() {
+        if std::process::Command::new("qpdf")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("qpdf missing: skipping");
+            return;
+        }
+        let mut w = PdfWriter::new(Compress::Jpeg(90));
+        w.add_page(&page(PageImage::Rgb(gradient(90, 70)), 150), &[]);
+        let plain = w.finish();
+        let want = PdfDoc::open(plain.clone())
+            .unwrap()
+            .page_image(0)
+            .unwrap()
+            .image
+            .to_rgb8();
+        let dir = std::env::temp_dir().join(format!("lgr-enc-pw-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let inp = dir.join("in.pdf");
+        std::fs::write(&inp, &plain).unwrap();
+        let variants: [&[&str]; 5] = [
+            &[
+                "--allow-weak-crypto",
+                "--encrypt",
+                "usér",
+                "own3r",
+                "40",
+                "--",
+            ],
+            &[
+                "--allow-weak-crypto",
+                "--encrypt",
+                "usér",
+                "own3r",
+                "128",
+                "--use-aes=n",
+                "--",
+            ],
+            &[
+                "--allow-weak-crypto",
+                "--encrypt",
+                "usér",
+                "own3r",
+                "128",
+                "--use-aes=y",
+                "--",
+            ],
+            &["--encrypt", "usér", "own3r", "256", "--force-R5", "--"],
+            &["--encrypt", "usér", "own3r", "256", "--"],
+        ];
+        for (i, v) in variants.iter().enumerate() {
+            let out = dir.join(format!("out{i}.pdf"));
+            let o = std::process::Command::new("qpdf")
+                .args(v.iter())
+                .arg(&inp)
+                .arg(&out)
+                .output()
+                .unwrap();
+            assert!(
+                o.status.success(),
+                "qpdf {i}: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+            let enc = std::fs::read(&out).unwrap();
+            // no password, a wrong one: refused with a message about the password
+            let e = PdfDoc::open(enc.clone()).err().expect("needs a password");
+            assert!(e.0.contains("password"), "variant {i}: {}", e.0);
+            let e = PdfDoc::open_with_password(enc.clone(), b"nope")
+                .err()
+                .expect("wrong password");
+            assert!(e.0.contains("wrong"), "variant {i}: {}", e.0);
+            // user password (UTF-8 for R5/6 and Latin-1 for the older revisions is what qpdf takes
+            // from the command line bytes), owner password
+            for pw in ["usér".as_bytes(), b"own3r"] {
+                let doc = PdfDoc::open_with_password(enc.clone(), pw)
+                    .unwrap_or_else(|e| panic!("variant {i} {pw:?}: {e}"));
+                let got = doc.page_image(0).unwrap().image.to_rgb8();
+                assert_eq!(got.as_raw(), want.as_raw(), "variant {i} {pw:?}");
             }
         }
         let _ = std::fs::remove_dir_all(&dir);

@@ -381,6 +381,12 @@ struct Cli {
     #[arg(long, value_name = "X,Y X,Y …")]
     dewarp_guide: Vec<String>,
 
+    /// Password for encrypted PDF input (user or owner password; also read from the environment
+    /// variable LEGATOROCR_PDF_PASSWORD, which keeps it out of the process list). Files that open
+    /// with the empty password need none.
+    #[arg(long, value_name = "PASSWORD")]
+    pdf_password: Option<String>,
+
     /// Drop one printed colour: off, red, green, blue.
     #[arg(long, default_value = "off")]
     dropout: String,
@@ -602,6 +608,13 @@ fn expand_path(p: &mut Option<PathBuf>, name: &str) -> Result<()> {
 
 fn real_main() -> Result<()> {
     let mut cli = Cli::parse();
+    if let Some(pw) = cli
+        .pdf_password
+        .clone()
+        .or_else(|| std::env::var("LEGATOROCR_PDF_PASSWORD").ok())
+    {
+        legatorocr_engine::set_pdf_password(&pw);
+    }
     {
         let first = cli.inputs.first().cloned();
         let name = first

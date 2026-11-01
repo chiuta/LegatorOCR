@@ -575,10 +575,20 @@ pub struct EncryptParams<'a> {
     pub o: &'a [u8],
     pub u: &'a [u8],
     pub ue: &'a [u8],
+    pub oe: &'a [u8],
+    /// Password to try first (user, then owner); the empty password is always tried too.
+    pub password: &'a [u8],
     pub p: i64,
     pub id0: &'a [u8],
     pub encrypt_metadata: bool,
     pub stm: Method,
+}
+
+/// A password padded or cut to 32 bytes (algorithm 2, step a).
+fn pad_pw(pw: &[u8]) -> Vec<u8> {
+    let mut v: Vec<u8> = pw.iter().copied().take(32).collect();
+    v.extend_from_slice(&PAD[..32 - v.len()]);
+    v
 }
 
 /// Algorithm 2.B (revision 6) hash.
@@ -617,41 +627,115 @@ fn hash_r6(pw: &[u8], salt: &[u8], udata: &[u8]) -> Vec<u8> {
 }
 
 impl Crypt {
-    /// Derive the file key for the empty user password; `Err` when the file needs a password
+    /// Derive the file key for `p.password` (as user password, then as owner password), and for
+    /// the empty user password when that differs; `Err` when the file needs another password
     /// or uses something unsupported.
     pub fn new(p: &EncryptParams) -> Result<Crypt, String> {
+        let mut tries: Vec<Vec<u8>> = vec![p.password.to_vec()];
+        if p.r < 5 {
+            // the older revisions take the password in PDFDocEncoding (≈ Latin-1), not UTF-8
+            if let Some(l1) = std::str::from_utf8(p.password)
+                .ok()
+                .filter(|t| !t.is_ascii())
+                .and_then(|t| t.chars().map(|c| u8::try_from(c as u32).ok()).collect())
+            {
+                tries.push(l1);
+            }
+        }
+        if !p.password.is_empty() {
+            tries.push(Vec::new());
+        }
+        for pw in &tries {
+            if let Some(c) = Self::with_password(p, pw) {
+                return Ok(c);
+            }
+        }
+        Err(if p.password.is_empty() {
+            "the PDF is password-protected (it needs a user password; give it with --pdf-password)"
+                .into()
+        } else {
+            "the PDF's password is wrong".into()
+        })
+    }
+
+    fn with_password(p: &EncryptParams, pw: &[u8]) -> Option<Crypt> {
         if p.r >= 5 {
-            if p.u.len() < 48 || p.ue.len() < 32 {
-                return Err("the PDF's encryption data is incomplete".into());
-            }
-            let (vs, ks) = (&p.u[32..40], &p.u[40..48]);
-            let h = |salt: &[u8]| {
-                if p.r == 5 {
-                    sha256(salt)
-                } else {
-                    hash_r6(b"", salt, b"")
-                }
-            };
-            if h(vs)[..32] != p.u[..32] {
-                return Err("the PDF is password-protected (it needs a user password)".into());
-            }
-            let ik = h(ks);
-            let key = aes_cbc_decrypt(&ik, Some([0; 16]), &p.ue[..32]).ok_or("bad key")?;
-            return Ok(Crypt {
-                key,
-                stm: if p.stm == Method::None {
-                    Method::None
-                } else {
-                    Method::AesV3
-                },
-            });
+            return Self::with_password_v5(p, pw);
+        }
+        // R2-4: the owner password yields the user password (algorithm 7)
+        if let Some(c) = Self::with_user_password(p, pw) {
+            return Some(c);
         }
         let n = if p.r == 2 {
             5
         } else {
             (p.length_bits / 8).clamp(5, 16) as usize
         };
-        let mut m = PAD.to_vec();
+        let mut h = md5(&pad_pw(pw)).to_vec();
+        if p.r >= 3 {
+            for _ in 0..50 {
+                h = md5(&h).to_vec();
+            }
+        }
+        let okey = &h[..n];
+        let mut user_pw = p.o.to_vec();
+        if p.r == 2 {
+            user_pw = rc4(okey, &user_pw);
+        } else {
+            for i in (0..=19u8).rev() {
+                let k2: Vec<u8> = okey.iter().map(|b| b ^ i).collect();
+                user_pw = rc4(&k2, &user_pw);
+            }
+        }
+        Self::with_user_password(p, &user_pw)
+    }
+
+    fn with_password_v5(p: &EncryptParams, pw: &[u8]) -> Option<Crypt> {
+        if p.u.len() < 48 || p.ue.len() < 32 {
+            return None;
+        }
+        let pw = &pw[..pw.len().min(127)];
+        let h = |salt: &[u8], udata: &[u8]| {
+            if p.r == 5 {
+                let mut x = pw.to_vec();
+                x.extend_from_slice(salt);
+                x.extend_from_slice(udata);
+                sha256(&x)
+            } else {
+                hash_r6(pw, salt, udata)
+            }
+        };
+        let method = if p.stm == Method::None {
+            Method::None
+        } else {
+            Method::AesV3
+        };
+        // user password
+        if h(&p.u[32..40], b"")[..32] == p.u[..32] {
+            let ik = h(&p.u[40..48], b"");
+            let key = aes_cbc_decrypt(&ik, Some([0; 16]), &p.ue[..32])?;
+            return Some(Crypt { key, stm: method });
+        }
+        // owner password
+        if p.o.len() >= 48 && p.oe.len() >= 32 {
+            let u48 = &p.u[..48];
+            if h(&p.o[32..40], u48)[..32] == p.o[..32] {
+                let ik = h(&p.o[40..48], u48);
+                let key = aes_cbc_decrypt(&ik, Some([0; 16]), &p.oe[..32])?;
+                return Some(Crypt { key, stm: method });
+            }
+        }
+        None
+    }
+
+    /// R2-4 key for `user_pw`, accepted when it checks against /U (algorithms 2 and 6).
+    fn with_user_password(p: &EncryptParams, user_pw: &[u8]) -> Option<Crypt> {
+        let n = if p.r == 2 {
+            5
+        } else {
+            (p.length_bits / 8).clamp(5, 16) as usize
+        };
+        let mut m = pad_pw(user_pw);
         m.extend_from_slice(p.o);
         m.extend_from_slice(&(p.p as i32 as u32).to_le_bytes());
         m.extend_from_slice(p.id0);
@@ -665,7 +749,6 @@ impl Crypt {
             }
         }
         let key = h[..n].to_vec();
-        // verify the (empty) user password
         let ok = if p.r == 2 {
             rc4(&key, &PAD) == p.u[..p.u.len().min(32)]
         } else {
@@ -678,10 +761,7 @@ impl Crypt {
             }
             p.u.len() >= 16 && t[..16] == p.u[..16]
         };
-        if !ok {
-            return Err("the PDF is password-protected (it needs a user password)".into());
-        }
-        Ok(Crypt { key, stm: p.stm })
+        ok.then_some(Crypt { key, stm: p.stm })
     }
 
     /// Decrypt a literal string that belongs to object `num gen` (strings use the string

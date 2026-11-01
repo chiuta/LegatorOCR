@@ -438,7 +438,9 @@ fn ext_of(name: &str) -> String {
 fn read_units(name: &str, data: Vec<u8>) -> Read {
     match ext_of(name).as_str() {
         "pdf" => {
-            let Ok(doc) = legatorocr_pdf::reader::PdfDoc::open(data) else {
+            let Ok(doc) =
+                legatorocr_pdf::reader::PdfDoc::open_with_password(data, &crate::pdf_password())
+            else {
                 return Read::Unreadable;
             };
             let mut units = Vec::new();

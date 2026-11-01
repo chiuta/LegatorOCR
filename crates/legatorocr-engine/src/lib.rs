@@ -459,6 +459,23 @@ type CachedPdf = (
     u64,
     std::sync::Arc<legatorocr_pdf::reader::PdfDoc>,
 );
+static PDF_PASSWORD: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
+
+/// Password for encrypted PDFs (user or owner password); the empty one is always tried as well.
+/// Cached documents opened with another password are dropped.
+pub fn set_pdf_password(pw: &str) {
+    let mut g = PDF_PASSWORD.lock().unwrap();
+    if g.as_slice() != pw.as_bytes() {
+        *g = pw.as_bytes().to_vec();
+        PDF_CACHE.lock().unwrap().clear();
+    }
+}
+
+/// The password set with [`set_pdf_password`].
+pub fn pdf_password() -> Vec<u8> {
+    PDF_PASSWORD.lock().unwrap().clone()
+}
+
 static PDF_CACHE: std::sync::Mutex<Vec<CachedPdf>> = std::sync::Mutex::new(Vec::new());
 
 /// The parsed PDF at `path` (cached by path, size and modification time).
@@ -479,7 +496,7 @@ pub fn pdf_doc(path: &Path) -> Result<std::sync::Arc<legatorocr_pdf::reader::Pdf
     }
     let data = std::fs::read(path).with_context(|| path.display().to_string())?;
     let doc = std::sync::Arc::new(
-        legatorocr_pdf::reader::PdfDoc::open(data)
+        legatorocr_pdf::reader::PdfDoc::open_with_password(data, &pdf_password())
             .map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?,
     );
     let mut c = PDF_CACHE.lock().unwrap();
@@ -1614,7 +1631,7 @@ mod batch_features_tests {
         assert_eq!(r.docs.len(), 3, "A B | C | D");
         assert_eq!(r.pages, 4);
         let count = |b: &Vec<u8>| {
-            legatorocr_pdf::reader::PdfDoc::open(b.clone())
+            legatorocr_pdf::reader::PdfDoc::open_with_password(b.clone(), &pdf_password())
                 .unwrap()
                 .page_count()
         };
@@ -1644,7 +1661,7 @@ mod batch_features_tests {
             vec![Some("ACT-1".to_string()), Some("ACT-2".to_string())]
         );
         let count = |b: &Vec<u8>| {
-            legatorocr_pdf::reader::PdfDoc::open(b.clone())
+            legatorocr_pdf::reader::PdfDoc::open_with_password(b.clone(), &pdf_password())
                 .unwrap()
                 .page_count()
         };
