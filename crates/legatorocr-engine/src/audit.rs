@@ -151,7 +151,14 @@ mod tests {
             legal_hold: true,
             note: "x\ny".into(),
         };
-        let t = render("T 1", &[PathBuf::from("in.tif")], &[f.clone()], 0, &o).unwrap();
+        let t = render(
+            "T 1",
+            &[PathBuf::from("in.tif")],
+            std::slice::from_ref(&f),
+            0,
+            &o,
+        )
+        .unwrap();
         assert!(t.starts_with("{\"time\":\"1970-01-01T00:00:00Z\""));
         assert!(t.contains("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"));
         assert!(t.contains("\"legal_hold\":true"));

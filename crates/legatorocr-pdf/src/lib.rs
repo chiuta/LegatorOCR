@@ -271,44 +271,88 @@ impl PdfWriter {
         if words.is_empty() {
             return;
         }
-        cs.push_str("BT 3 Tr\n");
-        for w in words {
-            if w.text.trim().is_empty() || w.w == 0 || w.h == 0 {
+        // One text object per recognised line, all its words on the same baseline and in the same
+        // font size (like ABBYY's output): readers then select a line as a line instead of a
+        // cloud of differently sized words whose boxes happen to have ascenders or descenders.
+        let mut i = 0;
+        while i < words.len() {
+            let mut j = i + 1;
+            while j < words.len() && words[j].line == words[i].line {
+                j += 1;
+            }
+            let group: Vec<&Word> = words[i..j]
+                .iter()
+                .filter(|w| {
+                    // boxes off the page or taller than it are garbage (a PDF reader may choke on
+                    // 10-digit coordinates): drop them before they can steer the line's baseline
+                    let (x, top, h) = (
+                        w.x as f32 * 72.0 / dpi,
+                        w.y as f32 * 72.0 / dpi,
+                        w.h as f32 * 72.0 / dpi,
+                    );
+                    !w.text.trim().is_empty()
+                        && w.w > 0
+                        && w.h > 0
+                        && x.is_finite()
+                        && top.is_finite()
+                        && h.is_finite()
+                        && x < wpt
+                        && top < hpt
+                        && h <= hpt
+                })
+                .collect();
+            i = j;
+            if group.is_empty() {
                 continue;
             }
-            let n = w.text.chars().count() as f32;
-            let size = (w.h as f32 * 72.0 / dpi).max(1.0);
-            let (x, top) = (w.x as f32 * 72.0 / dpi, w.y as f32 * 72.0 / dpi);
-            // Words outside the page or taller than it are garbage (a PDF reader may choke on
-            // 10-digit coordinates): drop them rather than write absurd numbers.
-            if !(x.is_finite() && top.is_finite() && size.is_finite())
-                || x >= wpt
-                || top >= hpt
-                || size > hpt
-            {
-                continue;
-            }
-            // Glyph advance is 0.5 em; scale horizontally to the word box (kept within sane bounds).
-            let tz = ((w.w as f32 * 72.0 / dpi) / (n * 0.5 * size) * 100.0).clamp(5.0, 2000.0);
-            let y = hpt - top - size + size * 0.2;
-            let mut hex = String::new();
-            for ch in w.text.chars().chain(std::iter::once(' ')) {
-                match self.cid(ch) {
-                    Some(id) => hex.push_str(&format!("{id:04X}")),
-                    None => {
-                        hex.clear();
-                        break;
+            let median = |mut v: Vec<f32>| {
+                v.sort_by(|a, b| a.total_cmp(b));
+                v[v.len() / 2]
+            };
+            // a line's size and baseline come from the middle of its words: one tall or low
+            // word (a descender, a stray mark) must not shift the rest
+            let size = median(group.iter().map(|w| w.h as f32 * 72.0 / dpi).collect()).max(1.0);
+            let bottom = median(
+                group
+                    .iter()
+                    .map(|w| (w.y as f32 + w.h as f32) * 72.0 / dpi)
+                    .collect(),
+            );
+            let y = hpt - bottom + size * 0.2;
+            let mut body = String::new();
+            for w in group {
+                let n = w.text.chars().count() as f32;
+                let x = w.x as f32 * 72.0 / dpi;
+                // Words outside the page or taller than it are garbage (a PDF reader may choke on
+                // 10-digit coordinates): drop them rather than write absurd numbers.
+                if !(x.is_finite() && y.is_finite() && size.is_finite())
+                    || x >= wpt
+                    || (w.y as f32 * 72.0 / dpi) >= hpt
+                    || size > hpt
+                {
+                    continue;
+                }
+                // Glyph advance is 0.5 em; scale horizontally to the word box (kept within sane bounds).
+                let tz = ((w.w as f32 * 72.0 / dpi) / (n * 0.5 * size) * 100.0).clamp(5.0, 2000.0);
+                let mut hex = String::new();
+                for ch in w.text.chars().chain(std::iter::once(' ')) {
+                    match self.cid(ch) {
+                        Some(id) => hex.push_str(&format!("{id:04X}")),
+                        None => {
+                            hex.clear();
+                            break;
+                        }
                     }
                 }
+                if hex.is_empty() {
+                    continue;
+                }
+                body.push_str(&format!("{tz:.1} Tz 1 0 0 1 {x:.2} {y:.2} Tm <{hex}> Tj\n"));
             }
-            if hex.is_empty() {
-                continue;
+            if !body.is_empty() {
+                cs.push_str(&format!("BT 3 Tr /F1 {size:.2} Tf\n{body}ET\n"));
             }
-            cs.push_str(&format!(
-                "/F1 {size:.2} Tf {tz:.1} Tz 1 0 0 1 {x:.2} {y:.2} Tm <{hex}> Tj\n"
-            ));
         }
-        cs.push_str("ET\n");
     }
 
     fn finish_page(&mut self, cs: String, xobjects: &str, wpt: f32, hpt: f32) {
