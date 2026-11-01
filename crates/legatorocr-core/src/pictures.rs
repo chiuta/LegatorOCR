@@ -55,16 +55,28 @@ pub fn detect(gray: &GrayImage, dpi: u32, sensitivity: f32) -> Vec<Zone> {
         for gx in 0..gw {
             let (x0, y0) = (gx * tile, gy * tile);
             let (x1, y1) = ((x0 + tile).min(sw), (y0 + tile).min(sh));
-            let (mut mid, mut n, mut paperish, mut dark) = (0u32, 0u32, 0u32, 0u32);
+            let (mut mid, mut n, mut paperish, mut darkg) = (0u32, 0u32, 0u32, 0u32);
+            // Paper level *here*: the bright end of the tile itself, so a shadow or an
+            // illumination gradient does not turn the text on it into mid-tones. Never
+            // far below the page's own paper level, or a dark photo would normalise away.
+            let mut vals: Vec<u8> = Vec::with_capacity(tile * tile);
+            for y in y0..y1 {
+                vals.extend_from_slice(&raw[y * sw + x0..y * sw + x1]);
+            }
+            vals.sort_unstable();
+            let local = vals[(vals.len() * 9 / 10).min(vals.len() - 1)] as f32;
+            let reff = local.max(paper * 0.5);
             for y in y0..y1 {
                 for &p in &raw[y * sw + x0..y * sw + x1] {
-                    let r = p as f32 / paper;
+                    let r = p as f32 / reff;
+                    let rg = p as f32 / paper;
                     if r > 0.88 {
                         paperish += 1;
                     } else if r > 0.18 {
                         mid += 1;
-                    } else {
-                        dark += 1;
+                    }
+                    if rg <= 0.18 {
+                        darkg += 1;
                     }
                     n += 1;
                 }
@@ -75,7 +87,7 @@ pub fn detect(gray: &GrayImage, dpi: u32, sensitivity: f32) -> Vec<Zone> {
             // (A solid dark tile — the black part of a photo — also counts; the blob-size
             // test below keeps rules and bold headings from becoming pictures.)
             pic[gy * gw + gx] = (mid as f32 / n >= mid_needed && (paperish as f32 / n) < 0.55)
-                || dark as f32 / n >= 0.7;
+                || darkg as f32 / n >= 0.7;
         }
     }
     // Close gaps (radius 1 tile) so a picture with bright patches stays one blob.
@@ -310,6 +322,30 @@ mod tests {
                 if (x - 150) / 24 % 3 == 0 {
                     g.put_pixel(x, y, Luma([120]));
                 }
+            }
+        }
+        assert!(detect(&g, 300, 0.5).is_empty());
+    }
+
+    /// Small text on a page with a strong lighting gradient (darker towards a corner) is
+    /// still text: the paper level is judged where the tile is, not once for the page.
+    #[test]
+    fn text_on_an_illumination_gradient_is_not_a_picture() {
+        let (w, h) = (1200u32, 1500u32);
+        let mut g = GrayImage::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let shade = 245.0 - 120.0 * ((x + y) as f32 / (w + h) as f32);
+                let line = (y % 40) < 9 && (x / 7) % 3 != 0 && (100..1100).contains(&x);
+                g.put_pixel(
+                    x,
+                    y,
+                    Luma([if line {
+                        (shade * 0.2) as u8
+                    } else {
+                        shade as u8
+                    }]),
+                );
             }
         }
         assert!(detect(&g, 300, 0.5).is_empty());
