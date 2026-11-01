@@ -87,24 +87,40 @@ impl Matcher {
             Matcher::Plain { needle, exact } => {
                 // One string for the whole unit, lines joined by a space, so that a phrase
                 // broken over a line end is still found; remember where each line starts.
+                // A second copy joins words hyphenated across the line end ("con-" / "tinued"
+                // → "continued"), so both spellings are found.
                 let mut joined = String::with_capacity(text.len());
                 let mut starts = Vec::new();
+                let mut dehyph = String::with_capacity(text.len());
+                let mut starts_d = Vec::new();
                 for l in text.lines() {
-                    starts.push(joined.len());
                     let t = l.split_whitespace().collect::<Vec<_>>().join(" ");
-                    joined.push_str(&if *exact { t } else { fold(&t) });
+                    let t = if *exact { t } else { fold(&t) };
+                    starts.push(joined.len());
+                    joined.push_str(&t);
                     joined.push(' ');
+                    // dehyphenated copy
+                    starts_d.push(dehyph.len()); // a word continued from above is reported on this line
+                    dehyph.push_str(&t);
+                    if t.ends_with('-') && t.len() > 1 && !t.ends_with(" -") {
+                        dehyph.pop();
+                    } else {
+                        dehyph.push(' ');
+                    }
                 }
                 let mut out: Vec<usize> = Vec::new();
-                let mut pos = 0;
-                while let Some(i) = joined[pos..].find(needle.as_str()) {
-                    let at = pos + i;
-                    let line = starts.partition_point(|&s| s <= at); // 1-based
-                    if out.last() != Some(&line) {
-                        out.push(line);
+                for (hay, st) in [(&joined, &starts), (&dehyph, &starts_d)] {
+                    let mut pos = 0;
+                    while let Some(i) = hay[pos..].find(needle.as_str()) {
+                        let at = pos + i;
+                        let line = st.partition_point(|&s| s <= at); // 1-based
+                        if !out.contains(&line) {
+                            out.push(line);
+                        }
+                        pos = at + needle.len().max(1);
                     }
-                    pos = at + needle.len().max(1);
                 }
+                out.sort_unstable();
                 out
             }
         }
@@ -395,12 +411,22 @@ impl Ctx<'_> {
         if self.done() || depth > 40 {
             return;
         }
-        let Ok(md) = std::fs::symlink_metadata(p) else {
+        let Ok(mut md) = std::fs::symlink_metadata(p) else {
             self.sum.unreadable += 1;
             return;
         };
         if md.file_type().is_symlink() {
-            return;
+            if depth > 0 {
+                return; // links met while walking a folder are not followed (loops, escapes)
+            }
+            // a link the user named on the command line is what they asked to search
+            match std::fs::metadata(p) {
+                Ok(m) => md = m,
+                Err(_) => {
+                    self.sum.unreadable += 1;
+                    return;
+                }
+            }
         }
         if md.is_dir() {
             let Ok(rd) = std::fs::read_dir(p) else {
@@ -522,6 +548,42 @@ mod tests {
                 .len(),
             1
         );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn words_hyphenated_across_a_line_end_are_found() {
+        let d = tmp("hyphen");
+        std::fs::write(d.join("a.txt"), "the story con-\ntinued on the next page\nand more text").unwrap();
+        let o = SearchOptions::default();
+        let (h, _) = run(&d, "continued", &o);
+        assert_eq!(h.len(), 1, "{h:?}");
+        // the plain spelling with the hyphen still works, and so does a phrase across the break
+        assert_eq!(run(&d, "con- tinued", &o).0.len(), 1);
+        assert_eq!(run(&d, "continued on the next", &o).0.len(), 1);
+        // a spaced dash is not a hyphenation
+        std::fs::write(d.join("b.txt"), "one -\ntwo").unwrap();
+        assert!(run(&d, "onetwo", &o).0.is_empty());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_named_as_the_search_root_is_followed_but_links_inside_are_not() {
+        let d = tmp("symlink");
+        let real = d.join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(real.join("a.txt"), "needle here").unwrap();
+        std::fs::create_dir_all(d.join("inner")).unwrap();
+        std::os::unix::fs::symlink(&real, d.join("link")).unwrap();
+        std::os::unix::fs::symlink(&real, d.join("inner").join("escape")).unwrap();
+        let o = SearchOptions::default();
+        let mut hits = Vec::new();
+        search(&[d.join("link")], "needle", &o, &mut |h| hits.push(h)).unwrap();
+        assert_eq!(hits.len(), 1, "a root link must be searched");
+        // searching the parent finds the real file once; the links inside are not followed
+        let (h, _) = run(&d, "needle", &o);
+        assert_eq!(h.len(), 1, "{h:?}");
         let _ = std::fs::remove_dir_all(&d);
     }
 

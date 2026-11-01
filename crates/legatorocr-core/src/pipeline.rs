@@ -488,7 +488,7 @@ fn prepare(mut img: RgbImage, s: &Settings) -> Prepared {
         None => None,
     };
     if let Some(a) = angle {
-        if a.abs() > 0.02f32.to_radians() {
+        if a.abs() > 0.05f32.to_radians() {
             img = transform::rotate_cw(&img, a, bg);
             skew_deg = a.to_degrees();
         }

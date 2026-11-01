@@ -23,8 +23,59 @@ fn norm(s: &str) -> String {
         .join(" ")
 }
 
-/// Levenshtein distance, two rows, O(n·m) time and O(m) memory.
+/// Levenshtein distance: two rows, O(n·m) time and O(m) memory for ordinary texts. For very long
+/// ones (more than 4·10⁸ cells) only a diagonal band around the alignment is computed (O(n·k),
+/// k grown from |n − m| + 64 up to |n − m| + 4096 until the distance fits): exact whenever the
+/// true distance is within the final band, and larger than the band width otherwise (so a
+/// hopeless comparison still reads as "very different").
 pub fn edit_distance<T: PartialEq>(a: &[T], b: &[T]) -> usize {
+    if (a.len() as u128) * (b.len() as u128) > 400_000_000 {
+        // widen the band until the distance fits inside it (exact), up to a generous limit
+        let diff = a.len().abs_diff(b.len());
+        let mut k = diff + 64;
+        loop {
+            let d = edit_distance_banded(a, b, k);
+            if d <= k || k >= diff + 4096 {
+                return d;
+            }
+            k = (k * 4).min(diff + 4096);
+        }
+    }
+    edit_distance_full(a, b)
+}
+
+/// Ukkonen-style banded Levenshtein: cells farther than `k` from the main diagonal are treated
+/// as unreachable. Exact when the true distance is ≤ `k`; otherwise the result is > `k`.
+fn edit_distance_banded<T: PartialEq>(a: &[T], b: &[T], k: usize) -> usize {
+    let (n, m) = (a.len(), b.len());
+    if n.abs_diff(m) > k {
+        return n.abs_diff(m);
+    }
+    let inf = usize::MAX / 2;
+    let mut prev = vec![inf; m + 1];
+    let mut cur = vec![inf; m + 1];
+    for (j, p) in prev.iter_mut().enumerate().take(k.min(m) + 1) {
+        *p = j;
+    }
+    for i in 1..=n {
+        let (lo, hi) = (i.saturating_sub(k), (i + k).min(m));
+        cur[lo.saturating_sub(1)..=hi].iter_mut().for_each(|c| *c = inf);
+        if lo == 0 {
+            cur[0] = i;
+        }
+        for j in lo.max(1)..=hi {
+            let sub = prev[j - 1] + usize::from(a[i - 1] != b[j - 1]);
+            cur[j] = sub.min(prev[j].saturating_add(1)).min(cur[j - 1].saturating_add(1));
+        }
+        std::mem::swap(&mut prev, &mut cur);
+        if hi < m {
+            prev[hi + 1] = inf;
+        }
+    }
+    prev[m]
+}
+
+fn edit_distance_full<T: PartialEq>(a: &[T], b: &[T]) -> usize {
     if a.is_empty() {
         return b.len();
     }
@@ -94,6 +145,26 @@ mod tests {
         assert_eq!(rates("", "").cer, 0.0);
         assert_eq!(rates("", "x").cer, 1.0);
         assert_eq!(rates("abc", "").cer, 1.0);
+    }
+
+    #[test]
+    fn banded_distance_agrees_with_the_full_one_and_stays_fast_on_huge_texts() {
+        let a: Vec<u8> = (0..3000u32).map(|i| (i * 7 % 26) as u8).collect();
+        let mut b = a.clone();
+        for i in (0..b.len()).step_by(97) {
+            b[i] = 99; // 31 substitutions
+        }
+        b.insert(500, 1);
+        b.remove(2000);
+        let full = edit_distance_full(&a, &b);
+        assert_eq!(edit_distance_banded(&a, &b, 200), full);
+        // a million-character pair is compared in well under the time the full table would need
+        let big: Vec<u8> = (0..1_000_000u32).map(|i| (i % 251) as u8).collect();
+        let mut big2 = big.clone();
+        big2[1234] = 255;
+        let t = std::time::Instant::now();
+        assert_eq!(edit_distance(&big, &big2), 1);
+        assert!(t.elapsed() < std::time::Duration::from_secs(20), "{:?}", t.elapsed());
     }
 
     #[test]

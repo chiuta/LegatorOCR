@@ -1038,6 +1038,7 @@ pub fn decode(data: &[u8], globals: Option<&[u8]>, w: usize, h: usize) -> R<Vec<
     // Total area of all regions of this stream: a few hundred bytes of arithmetic-coded data can
     // describe a region of 400 million pixels, and 10 000 segments are allowed.
     let mut region_px: u64 = 0;
+    let mut dict_px: u64 = 0;
     for s in &segs {
         let data: &[u8] = &s.data;
         if matches!(s.kind, 4 | 6 | 7 | 20 | 22 | 23 | 36 | 38 | 39 | 40 | 42 | 43) && data.len() >= 8 {
@@ -1119,7 +1120,14 @@ pub fn decode(data: &[u8], globals: Option<&[u8]>, w: usize, h: usize) -> R<Vec<
                 if inputs.len() > 131_072 {
                     return fail("JBIG2 symbol dictionary too large");
                 }
-                dicts.insert(s.num, symbol_dict(data, &inputs)?);
+                // dictionaries that re-export their inputs copy every symbol: bound the total
+                // pixel count of everything exported by this stream
+                let exported = symbol_dict(data, &inputs)?;
+                dict_px = exported.iter().fold(dict_px, |a, b| a.saturating_add(b.w as u64 * b.h as u64));
+                if dict_px > 600_000_000 {
+                    return fail("JBIG2 symbol dictionaries hold too much data");
+                }
+                dicts.insert(s.num, exported);
             }
             4 | 6 | 7 => {
                 if data.len() < 17 {

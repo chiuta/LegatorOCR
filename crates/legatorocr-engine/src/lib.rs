@@ -645,6 +645,9 @@ pub fn run_export(
     let done = AtomicUsize::new(0);
     let batch = rayon::current_num_threads().max(2);
     let mut res = ExportResult::default();
+    // with keep_going a page whose OCR fails is kept (without text layer) and reported, instead of
+    // the whole sheet and its other pages being thrown away
+    let ocr_warnings: std::sync::Mutex<Vec<(PathBuf, String)>> = std::sync::Mutex::new(Vec::new());
 
     for (b, chunk) in job.sheets.chunks(batch).enumerate() {
         let base = b * batch;
@@ -687,8 +690,20 @@ pub fn run_export(
                             if cancel.load(Ordering::Relaxed) {
                                 bail!("cancelled");
                             }
-                            legatorocr_ocr::recognize(&pg.image, pg.dpi, o)
-                                .with_context(|| format!("OCR of {}", sheet.path.display()))?
+                            match legatorocr_ocr::recognize(&pg.image, pg.dpi, o) {
+                                Ok(w) => w,
+                                Err(e) if job.keep_going => {
+                                    ocr_warnings.lock().unwrap().push((
+                                        sheet.path.clone(),
+                                        format!("OCR failed, page kept without text layer: {e}"),
+                                    ));
+                                    Vec::new()
+                                }
+                                Err(e) => {
+                                    return Err(anyhow::Error::new(e)
+                                        .context(format!("OCR of {}", sheet.path.display())))
+                                }
+                            }
                         }
                         None => Vec::new(),
                     };
@@ -795,6 +810,7 @@ pub fn run_export(
     } else {
         res.pdf = writer.map(PdfWriter::finish);
     }
+    res.failed.extend(ocr_warnings.into_inner().unwrap_or_default());
     Ok(res)
 }
 
