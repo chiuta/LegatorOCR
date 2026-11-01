@@ -152,6 +152,9 @@ impl Model {
             }
             convs.push(Conv { cin, cout, w: wt, b: b.data.clone() });
         }
+        if convs[0].cin != 1 || convs.windows(2).any(|w| w[0].cout != w[1].cin) {
+            return Err(ModelError::Corrupt("conv channel chain"));
+        }
         let c_last = convs[3].cout;
         let gdir = |layer: &str, d: &str, nin: usize| -> Result<GruDir, ModelError> {
             let wih = get(&format!("{layer}.{d}.weight_ih"), 2)?;

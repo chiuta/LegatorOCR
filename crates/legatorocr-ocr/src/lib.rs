@@ -196,28 +196,38 @@ pub fn valid_lang(l: &str) -> bool {
         })
 }
 
-/// The engine that will really run for these options (`Auto` resolved; the answer is cached per
-/// program path and language list, because it costs two process launches).
+/// The engine that will really run for these options (`Auto` resolved). Probing Tesseract costs
+/// two process launches, so the answer is cached per program path and language list: a positive
+/// answer for the life of the process, a fall-back to the native engine only for 30 s (Tesseract
+/// may have been installed meanwhile, or a launch may just have been slow).
 pub fn effective_engine(o: &OcrOptions) -> Engine {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
     match o.engine {
         Engine::Native | Engine::Tesseract => o.engine,
         Engine::Auto => {
-            static CACHE: OnceLock<Mutex<HashMap<(PathBuf, String), Engine>>> = OnceLock::new();
-            let key = (o.tesseract.clone(), canonical_lang(&o.lang));
-            let cache = CACHE.get_or_init(Default::default);
-            if let Some(&e) = cache.lock().unwrap().get(&key) {
-                return e;
+            let lang = canonical_lang(&o.lang);
+            // the native engine cannot read other languages: do not pretend it can
+            if !legatorocr_nocr::lexicon::all_supported(&lang) || !native_available() {
+                return Engine::Tesseract;
             }
-            let t = Engine::Tesseract;
-            let to = OcrOptions { engine: t, ..o.clone() };
+            static CACHE: OnceLock<Mutex<HashMap<(PathBuf, String), (Engine, Instant)>>> = OnceLock::new();
+            let key = (o.tesseract.clone(), lang);
+            // the lock is held while probing, so parallel page workers probe once, not N times
+            let mut cache = CACHE.get_or_init(Default::default).lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(&(e, at)) = cache.get(&key) {
+                if e == Engine::Tesseract || at.elapsed() < Duration::from_secs(30) {
+                    return e;
+                }
+            }
+            let to = OcrOptions { engine: Engine::Tesseract, ..o.clone() };
             let ok = check_tesseract(&to).is_ok()
                 && list_tesseract_languages(&to)
                     .map(|have| key.1.split('+').all(|l| have.iter().any(|h| h == l)))
                     .unwrap_or(false);
-            let e = if ok || !native_available() { t } else { Engine::Native };
-            cache.lock().unwrap().insert(key, e);
+            let e = if ok { Engine::Tesseract } else { Engine::Native };
+            cache.insert(key, (e, Instant::now()));
             e
         }
     }
@@ -294,6 +304,31 @@ pub fn parse_osd(out: &str) -> Option<u16> {
 /// clockwise to be upright. `Ok(None)` when it cannot tell (too little text,
 /// low confidence, or the `osd` language data is not installed).
 pub fn detect_rotation(img: &image::DynamicImage, o: &OcrOptions) -> Result<Option<u16>, OcrError> {
+    if o.engine != Engine::Tesseract {
+        // Tesseract's OSD when it is installed with its `osd` data, otherwise the native detector
+        let to = OcrOptions { engine: Engine::Tesseract, ..o.clone() };
+        let tess_osd = check_tesseract(&to).is_ok()
+            && list_tesseract_languages(&to).map(|l| l.iter().any(|x| x == "osd")).unwrap_or(false);
+        if !tess_osd {
+            return Ok(native_rotation(img, o));
+        }
+        return match detect_rotation_tesseract(img, &to)? {
+            Some(d) => Ok(Some(d)),
+            None => Ok(native_rotation(img, o)),
+        };
+    }
+    detect_rotation_tesseract(img, o)
+}
+
+/// Native orientation test: which turn makes the words dictionary words (needs ≥ ~12 letters
+/// of recognisable text). `None` when undecided or the build has no model.
+fn native_rotation(img: &image::DynamicImage, o: &OcrOptions) -> Option<u16> {
+    let model = legatorocr_nocr::embedded_model()?;
+    let page = PageImage::Gray(img.to_luma8());
+    legatorocr_nocr::detect_orientation(&page, 300, model, &canonical_lang(&o.lang))
+}
+
+fn detect_rotation_tesseract(img: &image::DynamicImage, o: &OcrOptions) -> Result<Option<u16>, OcrError> {
     let small = if img.width().max(img.height()) > 1800 {
         img.thumbnail(1800, 1800)
     } else {
@@ -746,5 +781,60 @@ mod tests {
         assert_eq!(w[0].text, "Bună");
         assert_eq!((w[0].line, w[1].line, w[2].line), (0, 0, 1));
         assert_eq!(parse_tsv(tsv, 50.0).len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod engine_choice_tests {
+    use super::*;
+
+    #[test]
+    fn engine_names_parse() {
+        assert_eq!("auto".parse::<Engine>(), Ok(Engine::Auto));
+        assert_eq!("Native".parse::<Engine>(), Ok(Engine::Native));
+        assert_eq!("tesseract".parse::<Engine>(), Ok(Engine::Tesseract));
+        assert!("abbyy".parse::<Engine>().is_err());
+    }
+
+    fn missing_tesseract(lang: &str) -> OcrOptions {
+        OcrOptions {
+            lang: lang.into(),
+            tesseract: "definitely-not-installed-tesseract".into(),
+            ..OcrOptions::default()
+        }
+    }
+
+    #[test]
+    fn auto_falls_back_to_native_when_tesseract_is_missing() {
+        assert!(native_available());
+        assert_eq!(effective_engine(&missing_tesseract("ron+eng")), Engine::Native);
+        let v = check_engine(&missing_tesseract("ron")).unwrap();
+        assert!(v.contains("native"), "{v}");
+    }
+
+    #[test]
+    fn auto_does_not_claim_languages_the_native_engine_cannot_read() {
+        // Russian is not one of the eight: Auto must not pick the native engine for it
+        assert_eq!(effective_engine(&missing_tesseract("rus")), Engine::Tesseract);
+        assert_eq!(effective_engine(&missing_tesseract("ron+rus")), Engine::Tesseract);
+    }
+
+    #[test]
+    fn forced_engines_are_respected() {
+        let mut o = missing_tesseract("eng");
+        o.engine = Engine::Tesseract;
+        assert_eq!(effective_engine(&o), Engine::Tesseract);
+        assert!(check_engine(&o).is_err());
+        o.engine = Engine::Native;
+        assert_eq!(effective_engine(&o), Engine::Native);
+        assert_eq!(list_languages(&o).unwrap().len(), 8);
+    }
+
+    #[test]
+    fn native_recognition_runs_through_the_public_api() {
+        let mut o = missing_tesseract("eng");
+        o.engine = Engine::Native;
+        let blank = PageImage::Gray(image::GrayImage::from_pixel(120, 80, image::Luma([250])));
+        assert!(recognize(&blank, 300, &o).unwrap().is_empty());
     }
 }

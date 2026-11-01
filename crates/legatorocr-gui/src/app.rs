@@ -408,7 +408,7 @@ impl App {
                             self.s.ocr_langs =
                                 langs.iter().filter(|l| *l == "eng").cloned().collect();
                         }
-                        self.has_osd = langs.iter().any(|l| l == "osd");
+                        self.has_osd = langs.iter().any(|l| l == "osd") || legatorocr_engine::ocr::native_available();
                         self.installed = langs.into_iter().filter(|l| l != "osd").collect();
                     }
                     Err(e) => {

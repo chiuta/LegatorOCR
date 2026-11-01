@@ -465,7 +465,7 @@ fn real_main() -> Result<()> {
             lang: "eng".into(),
             ..OcrOptions::default()
         };
-        let v = check_ocr(&o).context("Tesseract was not found")?;
+        let v = check_ocr(&o).context("no OCR engine is available")?;
         let have = legatorocr_engine::ocr::list_languages(&o)?;
         println!("{v}");
         for (iso, tess, name) in legatorocr_engine::ocr::UI_LANGUAGES {

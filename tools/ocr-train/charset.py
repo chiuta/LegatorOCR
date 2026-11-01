@@ -10,9 +10,10 @@ LETTERS = (
     "äöüßÄÖÜẞ"             # German
     "őűŐŰ"                 # Hungarian
     "ìòÌÒ"                 # Italian
+    "ªº"                   # Portuguese / Spanish ordinals
 )
 DIGITS = "0123456789"
-PUNCT = ".,;:!?-–—'’\"“”„«»()[]/%&@#+=*€$§°…_"
+PUNCT = ".,;:!?-–—'’\"“”„«»()[]/%&@#+=*€$§°…_‘‚‹›·¼½²³©®™×÷<>|\\^~`{}£¥"
 CHARS = []
 for c in " " + LETTERS + DIGITS + PUNCT:
     if c not in CHARS:

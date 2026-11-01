@@ -139,9 +139,23 @@ if __name__ == "__main__":
     os.makedirs(out, exist_ok=True)
     torch.set_num_threads(int(os.environ.get("TT", "3")))
     net = Net()
+    init = os.environ.get("INIT")
+    if init:  # warm start from a model trained on the previous charset: copy matching classes
+        import charset_v1
+        sd = torch.load(init)
+        old = charset_v1.CHARSET
+        w_old, b_old = sd.pop("fc.weight"), sd.pop("fc.bias")
+        net.load_state_dict(sd, strict=False)
+        with torch.no_grad():
+            net.fc.bias.fill_(-3.0)
+            net.fc.bias[0] = b_old[0]; net.fc.weight[0] = w_old[0]
+            for i, ch in enumerate(old):
+                j = CHARSET.index(ch) + 1
+                net.fc.weight[j] = w_old[i + 1]; net.fc.bias[j] = b_old[i + 1]
+        print("warm start from", init, flush=True)
     print("params", sum(p.numel() for p in net.parameters()), flush=True)
     opt = torch.optim.AdamW(net.parameters(), 2e-3, weight_decay=1e-4)
-    sched = torch.optim.lr_scheduler.OneCycleLR(opt, 3e-3, total_steps=steps, pct_start=0.05)
+    sched = torch.optim.lr_scheduler.OneCycleLR(opt, float(os.environ.get('LR', '3e-3')), total_steps=steps, pct_start=0.05)
     ctc = nn.CTCLoss(zero_infinity=True)
     vg = batches(424242)
     val = [next(vg) for _ in range(12)]

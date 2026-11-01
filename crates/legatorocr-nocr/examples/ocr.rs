@@ -19,6 +19,12 @@ fn main() {
             eprintln!("  line x{} y{} w{} h{} ink{}", l.x, l.y, l.w, l.h, n);
         }
     }
+    if std::env::var_os("NOCR_ORIENT").is_some() {
+        let lang = std::env::var("NOCR_LANG").unwrap_or_default();
+        let t = std::time::Instant::now();
+        println!("{:?} in {:?}", legatorocr_nocr::detect_orientation(&PageImage::Gray(img.clone()), dpi, &model, &lang), t.elapsed());
+        return;
+    }
     let t = std::time::Instant::now();
     let words = recognize(&PageImage::Gray(img), dpi, &model, &NativeOptions { lang: std::env::var("NOCR_LANG").unwrap_or_default(), ..Default::default() });
     let mut line = u32::MAX;

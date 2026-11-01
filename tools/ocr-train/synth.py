@@ -44,9 +44,25 @@ def zipf_pick(ws, rng):
     return ws[min(i, len(ws) - 1)]
 
 PUNCT_END = [".", ".", ",", ";", ":", "!", "?", "…"]
+SYMS = list("<>|\\^~`{}£¥©®™×÷‘‚‹›·¼½²³ªº")
+def numeric_line(rng):
+    parts = []
+    for _ in range(rng.randint(1, 6)):
+        r = rng.random()
+        if r < 0.25: parts.append(f"{rng.randint(1, 31):02d}.{rng.randint(1, 12):02d}.{rng.randint(1900, 2030)}")
+        elif r < 0.5: parts.append(f"{rng.randint(1, 999)} {rng.randint(0, 999):03d},{rng.randint(0, 99):02d}")
+        elif r < 0.65: parts.append(rng.choice(["€", "$", "£", "%", "§", "©", "®", "™", "×", "÷", "="]) + str(rng.randint(0, 9999)))
+        elif r < 0.8: parts.append(f"ISBN {rng.randint(100, 999)}-{rng.randint(0, 9)}-{rng.randint(10000, 99999)}-{rng.randint(0, 9)}")
+        elif r < 0.9: parts.append(f"{rng.randint(1, 400)}-{rng.randint(1, 400)}")
+        else: parts.append("".join(rng.choice("0123456789ABCDEFGHJKLMNPRSTUVWXYZ") for _ in range(rng.randint(3, 9))))
+    return " ".join(parts)
+
 def sample_text(lang, rng):
+    r0 = rng.random()
+    if r0 < 0.07:
+        return numeric_line(rng)
     ws = words(lang)
-    n = rng.choice([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14])
+    n = rng.choice([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14] + ([18, 22, 26] if rng.random() < 0.12 else []))
     out = []
     for k in range(n):
         r = rng.random()
@@ -63,6 +79,10 @@ def sample_text(lang, rng):
         out.append(w)
         if k < n - 1 and rng.random() < 0.10:
             out[-1] += rng.choice([",", ",", ";", ":", "-"])
+    if rng.random() < 0.05:
+        out.insert(rng.randrange(len(out) + 1), "".join(rng.choice(SYMS) for _ in range(rng.randint(1, 3))))
+    if rng.random() < 0.03:
+        out = [w.upper() for w in out]
     s = " ".join(out)
     if rng.random() < 0.5:
         s += rng.choice(PUNCT_END)
@@ -70,7 +90,12 @@ def sample_text(lang, rng):
         s += rng.choice([")", "”", "»", '"'])
     return s
 
-def render(text, font_path, size, rng):
+CEDILLA = {"ș": "ş", "ț": "ţ", "Ș": "Ş", "Ț": "Ţ"}
+def render(text, font_path, size, rng, cmap=None):
+    if cmap is not None and any(c in text for c in CEDILLA) and rng.random() < 0.5:
+        alt = "".join(CEDILLA.get(c, c) for c in text)
+        if all(ord(c) in cmap for c in alt):
+            text = alt   # draw the legacy cedilla form; the label keeps the correct comma-below letter
     f = ImageFont.truetype(font_path, size)
     w = int(f.getlength(text)) + 4 * size
     h = int(size * 2.2)
@@ -99,14 +124,46 @@ def crop_normalise(im, rng):
     c = im.crop(box)
     return c
 
+def artifacts(im, rng):
+    """Things that really sit in a line crop: underline, a table rule, slivers of the lines above/below."""
+    a = np.array(im)
+    h, w = a.shape
+    r = rng.random()
+    if r < 0.06:            # underline just under the baseline zone
+        y = min(h - 1, int(h * rng.uniform(0.82, 0.96)))
+        a[y:y + max(1, h // 18), :] = rng.randint(0, 60)
+    elif r < 0.10:          # table rule along the top or bottom edge
+        t = max(1, h // 16)
+        if rng.random() < 0.5: a[:t, :] = rng.randint(0, 60)
+        else: a[h - t:, :] = rng.randint(0, 60)
+    elif r < 0.14:          # vertical table border at one side
+        t = max(1, h // 14)
+        if rng.random() < 0.5: a[:, :t] = rng.randint(0, 60)
+        else: a[:, w - t:] = rng.randint(0, 60)
+    elif r < 0.22:          # neighbouring line's descender/ascender tips
+        for _ in range(rng.randint(1, 4)):
+            x = rng.randrange(w); ww = rng.randint(2, max(3, h // 6)); hh = rng.randint(2, max(3, h // 5))
+            if rng.random() < 0.5: a[:hh, x:x + ww] = rng.randint(0, 80)
+            else: a[h - hh:, x:x + ww] = rng.randint(0, 80)
+    return Image.fromarray(a)
+
+def jpeg(im, rng):
+    import io
+    b = io.BytesIO()
+    im.convert("L").save(b, "JPEG", quality=rng.randint(40, 92))
+    b.seek(0)
+    return Image.open(b).convert("L")
+
 def degrade(im, rng):
     if rng.random() < 0.5:  # low resolution scan
-        s = rng.uniform(0.35, 0.9)
+        s = rng.uniform(0.42, 0.9)
         im = im.resize((max(8, int(im.width * s)), max(8, int(im.height * s))), Image.BILINEAR)
     if rng.random() < 0.6:
-        im = im.rotate(rng.uniform(-1.2, 1.2), resample=Image.BILINEAR, expand=True, fillcolor=255)
-    if rng.random() < 0.35:
-        im = im.filter(ImageFilter.GaussianBlur(rng.uniform(0.3, 1.1)))
+        im = im.rotate(rng.uniform(-2.0, 2.0), resample=Image.BILINEAR, expand=True, fillcolor=255)
+    if rng.random() < 0.35 and im.height > 30:
+        im = im.filter(ImageFilter.GaussianBlur(rng.uniform(0.3, 1.0)))
+    if rng.random() < 0.3:
+        im = jpeg(im, rng)
     return im
 
 def to_input(im, rng):
@@ -133,11 +190,16 @@ def sample(fonts, rng, lang=None):
         if not all(ord(c) in cmap for c in text):
             continue
         size = rng.randint(16, 56)
-        im = render(text, path, size, rng)
+        im = render(text, path, size, rng, cmap)
+        if rng.random() < 0.25:  # condensed / extended faces and loose tracking
+            k = rng.uniform(0.82, 1.18)
+            im = im.resize((max(8, int(im.width * k)), im.height), Image.BILINEAR)
         c = crop_normalise(im, rng)
+        if c is not None:
+            c = artifacts(c, rng)
         if c is None or c.width < 8:
             continue
         a = to_input(degrade(c, rng), rng)
-        if a.shape[1] > 1600 or (a < 128).mean() < 0.01:
+        if a.shape[1] > 2300 or (a < 128).mean() < 0.01:
             continue
         return a, text

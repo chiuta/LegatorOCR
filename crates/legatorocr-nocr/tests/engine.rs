@@ -175,29 +175,141 @@ fn blank_page_recognises_nothing() {
 fn lexicon_codes_and_repair() {
     assert_eq!(lexicon::codes("ron+eng+xxx"), vec!["ro", "en"]);
     assert_eq!(lexicon::codes("hu+HU"), vec!["hu"]);
+    assert!(lexicon::all_supported("ron+eng") && !lexicon::all_supported("ron+rus") && !lexicon::all_supported(""));
     let en = lexicon::Lexicon::load("en").unwrap();
-    assert!(en.contains("The") && en.contains("people"));
-    assert!(!en.contains("peopie"));
-    let mk = |s: &str, alt_at: usize, alt: char| -> Vec<ctc::Glyph> {
+    let ro = lexicon::Lexicon::load("ro").unwrap();
+    assert!(en.contains("The") && en.contains("people") && !en.contains("peopie"));
+    let mk = |s: &str, alt_at: usize, alt: char, p: f32| -> Vec<ctc::Glyph> {
         s.chars()
             .enumerate()
-            .map(|(i, ch)| ctc::Glyph {
-                ch,
-                c0: i,
-                c1: i,
-                p: 0.5,
-                alt: (i == alt_at).then_some((alt, 0.4)),
-            })
+            .map(|(i, ch)| ctc::Glyph { ch, c0: i, c1: i, p: if i == alt_at { p } else { 0.97 }, alt: (i == alt_at).then_some((alt, 0.4)) })
             .collect()
     };
-    let g = mk("peopie", 4, 'l');
-    let refs: Vec<&ctc::Glyph> = g.iter().collect();
-    assert_eq!(en.repair("peopie", &refs).as_deref(), Some("people"));
-    // punctuation around the word is kept; a known word is never touched
-    let g = mk("„peopie,", 5, 'l');
-    let refs: Vec<&ctc::Glyph> = g.iter().collect();
-    assert_eq!(en.repair("„peopie,", &refs).as_deref(), Some("„people,"));
-    let g = mk("people", 4, 'x');
-    let refs: Vec<&ctc::Glyph> = g.iter().collect();
-    assert_eq!(en.repair("people", &refs), None);
+    let fix = |lx: &[&lexicon::Lexicon], t: &str, at: usize, alt: char, p: f32, first: bool| {
+        let g = mk(t, at, alt, p);
+        let r: Vec<&ctc::Glyph> = g.iter().collect();
+        lexicon::repair(lx, t, &r, first)
+    };
+    assert_eq!(fix(&[en], "peopie", 4, 'l', 0.5, false).as_deref(), Some("people"));
+    assert_eq!(fix(&[en], "„peopie,", 5, 'l', 0.5, false).as_deref(), Some("„people,"));
+    // a known word, a confident glyph, a capitalised name mid-line, and an upper/lower swap are left alone
+    assert_eq!(fix(&[en], "people", 4, 'x', 0.5, false), None);
+    assert_eq!(fix(&[en], "peopie", 4, 'l', 0.95, false), None);
+    assert_eq!(fix(&[en], "Peopie", 4, 'l', 0.5, false), None);
+    assert_eq!(fix(&[en], "peopie", 4, 'L', 0.5, false), None);
+    // multi-language: a correct English word is not "repaired" through the Romanian list
+    assert!(lexicon::known(&[ro, en], "table"));
+    assert_eq!(fix(&[ro, en], "table", 3, 'x', 0.5, false), None);
+}
+
+// ---- adversarial layout cases found by the review ----
+
+#[test]
+fn dense_page_with_many_lines_loses_none() {
+    // 120 lines at uniform spacing: a depth-limited cut used to swallow everything after ~40
+    let rows: Vec<(u32, u32)> = (0..120).map(|i| (10 + i * 12, 8)).collect();
+    let mut b = BitImage::new(400, 10 + 120 * 12 + 10);
+    for &(y, h) in &rows {
+        for yy in y..y + h {
+            for x in 20..380 {
+                if (x / 5) % 3 != 0 {
+                    b.set(x, yy, true);
+                }
+            }
+        }
+    }
+    let lines = layout::find_lines(&b, 8);
+    assert_eq!(lines.len(), 120);
+    assert!(lines.iter().all(|l| l.h == 8));
+}
+
+#[test]
+fn ruled_table_rows_stay_separate_lines() {
+    // text rows inside a frame with vertical borders: borders must not weld the rows together
+    let mut g = image::GrayImage::from_pixel(400, 300, image::Luma([240]));
+    for y in 20..280 {
+        for x in [30u32, 31, 32, 368, 369, 370] {
+            g.put_pixel(x, y, image::Luma([20]));
+        }
+    }
+    for row in 0..5 {
+        for yy in 0..14 {
+            for x in 50..350 {
+                if (x / 4 + row) % 3 != 0 {
+                    g.put_pixel(x, 40 + row * 45 + yy, image::Luma([20]));
+                }
+            }
+        }
+    }
+    let prep = layout::prepare(&PageImage::Gray(g), 150);
+    assert!(prep.med > 0);
+    let lines = layout::find_lines(&prep.ink, prep.med);
+    assert_eq!(lines.len(), 5, "{lines:?}");
+}
+
+#[test]
+fn light_on_dark_page_is_inverted() {
+    let mut g = image::GrayImage::from_pixel(300, 120, image::Luma([15]));
+    for row in 0..2 {
+        for yy in 0..16 {
+            for x in 20..280 {
+                if (x / 4) % 3 != 0 {
+                    g.put_pixel(x, 20 + row * 50 + yy, image::Luma([235]));
+                }
+            }
+        }
+    }
+    let prep = layout::prepare(&PageImage::Gray(g), 150);
+    assert!(prep.gray.get_pixel(0, 0).0[0] > 200, "paper must be light after inversion");
+    assert_eq!(layout::find_lines(&prep.ink, prep.med).len(), 2);
+}
+
+#[test]
+fn long_lines_are_split_at_gaps_and_cover_the_line() {
+    let mut b = BitImage::new(6000, 60);
+    let mut x = 10;
+    while x < 5900 {
+        for xx in x..x + 40 {
+            for y in 10..40 {
+                if (xx / 3) % 2 == 0 {
+                    b.set(xx, y, true);
+                }
+            }
+        }
+        x += 60; // 20-px word gaps
+    }
+    let line = layout::Line { x: 10, y: 10, w: 5900, h: 30 };
+    let parts = layout::split_long(&b, &line, 600);
+    assert!(parts.len() > 1);
+    assert_eq!(parts[0].x, 10);
+    let end = parts.last().map(|l| l.x + l.w).unwrap();
+    assert_eq!(end, 5910);
+    assert!(parts.windows(2).all(|w| w[0].x + w[0].w == w[1].x), "parts must tile the line");
+    assert!(parts.iter().all(|l| l.w <= 600 * 30 * 124 / 100 / 32 + 1));
+}
+
+#[test]
+fn median_height_ignores_dust_and_survives_short_images() {
+    // one cropped text line only 40 px high: letters (28 px) must still count
+    let mut b = BitImage::new(300, 40);
+    for x in (10..290).step_by(14) {
+        for xx in x..x + 8 {
+            for y in 6..34 {
+                b.set(xx, y, true);
+            }
+        }
+    }
+    assert_eq!(layout::median_component_height(&b), 28);
+    // add dust: many 2-px specks must not drag the median down
+    for i in 0..60u32 {
+        b.set(3 + (i * 5) % 290, 1 + (i * 7) % 3, true);
+    }
+    assert_eq!(layout::median_component_height(&b), 28);
+}
+
+#[test]
+fn huge_blank_page_does_not_allocate_per_pixel_labels() {
+    // 9000 × 9000 empty page: the run-based labelling needs next to no memory and returns fast
+    let b = BitImage::new(9000, 9000);
+    assert_eq!(layout::median_component_height(&b), 0);
 }
