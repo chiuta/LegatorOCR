@@ -294,11 +294,17 @@ fn read_units(name: &str, data: Vec<u8>) -> Read {
                 return Read::Unreadable;
             };
             let mut v = Vec::new();
+            let mut held = 0usize;
             for e in &list {
                 if e.name.ends_with('/') || !is_searchable(&e.name) {
                     continue;
                 }
                 if let Some(b) = zipmini::read(&data, e) {
+                    // a zip of many large text members must not be inflated into memory whole
+                    held += b.len();
+                    if held > 512 << 20 {
+                        break;
+                    }
                     v.push((e.name.clone(), b));
                 }
             }

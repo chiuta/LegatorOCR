@@ -121,6 +121,21 @@ fn cap_name(name: &str, max: usize) -> String {
     format!("{}{ext}", &stem[..keep])
 }
 
+/// Total size of the files below `dir` (symlinks not followed, depth-limited).
+fn dir_size(dir: &Path, depth: u32) -> u64 {
+    if depth > 32 {
+        return 0;
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else { return 0 };
+    rd.flatten()
+        .map(|e| match e.file_type() {
+            Ok(t) if t.is_dir() => dir_size(&e.path(), depth + 1),
+            Ok(t) if t.is_file() => e.metadata().map(|m| m.len()).unwrap_or(0),
+            _ => 0,
+        })
+        .sum()
+}
+
 struct Sink {
     dir: PathBuf,
     out: Vec<(String, PathBuf)>,
@@ -304,28 +319,58 @@ fn external_extract(archive: &Path, want: &dyn Fn(&str) -> bool, sink: &mut Sink
             cmd.arg("-o").arg(&raw).arg("-f").arg(archive);
         }
     }
+    // the scratch folder goes away on every exit path (errors, timeouts, bombs)
+    struct RawGuard(PathBuf);
+    impl Drop for RawGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _guard = RawGuard(raw.clone());
     let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
         .with_context(|| format!("cannot start {name}"))?;
+    // keep the tail of stderr on a thread so a chatty extractor can never block on a full pipe
+    let err_thread = child.stderr.take().map(|mut s| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = s.by_ref().take(1 << 20).read_to_end(&mut buf);
+            let _ = std::io::copy(&mut s, &mut std::io::sink()); // keep draining
+            String::from_utf8_lossy(&buf).into_owned()
+        })
+    });
     let start = Instant::now();
+    let mut last_check = Instant::now();
     let status = loop {
         match child.try_wait()? {
             Some(s) => break s,
             None if start.elapsed() > Duration::from_secs(3600) => {
                 let _ = child.kill();
+                let _ = child.wait();
                 bail!("{name} timed out");
             }
-            None => std::thread::sleep(Duration::from_millis(50)),
+            None => {
+                // an archive bomb must be stopped while it extracts, not after the disk is full
+                if last_check.elapsed() > Duration::from_millis(500) {
+                    last_check = Instant::now();
+                    if dir_size(&raw, 0) > MAX_TOTAL {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        bail!("archive expands to more than {} GiB", MAX_TOTAL >> 30);
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
         }
     };
-    if !status.success() {
-        let mut e = String::new();
-        if let Some(mut s) = child.stderr.take() {
-            let _ = s.read_to_string(&mut e);
-        }
+    // exit status 1 of the 7-Zip family means "warnings" (a bad CRC somewhere, a skipped file):
+    // the other members are fine
+    let warning_only = status.code() == Some(1) && matches!(name.as_str(), "7zz" | "7z" | "7za");
+    if !status.success() && !warning_only {
+        let e = err_thread.and_then(|t| t.join().ok()).unwrap_or_default();
         bail!(
             "{name} failed on {}: {}",
             archive.display(),
