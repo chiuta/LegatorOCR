@@ -2,3 +2,4 @@ target/
 dist/
 legatorocr-out/
 *.lgr.bak
+__pycache__/

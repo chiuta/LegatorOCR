@@ -65,7 +65,33 @@ static COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// The folder all extractions of this process go to (created on demand).
 pub fn work_dir() -> PathBuf {
-    std::env::temp_dir().join(format!("legatorocr-archives-{}", std::process::id()))
+    use std::sync::OnceLock;
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        // unpredictable name and owner-only permissions: another local user cannot pre-create
+        // the folder (or plant symlinks in it) in the shared temp directory
+        let t = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        let stack = 0u8;
+        let salt = t ^ ((&stack as *const u8 as u64) << 20) ^ ((std::process::id() as u64) << 40);
+        let d = std::env::temp_dir().join(format!(
+            "legatorocr-archives-{}-{:016x}",
+            std::process::id(),
+            salt
+        ));
+        let mut b = std::fs::DirBuilder::new();
+        b.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            b.mode(0o700);
+        }
+        let _ = b.create(&d);
+        d
+    })
+    .clone()
 }
 
 /// Remove everything extracted so far. Call when the program ends (the GUI keeps the files
@@ -92,8 +118,10 @@ fn flat_name(i: usize, member: &str) -> String {
                 c
             }
         })
-        .take(120)
         .collect();
+    // Cap by bytes (NAME_MAX is 255 bytes, not characters) but keep the extension: later code
+    // decides pdf / tiff / image by it.
+    let clean = cap_name(&clean, 180);
     let clean = if clean.trim_matches('.').is_empty() {
         "member".into()
     } else {
@@ -101,6 +129,39 @@ fn flat_name(i: usize, member: &str) -> String {
     };
     // The running number keeps archive order and makes equal names unique.
     format!("{i:06}_{clean}")
+}
+
+/// Shorten `name` to at most `max` bytes by cutting the stem, never the extension.
+fn cap_name(name: &str, max: usize) -> String {
+    if name.len() <= max {
+        return name.to_string();
+    }
+    let (stem, ext) = match name.rfind('.') {
+        Some(i) if name.len() - i <= 12 => (&name[..i], &name[i..]),
+        _ => (name, ""),
+    };
+    let mut keep = max.saturating_sub(ext.len());
+    while keep > 0 && !stem.is_char_boundary(keep) {
+        keep -= 1;
+    }
+    format!("{}{ext}", &stem[..keep])
+}
+
+/// Total size of the files below `dir` (symlinks not followed, depth-limited).
+fn dir_size(dir: &Path, depth: u32) -> u64 {
+    if depth > 32 {
+        return 0;
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    rd.flatten()
+        .map(|e| match e.file_type() {
+            Ok(t) if t.is_dir() => dir_size(&e.path(), depth + 1),
+            Ok(t) if t.is_file() => e.metadata().map(|m| m.len()).unwrap_or(0),
+            _ => 0,
+        })
+        .sum()
 }
 
 struct Sink {
@@ -126,6 +187,14 @@ impl Sink {
 }
 
 fn octal(b: &[u8]) -> Option<u64> {
+    // GNU base-256: a set high bit means the rest is a big-endian binary number (members > 8 GiB)
+    if b.first().is_some_and(|&c| c & 0x80 != 0) {
+        let mut v: u64 = (b[0] & 0x7f) as u64;
+        for &c in &b[1..] {
+            v = v.checked_mul(256)?.checked_add(c as u64)?;
+        }
+        return Some(v);
+    }
     let s: String = b
         .iter()
         .take_while(|&&c| c != 0)
@@ -147,7 +216,8 @@ fn tar_extract(mut r: impl Read, want: &dyn Fn(&str) -> bool, sink: &mut Sink) -
             break;
         }
         let Some(size) = octal(&hdr[124..136]) else {
-            bail!("damaged tar header");
+            eprintln!("warning: damaged tar header; keeping what was read");
+            break;
         };
         let typ = hdr[156];
         let str_of = |b: &[u8]| -> String {
@@ -167,8 +237,15 @@ fn tar_extract(mut r: impl Read, want: &dyn Fn(&str) -> bool, sink: &mut Sink) -
         if (wanted_type && want(long_name.as_deref().unwrap_or(&name)) && size <= MAX_MEMBER)
             || (meta_type && size <= 1 << 20)
         {
-            let mut data = vec![0u8; size as usize];
-            r.read_exact(&mut data).context("truncated tar member")?;
+            // read what is there: a header that promises a gigabyte must not allocate one up front
+            let mut data = Vec::new();
+            (&mut r).take(size).read_to_end(&mut data)?;
+            if (data.len() as u64) < size {
+                eprintln!(
+                    "warning: tar archive is truncated inside a member; keeping what was read"
+                );
+                break;
+            }
             let skip = padded - size;
             std::io::copy(&mut (&mut r).take(skip), &mut std::io::sink())?;
             if typ == b'L' {
@@ -259,6 +336,8 @@ fn walk_files(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
 }
 
 fn external_extract(archive: &Path, want: &dyn Fn(&str) -> bool, sink: &mut Sink) -> Result<()> {
+    let safe_archive = crate::files::safe_path(archive);
+    let archive = safe_archive.as_path();
     let Some((name, prog)) = find_tool(&["7zz", "7z", "7za", "unrar", "bsdtar", "unar"]) else {
         bail!(
             "{}: reading this archive type needs an installed extractor (7-Zip, unrar, bsdtar or unar)",
@@ -286,28 +365,58 @@ fn external_extract(archive: &Path, want: &dyn Fn(&str) -> bool, sink: &mut Sink
             cmd.arg("-o").arg(&raw).arg("-f").arg(archive);
         }
     }
+    // the scratch folder goes away on every exit path (errors, timeouts, bombs)
+    struct RawGuard(PathBuf);
+    impl Drop for RawGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _guard = RawGuard(raw.clone());
     let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
         .with_context(|| format!("cannot start {name}"))?;
+    // keep the tail of stderr on a thread so a chatty extractor can never block on a full pipe
+    let err_thread = child.stderr.take().map(|mut s| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = s.by_ref().take(1 << 20).read_to_end(&mut buf);
+            let _ = std::io::copy(&mut s, &mut std::io::sink()); // keep draining
+            String::from_utf8_lossy(&buf).into_owned()
+        })
+    });
     let start = Instant::now();
+    let mut last_check = Instant::now();
     let status = loop {
         match child.try_wait()? {
             Some(s) => break s,
             None if start.elapsed() > Duration::from_secs(3600) => {
                 let _ = child.kill();
+                let _ = child.wait();
                 bail!("{name} timed out");
             }
-            None => std::thread::sleep(Duration::from_millis(50)),
+            None => {
+                // an archive bomb must be stopped while it extracts, not after the disk is full
+                if last_check.elapsed() > Duration::from_millis(500) {
+                    last_check = Instant::now();
+                    if dir_size(&raw, 0) > MAX_TOTAL {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        bail!("archive expands to more than {} GiB", MAX_TOTAL >> 30);
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
         }
     };
-    if !status.success() {
-        let mut e = String::new();
-        if let Some(mut s) = child.stderr.take() {
-            let _ = s.read_to_string(&mut e);
-        }
+    // exit status 1 of the 7-Zip family means "warnings" (a bad CRC somewhere, a skipped file):
+    // the other members are fine
+    let warning_only = status.code() == Some(1) && matches!(name.as_str(), "7zz" | "7z" | "7za");
+    if !status.success() && !warning_only {
+        let e = err_thread.and_then(|t| t.join().ok()).unwrap_or_default();
         bail!(
             "{name} failed on {}: {}",
             archive.display(),
@@ -356,6 +465,22 @@ pub fn extract(archive: &Path, want: &dyn Fn(&str) -> bool) -> Result<Vec<(Strin
         out: Vec::new(),
         total: 0,
     };
+    // whatever goes wrong half-way, the files already written for this archive are removed
+    match extract_into(k, archive, want, &mut sink) {
+        Ok(()) => Ok(sink.out),
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&sink.dir);
+            Err(e)
+        }
+    }
+}
+
+fn extract_into(
+    k: Kind,
+    archive: &Path,
+    want: &dyn Fn(&str) -> bool,
+    sink: &mut Sink,
+) -> Result<()> {
     match k {
         Kind::Zip => {
             let md = std::fs::metadata(archive)?;
@@ -365,31 +490,135 @@ pub fn extract(archive: &Path, want: &dyn Fn(&str) -> bool) -> Result<Vec<(Strin
             let data = std::fs::read(archive)?;
             let Some(list) = zipmini::list(&data) else {
                 // ZIP64 / odd layouts: let an installed extractor try.
-                return external_extract(archive, want, &mut sink).map(|_| sink.out);
+                return external_extract(archive, want, sink);
             };
+            let mut unreadable: Vec<(String, String)> = Vec::new();
             for e in &list {
                 if e.name.ends_with('/') || !want(&e.name) {
                     continue;
                 }
-                if let Some(b) = zipmini::read(&data, e) {
-                    sink.put(&e.name, &b)?;
+                match zipmini::read_checked(&data, e) {
+                    Ok(b) => sink.put(&e.name, &b)?,
+                    Err(why) => unreadable.push((e.name.clone(), why)),
                 }
             }
+            if !unreadable.is_empty() {
+                // another method (LZMA, bzip2, deflate64), ZIP64 or a damaged member: an installed
+                // extractor may still read everything; otherwise say what is missing
+                let mut again = Sink {
+                    dir: fresh_dir()?,
+                    out: Vec::new(),
+                    total: 0,
+                };
+                if external_extract(archive, want, &mut again).is_ok() && !again.out.is_empty() {
+                    let _ = std::fs::remove_dir_all(&sink.dir);
+                    sink.dir = again.dir;
+                    sink.out = again.out;
+                    return Ok(());
+                }
+                eprintln!(
+                    "warning: {}: {} member(s) could not be read (first: {} — {}); install 7-Zip or bsdtar to read them",
+                    archive.display(),
+                    unreadable.len(),
+                    unreadable[0].0,
+                    unreadable[0].1
+                );
+            }
         }
-        Kind::Tar => tar_extract(std::fs::File::open(archive)?, want, &mut sink)?,
+        Kind::Tar => tar_extract(std::fs::File::open(archive)?, want, sink)?,
         Kind::TarGz => tar_extract(
             flate2::read::GzDecoder::new(std::io::BufReader::new(std::fs::File::open(archive)?)),
             want,
-            &mut sink,
+            sink,
         )?,
-        Kind::External => external_extract(archive, want, &mut sink)?,
+        Kind::External => external_extract(archive, want, sink)?,
     }
-    Ok(sink.out)
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_member_names_keep_their_extension_and_stay_under_name_max() {
+        let long = format!("{}.pdf", "é".repeat(300));
+        let n = flat_name(7, &long);
+        assert!(n.len() <= 6 + 1 + 180 + 4, "{} bytes", n.len());
+        assert!(n.ends_with(".pdf"), "{n}");
+        assert!(n.starts_with("000007_"));
+        assert_eq!(cap_name("short.png", 180), "short.png");
+        assert_eq!(cap_name(&"x".repeat(400), 100).len(), 100);
+    }
+
+    fn tar_header(name: &str, size_field: [u8; 12], typ: u8) -> [u8; 512] {
+        let mut h = [0u8; 512];
+        h[..name.len()].copy_from_slice(name.as_bytes());
+        h[124..136].copy_from_slice(&size_field);
+        h[156] = typ;
+        h
+    }
+
+    fn octal_field(n: u64) -> [u8; 12] {
+        let mut f = [0u8; 12];
+        let t = format!("{n:011o}");
+        f[..11].copy_from_slice(t.as_bytes());
+        f
+    }
+
+    #[test]
+    fn tar_base256_sizes_and_truncated_members_do_not_abort_the_archive() {
+        // base-256 encoded size (high bit set) of 5 bytes is read like the octal one
+        let mut f = [0u8; 12];
+        f[0] = 0x80;
+        f[11] = 5;
+        assert_eq!(octal(&f), Some(5));
+        assert_eq!(octal(&octal_field((8 << 30) - 1)), Some((8 << 30) - 1));
+        // good member, then a member that promises 100 000 bytes but the file ends
+        let mut t = Vec::new();
+        t.extend_from_slice(&tar_header("a.png", octal_field(5), b'0'));
+        t.extend_from_slice(b"HELLO");
+        t.extend_from_slice(&[0u8; 507]);
+        t.extend_from_slice(&tar_header("b.png", octal_field(100_000), b'0'));
+        t.extend_from_slice(b"short");
+        let d = tmp("tar_trunc");
+        let mut sink = Sink {
+            dir: d.clone(),
+            out: Vec::new(),
+            total: 0,
+        };
+        tar_extract(&t[..], &|_| true, &mut sink).expect("a truncated tar keeps what was read");
+        assert_eq!(sink.out.len(), 1);
+        assert_eq!(std::fs::read(&sink.out[0].1).unwrap(), b"HELLO");
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn zip_members_that_cannot_be_read_say_why() {
+        let z = zipmini::write(&[("ok.txt", b"fine"), ("bad.txt", b"payload")]);
+        let list = zipmini::list(&z).unwrap();
+        assert!(zipmini::read_checked(&z, &list[0]).is_ok());
+        // flip a payload byte of the stored second member: the CRC no longer matches
+        let mut damaged = z.clone();
+        let at = damaged.windows(7).position(|w| w == b"payload").unwrap();
+        damaged[at] ^= 0xFF;
+        let list = zipmini::list(&damaged).unwrap();
+        assert_eq!(
+            zipmini::read_checked(&damaged, &list[1]).unwrap_err(),
+            "checksum mismatch"
+        );
+        // an unknown compression method in the central directory
+        let mut m = z.clone();
+        let cd = m
+            .windows(4)
+            .rposition(|w| w == [0x50, 0x4b, 0x01, 0x02])
+            .unwrap();
+        m[cd + 10] = 99;
+        let list = zipmini::list(&m).unwrap();
+        assert!(zipmini::read_checked(&m, &list[1])
+            .unwrap_err()
+            .contains("method 99"));
+    }
 
     fn tmp(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("lgr-arch-{tag}-{}", std::process::id()));

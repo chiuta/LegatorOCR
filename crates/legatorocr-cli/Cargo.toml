@@ -13,8 +13,12 @@ path = "src/main.rs"
 
 [dependencies]
 legatorocr-core = { path = "../legatorocr-core" }
-legatorocr-engine = { path = "../legatorocr-engine" }
+legatorocr-engine = { path = "../legatorocr-engine", default-features = false }
 image.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 rayon.workspace = true
+
+[features]
+default = ["lexicon"]
+lexicon = ["legatorocr-engine/lexicon"]

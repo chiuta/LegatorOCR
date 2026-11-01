@@ -24,6 +24,9 @@ pub struct Entry {
     csize: usize,
     usize_: usize,
     local: usize,
+    crc: u32,
+    flags: usize,
+    zip64: bool,
 }
 
 /// List the members of an archive. `None` when it is not a (supported) ZIP file.
@@ -41,8 +44,11 @@ pub fn list(d: &[u8]) -> Option<Vec<Entry>> {
             return None;
         }
         let (method, csize, usize_) = (u16le(d, p + 10)?, u32le(d, p + 20)?, u32le(d, p + 24)?);
+        let (flags, crc) = (u16le(d, p + 8)?, u32le(d, p + 16)? as u32);
         let (nl, el, cl) = (u16le(d, p + 28)?, u16le(d, p + 30)?, u16le(d, p + 32)?);
         let local = u32le(d, p + 42)?;
+        // 0xFFFFFFFF marks "the real value is in the ZIP64 extra field"
+        let zip64 = [csize, usize_, local].contains(&0xFFFF_FFFF);
         let name = String::from_utf8_lossy(d.get(p + 46..p + 46 + nl)?).into_owned();
         v.push(Entry {
             name,
@@ -50,6 +56,9 @@ pub fn list(d: &[u8]) -> Option<Vec<Entry>> {
             csize,
             usize_,
             local,
+            crc,
+            flags,
+            zip64,
         });
         p += 46 + nl + el + cl;
     }
@@ -58,23 +67,53 @@ pub fn list(d: &[u8]) -> Option<Vec<Entry>> {
 
 /// Inflate one member. `None` for unsupported methods, bad offsets or oversized data.
 pub fn read(d: &[u8], e: &Entry) -> Option<Vec<u8>> {
-    if e.usize_ as u64 > MAX_ENTRY || d.get(e.local..e.local + 4)? != [0x50, 0x4b, 0x03, 0x04] {
-        return None;
+    read_checked(d, e).ok()
+}
+
+/// Like [`read`], but says why a member cannot be read (so callers can tell the user instead of
+/// silently returning a shorter book) and checks the stored CRC-32.
+pub fn read_checked(d: &[u8], e: &Entry) -> Result<Vec<u8>, String> {
+    if e.flags & 1 != 0 {
+        return Err("encrypted".into());
     }
-    let start = e.local + 30 + u16le(d, e.local + 26)? + u16le(d, e.local + 28)?;
-    let raw = d.get(start..start.checked_add(e.csize)?)?;
-    match e.method {
-        0 => Some(raw.to_vec()),
+    if e.zip64 {
+        return Err("ZIP64 size or offset".into());
+    }
+    if e.usize_ as u64 > MAX_ENTRY {
+        return Err(format!("larger than {} MiB", MAX_ENTRY >> 20));
+    }
+    let bad = || "damaged entry".to_string();
+    if d.get(e.local..e.local + 4).ok_or_else(bad)? != [0x50, 0x4b, 0x03, 0x04] {
+        return Err(bad());
+    }
+    let start = e.local
+        + 30
+        + u16le(d, e.local + 26).ok_or_else(bad)?
+        + u16le(d, e.local + 28).ok_or_else(bad)?;
+    let raw = d
+        .get(start..start.checked_add(e.csize).ok_or_else(bad)?)
+        .ok_or_else(bad)?;
+    let out = match e.method {
+        0 => raw.to_vec(),
         8 => {
             let mut out = Vec::new();
             DeflateDecoder::new(raw)
-                .take(MAX_ENTRY)
+                .take(MAX_ENTRY + 1)
                 .read_to_end(&mut out)
-                .ok()?;
-            Some(out)
+                .map_err(|_| bad())?;
+            if out.len() as u64 > MAX_ENTRY {
+                return Err(format!("larger than {} MiB", MAX_ENTRY >> 20));
+            }
+            out
         }
-        _ => None,
+        m => return Err(format!("compression method {m}")),
+    };
+    let mut crc = Crc::new();
+    crc.update(&out);
+    if crc.sum() != e.crc {
+        return Err("checksum mismatch".into());
     }
+    Ok(out)
 }
 
 /// Build an archive (deflated entries, current-date-free: fixed DOS timestamp).

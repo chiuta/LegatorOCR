@@ -133,7 +133,14 @@ pub fn find_page_quad(img: &RgbImage) -> Option<[Pt; 4]> {
     if signs.iter().any(|&s| s != signs[0]) {
         return None;
     }
-    let q = pts.map(|(x, y)| (x * f, y * f));
+    // pts are pixel indices of the downscaled copy: the page corner is the pixel's OUTER corner
+    // (one analysis pixel = f source pixels), otherwise the warped page is inset by up to f px
+    let q = [
+        (pts[0].0 * f, pts[0].1 * f),
+        ((pts[1].0 + 1.0) * f, pts[1].1 * f),
+        ((pts[2].0 + 1.0) * f, (pts[2].1 + 1.0) * f),
+        (pts[3].0 * f, (pts[3].1 + 1.0) * f),
+    ];
     // already (nearly) a rectangle? then leave it to deskew
     let d = |a: Pt, b: Pt| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
     let (top, bottom, left, right) = (d(q[0], q[1]), d(q[3], q[2]), d(q[0], q[3]), d(q[1], q[2]));

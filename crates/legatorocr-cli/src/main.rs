@@ -8,7 +8,7 @@ use legatorocr_engine::{
     ocr::OcrOptions,
     run_export, write_atomic, ExportJob, PdfExport, SheetInput,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{atomic::AtomicBool, Mutex};
 
 #[derive(Copy, Clone, ValueEnum)]
@@ -203,6 +203,11 @@ struct Cli {
     /// Drop OCR words below this confidence (0–100).
     #[arg(long, default_value_t = 0.0)]
     min_conf: f32,
+
+    /// OCR engine: `auto` (Tesseract when installed with the languages, else the built-in
+    /// native engine), `native` (built-in, nothing to install) or `tesseract`.
+    #[arg(long, default_value = "auto")]
+    engine: legatorocr_engine::ocr::Engine,
 
     /// Path to the tesseract executable.
     #[arg(long, default_value = "tesseract")]
@@ -427,6 +432,32 @@ fn output_stems(paths: &[PathBuf]) -> Vec<String> {
         .collect()
 }
 
+/// The first page-image path (`stem`, `stem_L`, `stem_R` + extension, in `out_dir`) that is one of
+/// the input files themselves, compared by canonical path (and case-insensitively, for the
+/// case-folding file systems of Windows and macOS).
+fn output_clobbers_input(
+    out_dir: &Path,
+    stems: &[String],
+    ext: &str,
+    inputs: &[PathBuf],
+) -> Option<PathBuf> {
+    let dir = out_dir.canonicalize().ok()?;
+    let canon: Vec<String> = inputs
+        .iter()
+        .filter_map(|p| p.canonicalize().ok())
+        .map(|p| p.to_string_lossy().to_lowercase())
+        .collect();
+    for stem in stems {
+        for suffix in ["", "_L", "_R"] {
+            let cand = dir.join(format!("{stem}{suffix}.{ext}"));
+            if canon.contains(&cand.to_string_lossy().to_lowercase()) {
+                return Some(cand);
+            }
+        }
+    }
+    None
+}
+
 fn parse_page_size(s: &str) -> Result<(f32, f32)> {
     Ok(match s.to_ascii_lowercase().as_str() {
         "a4" => (210.0, 297.0),
@@ -519,7 +550,7 @@ fn real_main() -> Result<()> {
             lang: "eng".into(),
             ..OcrOptions::default()
         };
-        let v = check_ocr(&o).context("Tesseract was not found")?;
+        let v = check_ocr(&o).context("no OCR engine is available")?;
         let have = legatorocr_engine::ocr::list_languages(&o)?;
         println!("{v}");
         for (iso, tess, name) in legatorocr_engine::ocr::UI_LANGUAGES {
@@ -541,6 +572,12 @@ fn real_main() -> Result<()> {
         let Some(bc) = legatorocr_core::barcode::render(text, 4, 500) else {
             bail!("--make-separator: use 1–80 printable ASCII characters");
         };
+        if bc.width() > 2480 {
+            bail!(
+                "--make-separator: this text needs a {}-px wide code, more than the 2480-px page; use at most about 45 characters",
+                bc.width()
+            );
+        }
         let mut sheet = image::GrayImage::from_pixel(2480, 3508, image::Luma([255]));
         let (ox, oy) = (
             2480u32.saturating_sub(bc.width()) / 2,
@@ -583,6 +620,25 @@ fn real_main() -> Result<()> {
         )
     })?;
     in_range("picture-sensitivity", cli.picture_sensitivity, 0.0, 1.0)?;
+    in_range("sharpen", cli.sharpen, 0.0, 2.0)?;
+    in_range("despeckle-strength", cli.despeckle_strength, 0.25, 4.0)?;
+    if let Some(d) = cli.output_dpi {
+        if !(36..=1200).contains(&d) {
+            bail!("--output-dpi must be between 36 and 1200 (got {d})");
+        }
+    }
+    if !(36..=300).contains(&cli.hybrid_dpi) {
+        bail!(
+            "--hybrid-dpi must be between 36 and 300 (got {})",
+            cli.hybrid_dpi
+        );
+    }
+    if !(1..=100).contains(&cli.jpeg_quality) {
+        bail!(
+            "--jpeg-quality must be between 1 and 100 (got {})",
+            cli.jpeg_quality
+        );
+    }
     let align = parse_align(&cli.align)?;
     let settings = Settings {
         dpi: cli.dpi.unwrap_or(300),
@@ -646,6 +702,52 @@ fn real_main() -> Result<()> {
         .as_deref()
         .map(legatorocr_engine::profiles::load)
         .transpose()?;
+    if project.is_some() || profile.is_some() {
+        // the loaded settings replace the processing options: say so for those given explicitly
+        const PROCESSING: &[&str] = &[
+            "--mode",
+            "--dpi",
+            "--margin",
+            "--page-size",
+            "--split",
+            "--no-deskew",
+            "--skew",
+            "--max-skew",
+            "--threshold",
+            "--sauvola-k",
+            "--sharpen",
+            "--despeckle-strength",
+            "--output-dpi",
+            "--hybrid-dpi",
+            "--dropout",
+            "--descreen",
+            "--perspective",
+            "--dewarp",
+            "--fingers",
+            "--punch-holes",
+            "--remove-lines",
+            "--erase",
+            "--picture-zone",
+        ];
+        let given: Vec<String> = std::env::args()
+            .skip(1)
+            .filter_map(|a| {
+                let name = a.split('=').next().unwrap_or("").to_string();
+                PROCESSING.contains(&name.as_str()).then_some(name)
+            })
+            .collect();
+        if !given.is_empty() {
+            eprintln!(
+                "warning: --{} settings replace the processing options given on the command line ({}); change them in the {} instead",
+                if project.is_some() { "project" } else { "profile" },
+                given.join(", "),
+                if project.is_some() { "project file" } else { "profile" }
+            );
+        }
+    }
+    if cli.skew.is_some() && cli.no_deskew {
+        eprintln!("warning: --skew sets the angle by hand and is applied even though --no-deskew is given");
+    }
     let settings = match (&project, &profile) {
         (Some(p), _) => p.settings.clone(),
         (None, Some(p)) => p.settings.clone(),
@@ -665,6 +767,7 @@ fn real_main() -> Result<()> {
     }
 
     let ocr_opts = OcrOptions {
+        engine: cli.engine,
         lang: legatorocr_engine::ocr::canonical_lang(&cli.lang),
         psm: cli.psm,
         min_conf: cli.min_conf,
@@ -816,6 +919,17 @@ fn real_main() -> Result<()> {
         Fmt::Jpeg => "jpg",
         _ => "tif",
     };
+    if save_images {
+        if let Some(clash) = output_clobbers_input(&cli.out_dir, &stems, ext, &inputs) {
+            bail!(
+                "the page image {} would overwrite an input scan; choose another folder with -o (or --format none)",
+                clash.display()
+            );
+        }
+    }
+    if cli.multitiff.is_some() && !matches!(cli.mode, Mode::Bw) {
+        bail!("--multitiff needs black & white pages (use --mode bw)");
+    }
     let first_err: Mutex<Option<String>> = Mutex::new(None);
     if cli.multitiff.is_some()
         && (cli.skip_duplicates || cli.split_on_blank || cli.split_on_barcode || cli.skip_blank)
@@ -920,9 +1034,7 @@ fn real_main() -> Result<()> {
         },
         &|_, _| {},
     )?;
-    if let Some(e) = first_err.into_inner().unwrap() {
-        bail!("saving image failed: {e}");
-    }
+    let save_error = first_err.into_inner().unwrap();
     for (p, e) in &res.failed {
         eprintln!("SKIPPED {}: {e}", p.display());
     }
@@ -1057,6 +1169,10 @@ fn real_main() -> Result<()> {
         let sp = base.join("SHA256SUMS.txt");
         write_atomic(&sp, sums.as_bytes())?;
         eprintln!("wrote {} ({} file(s))", sp.display(), written.len());
+    }
+    if let Some(e) = save_error {
+        legatorocr_engine::archive::cleanup();
+        bail!("saving page image failed (the PDF and text outputs above were written): {e}");
     }
     if !res.failed.is_empty() {
         eprintln!("{} input(s) could not be processed", res.failed.len());

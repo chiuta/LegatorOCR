@@ -374,7 +374,17 @@ impl UiSettings {
         {
             self.min_conf = v.clamp(0.0, 100.0);
         }
-        if let Some(v) = p.get("tesseract").filter(|v| !v.is_empty()) {
+        // the OCR program is a per-machine choice: never taken from a project file (it would be
+        // executed at the next export), only from the user's own config file
+    }
+
+    /// Per-machine choices that only the user's own config file may set (never a shared project
+    /// or profile): the Tesseract program, which would be executed at the next OCR run.
+    pub fn apply_machine(&mut self, p: &Project) {
+        if let Some(v) = p
+            .get("tesseract")
+            .filter(|v| !v.is_empty() && !v.chars().any(char::is_control))
+        {
             self.tesseract = v.to_string();
         }
     }
@@ -390,6 +400,7 @@ impl UiSettings {
 
     pub fn ocr_options(&self) -> OcrOptions {
         OcrOptions {
+            engine: legatorocr_engine::ocr::Engine::Auto,
             lang: self.lang_string(),
             psm: self.psm,
             min_conf: self.min_conf,
@@ -533,6 +544,21 @@ mod tests {
         assert_eq!((t.mode, t.margin_mm), (ModeChoice::Mixed, 7.5));
         assert_eq!(back.get("lang"), Some("hu"));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn project_files_cannot_pick_the_ocr_program() {
+        let text = "legatorocr-project 1\ntesseract = /tmp/evil\nocr = true\n";
+        let p = Project::parse(text, None).unwrap();
+        let mut s = UiSettings::default();
+        s.apply_project(&p);
+        assert_eq!(s.tesseract, "tesseract");
+        s.apply_machine(&p); // the user's own config may name the program
+        assert_eq!(s.tesseract, "/tmp/evil");
+        let bad = Project::parse("legatorocr-project 1\ntesseract = a\u{7}b\n", None).unwrap();
+        let mut t = UiSettings::default();
+        t.apply_machine(&bad);
+        assert_eq!(t.tesseract, "tesseract");
     }
 
     #[test]

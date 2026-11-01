@@ -18,6 +18,7 @@ rm -rf "$OUT" && mkdir -p "$OUT" dist
 EXE=""; case "$TARGET" in *windows*) EXE=".exe";; esac
 cp "$BIN/legatorocr${EXE}" "$OUT/"
 cp README.md LICENSE THIRD_PARTY_LICENSES.md "$OUT/"
+cp crates/legatorocr-nocr/lexicons/README.md "$OUT/LEXICONS-NOTICE.md"
 
 case "$TARGET" in
   *apple*)

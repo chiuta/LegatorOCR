@@ -54,12 +54,18 @@ scripts/package.sh <target>    # e.g. x86_64-unknown-linux-gnu → dist/LegatorO
 | Windows x86-64 | `.zip` | needs OpenGL 2+ (any GPU driver; plain RDP sessions may lack it) |
 | macOS Apple-silicon / Intel | `.zip` with `LegatorOCR.app` | **unsigned**: first launch via right-click → Open, or `xattr -dr com.apple.quarantine LegatorOCR.app` |
 
-**OCR needs Tesseract** (run as a separate program; the app finds it on `PATH`):
+**OCR works out of the box** with the built-in native engine (`legatorocr-nocr`, pure Rust, no
+install; `--engine native`). It reads the eight interface languages with one model plus per-language
+word lists. Its model is trained on synthetic text only: on clean and moderately degraded synthetic
+pages it makes under 1 % character errors, but real scans of old or unusual print can be worse than
+Tesseract. `--engine auto` (default) therefore uses **Tesseract when it is installed with the
+requested languages** and falls back to the native engine otherwise; `--engine tesseract` forces it.
+Tesseract (run as a separate program; the app finds it on `PATH`):
 `sudo apt install tesseract-ocr tesseract-ocr-ron` · `brew install tesseract tesseract-lang` ·
 Windows: `winget install UB-Mannheim.TesseractOCR` (add it to `PATH`).
 The app also looks in the usual install folders (Homebrew `/opt/homebrew/bin`, `/usr/local/bin`,
 `C:\Program Files\Tesseract-OCR`), so a double-clicked app works without editing `PATH`.
-Without Tesseract everything else works; the OCR switch is disabled and says why.
+Without Tesseract the native engine is used (the OCR switch stays enabled).
 `--auto-rotate` / the OSD checkbox additionally need `osd.traineddata` (part of the standard packages).
 
 ## Pipeline
@@ -94,7 +100,7 @@ Without Tesseract everything else works; the OCR switch is disabled and says why
 | Picture zones | Always kept as a colour picture in mixed / hybrid output, for photos the detector misses. Drawn with the mouse in the GUI (tick *Draw zones*, choose *Picture*; blue; Undo / Redo shared with erase zones; saved per sheet in the `.lgr` project as `picture =`): they are followed through rotation, page split and deskew, so they stay on the picture. Not followed through perspective correction (then dropped) or dewarping (position approximate). Typed: `--picture-zone X,Y,W,H` (mm of the deskewed page, repeatable), GUI field, `picture_zones=` |
 | Text output | `--txt` (plain text), `--hocr` (word boxes + confidences), `--docx` (editable Word document: paragraphs recovered from the line spacing, one page break per scanned page), PDF author/subject/keywords/dates. With `--lang ron` the cedilla letters ş/ţ are corrected to the proper comma-below ș/ț |
 | Archives as input | Give `.zip`/`.cbz`, `.tar`, `.tar.gz`/`.tgz` (built in) or `.7z`, `.rar`/`.cbr`, `.cab`, `.iso`, `.tar.bz2`, `.tar.xz` … (through an installed 7-Zip, unrar, bsdtar or unar) instead of a folder: the images and PDFs inside are processed in natural order of their names, in the CLI and the GUI (add / drag and drop), and are searched by `--search`. Extraction goes to a temporary folder that is removed on exit; names are flattened and sizes capped |
-| OCR languages | `--lang` takes Tesseract names or two-letter codes (`ro+en` = `ron+eng`) for the eight interface languages ro, en, fr, it, es, pt, de, hu; `--ocr-languages` shows which models are installed and how to add the missing ones; the GUI warns about missing ones. Recognition is done by the separately installed Tesseract — a native engine is planned, not written |
+| OCR languages | `--lang` takes Tesseract names or two-letter codes (`ro+en` = `ron+eng`) for the eight interface languages ro, en, fr, it, es, pt, de, hu; `--ocr-languages` shows which models are installed and how to add the missing ones; the GUI warns about missing ones. Recognition is done by Tesseract when installed, else by the built-in native engine (see above); the training and benchmark tools are in `tools/ocr-train` |
 | Full-text search | `legatorocr --search "text" FOLDER-OR-FILE…` finds a phrase in PDF text layers (LegatorOCR, ABBYY FineReader, PDF24, Word …), `.txt`, `.hocr`/`.html`, `.docx` and inside archives (`.zip`, `.tar`, `.tgz`, and `.7z`/`.rar` with an extractor installed); ignores case and diacritics (`mobila` finds `Mobilă`, also across a line break); `--search-regex`, `--search-exact`, `--search-max N`; exit status 1 when nothing is found. Scans without a text layer are reported so you know they still need `--ocr` |
 | PDF input | own tolerant reader: pages of scanned PDFs become `book.pdf#N` (Flate/LZW/ASCII85/RunLength, PNG/TIFF predictors, JPEG, CCITT G4, Gray/RGB/CMYK/Indexed, /Rotate, DPI from the page size); object streams and damaged cross-reference tables are fine; **layered / scanner-MRC pages** (several images placed by their transformation matrices, stencil masks in the fill colour, form XObjects) are composited at the sharpest image's resolution; CCITT **Group 3** (1-D, 2-D and byte-aligned) and **JBIG2 generic regions** (arithmetic templates 0–3 with adaptive pixels and typical prediction, MMR) are decoded; **encrypted files** (RC4 40/128, AES-128, AES-256 R5/R6, empty user password) are opened natively; JBIG2 **symbol dictionaries and text regions** (arithmetic coding) and **rotated/skewed placements** are handled; **JPEG 2000** (JP2 or raw codestream: tiles, all five progression orders, layers, precincts, 5/3 and 9/7 wavelets, RCT/ICT) and JBIG2 **generic refinement, refinement/aggregate symbols and halftone regions** are decoded natively; what is still outside the built-in reader (JBIG2 Huffman coding, JPEG 2000 bypass/termall code-block styles, POC/PPM/PPT) is rendered through an installed `pdftoppm`, `mutool` or Ghostscript when one exists, otherwise refused with a clear message |
 | Profiles | `--profile NAME` / `--list-profiles` / `--save-profile NAME` (14 built in: doc-birou, schite-desene, registre-manuscrise, book-bw, book-small-color, document-text, photo-archive, newspaper, form-dropout-red, negatives, flux-1-optim, flux-2-draft, flux-3-volum, phone-photos; user profiles in the config folder) and a GUI selector |
@@ -113,10 +119,11 @@ Quality gates: see `FUZZING.md` (10 fuzz/property suites, run weekly in CI with 
 
 See `COMPARISON.md` for what other tools do that this one does not. In short:
 
-- **Orientation**: the built-in test only finds "page lies on its side", not *which way*. With
-  Tesseract's `osd` data installed, enable **Orientation via OCR (OSD)** (GUI) or `--auto-rotate`
-  (CLI): it also resolves 90° vs 270° and upside-down pages (needs enough printed text on the page;
-  otherwise it leaves the page alone). Manual fallback: *Rotate left/right 90°* / `--rotate`.
+- **Orientation**: the built-in test only finds "page lies on its side", not *which way*. **Orientation via OCR**
+  (GUI switch / `--auto-rotate`) resolves 90° vs 270° and upside-down pages: with Tesseract's `osd` data when that is
+  installed, otherwise with the built-in engine, which reads a reduced copy in all four turns and keeps the one whose
+  words are found in the language word lists (needs about a dozen letters of printed text; otherwise the page is left
+  alone). Manual fallback: *Rotate left/right 90°* / `--rotate`.
 - Erase zones: typed in millimetres (same on every page) or drawn with the mouse per sheet (drag on the Original view, right-click removes; stored in the project; GUI drag not visually tested); picture
   zones and dewarp control points cannot be drawn at all. Pictures are detected automatically
   (sensitivity adjustable) and the content box can be nudged per page (numeric fields or by dragging its green edges in the GUI; on a split spread the nudge applies to both pages).
@@ -151,4 +158,6 @@ feature lists and release notes of other tools were read; no source code of any 
 scan-processing tool was consulted or copied. Before commercial release, do your own due
 diligence, including a trademark search for the name.
 
-MIT licensed. Dependencies and embedded fonts: see `THIRD_PARTY_LICENSES.md`.
+MIT licensed. Dependencies and embedded fonts: see `THIRD_PARTY_LICENSES.md`. The built-in OCR engine ships word lists
+derived from the *wordfreq* data (**CC BY-SA 4.0**, attribution in `crates/legatorocr-nocr/lexicons/README.md` and in the release
+archives as `LEXICONS-NOTICE.md`); build with `--no-default-features` to leave them out.

@@ -124,7 +124,7 @@ fn profile_skew(ink: &BitImage, max_deg: f32) -> Option<(f32, f64, f64)> {
             a += 0.5;
         }
     }
-    all.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    all.sort_by(|a, b| a.total_cmp(b));
     let med = all[all.len() / 2].max(1.0);
     let (c, _) = search(-max_deg, max_deg, 0.5);
     let (f, best) = search(c - 0.5, c + 0.5, 0.05);
@@ -142,7 +142,8 @@ fn profile_skew(ink: &BitImage, max_deg: f32) -> Option<(f32, f64, f64)> {
     if best < base * 1.02 {
         return Some((0.0, best / med, share));
     }
-    Some((f.to_radians(), best / med, share))
+    // the fine search may step half a degree past the search range: --max-skew is a hard limit
+    Some((f.clamp(-max_deg, max_deg).to_radians(), best / med, share))
 }
 
 #[cfg(test)]

@@ -13,10 +13,14 @@ path = "src/main.rs"
 
 [dependencies]
 legatorocr-core = { path = "../legatorocr-core" }
-legatorocr-engine = { path = "../legatorocr-engine" }
+legatorocr-engine = { path = "../legatorocr-engine", default-features = false }
 image.workspace = true
 anyhow.workspace = true
 rayon.workspace = true
 eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
 rfd = "0.17"
 sys-locale = "0.3"
+
+[features]
+default = ["lexicon"]
+lexicon = ["legatorocr-engine/lexicon"]

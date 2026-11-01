@@ -141,8 +141,10 @@ pub fn measure_uniform_size(
             if cancel.load(Ordering::Relaxed) {
                 bail!("cancelled");
             }
-            let img = load_image(&sheet.path)
-                .with_context(|| format!("reading {}", sheet.path.display()))?;
+            // an unreadable sheet is reported by the main pass (honouring keep_going), not here
+            let Ok(img) = load_image(&sheet.path) else {
+                return Ok(Vec::new());
+            };
             let (img, settings) = orient_with_osd(img, &sheet.settings, osd);
             Ok(legatorocr_core::measure_page(&img, &settings)
                 .into_iter()
@@ -648,6 +650,9 @@ pub fn run_export(
     let done = AtomicUsize::new(0);
     let batch = rayon::current_num_threads().max(2);
     let mut res = ExportResult::default();
+    // with keep_going a page whose OCR fails is kept (without text layer) and reported, instead of
+    // the whole sheet and its other pages being thrown away
+    let ocr_warnings: std::sync::Mutex<Vec<(PathBuf, String)>> = std::sync::Mutex::new(Vec::new());
 
     for (b, chunk) in job.sheets.chunks(batch).enumerate() {
         let base = b * batch;
@@ -679,7 +684,8 @@ pub fn run_export(
                 let mut kept = Vec::new();
                 let mut skipped = 0;
                 for pg in process_page(&img, &settings) {
-                    if job.skip_blank && pg.blank {
+                    // with split_on_blank a blank sheet is a separator: it must reach the splitter
+                    if job.skip_blank && pg.blank && !job.split_on_blank {
                         skipped += 1;
                         continue;
                     }
@@ -689,8 +695,20 @@ pub fn run_export(
                             if cancel.load(Ordering::Relaxed) {
                                 bail!("cancelled");
                             }
-                            legatorocr_ocr::recognize(&pg.image, pg.dpi, o)
-                                .with_context(|| format!("OCR of {}", sheet.path.display()))?
+                            match legatorocr_ocr::recognize(&pg.image, pg.dpi, o) {
+                                Ok(w) => w,
+                                Err(e) if job.keep_going => {
+                                    ocr_warnings.lock().unwrap().push((
+                                        sheet.path.clone(),
+                                        format!("OCR failed, page kept without text layer: {e}"),
+                                    ));
+                                    Vec::new()
+                                }
+                                Err(e) => {
+                                    return Err(anyhow::Error::new(e)
+                                        .context(format!("OCR of {}", sheet.path.display())))
+                                }
+                            }
                         }
                         None => Vec::new(),
                     };
@@ -797,13 +815,19 @@ pub fn run_export(
     } else {
         res.pdf = writer.map(PdfWriter::finish);
     }
+    res.failed
+        .extend(ocr_warnings.into_inner().unwrap_or_default());
     Ok(res)
 }
 
 /// Bookmark title for a sheet: its file name without the `#page` suffix or extension.
 fn source_key(p: &Path) -> String {
-    let s = p.to_string_lossy();
-    let base = s.split('#').next().unwrap_or("");
+    // only the file name carries the `#page` suffix: a folder called "Book #2" must not cut the path
+    let name = p
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let base = name.rsplit_once('#').map_or(name.as_str(), |(b, _)| b);
     Path::new(base)
         .file_stem()
         .map(|x| x.to_string_lossy().into_owned())
@@ -858,12 +882,23 @@ pub fn check_writable(path: &Path) -> Result<()> {
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
     }
-    let mut probe = path.as_os_str().to_owned();
-    probe.push(".part");
-    let probe = PathBuf::from(probe);
+    let probe = part_name(path);
     std::fs::write(&probe, b"").with_context(|| format!("cannot write {}", path.display()))?;
     let _ = std::fs::remove_file(&probe);
     Ok(())
+}
+
+/// Name of the temporary sibling file of `path`: unique per process and call, so two runs writing
+/// the same output never share (or clobber) one `.part` file.
+fn part_name(path: &Path) -> PathBuf {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let mut t = path.as_os_str().to_owned();
+    t.push(format!(
+        ".{}-{}.part",
+        std::process::id(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    PathBuf::from(t)
 }
 
 /// Write via a temporary sibling file, then rename (no half-written outputs).
@@ -871,9 +906,7 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir)?;
     }
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".part");
-    let tmp = PathBuf::from(tmp);
+    let tmp = part_name(path);
     let r = std::fs::write(&tmp, data).and_then(|_| std::fs::rename(&tmp, path));
     if r.is_err() {
         let _ = std::fs::remove_file(&tmp);
@@ -886,6 +919,13 @@ mod tests {
     use super::*;
     use image::{GrayImage, Luma};
     use std::sync::Mutex;
+
+    #[test]
+    fn bookmark_titles_survive_hash_characters_in_folder_names() {
+        assert_eq!(source_key(Path::new("/scans/Book #2/001.png")), "001");
+        assert_eq!(source_key(Path::new("/scans/Book #2/book.pdf#7")), "book");
+        assert_eq!(source_key(Path::new("a/b.tif")), "b");
+    }
 
     fn tmpdir(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("lgr-engine-{tag}-{}", std::process::id()));

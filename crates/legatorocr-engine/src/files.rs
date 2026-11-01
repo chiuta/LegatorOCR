@@ -122,13 +122,11 @@ fn expand(p: &Path, out: &mut Vec<PathBuf>) {
 /// An unreadable archive contributes nothing (the reason goes to stderr).
 fn from_archive(p: &Path, out: &mut Vec<PathBuf>) {
     let want = |n: &str| {
-        IMAGE_EXT.contains(
-            &n.rsplit('.')
-                .next()
-                .unwrap_or("")
-                .to_ascii_lowercase()
-                .as_str(),
-        )
+        // a member needs a real extension: a file literally called "pdf" or "png" is not an image
+        let base = n.rsplit(['/', '\\']).next().unwrap_or("");
+        base.rsplit_once('.').is_some_and(|(stem, ext)| {
+            !stem.is_empty() && IMAGE_EXT.contains(&ext.to_ascii_lowercase().as_str())
+        })
     };
     match crate::archive::extract(p, &want) {
         Ok(mut v) => {
@@ -351,5 +349,63 @@ mod tests {
         // unchanged: 300 dpi
         assert_eq!(detect_dpi(&mk("e.jpg", 2480, 3508, 300)), Some(300));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// A path that is safe to hand to an external program as an argument: a relative name that
+/// starts with `-` or `@` would be read as an option or a list file (`-oX.7z`, `@list.7z`), so it
+/// is made explicitly relative (`./-oX.7z`). Absolute paths and ordinary names are unchanged.
+pub fn safe_path(p: &std::path::Path) -> std::path::PathBuf {
+    let first = p.components().next();
+    let risky = p.is_relative()
+        && matches!(first, Some(std::path::Component::Normal(n))
+            if n.to_string_lossy().starts_with(['-', '@']));
+    if risky {
+        std::path::Path::new(".").join(p)
+    } else {
+        p.to_path_buf()
+    }
+}
+
+#[cfg(test)]
+mod safe_path_tests {
+    use super::safe_path;
+    use std::path::Path;
+    #[test]
+    fn option_like_names_are_made_explicitly_relative() {
+        assert_eq!(safe_path(Path::new("-oX.7z")), Path::new("./-oX.7z"));
+        assert_eq!(safe_path(Path::new("@list.7z")), Path::new("./@list.7z"));
+        assert_eq!(
+            safe_path(Path::new("-dir/a.pdf")),
+            Path::new("./-dir/a.pdf")
+        );
+        assert_eq!(safe_path(Path::new("book.pdf")), Path::new("book.pdf"));
+        assert_eq!(
+            safe_path(Path::new("/abs/-x.pdf")),
+            Path::new("/abs/-x.pdf")
+        );
+        assert_eq!(safe_path(Path::new("dir/-x.pdf")), Path::new("dir/-x.pdf"));
+    }
+}
+
+#[cfg(test)]
+mod archive_member_tests {
+    #[test]
+    fn archive_members_need_a_real_extension() {
+        // the filter used when listing the pages of an archive
+        let want = |n: &str| {
+            let base = n.rsplit(['/', '\\']).next().unwrap_or("");
+            base.rsplit_once('.').is_some_and(|(stem, ext)| {
+                !stem.is_empty() && super::IMAGE_EXT.contains(&ext.to_ascii_lowercase().as_str())
+            })
+        };
+        assert!(want("a/page1.PNG") && want("x.tif") && want("dir.v2/p.pdf"));
+        assert!(
+            !want("png")
+                && !want("dir/pdf")
+                && !want(".png")
+                && !want("notes.txt")
+                && !want("dir.png/readme")
+        );
     }
 }

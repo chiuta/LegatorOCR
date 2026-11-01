@@ -10,7 +10,8 @@ fn esc(s: &str) -> String {
             '&' => o.push_str("&amp;"),
             '<' => o.push_str("&lt;"),
             '>' => o.push_str("&gt;"),
-            c if (c as u32) < 0x20 => {}
+            '\t' => o.push(' '),
+            c if (c as u32) < 0x20 || c == '\u{FFFE}' || c == '\u{FFFF}' => {} // invalid in XML 1.0
             c => o.push(c),
         }
     }

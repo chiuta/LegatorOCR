@@ -63,6 +63,10 @@ pub fn rotate_cw(img: &RgbImage, rad: f32, fill: Rgb<u8>) -> RgbImage {
     let (s, c) = (rad.sin(), rad.cos());
     let nw = ((w as f32 * c.abs() + h as f32 * s.abs()).ceil() as u32).max(1);
     let nh = ((w as f32 * s.abs() + h as f32 * c.abs()).ceil() as u32).max(1);
+    // a huge scan turned by a large angle would need gigabytes for the enlarged canvas: leave it
+    if (nw as u64) * (nh as u64) > 500_000_000 || !rad.is_finite() {
+        return img.clone();
+    }
     let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0);
     let (ncx, ncy) = (nw as f32 / 2.0, nh as f32 / 2.0);
     let mut out = vec![0u8; (nw as usize) * (nh as usize) * 3];

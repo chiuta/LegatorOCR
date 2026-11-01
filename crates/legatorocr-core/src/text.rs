@@ -71,6 +71,10 @@ pub fn normalize_ro(s: &str) -> String {
 pub fn fold(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
     for c in s.chars() {
+        // combining marks (decomposed accents, as macOS file names and many PDFs write them)
+        if ('\u{300}'..='\u{36f}').contains(&c) {
+            continue;
+        }
         let b: &str =
             match c {
                 'ă' | 'â' | 'à' | 'á' | 'ä' | 'ã' | 'å' | 'ā' | 'Ă' | 'Â' | 'À' | 'Á' | 'Ä'
@@ -126,6 +130,11 @@ mod tests {
             "mobila stiinta stiinta cluj-napoca"
         );
         assert_eq!(fold("Straße Œuvre"), "strasse oeuvre");
+        // decomposed forms fold like the precomposed ones
+        assert_eq!(
+            fold("Mobila\u{306} S\u{326}tiint\u{326}a\u{306}"),
+            "mobila stiinta"
+        );
     }
 
     #[test]
