@@ -9,6 +9,10 @@ authors.workspace = true
 
 [dependencies]
 legatorocr-core = { path = "../legatorocr-core" }
-legatorocr-nocr = { path = "../legatorocr-nocr" }
+legatorocr-nocr = { path = "../legatorocr-nocr", default-features = false }
 image.workspace = true
 thiserror.workspace = true
+
+[features]
+default = ["lexicon"]
+lexicon = ["legatorocr-nocr/lexicon"]

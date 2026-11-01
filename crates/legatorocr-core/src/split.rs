@@ -40,7 +40,7 @@ pub fn find_gutter(ink: &BitImage) -> Option<u32> {
     if side.len() < 10 {
         return None;
     }
-    side.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    side.sort_by(|a, b| a.total_cmp(b));
     let med = side[side.len() / 2];
     if bv > 0.25 * med {
         return None;

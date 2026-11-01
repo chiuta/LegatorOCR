@@ -65,7 +65,29 @@ static COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// The folder all extractions of this process go to (created on demand).
 pub fn work_dir() -> PathBuf {
-    std::env::temp_dir().join(format!("legatorocr-archives-{}", std::process::id()))
+    use std::sync::OnceLock;
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        // unpredictable name and owner-only permissions: another local user cannot pre-create
+        // the folder (or plant symlinks in it) in the shared temp directory
+        let t = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        let stack = 0u8;
+        let salt = t ^ ((&stack as *const u8 as u64) << 20) ^ ((std::process::id() as u64) << 40);
+        let d = std::env::temp_dir().join(format!("legatorocr-archives-{}-{:016x}", std::process::id(), salt));
+        let mut b = std::fs::DirBuilder::new();
+        b.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            b.mode(0o700);
+        }
+        let _ = b.create(&d);
+        d
+    })
+    .clone()
 }
 
 /// Remove everything extracted so far. Call when the program ends (the GUI keeps the files

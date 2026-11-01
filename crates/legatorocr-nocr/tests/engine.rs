@@ -171,6 +171,7 @@ fn blank_page_recognises_nothing() {
     assert!(legatorocr_nocr::recognize(&page, 300, &m, &NativeOptions::default()).is_empty());
 }
 
+#[cfg(feature = "lexicon")]
 #[test]
 fn lexicon_codes_and_repair() {
     assert_eq!(lexicon::codes("ron+eng+xxx"), vec!["ro", "en"]);

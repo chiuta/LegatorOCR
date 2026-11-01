@@ -239,6 +239,49 @@ pub fn apply_pair(s: &mut Settings, k: &str, v: &str) -> Result<bool> {
     Ok(true)
 }
 
+/// A path as one safe line of a project file: line breaks, tabs, `%` and edge spaces (which the
+/// parser trims) become `%XX`, so a file name can never inject a `[sheet]` or a `key = value` line.
+fn escape_path(s: &str) -> String {
+    let mut o = String::with_capacity(s.len());
+    let n = s.chars().count();
+    for (i, c) in s.chars().enumerate() {
+        match c {
+            '%' => o.push_str("%25"),
+            '\n' => o.push_str("%0A"),
+            '\r' => o.push_str("%0D"),
+            '\t' => o.push_str("%09"),
+            ' ' if i == 0 || i + 1 == n => o.push_str("%20"),
+            c => o.push(c),
+        }
+    }
+    o
+}
+
+fn unescape_path(s: &str) -> String {
+    let mut o = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find('%') {
+        o.push_str(&rest[..i]);
+        let tail = &rest[i..];
+        let code = tail.get(1..3);
+        match code {
+            Some("25") => o.push('%'),
+            Some("0A") => o.push('\n'),
+            Some("0D") => o.push('\r'),
+            Some("09") => o.push('\t'),
+            Some("20") => o.push(' '),
+            _ => {
+                o.push('%');
+                rest = &tail[1..];
+                continue;
+            }
+        }
+        rest = &tail[3..];
+    }
+    o.push_str(rest);
+    o
+}
+
 impl Project {
     pub fn to_text(&self, base: Option<&Path>) -> String {
         let mut out = format!("{HEADER}\n");
@@ -250,7 +293,7 @@ impl Project {
         }
         for (p, a) in &self.sheets {
             let shown = base.and_then(|b| p.strip_prefix(b).ok()).unwrap_or(p);
-            out.push_str(&format!("\n[sheet]\npath = {}\n", shown.display()));
+            out.push_str(&format!("\n[sheet]\npath = {}\n", escape_path(&shown.to_string_lossy())));
             if a.rotate_quarters % 4 != 0 {
                 out.push_str(&format!("rotate = {}\n", a.rotate_quarters % 4));
             }
@@ -305,7 +348,7 @@ impl Project {
             match cur.as_mut() {
                 Some((path, adj)) => match k {
                     "path" => {
-                        let pb = PathBuf::from(v);
+                        let pb = PathBuf::from(unescape_path(v));
                         *path = if pb.is_absolute() {
                             pb
                         } else {
@@ -414,6 +457,19 @@ mod tests {
         assert!(q.settings.dewarp);
         assert_eq!(q.settings.margins_mm, [1.0, 2.0, 3.0, 4.5]);
         assert_eq!(q.get("pdf_quality"), Some("70"));
+    }
+
+    #[test]
+    fn hostile_file_names_cannot_inject_lines_and_round_trip() {
+        for name in ["x\n[sheet]\npath = /etc/passwd", " lead.png", "trail.png ", "50%25.png", "tab\there.png", "a%b.png", "100%"] {
+            let mut p = Project::default();
+            p.sheets.push((PathBuf::from(format!("/scans/{name}")), SheetAdj::default()));
+            let text = p.to_text(None);
+            assert_eq!(text.lines().filter(|l| l.trim() == "[sheet]").count(), 1, "injected a sheet: {name:?}");
+            let q = Project::parse(&text, None).unwrap();
+            assert_eq!(q.sheets.len(), 1);
+            assert_eq!(q.sheets[0].0, PathBuf::from(format!("/scans/{name}")), "{name:?}");
+        }
     }
 
     #[test]

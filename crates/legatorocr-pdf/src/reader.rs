@@ -32,7 +32,40 @@ fn fail<T>(m: impl Into<String>) -> R<T> {
 /// Largest decoded image / stream we accept.
 const MAX_PIXELS: u64 = 500_000_000;
 const MAX_STREAM_BYTES: u64 = 1 << 31;
-const MAX_PAGES: usize = 200_000;
+const MAX_PAGES: usize = 100_000;
+/// Decoded bytes one public operation (page_info / page_image …) may produce in total, and the
+/// number of structure visits (XObjects, operators, page-tree entries) it may make. A hostile
+/// file can otherwise multiply a small stream into terabytes or fan out exponentially.
+const MAX_OP_BYTES: u64 = 6 << 30;
+const MAX_OP_VISITS: u64 = 400_000;
+/// An object stream larger than this once decoded is treated as damaged.
+const MAX_OBJSTM_BYTES: usize = 128 << 20;
+
+thread_local! {
+    static OP_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static OP_VISITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+fn budget_reset() {
+    OP_BYTES.with(|c| c.set(0));
+    OP_VISITS.with(|c| c.set(0));
+}
+
+/// Account for `n` decoded bytes; `false` once the operation has used up its budget.
+fn charge_bytes(n: usize) -> bool {
+    OP_BYTES.with(|c| {
+        c.set(c.get().saturating_add(n as u64));
+        c.get() <= MAX_OP_BYTES
+    })
+}
+
+/// Account for `n` structure visits; `false` once the budget is gone.
+fn charge_visits(n: u64) -> bool {
+    OP_VISITS.with(|c| {
+        c.set(c.get().saturating_add(n));
+        c.get() <= MAX_OP_VISITS
+    })
+}
 
 // ---------------------------------------------------------------------------
 // objects
@@ -333,10 +366,48 @@ fn find(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
     if needle.is_empty() || from >= hay.len() {
         return None;
     }
-    hay[from..]
-        .windows(needle.len())
-        .position(|w| w == needle)
-        .map(|p| p + from)
+    let first = needle[0];
+    let last_start = hay.len().checked_sub(needle.len())?;
+    let mut i = from;
+    while i <= last_start {
+        match hay[i..=last_start].iter().position(|&b| b == first) {
+            Some(k) => {
+                let at = i + k;
+                if &hay[at..at + needle.len()] == needle {
+                    return Some(at);
+                }
+                i = at + 1;
+            }
+            None => return None,
+        }
+    }
+    None
+}
+
+/// Position of the first `endstream` at or after `from`. All positions are found once per
+/// buffer (and kept), so a file full of streams with wrong /Length does not rescan to the end
+/// for every one of them.
+fn next_endstream(d: &[u8], from: usize) -> Option<usize> {
+    use std::cell::RefCell;
+    thread_local! {
+        static INDEX: RefCell<Option<(usize, usize, Vec<usize>)>> = const { RefCell::new(None) };
+    }
+    INDEX.with(|c| {
+        let mut c = c.borrow_mut();
+        let key = (d.as_ptr() as usize, d.len());
+        if c.as_ref().is_none_or(|(p, l, _)| (*p, *l) != key) {
+            let mut v = Vec::new();
+            let mut i = 0;
+            while let Some(p) = find(d, b"endstream", i) {
+                v.push(p);
+                i = p + 9;
+            }
+            *c = Some((key.0, key.1, v));
+        }
+        let v = &c.as_ref().unwrap().2;
+        let k = v.partition_point(|&p| p < from);
+        v.get(k).copied()
+    })
 }
 
 /// Parse `N G obj <value> [stream…endstream]` at `off`.
@@ -377,7 +448,7 @@ fn parse_object(d: &[u8], off: usize) -> Option<Val> {
             let end = match by_len {
                 Some(e) => e,
                 None => {
-                    let e = find(d, b"endstream", start).unwrap_or(d.len());
+                    let e = next_endstream(d, start).unwrap_or(d.len());
                     let mut e2 = e;
                     if e2 > start && d[e2 - 1] == b'\n' {
                         e2 -= 1;
@@ -698,6 +769,7 @@ pub struct PdfPage {
 
 impl PdfDoc {
     pub fn open(data: Vec<u8>) -> R<PdfDoc> {
+        budget_reset();
         if find(&data[..data.len().min(1024)], b"%PDF-", 0).is_none() {
             return fail("not a PDF file (no %PDF- header)");
         }
@@ -918,7 +990,8 @@ impl PdfDoc {
         crate::crypt::Crypt::new(&EncryptParams {
             v,
             r,
-            length_bits: int("Length", 40),
+            // V4 (AES-128 / RC4-128 crypt filters) always uses a 128-bit key; /Length may be absent
+            length_bits: if v == 4 { 128 } else { int("Length", 40) },
             o: &o,
             u: &u,
             ue: &ue,
@@ -969,6 +1042,9 @@ impl PdfDoc {
         let Ok(body) = self.decode_stream(&dict, s, e, &mut |_| {}) else {
             return;
         };
+        if body.len() > MAX_OBJSTM_BYTES {
+            return; // a zip-bomb object stream, not a real one
+        }
         let mut p = P::new(&body, 0);
         let idx = self.stms.len();
         let mut entries = Vec::new();
@@ -1021,7 +1097,7 @@ impl PdfDoc {
         seen: &mut HashSet<u32>,
         out: &mut Vec<Dict>,
     ) {
-        if depth > 64 || out.len() >= MAX_PAGES {
+        if depth > 64 || out.len() >= MAX_PAGES || !charge_visits(1 + inherited.len() as u64) {
             return;
         }
         if let Val::Ref(n) = node {
@@ -1043,6 +1119,10 @@ impl PdfDoc {
                 }
             }
             _ => {
+                // each page owns a copy of its dictionary: count what is cloned
+                if !charge_visits(d.len() as u64 + inh.len() as u64) {
+                    return;
+                }
                 let mut page = d.clone();
                 for (k, v) in inh {
                     page.entry(k).or_insert(v);
@@ -1068,6 +1148,9 @@ impl PdfDoc {
             return;
         };
         for v in xo.values() {
+            if !charge_visits(1) || out.len() > 5000 {
+                return;
+            }
             if let Val::Stream(d, s, e) = self.resolve(v) {
                 match d.get("Subtype").and_then(|t| t.name()) {
                     Some("Image") => out.push((d, s, e)),
@@ -1102,6 +1185,7 @@ impl PdfDoc {
     }
 
     pub fn page_info(&self, index: usize) -> R<PageInfo> {
+        budget_reset();
         let page = self
             .pages
             .get(index)
@@ -1150,15 +1234,23 @@ impl PdfDoc {
 
     /// Decode the scan image of page `index` (0-based), turned the way the PDF displays it.
     pub fn page_image(&self, index: usize) -> R<PdfPage> {
+        budget_reset();
         let info = self.page_info(index)?;
         let page = &self.pages[index];
         let ((d, s, e), layered) = self.page_image_ref(page)?;
+        let mut placed_dpi = None;
         let img = match layered.then(|| self.compose_page(page)).transpose()? {
             Some(Some(img)) => img,
-            _ => self.decode_image(&d, s, e)?,
+            _ => {
+                let img = self.decode_image(&d, s, e)?;
+                // a scan placed rotated, mirrored or with margins: follow the page's own matrix
+                let (img, dpi) = self.apply_placement(page, s, e, img);
+                placed_dpi = dpi;
+                img
+            }
         };
         let info = PageInfo {
-            dpi: self.composed_dpi(&img, page).or(info.dpi),
+            dpi: placed_dpi.or_else(|| self.composed_dpi(&img, page)).or(info.dpi),
             ..info
         };
         let img = match info.rotate {
@@ -1168,6 +1260,56 @@ impl PdfDoc {
             _ => img,
         };
         Ok(PdfPage { image: img, info })
+    }
+
+    /// Orient a single page image the way the content stream's matrix displays it (mirrored,
+    /// turned by multiples of 90°) and measure its resolution from the size it is placed at.
+    /// Anything unclear leaves the image and the resolution as they were.
+    fn apply_placement(&self, page: &Dict, s: usize, e: usize, img: DynamicImage) -> (DynamicImage, Option<u32>) {
+        let Some(res) = page.get("Resources") else { return (img, None) };
+        let content = self.page_content(page);
+        let mut pl = Vec::new();
+        self.placements(&content, res, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], 0, &mut [0, 0, 0], &mut pl);
+        let Some(q) = pl.iter().find(|q| q.s == s && q.e == e) else { return (img, None) };
+        let [a, b, c, d, _, _] = q.m;
+        let det = a * d - b * c;
+        if !det.is_finite() || det.abs() < 1e-9 {
+            return (img, None);
+        }
+        let unit = page
+            .get("UserUnit")
+            .and_then(|u| self.resolve(u).num())
+            .filter(|u| *u > 0.0)
+            .unwrap_or(1.0);
+        let width_pt = a.hypot(b) * unit;
+        let dpi = (width_pt > 1.0)
+            .then(|| (img.width() as f64 * 72.0 / width_pt).round())
+            .filter(|d| (36.0..=2400.0).contains(d))
+            .map(|d| d as u32);
+        // where do the image's own axes point on the page? (source i → right/down, j → down)
+        // i-axis (columns) goes to (a, -b) on screen, j-axis (rows) to (-c, d)
+        let (ix, iy) = (a, -b);
+        let (jx, jy) = (-c, d);
+        let dom = |x: f64, y: f64| -> (bool, bool) {
+            // (horizontal?, positive?) of the dominant screen direction
+            if x.abs() >= y.abs() { (true, x > 0.0) } else { (false, y > 0.0) }
+        };
+        let (i_h, i_pos) = dom(ix, iy);
+        let (j_h, j_pos) = dom(jx, jy);
+        if i_h == j_h {
+            return (img, dpi); // not a pure quarter-turn / mirror: leave it
+        }
+        let out = match (i_h, i_pos, j_pos) {
+            (true, true, true) => img,                                  // i→right, j→down
+            (true, false, true) => img.fliph(),                          // i→left,  j→down
+            (true, true, false) => img.flipv(),                          // i→right, j→up
+            (true, false, false) => img.rotate180(),                     // i→left,  j→up
+            (false, true, false) => img.rotate90(),                      // i→down,  j→left
+            (false, false, true) => img.rotate270(),                     // i→up,    j→right
+            (false, true, true) => img.rotate90().fliph(),               // i→down,  j→right
+            (false, false, false) => img.rotate90().flipv(),             // i→up,    j→left
+        };
+        (out, dpi)
     }
 
     fn media_box(&self, page: &Dict) -> (f64, f64, f64, f64) {
@@ -1239,7 +1381,7 @@ impl PdfDoc {
                 m[4] * c[1] + m[5] * c[3] + c[5],
             ]
         }
-        if depth > 3 || out.len() > 5000 {
+        if depth > 3 || out.len() > 5000 || !charge_visits(1) {
             return;
         }
         let xobjs = self
@@ -1658,6 +1800,9 @@ impl PdfDoc {
                 }
             };
         }
+        if !charge_bytes(data.len()) {
+            return fail("the PDF decodes to an unreasonable amount of data");
+        }
         Ok(data)
     }
 
@@ -1733,8 +1878,20 @@ impl PdfDoc {
         } else {
             self.colour_space(dict.get("ColorSpace").or_else(|| dict.get("CS")), 0)
                 .or_else(|err| {
-                    // a JPEG / CCITT stream carries its own colour information
-                    if dict.get("Filter").is_some() {
+                    // a JPEG / JPEG 2000 / CCITT stream carries its own colour information;
+                    // for any other filter an unknown colour space must not be guessed as RGB
+                    let own_colour = |v: &Val| {
+                        matches!(
+                            self.resolve(v).name(),
+                            Some("DCTDecode" | "DCT" | "JPXDecode" | "CCITTFaxDecode" | "CCF")
+                        )
+                    };
+                    let codec_colour = match dict.get("Filter").map(|f| self.resolve(f)) {
+                        Some(Val::Arr(a)) => a.iter().any(own_colour),
+                        Some(f) => own_colour(&f),
+                        None => false,
+                    };
+                    if codec_colour {
                         Ok(Cs::Rgb)
                     } else {
                         Err(err)
@@ -2328,6 +2485,62 @@ mod tests {
         let dict = "/Width 8/Height 8/BitsPerComponent 8/ColorSpace/DeviceGray/Filter/FlateDecode/DecodeParms<</Predictor 12/Colors 1000000000/Columns 16777216>>";
         let doc = PdfDoc::open(tiny_pdf_with_image(dict, b"x\x9c\x03\x00\x00\x00\x00\x01")).unwrap();
         let _ = doc.page_image(0);
+    }
+
+    #[test]
+    fn many_streams_with_wrong_length_do_not_make_opening_quadratic() {
+        // 30 000 stream objects whose /Length lies and that have no endstream marker
+        let mut v = b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 10 10]>>endobj\n".to_vec();
+        for n in 10..30_010 {
+            v.extend_from_slice(format!("{n} 0 obj<</Length 99999999>>stream\nabc\n").as_bytes());
+        }
+        v.extend_from_slice(b"trailer<</Root 1 0 R/Size 30010>>\n");
+        let t = std::time::Instant::now();
+        let _ = PdfDoc::open(v);
+        assert!(t.elapsed() < std::time::Duration::from_secs(10), "took {:?}", t.elapsed());
+    }
+
+    #[test]
+    fn form_xobject_that_invokes_itself_many_times_is_cut_off() {
+        let content: String = "/F Do ".repeat(300);
+        let mut v = b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n".to_vec();
+        v.extend_from_slice(b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 100 100]/Resources<</XObject<</F 4 0 R>>>>/Contents 5 0 R>>endobj\n");
+        v.extend_from_slice(format!("4 0 obj<</Type/XObject/Subtype/Form/BBox[0 0 100 100]/Resources<</XObject<</F 4 0 R>>>>/Length {}>>stream\n{content}\nendstream endobj\n", content.len()).as_bytes());
+        v.extend_from_slice(format!("5 0 obj<</Length {}>>stream\n{content}\nendstream endobj\ntrailer<</Root 1 0 R/Size 6>>\n", content.len()).as_bytes());
+        let t = std::time::Instant::now();
+        if let Ok(doc) = PdfDoc::open(v) {
+            let _ = doc.page_image(0);
+            let _ = doc.page_info(0);
+        }
+        assert!(t.elapsed() < std::time::Duration::from_secs(10), "took {:?}", t.elapsed());
+    }
+
+    fn pdf_with_gray_2x2(cm: &str) -> Vec<u8> {
+        let content = format!("q {cm} cm /Im0 Do Q");
+        let mut v = b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n".to_vec();
+        v.extend_from_slice(b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 100 100]/Resources<</XObject<</Im0 4 0 R>>>>/Contents 5 0 R>>endobj\n");
+        v.extend_from_slice(b"4 0 obj<</Type/XObject/Subtype/Image/Width 2/Height 2/BitsPerComponent 8/ColorSpace/DeviceGray/Length 4>>stream\n");
+        v.extend_from_slice(&[10, 20, 30, 40]);
+        v.extend_from_slice(format!("\nendstream endobj\n5 0 obj<</Length {}>>stream\n{content}\nendstream endobj\ntrailer<</Root 1 0 R/Size 6>>\n", content.len()).as_bytes());
+        v
+    }
+
+    #[test]
+    fn scans_placed_mirrored_or_turned_are_shown_the_way_the_pdf_displays_them() {
+        // image rows: [10 20] / [30 40]; each matrix puts it on the 100×100 page differently
+        let cases: [(&str, [u8; 4]); 6] = [
+            ("100 0 0 100 0 0", [10, 20, 30, 40]),     // as written
+            ("100 0 0 -100 0 100", [30, 40, 10, 20]),  // vertically flipped
+            ("-100 0 0 100 100 0", [20, 10, 40, 30]),  // horizontally flipped
+            ("-100 0 0 -100 100 100", [40, 30, 20, 10]), // turned 180°
+            ("0 -100 100 0 0 100", [30, 10, 40, 20]),  // turned 90° clockwise
+            ("0 100 -100 0 100 0", [20, 40, 10, 30]),  // turned 90° counter-clockwise
+        ];
+        for (cm, want) in cases {
+            let doc = PdfDoc::open(pdf_with_gray_2x2(cm)).unwrap();
+            let img = doc.page_image(0).unwrap().image.to_luma8();
+            assert_eq!(img.as_raw().as_slice(), &want, "matrix {cm}");
+        }
     }
 
     #[test]

@@ -154,4 +154,6 @@ feature lists and release notes of other tools were read; no source code of any 
 scan-processing tool was consulted or copied. Before commercial release, do your own due
 diligence, including a trademark search for the name.
 
-MIT licensed. Dependencies and embedded fonts: see `THIRD_PARTY_LICENSES.md`.
+MIT licensed. Dependencies and embedded fonts: see `THIRD_PARTY_LICENSES.md`. The built-in OCR engine ships word lists
+derived from the *wordfreq* data (**CC BY-SA 4.0**, attribution in `crates/legatorocr-nocr/lexicons/README.md` and in the release
+archives as `LEXICONS-NOTICE.md`); build with `--no-default-features` to leave them out.

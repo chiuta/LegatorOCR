@@ -332,7 +332,10 @@ impl Settings {
 
 /// Stages shared by [`process_page`] and [`measure_page`]: orientation and page split.
 fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<(RgbImage, Option<u8>)> {
-    let mut rgb = transform::rot90(&src.to_rgb8(), s.rotate_quarters);
+    let mut rgb = src.to_rgb8();
+    if s.rotate_quarters % 4 != 0 {
+        rgb = transform::rot90(&rgb, s.rotate_quarters); // no copy at all when nothing is turned
+    }
     if s.perspective {
         if let Some(flat) = crate::perspective::correct(&rgb) {
             rgb = flat;
@@ -346,7 +349,7 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<(RgbImage, Option<u8>)> 
         }
     }
 
-    let mut parts: Vec<(RgbImage, Option<u8>)> = vec![(rgb.clone(), None)];
+    let mut cut_at = None;
     if s.split != SplitMode::Off {
         let cut = match s.split {
             SplitMode::Middle => {
@@ -358,13 +361,16 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<(RgbImage, Option<u8>)> 
                     .map(|x| (x * a.factor).min(rgb.width().saturating_sub(1)))
             }
         };
-        if let Some(x) = cut.filter(|&x| x > 0 && x < rgb.width()) {
+        cut_at = cut.filter(|&x| x > 0 && x < rgb.width());
+    }
+    match cut_at {
+        Some(x) => {
             let l = imageops::crop_imm(&rgb, 0, 0, x, rgb.height()).to_image();
             let r = imageops::crop_imm(&rgb, x, 0, rgb.width() - x, rgb.height()).to_image();
-            parts = vec![(l, Some(0)), (r, Some(1))];
+            vec![(l, Some(0)), (r, Some(1))]
         }
+        None => vec![(rgb, None)],
     }
-    parts
 }
 
 /// Run the whole pipeline on one scanned sheet. A two-page spread yields two pages.

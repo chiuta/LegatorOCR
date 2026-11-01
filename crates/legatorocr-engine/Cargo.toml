@@ -10,10 +10,14 @@ authors.workspace = true
 [dependencies]
 legatorocr-core = { path = "../legatorocr-core" }
 legatorocr-pdf = { path = "../legatorocr-pdf" }
-legatorocr-ocr = { path = "../legatorocr-ocr" }
+legatorocr-ocr = { path = "../legatorocr-ocr", default-features = false }
 anyhow.workspace = true
 image.workspace = true
 rayon.workspace = true
 regex.workspace = true
 tiff = "0.11"
 flate2.workspace = true
+
+[features]
+default = ["lexicon"]
+lexicon = ["legatorocr-ocr/lexicon"]

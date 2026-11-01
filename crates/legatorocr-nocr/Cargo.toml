@@ -12,4 +12,9 @@ legatorocr-core = { path = "../legatorocr-core" }
 image.workspace = true
 rayon.workspace = true
 thiserror.workspace = true
-flate2.workspace = true
+flate2 = { workspace = true, optional = true }
+
+[features]
+default = ["lexicon"]
+# the CC BY-SA word lists (crates/legatorocr-nocr/lexicons); without them no error repair happens
+lexicon = ["dep:flate2"]

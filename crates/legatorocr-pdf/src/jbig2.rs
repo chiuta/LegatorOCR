@@ -621,7 +621,14 @@ fn symbol_dict(data: &[u8], inputs: &[Bitmap]) -> R<Vec<Bitmap>> {
     let mut pool: Vec<Bitmap> = inputs.to_vec();
     let mut budget = 0u64;
     let mut hc_h: i64 = 0;
+    let mut idle_rounds = 0u32;
     while pool.len() - inputs.len() < n_new {
+        // a height class that adds no symbol, many times over, means the data ran out
+        let before = pool.len();
+        idle_rounds += 1;
+        if idle_rounds > 100_000 {
+            return fail("JBIG2 symbol dictionary makes no progress");
+        }
         let dh = int_or_fail(iadh.decode(&mut mq))?;
         hc_h += dh;
         if !(0..=65_535).contains(&hc_h) {
@@ -678,6 +685,9 @@ fn symbol_dict(data: &[u8], inputs: &[Bitmap]) -> R<Vec<Bitmap>> {
                 }
             };
             pool.push(Bitmap { w, h, d });
+        }
+        if pool.len() > before {
+            idle_rounds = 0;
         }
     }
     let total = pool.len();
@@ -1025,8 +1035,18 @@ pub fn decode(data: &[u8], globals: Option<&[u8]>, w: usize, h: usize) -> R<Vec<
     let mut regions = 0;
     let mut dicts: std::collections::HashMap<u32, Vec<Bitmap>> = std::collections::HashMap::new();
     let mut inter: std::collections::HashMap<u32, Bitmap> = std::collections::HashMap::new();
+    // Total area of all regions of this stream: a few hundred bytes of arithmetic-coded data can
+    // describe a region of 400 million pixels, and 10 000 segments are allowed.
+    let mut region_px: u64 = 0;
     for s in &segs {
         let data: &[u8] = &s.data;
+        if matches!(s.kind, 4 | 6 | 7 | 20 | 22 | 23 | 36 | 38 | 39 | 40 | 42 | 43) && data.len() >= 8 {
+            region_px = region_px
+                .saturating_add(be32(data, 0).unwrap_or(0) as u64 * be32(data, 4).unwrap_or(0) as u64);
+            if region_px > 1_500_000_000 {
+                return fail("JBIG2 stream describes too much image data");
+            }
+        }
         match s.kind {
             48 => {
                 // page information: pages w/h may be 0xFFFFFFFF (striped); the PDF dictionary wins
@@ -1201,6 +1221,9 @@ pub fn decode(data: &[u8], globals: Option<&[u8]>, w: usize, h: usize) -> R<Vec<
                     bpp += 1;
                 }
                 let (pw, ph) = (pats[0].w as i64, pats[0].h as i64);
+                if (gw as u64).saturating_mul(gh as u64).saturating_mul(pw as u64 * ph as u64) > 4_000_000_000 {
+                    return fail("JBIG2 halftone is too expensive to decode");
+                }
                 let pos = |m: usize, n: usize| -> (i64, i64) {
                     (
                         (gx + m as i64 * rys + n as i64 * rxs) >> 8,
@@ -1274,6 +1297,9 @@ pub fn decode(data: &[u8], globals: Option<&[u8]>, w: usize, h: usize) -> R<Vec<
                 for m in 0..gh {
                     for n in 0..gw {
                         let (x, y) = pos(m, n);
+                        if x + pw <= 0 || y + ph <= 0 || x >= rw as i64 || y >= rh as i64 {
+                            continue; // the pattern lands entirely outside the region
+                        }
                         let pat = &pats[(gray[m * gw + n] as usize).min(np - 1)];
                         for yy in 0..pat.h {
                             for xx in 0..pat.w {

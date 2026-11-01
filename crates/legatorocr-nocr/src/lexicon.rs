@@ -4,18 +4,22 @@
 //! *is* in a list. Deliberately conservative: names, capitalised and all-caps words are left alone.
 
 use crate::ctc::Glyph;
-use flate2::read::GzDecoder;
 use std::collections::HashSet;
-use std::io::Read;
 use std::sync::OnceLock;
 
+#[cfg(feature = "lexicon")]
 macro_rules! lex {
     ($code:literal) => {
         ($code, include_bytes!(concat!("../lexicons/", $code, ".txt.gz")) as &[u8])
     };
 }
+/// The word lists, compiled in (CC BY-SA 4.0 data, see `lexicons/README.md`). Built without the
+/// `lexicon` feature the lists are absent: no list is ever loaded and no error repair happens.
+#[cfg(feature = "lexicon")]
 const FILES: [(&str, &[u8]); 8] =
     [lex!("ro"), lex!("en"), lex!("fr"), lex!("it"), lex!("es"), lex!("pt"), lex!("de"), lex!("hu")];
+#[cfg(not(feature = "lexicon"))]
+const FILES: [(&str, &[u8]); 0] = [];
 
 pub struct Lexicon {
     words: HashSet<String>,
@@ -35,8 +39,13 @@ impl Lexicon {
         ];
         let i = FILES.iter().position(|(c, _)| *c == code)?;
         Some(CELLS[i].get_or_init(|| {
+            #[allow(unused_mut)]
             let mut s = String::new();
-            let _ = GzDecoder::new(FILES[i].1).read_to_string(&mut s);
+            #[cfg(feature = "lexicon")]
+            {
+                use std::io::Read;
+                let _ = flate2::read::GzDecoder::new(FILES[i].1).read_to_string(&mut s);
+            }
             Lexicon { words: s.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect() }
         }))
     }

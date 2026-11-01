@@ -857,12 +857,19 @@ pub fn check_writable(path: &Path) -> Result<()> {
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
     }
-    let mut probe = path.as_os_str().to_owned();
-    probe.push(".part");
-    let probe = PathBuf::from(probe);
+    let probe = part_name(path);
     std::fs::write(&probe, b"").with_context(|| format!("cannot write {}", path.display()))?;
     let _ = std::fs::remove_file(&probe);
     Ok(())
+}
+
+/// Name of the temporary sibling file of `path`: unique per process and call, so two runs writing
+/// the same output never share (or clobber) one `.part` file.
+fn part_name(path: &Path) -> PathBuf {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let mut t = path.as_os_str().to_owned();
+    t.push(format!(".{}-{}.part", std::process::id(), SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+    PathBuf::from(t)
 }
 
 /// Write via a temporary sibling file, then rename (no half-written outputs).
@@ -870,9 +877,7 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir)?;
     }
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".part");
-    let tmp = PathBuf::from(tmp);
+    let tmp = part_name(path);
     let r = std::fs::write(&tmp, data).and_then(|_| std::fs::rename(&tmp, path));
     if r.is_err() {
         let _ = std::fs::remove_file(&tmp);
