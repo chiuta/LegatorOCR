@@ -1733,6 +1733,18 @@ impl App {
                 adj.rotate_quarters = (adj.rotate_quarters + 1) % 4;
                 adj_changed = true;
             }
+            // 45° steps: quarter turns plus the manual skew together make the total angle
+            for (label, step) in [("↺45°", -45.0f32), ("↻45°", 45.0)] {
+                if ui.button(label).clicked() {
+                    let total =
+                        adj.rotate_quarters as f32 * 90.0 + adj.skew_deg.unwrap_or(0.0) + step;
+                    let q = (total / 90.0).round();
+                    adj.rotate_quarters = (q as i32).rem_euclid(4) as u8;
+                    let rest = total - q * 90.0;
+                    adj.skew_deg = Some(if rest.abs() < 0.01 { 0.0 } else { rest });
+                    adj_changed = true;
+                }
+            }
             ui.separator();
             let label = match adj.split {
                 None => tr("adj.split_default"),

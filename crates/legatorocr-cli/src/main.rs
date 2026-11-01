@@ -346,6 +346,19 @@ struct Cli {
     #[arg(long)]
     checksums: bool,
 
+    /// Append one JSON Lines record per file written (time, tool version, inputs, SHA-256, size,
+    /// retention date, legal hold) to this log. The log is append-only evidence; it deletes nothing.
+    #[arg(long, value_name = "FILE")]
+    audit_log: Option<PathBuf>,
+
+    /// Retention date (YYYY-MM-DD) recorded in the audit log. Needs --audit-log.
+    #[arg(long, value_name = "DATE")]
+    retain_until: Option<String>,
+
+    /// Mark the audit-log records as under legal hold (do not destroy). Needs --audit-log.
+    #[arg(long)]
+    legal_hold: bool,
+
     /// Check the files listed in a SHA256SUMS file (paths relative to it) and exit: status 0 when
     /// all match, 1 otherwise.
     #[arg(long, value_name = "SHA256SUMS")]
@@ -632,6 +645,12 @@ fn real_main() -> Result<()> {
             v.missing.len()
         );
         std::process::exit(if v.all_good() { 0 } else { 1 });
+    }
+    if cli.audit_log.is_none() && (cli.retain_until.is_some() || cli.legal_hold) {
+        bail!("--retain-until and --legal-hold need --audit-log");
+    }
+    if let Some(d) = &cli.retain_until {
+        legatorocr_engine::audit::check_date(d)?;
     }
     if (cli.checksums || cli.txt_each || cli.rights_notice.is_some() || cli.package.is_some())
         && cli.pdf.is_none()
@@ -1389,6 +1408,26 @@ fn real_main() -> Result<()> {
             "wrote {} ({} file(s) added or updated)",
             sp.display(),
             inside.len()
+        );
+    }
+    if let Some(log) = &cli.audit_log {
+        let o = legatorocr_engine::audit::Options {
+            retain_until: cli.retain_until.clone(),
+            legal_hold: cli.legal_hold,
+            note: String::new(),
+        };
+        let text = legatorocr_engine::audit::render(
+            concat!("LegatorOCR ", env!("CARGO_PKG_VERSION")),
+            &cli.inputs,
+            &written,
+            legatorocr_engine::now_unix(),
+            &o,
+        )?;
+        legatorocr_engine::audit::append(log, &text)?;
+        eprintln!(
+            "audit log: {} record(s) appended to {}",
+            written.len(),
+            log.display()
         );
     }
     if let Some(e) = save_error {
