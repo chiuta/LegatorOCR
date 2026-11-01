@@ -740,29 +740,62 @@ fn pick(
     Ok(Rc::clone(t))
 }
 
-/// Symbol dictionary, Huffman coding without refinement or aggregation (T.88 6.5, 7.4.2).
+/// Symbol dictionary, Huffman coding, with or without refinement/aggregation (T.88 6.5, 7.4.2).
 fn symbol_dict_huff(data: &[u8], inputs: &[Bitmap], ct: &[Rc<Table>]) -> R<Vec<Bitmap>> {
     let flags = be16(data, 0)?;
-    if flags & 2 != 0 {
-        return fail(
-            "JBIG2 Huffman symbol dictionaries with refinement or aggregation are not supported",
-        );
-    }
+    let refagg = flags & 2 != 0;
     if flags & 0x100 != 0 {
         return fail("JBIG2 symbol dictionaries with retained contexts are not supported");
     }
+    let rt = ((flags >> 12) & 1) as u8;
     let mut used = 0usize;
     let dh_t = pick((flags >> 2) & 3, &[(0, 4), (1, 5)], 3, ct, &mut used)?;
     let dw_t = pick((flags >> 4) & 3, &[(0, 2), (1, 3)], 3, ct, &mut used)?;
     let bm_t = pick((flags >> 6) & 1, &[(0, 1)], 1, ct, &mut used)?;
-    let _agg = pick((flags >> 7) & 1, &[(0, 1)], 1, ct, &mut used)?;
-    // no adaptive-template bytes with Huffman coding
-    let n_ex = be32(data, 2)? as usize;
-    let n_new = be32(data, 6)? as usize;
+    let agg_t = pick((flags >> 7) & 1, &[(0, 1)], 1, ct, &mut used)?;
+    // no adaptive-template bytes with Huffman coding; the refinement ones only with
+    // refinement/aggregation and SDRTEMPLATE 0
+    let mut p = 2;
+    let mut rat = [(-1i32, -1i32); 2];
+    if refagg && rt == 0 {
+        let raw = data
+            .get(p..p + 4)
+            .ok_or_else(|| Jbig2Error("truncated JBIG2 symbol dictionary".into()))?;
+        rat = [
+            (raw[0] as i8 as i32, raw[1] as i8 as i32),
+            (raw[2] as i8 as i32, raw[3] as i8 as i32),
+        ];
+        p += 4;
+    }
+    let n_ex = be32(data, p)? as usize;
+    let n_new = be32(data, p + 4)? as usize;
+    p += 8;
     if n_new > 65_536 || n_ex > 131_072 + inputs.len() {
         return fail("JBIG2 symbol dictionary too large");
     }
-    let mut r = Bits::new(&data[10.min(data.len())..]);
+    let mut r = Bits::new(&data[p.min(data.len())..]);
+    // 6.5.8.2.3: fixed-length symbol codes, at least one bit in Huffman mode
+    let code_len = code_len_for(inputs.len() + n_new).max(1);
+    let mut gr = vec![(0u8, 0u8); if refagg { 1 << 13 } else { 0 }];
+    let mut area = 0u64; // refined pixels decoded so far (shared by the whole dictionary)
+                         // Table 17: the fixed table choices of the aggregate text region
+    let agg_text = if refagg {
+        Some(HuffText {
+            fs: Rc::new(Table::standard(6)),
+            ds: Rc::new(Table::standard(8)),
+            dt: Rc::new(Table::standard(11)),
+            refine: Some(HuffRefine {
+                rdw: Rc::new(Table::standard(15)),
+                rdh: Rc::new(Table::standard(15)),
+                rdx: Rc::new(Table::standard(15)),
+                rdy: Rc::new(Table::standard(15)),
+                rsize: Rc::new(Table::standard(1)),
+            }),
+        })
+    } else {
+        None
+    };
+    let (b1, b15) = (Table::standard(1), Table::standard(15));
     let mut pool: Vec<Bitmap> = inputs.to_vec();
     let mut hc_h: i64 = 0;
     let mut budget = 0u64;
@@ -786,8 +819,84 @@ fn symbol_dict_huff(data: &[u8], inputs: &[Bitmap], ct: &[Rc<Table>]) -> R<Vec<B
             if !(0..=65_535).contains(&sym_w) {
                 return fail("bad JBIG2 symbol width");
             }
+            if let Some(at) = &agg_text {
+                // 6.5.8.2: the symbol is decoded right here, there is no collective bitmap
+                let (w, h) = (sym_w as usize, hc_h as usize);
+                budget += w as u64 * h as u64;
+                if w as u64 * h as u64 > 16_000_000 || budget > 200_000_000 {
+                    return fail("JBIG2 symbols are too large");
+                }
+                if w == 0 || h == 0 {
+                    // T.88 does not say what an empty refined symbol consumes, and no
+                    // decoder agrees: refuse rather than guess
+                    return fail("JBIG2 empty refinement/aggregate symbols are not supported");
+                }
+                let ninst = agg_t.int(&mut r).map_err(herr)?;
+                let d = if ninst == 1 {
+                    // 6.5.8.2.2
+                    let id = r.bits(code_len).map_err(herr)? as usize;
+                    let rdx = b15.int(&mut r).map_err(herr)?;
+                    let rdy = b15.int(&mut r).map_err(herr)?;
+                    let size = b1.int(&mut r).map_err(herr)?;
+                    r.align();
+                    let n = usize::try_from(size)
+                        .map_err(|_| Jbig2Error("bad JBIG2 refinement data size".into()))?;
+                    let body = r
+                        .rest()
+                        .get(..n)
+                        .ok_or_else(|| Jbig2Error("truncated JBIG2 refinement data".into()))?;
+                    let rf = pool
+                        .get(id)
+                        .ok_or_else(|| Jbig2Error("JBIG2 symbol id out of range".into()))?;
+                    if rdx.abs() > 1 << 20 || rdy.abs() > 1 << 20 {
+                        return fail("bad JBIG2 refinement offset");
+                    }
+                    area += (w * h) as u64;
+                    if area > 400_000_000 {
+                        return fail("JBIG2 refinements are too large");
+                    }
+                    let mut mq = Mq::new(body);
+                    let d = refine(
+                        &mut mq, &mut gr, w, h, rf, rdx as i32, rdy as i32, rt, false, rat,
+                    );
+                    r.skip_bytes(n).map_err(herr)?;
+                    d
+                } else if ninst > 1 && ninst < 100_000 {
+                    let tp = TextP {
+                        rw: w,
+                        rh: h,
+                        strips: 1,
+                        corner: 1,
+                        transposed: false,
+                        comb: 0,
+                        def_pixel: 0,
+                        dso: 0,
+                        n_inst: ninst as usize,
+                        refine: true,
+                        rt,
+                        rat,
+                        code_len,
+                    };
+                    text_decode_huff(
+                        &mut r,
+                        &tp,
+                        at,
+                        &SymCode::Fixed(code_len),
+                        &mut gr,
+                        &mut area,
+                        &pool,
+                    )?
+                } else {
+                    return fail("bad JBIG2 aggregate instance count");
+                };
+                pool.push(Bitmap { w, h, d });
+                continue;
+            }
             tot_w += sym_w;
             widths.push(sym_w as usize);
+        }
+        if agg_text.is_some() {
+            continue;
         }
         let bmsize = bm_t.int(&mut r).map_err(herr)?;
         r.align();
@@ -867,7 +976,31 @@ fn symbol_dict_huff(data: &[u8], inputs: &[Bitmap], ct: &[Rc<Table>]) -> R<Vec<B
     Ok(out)
 }
 
-/// Text region, Huffman coding without refinement (T.88 6.4, 7.4.3).
+/// Huffman tables for the refinement part of a text region (T.88 7.4.3.1.2).
+struct HuffRefine {
+    rdw: Rc<Table>,
+    rdh: Rc<Table>,
+    rdx: Rc<Table>,
+    rdy: Rc<Table>,
+    rsize: Rc<Table>,
+}
+
+struct HuffText {
+    fs: Rc<Table>,
+    ds: Rc<Table>,
+    dt: Rc<Table>,
+    refine: Option<HuffRefine>,
+}
+
+/// How symbol ids are coded in a Huffman text region.
+enum SymCode<'a> {
+    /// the symbol-ID Huffman table of a text region segment
+    Table(&'a Table),
+    /// fixed-length codes (the aggregate text region inside a symbol dictionary, 6.5.8.2.3)
+    Fixed(u32),
+}
+
+/// Text region, Huffman coding, with or without refinement (T.88 6.4, 7.4.3).
 fn text_region_huff(
     data: &[u8],
     rw: usize,
@@ -876,28 +1009,52 @@ fn text_region_huff(
     ct: &[Rc<Table>],
 ) -> R<Vec<u8>> {
     let flags = be16(data, 0)?;
-    if flags & 2 != 0 {
-        return fail("JBIG2 Huffman text regions with refinement are not supported");
-    }
+    let refine = flags & 2 != 0;
+    let rt = ((flags >> 15) & 1) as u8;
     let hf = be16(data, 2)?;
+    let mut p = 4;
+    let mut rat = [(-1i32, -1i32); 2];
+    if refine && rt == 0 {
+        let raw = data
+            .get(p..p + 4)
+            .ok_or_else(|| Jbig2Error("truncated JBIG2 text region".into()))?;
+        rat = [
+            (raw[0] as i8 as i32, raw[1] as i8 as i32),
+            (raw[2] as i8 as i32, raw[3] as i8 as i32),
+        ];
+        p += 4;
+    }
     let mut dso = ((flags >> 10) & 31) as i32;
     if dso > 15 {
         dso -= 32;
     }
-    let n_inst = be32(data, 4)? as usize;
+    let n_inst = be32(data, p)? as usize;
+    p += 4;
     if n_inst > 4_000_000 {
         return fail("too many JBIG2 symbol instances");
     }
     let mut used = 0usize;
-    let fs_t = pick(hf & 3, &[(0, 6), (1, 7)], 3, ct, &mut used)?;
-    let ds_t = pick((hf >> 2) & 3, &[(0, 8), (1, 9), (2, 10)], 3, ct, &mut used)?;
-    let dt_t = pick(
+    let fs = pick(hf & 3, &[(0, 6), (1, 7)], 3, ct, &mut used)?;
+    let ds = pick((hf >> 2) & 3, &[(0, 8), (1, 9), (2, 10)], 3, ct, &mut used)?;
+    let dt = pick(
         (hf >> 4) & 3,
         &[(0, 11), (1, 12), (2, 13)],
         3,
         ct,
         &mut used,
     )?;
+    // the refinement table selections only count when the region refines (7.4.3.1.2)
+    let hr = if refine {
+        Some(HuffRefine {
+            rdw: pick((hf >> 6) & 3, &[(0, 14), (1, 15)], 3, ct, &mut used)?,
+            rdh: pick((hf >> 8) & 3, &[(0, 14), (1, 15)], 3, ct, &mut used)?,
+            rdx: pick((hf >> 10) & 3, &[(0, 14), (1, 15)], 3, ct, &mut used)?,
+            rdy: pick((hf >> 12) & 3, &[(0, 14), (1, 15)], 3, ct, &mut used)?,
+            rsize: pick((hf >> 14) & 1, &[(0, 1)], 1, ct, &mut used)?,
+        })
+    } else {
+        None
+    };
     let tp = TextP {
         rw,
         rh,
@@ -908,13 +1065,12 @@ fn text_region_huff(
         def_pixel: ((flags >> 9) & 1) as u8,
         dso,
         n_inst,
-        refine: false,
-        rt: 0,
-        rat: [(-1, -1); 2],
+        refine,
+        rt,
+        rat,
         code_len: 0,
     };
-    let log_strips = (flags >> 2) & 3;
-    let mut r = Bits::new(&data[8.min(data.len())..]);
+    let mut r = Bits::new(&data[p.min(data.len())..]);
     // symbol-ID codes: 35 run-code lengths, then one code length per symbol (7.4.3.1.7)
     let mut runlens = [0u8; 35];
     for l in runlens.iter_mut() {
@@ -943,42 +1099,104 @@ fn text_region_huff(
     }
     r.align();
     let id_t = Table::from_lengths(&lens).map_err(herr)?;
+    let ht = HuffText {
+        fs,
+        ds,
+        dt,
+        refine: hr,
+    };
+    let mut gr = vec![(0u8, 0u8); 1 << 13];
+    let mut area = 0u64;
+    text_decode_huff(
+        &mut r,
+        &tp,
+        &ht,
+        &SymCode::Table(&id_t),
+        &mut gr,
+        &mut area,
+        syms,
+    )
+}
 
-    let strips = tp.strips;
+/// The Huffman text-region decoding procedure (T.88 6.4.5 with SBHUFF = 1). Refinement bitmaps
+/// are MQ-coded in byte-aligned blocks of RSIZE bytes, each with a fresh arithmetic decoder but
+/// the refinement contexts `gr` carried over (6.4.11).
+fn text_decode_huff(
+    r: &mut Bits,
+    tp: &TextP,
+    ht: &HuffText,
+    ids: &SymCode,
+    gr: &mut [(u8, u8)],
+    area: &mut u64,
+    syms: &[Bitmap],
+) -> R<Vec<u8>> {
+    let (rw, rh, strips) = (tp.rw, tp.rh, tp.strips);
+    let log_strips = strips.trailing_zeros();
     let mut bm = vec![tp.def_pixel; rw * rh];
-    let mut stript: i64 = -dt_t.int(&mut r).map_err(herr)? * strips;
+    let mut stript: i64 = -ht.dt.int(r).map_err(herr)? * strips;
     let (mut firsts, mut done, mut drawn) = (0i64, 0usize, 0u64);
-    while done < n_inst {
-        stript += dt_t.int(&mut r).map_err(herr)? * strips;
+    while done < tp.n_inst {
+        stript += ht.dt.int(r).map_err(herr)? * strips;
         let mut curs = 0i64;
         let mut first = true;
         loop {
             if first {
-                firsts += fs_t.int(&mut r).map_err(herr)?;
+                firsts += ht.fs.int(r).map_err(herr)?;
                 curs = firsts;
                 first = false;
             } else {
-                match ds_t.decode(&mut r).map_err(herr)? {
+                match ht.ds.decode(r).map_err(herr)? {
                     None => break,
-                    Some(v) => curs += v + dso as i64,
+                    Some(v) => curs += v + tp.dso as i64,
                 }
             }
-            if done >= n_inst {
+            if done >= tp.n_inst {
                 return fail("JBIG2 text region overrun");
             }
             let curt = if strips == 1 {
                 0
             } else {
-                r.bits(log_strips as u32).map_err(herr)? as i64
+                r.bits(log_strips).map_err(herr)? as i64
             };
-            let id = id_t.int(&mut r).map_err(herr)? as usize;
-            let sym = syms
+            let id = match ids {
+                SymCode::Table(t) => t.int(r).map_err(herr)? as usize,
+                SymCode::Fixed(n) => r.bits(*n).map_err(herr)? as usize,
+            };
+            let base = syms
                 .get(id)
                 .ok_or_else(|| Jbig2Error("JBIG2 symbol id out of range".into()))?;
+            let mut refined: Option<Bitmap> = None;
+            if let Some(hr) = &ht.refine {
+                if r.bit().map_err(herr)? != 0 {
+                    let rdw = hr.rdw.int(r).map_err(herr)?;
+                    let rdh = hr.rdh.int(r).map_err(herr)?;
+                    let rdx = hr.rdx.int(r).map_err(herr)?;
+                    let rdy = hr.rdy.int(r).map_err(herr)?;
+                    let size = hr.rsize.int(r).map_err(herr)?;
+                    r.align();
+                    let n = usize::try_from(size)
+                        .map_err(|_| Jbig2Error("bad JBIG2 refinement data size".into()))?;
+                    let body = r
+                        .rest()
+                        .get(..n)
+                        .ok_or_else(|| Jbig2Error("truncated JBIG2 refinement data".into()))?;
+                    let mut mq = Mq::new(body);
+                    refined = Some(refine_instance(
+                        &mut mq,
+                        gr,
+                        base,
+                        (rdw, rdh, rdx, rdy),
+                        (tp.rt, tp.rat),
+                        area,
+                    )?);
+                    r.skip_bytes(n).map_err(herr)?;
+                }
+            }
+            let sym = refined.as_ref().unwrap_or(base);
             place_instance(
                 &mut bm,
                 (rw, rh),
-                &tp,
+                tp,
                 sym,
                 &mut curs,
                 stript + curt,
@@ -1104,9 +1322,43 @@ fn place_instance(
     Ok(())
 }
 
+/// Refine a symbol instance (T.88 6.4.11): the new size is the base size plus (RDW, RDH) and the
+/// reference offset is floor(RDW/2) + RDX, floor(RDH/2) + RDY. Shared by the arithmetic and the
+/// Huffman paths; the caller positions `mq` on the refinement data.
+fn refine_instance(
+    mq: &mut Mq,
+    gr: &mut [(u8, u8)],
+    base: &Bitmap,
+    (rdw, rdh, rdx, rdy): (i64, i64, i64, i64),
+    (rt, rat): (u8, [(i32, i32); 2]),
+    area: &mut u64,
+) -> R<Bitmap> {
+    let (nw, nh) = (base.w as i64 + rdw, base.h as i64 + rdh);
+    if !(0..=65_535).contains(&nw) || !(0..=65_535).contains(&nh) || nw * nh > 16_000_000 {
+        return fail("bad JBIG2 refined symbol size");
+    }
+    // every refined instance is decoded pixel by pixel: bound the total per region / dictionary
+    *area += (nw * nh) as u64;
+    if *area > 400_000_000 {
+        return fail("JBIG2 refinements are too large");
+    }
+    let (dx, dy) = (rdw.div_euclid(2) + rdx, rdh.div_euclid(2) + rdy);
+    if dx.abs() > 1 << 20 || dy.abs() > 1 << 20 {
+        return fail("bad JBIG2 refinement offset");
+    }
+    let (nw, nh) = (nw as usize, nh as usize);
+    let d = if nw == 0 || nh == 0 {
+        Vec::new()
+    } else {
+        refine(mq, gr, nw, nh, base, dx as i32, dy as i32, rt, false, rat)
+    };
+    Ok(Bitmap { w: nw, h: nh, d })
+}
+
 fn text_decode(mq: &mut Mq, tc: &mut TextCtx, tp: &TextP, syms: &[Bitmap]) -> R<Vec<u8>> {
     let (rw, rh, strips) = (tp.rw, tp.rh, tp.strips);
     let mut bm = vec![tp.def_pixel; rw * rh];
+    let mut area = 0u64;
     let mut stript: i64 = -int_or_fail(tc.iadt.decode(mq))? * strips;
     let mut firsts: i64 = 0;
     let mut done = 0usize;
@@ -1146,31 +1398,14 @@ fn text_decode(mq: &mut Mq, tc: &mut TextCtx, tp: &TextP, syms: &[Bitmap]) -> R<
                 let rdh = int_or_fail(tc.rc.iardh.decode(mq))?;
                 let rdx = int_or_fail(tc.rc.iardx.decode(mq))?;
                 let rdy = int_or_fail(tc.rc.iardy.decode(mq))?;
-                let (nw, nh) = (base.w as i64 + rdw, base.h as i64 + rdh);
-                if !(0..=65_535).contains(&nw)
-                    || !(0..=65_535).contains(&nh)
-                    || nw * nh > 16_000_000
-                {
-                    return fail("bad JBIG2 refined symbol size");
-                }
-                let (nw, nh) = (nw as usize, nh as usize);
-                let d = if nw == 0 || nh == 0 {
-                    Vec::new()
-                } else {
-                    refine(
-                        mq,
-                        &mut tc.rc.gr,
-                        nw,
-                        nh,
-                        base,
-                        (rdw.div_euclid(2) + rdx) as i32,
-                        (rdh.div_euclid(2) + rdy) as i32,
-                        tp.rt,
-                        false,
-                        tp.rat,
-                    )
-                };
-                refined = Some(Bitmap { w: nw, h: nh, d });
+                refined = Some(refine_instance(
+                    mq,
+                    &mut tc.rc.gr,
+                    base,
+                    (rdw, rdh, rdx, rdy),
+                    (tp.rt, tp.rat),
+                    &mut area,
+                )?);
             }
             let sym = refined.as_ref().unwrap_or(base);
             place_instance(&mut bm, (rw, rh), tp, sym, &mut curs, ti, &mut drawn)?;
@@ -2787,11 +3022,358 @@ pub(crate) mod tests {
         ),
     ];
 
+    /// Huffman text regions with refinement and Huffman symbol dictionaries with
+    /// refinement/aggregation: (name, width, height, stream, expected bitmap). Written by an
+    /// independent Python encoder (own MQ coder, own Huffman writer); the bitmaps are packed
+    /// MSB first, one padded row after the other. Every vector decodes identically with poppler
+    /// (`pdfimages`); all but `text_refine_b15_large` also with pdfium (see the README: pdfium
+    /// halves the RDW/RDH centring offset twice in Huffman text regions, so that vector is not
+    /// comparable there).
+    const HUFFMAN_REFINE_VECTORS: [(&str, usize, usize, &str, &str); 10] = [
+        (
+            "text_refine_std",
+            80,
+            48,
+            concat!(
+                "000000003000010000001300000050000000300000000000000000000000000000010000010000002800010000000500",
+                "000005e5c83f00279fef80546118008fa11f00fc6118008c6118008f9fef800140000000020620010100000077000000",
+                "500000003000000000000000000000130000ffffffff0000000900010000000000000000000000000000000000740209",
+                "862774757bffac807b08fb2be4c3b57fffac829d3e6a60f925cb90ffac8530c41535ffac7d20298a281c373fffac82b6",
+                "85405e7fffac84100f6f90029cb1ad737fffac40",
+            ),
+            concat!(
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000060f01e7a0e000000000050882046080",
+                "00000000088f420440e0000000000d88c20400800000000008888204408000000000008f01e780e00000000000088000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000003838083c000000000000204014220000000000003840223d0000000",
+                "0000020403e23000000000000204022220000000000003800223c0000000000000000002200000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            ),
+        ),
+        (
+            "text_refine_strips_bottomleft",
+            80,
+            48,
+            concat!(
+                "000000003000010000001300000050000000300000000000000000000000000000010000010000002800010000000500",
+                "000005e5c83f00279fef80546118008fa11f00fc6118008c6118008f9fef80014000000002062001010000007b000000",
+                "5000000030000000000000000000000b0000ffffffff0000000900010000000000000000000000000000000000502026",
+                "182774757bffac809ec200fb2be4c3b57fffac83275be6a6f925cb90ffac844c31001535ffac70044c51401c373fffac",
+                "82ada140405e7fffac85040cf6f900029cb1ad737fffac40",
+            ),
+            concat!(
+                "000000000000000000000000000000000000000000000000000000000000060f000000e0000000000508800000800000",
+                "0000088f41e000e0000000000d88c207a0800000000008888204608000000000008f020440e000000000000882040000",
+                "00000000000001e440000000000000000007800000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000380",
+                "00000000000000000200000000000000000003838083c000000000000204014220000000000002040223d00000000000",
+                "038403e23000000000000004022220000000000000000223c00000000000000000022000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            ),
+        ),
+        (
+            "text_refine_template1",
+            80,
+            48,
+            concat!(
+                "000000003000010000001300000050000000300000000000000000000000000000010000010000002800010000000500",
+                "000005e5c83f00279fef80546118008fa11f00fc6118008c6118008f9fef800140000000020620010100000074000000",
+                "500000003000000000000000000080130000000000090001000000000000000000000000000000000074020986275275",
+                "7bffac807b08b01eccf6597fffac829d3e6a60f92a4829ffac8530c5154e7fffac7d20298a2818857fffac82b6852993",
+                "3fffac84100f6f900345dd85948fffac40",
+            ),
+            concat!(
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000060f01e7a0e000000000050882046080",
+                "00000000088f420440e0000000000d88c20400800000000008888204408000000000008f01e780e00000000000088000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000003838083c000000000000204014220000000000003840223d0000000",
+                "0000020403e23000000000000204022220000000000003800223c0000000000000000002200000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            ),
+        ),
+        (
+            "text_refine_custom_at",
+            80,
+            48,
+            concat!(
+                "000000003000010000001300000050000000300000000000000000000000000000010000010000002800010000000500",
+                "000005e5c83f00279fef80546118008fa11f00fc6118008c6118008f9fef800140000000020620010100000077000000",
+                "500000003000000000000000000000130000fe00ffff0000000900010000000000000000000000000000000000740209",
+                "862774757bffac807b08fb2be4c3b67fffac829d3e6a60f9238562ffac8530c4fa18ffac7d20298a2808263fffac82b6",
+                "8504aec7ffac84100f6f9003ed099b7c33ffac40",
+            ),
+            concat!(
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000060f01e7a0e000000000050882046080",
+                "00000000088f420440e0000000000d88c20400800000000008888204408000000000008f01e780e00000000000088000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000003838083c000000000000204014220000000000003840223d0000000",
+                "0000020403e23000000000000204022220000000000003800223c0000000000000000002200000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            ),
+        ),
+        (
+            "text_refine_custom_tables",
+            80,
+            48,
+            concat!(
+                "000000003000010000001300000050000000300000000000000000000000000000010000010000002800010000000500",
+                "000005e5c83f00279fef80546118008fa11f00fc6118008c6118008f9fef800140000000023500010000001534fffff8",
+                "0000000800b526447ad562a76ee24cad80000000033500010000001d37fffffff1000006868391819070402150603461",
+                "4445565767786a9920000000043500010000001324000000010000008d211821a6acbaefcf7e1c000000053500010000",
+                "000e04fffffffd000000048644668000000000063500010000000c02fffffffe00000003da4800000000073500010000",
+                "000b12fffffffc00000004aaa0000000083500010000000b12ffffffff0000000d5af3000000093500010000000b3200",
+                "000000000001405a820000000a06e00000090000010203040506070809010000007d0000005000000030000000000000",
+                "00000000137fffffffffff000000090001000000000000000000000000000000000074020a2a182774757bffac807544",
+                "40fb2be4c3b57fffac829d3d140cf925cb90ffac853048081535ffac7d202981a1401c373fffac82a74428405e7fffac",
+                "84100ead0200029cb1ad737fffac40",
+            ),
+            concat!(
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000060f01e7a0e000000000050882046080",
+                "00000000088f420440e0000000000d88c20400800000000008888204408000000000008f01e780e00000000000088000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000003838083c000000000000204014220000000000003840223d0000000",
+                "0000020403e23000000000000204022220000000000003800223c0000000000000000002200000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            ),
+        ),
+        (
+            "text_refine_b15_large",
+            80,
+            48,
+            concat!(
+                "000000003000010000001300000050000000300000000000000000000000000000010000010000002800010000000500",
+                "000005e5c83f00279fef80546118008fa11f00fc6118008c6118008f9fef800140000000020620010100000083000000",
+                "500000003000000000000000000000131540ffffffff0000000900010000000000000000000000000000000000740208",
+                "187b331f27ffac847d68b00e3fa96497b888ff7fffac849d3eac48fc7726dfcbff7fffac85380adc6c7fffac7d6027d0",
+                "70f42077389fffac84204082fbffac813d6cabac923e4e257c050f7fffac8688",
+            ),
+            concat!(
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "00000000000000000000000000000000000000000000000000000000000000000203d00f3d0380000000050220102282",
+                "000000000883c8102283800000000f822010228200000000088224102302000000000883c00f3e038000000000010400",
+                "000000000000000080000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000000000000000000003d0083d00780000",
+                "0000022814220080000000000228223c80800000000002283e220080000000000230222240800000000003e0223c0078",
+                "000000000000001040000000000000000008000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            ),
+        ),
+        (
+            "sd_refagg_single",
+            64,
+            40,
+            concat!(
+                "000000003000010000001300000040000000280000000000000000000000000000010000010000002800010000000500",
+                "000005e5c83f00279fef80546118008fa11f00fc6118008c6118008f9fef80014000000002002001010000002f0003ff",
+                "ffffff0000000300000003e5c8228c27747527ffac82c380fb253a6e3fffacfdc83253000f871c57ffacfca300000003",
+                "0620020100000036000000400000002800000000000000000000130000ffffffff000000030010000000000000000000",
+                "0000000000000068041f58017510",
+            ),
+            concat!(
+                "000000000000000000000000000000000000000000000000000000000000000018000000000000001400000000000000",
+                "220000000000000036000000000000002200000000000000220000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "3c3e0000000000002320000000000000233c000000000000222000000000000022200000000000003c3e000000000000",
+                "003000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000",
+            ),
+        ),
+        (
+            "sd_refagg_multi",
+            64,
+            40,
+            concat!(
+                "000000003000010000001300000040000000280000000000000000000000000000010000010000002800010000000500",
+                "000005e5c83f00279fef80546118008fa11f00fc6118008c6118008f9fef80014000000002002001010000003f0003ff",
+                "ffffff0000000300000003e5c826c300f99f317ffface2200002c530e68bfb6bffac7fbc08c002d518092b38bfffac2c",
+                "c014c8140a07bfffac7f28c0000000030620020100000036000000400000002800000000000000000000130000ffffff",
+                "ff0000000300100000000000000000000000000000000068041f58017510",
+            ),
+            concat!(
+                "00000000000000000000000000000000000000000000000000000000000000003c000000000000002200000000000000",
+                "3c00000000000000220000000000000022000000000000003c0000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "0be3fe0000000000160411000000000023c4f100000000003e05110000000000220511000000000023e3fe0000000000",
+                "000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000",
+            ),
+        ),
+        (
+            "sd_refagg_multi_custom_agginst_template1",
+            64,
+            40,
+            concat!(
+                "000000003000010000001300000040000000280000000000000000000000000000010000010000002800010000000500",
+                "000005e5c83f00279fef80546118008fa11f00fc6118008c6118008f9fef800140000000023500010000000b12000000",
+                "010000000b48f30000000300400102010000003a10830000000300000003e5c86c30f99f317ffface30000162980e621",
+                "1eefffac7fbc0e00016a8c091b748fffac2cc014c814113b7fffac7f28c0000000040620030100000032000000400000",
+                "0028000000000000000000801300000000000300100000000000000000000000000000000068041f58017510",
+            ),
+            concat!(
+                "00000000000000000000000000000000000000000000000000000000000000003c000000000000002200000000000000",
+                "3c00000000000000220000000000000022000000000000003c0000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "0be3fe0000000000160411000000000023c4f100000000003e05110000000000220511000000000023e3fe0000000000",
+                "000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000",
+            ),
+        ),
+        (
+            "sd_refagg_multi_at_exportall",
+            64,
+            40,
+            concat!(
+                "000000003000010000001300000040000000280000000000000000000000000000010000010000002800010000000500",
+                "000005e5c83f00279fef80546118008fa11f00fc6118008c6118008f9fef8001400000000200200101000000400003fe",
+                "00ffff0000000800000003e5c826c300f99f317ffface2200002c530fde78db1ffac7fbc08c002d518092b38bfffac2c",
+                "c014c8180a00ff7fffac7f020000000003062002010000003e000000400000002800000000000000000000130000fe00",
+                "ffff000000080001000000000000000000000000000000000068041d1749d33eb004755d675c80",
+            ),
+            concat!(
+                "0000000000000000000000000000000000000000000000000000000000000000087879e0000000001444811000000000",
+                "22788110000000003e448110000000002244811000000000227879e00000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "3e782f8ff800000020445810440000003c788f13c40000002044f8144400000020448814440000003e788f8ff8000000",
+                "000000040000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000",
+            ),
+        ),
+    ];
+
     fn hex(s: &str) -> Vec<u8> {
         (0..s.len())
             .step_by(2)
             .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
             .collect()
+    }
+
+    /// Packed MSB-first bitmap (rows padded to bytes) -> 0/1 pixels.
+    fn unpack(h: &str, w: usize, rows: usize) -> Vec<u8> {
+        let b = hex(h);
+        let stride = w.div_ceil(8);
+        let mut out = Vec::with_capacity(w * rows);
+        for y in 0..rows {
+            for x in 0..w {
+                out.push((b[y * stride + x / 8] >> (7 - x % 8)) & 1);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn huffman_refinement_and_aggregation_decode_like_poppler_and_pdfium() {
+        for (name, w, h, stream, expected) in HUFFMAN_REFINE_VECTORS.iter() {
+            match decode(&hex(stream), None, *w, *h) {
+                Ok(got) => assert_eq!(got, unpack(expected, *w, *h), "vector {name}"),
+                Err(e) => panic!("vector {name}: {}", e.0),
+            }
+        }
+    }
+
+    /// Offsets of the first occurrence of `pat` in `d`.
+    fn find(d: &[u8], pat: &[u8]) -> usize {
+        d.windows(pat.len()).position(|w| w == pat).unwrap()
+    }
+
+    #[test]
+    fn huffman_refinement_reserved_and_missing_tables_are_errors() {
+        let vec_of = |n: &str| {
+            let v = HUFFMAN_REFINE_VECTORS.iter().find(|v| v.0 == n).unwrap();
+            (hex(v.3), v.1, v.2)
+        };
+        // text region: region info (80x48 at 0,0, OR) then the two flag words
+        let (st, w, h) = vec_of("text_refine_std");
+        let info = [0, 0, 0, 80, 0, 0, 0, 48, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let hf_at = find(&st, &info) + 17 + 2;
+        assert!(decode(&st, None, w, h).is_ok());
+        // reserved selection (2) for RDW, RDH, RDX, RDY; custom table (3 / 1) that is not supplied
+        for (shift, val) in [(6, 2u16), (8, 2), (10, 2), (12, 2), (6, 3), (14, 1)] {
+            let mut d = st.clone();
+            let f = u16::from_be_bytes([d[hf_at], d[hf_at + 1]]) | (val << shift);
+            d[hf_at..hf_at + 2].copy_from_slice(&f.to_be_bytes());
+            assert!(decode(&d, None, w, h).is_err(), "shift {shift} value {val}");
+        }
+        // the refinement selections are ignored when the region does not refine
+        let mut d = st.clone();
+        let fl_at = hf_at - 2;
+        d[fl_at + 1] &= !2;
+        let f = u16::from_be_bytes([d[hf_at], d[hf_at + 1]]) | (2 << 6);
+        d[hf_at..hf_at + 2].copy_from_slice(&f.to_be_bytes());
+        let _ = decode(&d, None, w, h); // garbage in, but no panic and no table error
+                                        // symbol dictionary: the AGGINST table (bit 7) is custom but missing
+        let (st, w, h) = vec_of("sd_refagg_single");
+        let at = find(&st, &[0, 3, 0xFF, 0xFF, 0xFF, 0xFF]);
+        assert!(decode(&st, None, w, h).is_ok());
+        let mut d = st.clone();
+        d[at + 1] |= 0x80;
+        assert!(decode(&d, None, w, h).is_err());
+        // reserved DH selection (2) in a refining dictionary
+        let mut d = st.clone();
+        d[at + 1] |= 2 << 2;
+        assert!(decode(&d, None, w, h).is_err());
+    }
+
+    #[test]
+    fn damaged_huffman_refinement_streams_never_panic_or_hang() {
+        let iters: u64 = std::env::var("LEGATOROCR_FUZZ_ITERS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(150);
+        let mut s = 0xBADC_0DE5u64;
+        let mut rnd = move || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            s
+        };
+        let t0 = std::time::Instant::now();
+        for (name, w, h, stream, _) in HUFFMAN_REFINE_VECTORS.iter() {
+            let good = hex(stream);
+            assert!(decode(&good, None, *w, *h).is_ok(), "{name}");
+            for _ in 0..iters {
+                let mut d = good.clone();
+                for _ in 0..1 + rnd() % 4 {
+                    let i = (rnd() as usize) % d.len();
+                    match rnd() % 3 {
+                        0 => d[i] = rnd() as u8,
+                        1 => d[i] ^= 1 << (rnd() % 8),
+                        _ => d.truncate(i.max(12)),
+                    }
+                }
+                let _ = decode(&d, None, *w, *h);
+            }
+        }
+        let budget = if cfg!(debug_assertions) { 300 } else { 30 };
+        assert!(
+            t0.elapsed().as_secs() < budget,
+            "too slow: {:?}",
+            t0.elapsed()
+        );
     }
 
     #[test]

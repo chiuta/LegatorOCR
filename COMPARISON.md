@@ -54,7 +54,7 @@ Sources read for this comparison:
 
 ## Not done (honest list)
 
-JBIG2 Huffman refinement/aggregation, certified PDF/A (veraPDF validates our generated sample files against PDF/A-2b in CI; that covers the samples, not every input), the extra binarisers of the Experimental
+JBIG2 refined or empty symbols inside Huffman aggregate dictionaries (refinement and aggregation in Huffman mode are otherwise decoded), certified PDF/A (veraPDF validates our generated sample files against PDF/A-2b in CI; that covers the samples, not every input), the extra binarisers of the Experimental
 fork, EM denoise / deblur filters, and any run of the GUI or the Windows / macOS builds by the author (CI now smoke-tests the packaged command-line binary on every release target).
 
 Measured, not claimed: `docs/OCR-BENCH.md` (synthetic OCR accuracy, 8 languages × 3 conditions).
