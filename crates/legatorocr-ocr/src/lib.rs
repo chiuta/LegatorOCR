@@ -37,7 +37,9 @@ impl std::str::FromStr for Engine {
             "auto" => Ok(Engine::Auto),
             "native" | "builtin" | "built-in" => Ok(Engine::Native),
             "tesseract" => Ok(Engine::Tesseract),
-            _ => Err(format!("unknown OCR engine '{s}' (auto, native or tesseract)")),
+            _ => Err(format!(
+                "unknown OCR engine '{s}' (auto, native or tesseract)"
+            )),
         }
     }
 }
@@ -212,21 +214,33 @@ pub fn effective_engine(o: &OcrOptions) -> Engine {
             if !legatorocr_nocr::lexicon::all_supported(&lang) || !native_available() {
                 return Engine::Tesseract;
             }
-            static CACHE: OnceLock<Mutex<HashMap<(PathBuf, String), (Engine, Instant)>>> = OnceLock::new();
+            #[allow(clippy::type_complexity)]
+            static CACHE: OnceLock<Mutex<HashMap<(PathBuf, String), (Engine, Instant)>>> =
+                OnceLock::new();
             let key = (o.tesseract.clone(), lang);
             // the lock is held while probing, so parallel page workers probe once, not N times
-            let mut cache = CACHE.get_or_init(Default::default).lock().unwrap_or_else(|p| p.into_inner());
+            let mut cache = CACHE
+                .get_or_init(Default::default)
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
             if let Some(&(e, at)) = cache.get(&key) {
                 if e == Engine::Tesseract || at.elapsed() < Duration::from_secs(30) {
                     return e;
                 }
             }
-            let to = OcrOptions { engine: Engine::Tesseract, ..o.clone() };
+            let to = OcrOptions {
+                engine: Engine::Tesseract,
+                ..o.clone()
+            };
             let ok = check_tesseract(&to).is_ok()
                 && list_tesseract_languages(&to)
                     .map(|have| key.1.split('+').all(|l| have.iter().any(|h| h == l)))
                     .unwrap_or(false);
-            let e = if ok { Engine::Tesseract } else { Engine::Native };
+            let e = if ok {
+                Engine::Tesseract
+            } else {
+                Engine::Native
+            };
             cache.insert(key, (e, Instant::now()));
             e
         }
@@ -243,9 +257,14 @@ pub fn check_engine(o: &OcrOptions) -> Result<String, OcrError> {
     match effective_engine(o) {
         Engine::Native => {
             if native_available() {
-                Ok(format!("LegatorOCR native engine {}", env!("CARGO_PKG_VERSION")))
+                Ok(format!(
+                    "LegatorOCR native engine {}",
+                    env!("CARGO_PKG_VERSION")
+                ))
             } else {
-                Err(OcrError::NotFound("this build contains no native recognition model".into()))
+                Err(OcrError::NotFound(
+                    "this build contains no native recognition model".into(),
+                ))
             }
         }
         _ => check_tesseract(o),
@@ -306,7 +325,10 @@ pub fn parse_osd(out: &str) -> Option<u16> {
 pub fn detect_rotation(img: &image::DynamicImage, o: &OcrOptions) -> Result<Option<u16>, OcrError> {
     if o.engine != Engine::Tesseract {
         // Tesseract's OSD when it is installed with its `osd` data, otherwise the native detector
-        let to = OcrOptions { engine: Engine::Tesseract, ..o.clone() };
+        let to = OcrOptions {
+            engine: Engine::Tesseract,
+            ..o.clone()
+        };
         let tess_osd = tesseract_has_osd(&to);
         if !tess_osd {
             return Ok(native_rotation(img, o));
@@ -326,16 +348,23 @@ fn tesseract_has_osd(o: &OcrOptions) -> bool {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
-    static CACHE: OnceLock<Mutex<HashMap<(PathBuf, Option<PathBuf>), (bool, Instant)>>> = OnceLock::new();
+    #[allow(clippy::type_complexity)]
+    static CACHE: OnceLock<Mutex<HashMap<(PathBuf, Option<PathBuf>), (bool, Instant)>>> =
+        OnceLock::new();
     let key = (o.tesseract.clone(), o.tessdata.clone());
-    let mut c = CACHE.get_or_init(Default::default).lock().unwrap_or_else(|p| p.into_inner());
+    let mut c = CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     if let Some(&(v, at)) = c.get(&key) {
         if at.elapsed() < Duration::from_secs(60) {
             return v;
         }
     }
     let v = check_tesseract(o).is_ok()
-        && list_tesseract_languages(o).map(|l| l.iter().any(|x| x == "osd")).unwrap_or(false);
+        && list_tesseract_languages(o)
+            .map(|l| l.iter().any(|x| x == "osd"))
+            .unwrap_or(false);
     c.insert(key, (v, Instant::now()));
     v
 }
@@ -348,7 +377,10 @@ fn native_rotation(img: &image::DynamicImage, o: &OcrOptions) -> Option<u16> {
     legatorocr_nocr::detect_orientation(&page, 300, model, &canonical_lang(&o.lang))
 }
 
-fn detect_rotation_tesseract(img: &image::DynamicImage, o: &OcrOptions) -> Result<Option<u16>, OcrError> {
+fn detect_rotation_tesseract(
+    img: &image::DynamicImage,
+    o: &OcrOptions,
+) -> Result<Option<u16>, OcrError> {
     let small = if img.width().max(img.height()) > 1800 {
         img.thumbnail(1800, 1800)
     } else {
@@ -467,14 +499,18 @@ pub fn recognize(page: &PageImage, dpi: u32, o: &OcrOptions) -> Result<Vec<Word>
 }
 
 fn recognize_native(page: &PageImage, dpi: u32, o: &OcrOptions) -> Result<Vec<Word>, OcrError> {
-    let model = legatorocr_nocr::embedded_model()
-        .ok_or_else(|| OcrError::NotFound("this build contains no native recognition model".into()))?;
+    let model = legatorocr_nocr::embedded_model().ok_or_else(|| {
+        OcrError::NotFound("this build contains no native recognition model".into())
+    })?;
     let lang = canonical_lang(&o.lang);
     let mut words = legatorocr_nocr::recognize(
         page,
         dpi,
         model,
-        &legatorocr_nocr::NativeOptions { min_conf: o.min_conf, lang: lang.clone() },
+        &legatorocr_nocr::NativeOptions {
+            min_conf: o.min_conf,
+            lang: lang.clone(),
+        },
     );
     if lang.split('+').any(|l| l == "ron") {
         for w in &mut words {
@@ -827,7 +863,10 @@ mod engine_choice_tests {
     #[test]
     fn auto_falls_back_to_native_when_tesseract_is_missing() {
         assert!(native_available());
-        assert_eq!(effective_engine(&missing_tesseract("ron+eng")), Engine::Native);
+        assert_eq!(
+            effective_engine(&missing_tesseract("ron+eng")),
+            Engine::Native
+        );
         let v = check_engine(&missing_tesseract("ron")).unwrap();
         assert!(v.contains("native"), "{v}");
     }
@@ -835,8 +874,14 @@ mod engine_choice_tests {
     #[test]
     fn auto_does_not_claim_languages_the_native_engine_cannot_read() {
         // Russian is not one of the eight: Auto must not pick the native engine for it
-        assert_eq!(effective_engine(&missing_tesseract("rus")), Engine::Tesseract);
-        assert_eq!(effective_engine(&missing_tesseract("ron+rus")), Engine::Tesseract);
+        assert_eq!(
+            effective_engine(&missing_tesseract("rus")),
+            Engine::Tesseract
+        );
+        assert_eq!(
+            effective_engine(&missing_tesseract("ron+rus")),
+            Engine::Tesseract
+        );
     }
 
     #[test]

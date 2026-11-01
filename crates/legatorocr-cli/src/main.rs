@@ -435,7 +435,12 @@ fn output_stems(paths: &[PathBuf]) -> Vec<String> {
 /// The first page-image path (`stem`, `stem_L`, `stem_R` + extension, in `out_dir`) that is one of
 /// the input files themselves, compared by canonical path (and case-insensitively, for the
 /// case-folding file systems of Windows and macOS).
-fn output_clobbers_input(out_dir: &Path, stems: &[String], ext: &str, inputs: &[PathBuf]) -> Option<PathBuf> {
+fn output_clobbers_input(
+    out_dir: &Path,
+    stems: &[String],
+    ext: &str,
+    inputs: &[PathBuf],
+) -> Option<PathBuf> {
     let dir = out_dir.canonicalize().ok()?;
     let canon: Vec<String> = inputs
         .iter()
@@ -623,10 +628,16 @@ fn real_main() -> Result<()> {
         }
     }
     if !(36..=300).contains(&cli.hybrid_dpi) {
-        bail!("--hybrid-dpi must be between 36 and 300 (got {})", cli.hybrid_dpi);
+        bail!(
+            "--hybrid-dpi must be between 36 and 300 (got {})",
+            cli.hybrid_dpi
+        );
     }
     if !(1..=100).contains(&cli.jpeg_quality) {
-        bail!("--jpeg-quality must be between 1 and 100 (got {})", cli.jpeg_quality);
+        bail!(
+            "--jpeg-quality must be between 1 and 100 (got {})",
+            cli.jpeg_quality
+        );
     }
     let align = parse_align(&cli.align)?;
     let settings = Settings {
@@ -694,10 +705,29 @@ fn real_main() -> Result<()> {
     if project.is_some() || profile.is_some() {
         // the loaded settings replace the processing options: say so for those given explicitly
         const PROCESSING: &[&str] = &[
-            "--mode", "--dpi", "--margin", "--page-size", "--split", "--no-deskew", "--skew",
-            "--max-skew", "--threshold", "--sauvola-k", "--sharpen", "--despeckle-strength",
-            "--output-dpi", "--hybrid-dpi", "--dropout", "--descreen", "--perspective", "--dewarp",
-            "--fingers", "--punch-holes", "--remove-lines", "--erase", "--picture-zone",
+            "--mode",
+            "--dpi",
+            "--margin",
+            "--page-size",
+            "--split",
+            "--no-deskew",
+            "--skew",
+            "--max-skew",
+            "--threshold",
+            "--sauvola-k",
+            "--sharpen",
+            "--despeckle-strength",
+            "--output-dpi",
+            "--hybrid-dpi",
+            "--dropout",
+            "--descreen",
+            "--perspective",
+            "--dewarp",
+            "--fingers",
+            "--punch-holes",
+            "--remove-lines",
+            "--erase",
+            "--picture-zone",
         ];
         let given: Vec<String> = std::env::args()
             .skip(1)

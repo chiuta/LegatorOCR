@@ -10,14 +10,25 @@ use std::sync::OnceLock;
 #[cfg(feature = "lexicon")]
 macro_rules! lex {
     ($code:literal) => {
-        ($code, include_bytes!(concat!("../lexicons/", $code, ".txt.gz")) as &[u8])
+        (
+            $code,
+            include_bytes!(concat!("../lexicons/", $code, ".txt.gz")) as &[u8],
+        )
     };
 }
 /// The word lists, compiled in (CC BY-SA 4.0 data, see `lexicons/README.md`). Built without the
 /// `lexicon` feature the lists are absent: no list is ever loaded and no error repair happens.
 #[cfg(feature = "lexicon")]
-const FILES: [(&str, &[u8]); 8] =
-    [lex!("ro"), lex!("en"), lex!("fr"), lex!("it"), lex!("es"), lex!("pt"), lex!("de"), lex!("hu")];
+const FILES: [(&str, &[u8]); 8] = [
+    lex!("ro"),
+    lex!("en"),
+    lex!("fr"),
+    lex!("it"),
+    lex!("es"),
+    lex!("pt"),
+    lex!("de"),
+    lex!("hu"),
+];
 #[cfg(not(feature = "lexicon"))]
 const FILES: [(&str, &[u8]); 0] = [];
 
@@ -46,7 +57,13 @@ impl Lexicon {
                 use std::io::Read;
                 let _ = flate2::read::GzDecoder::new(FILES[i].1).read_to_string(&mut s);
             }
-            Lexicon { words: s.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect() }
+            Lexicon {
+                words: s
+                    .lines()
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| !l.is_empty())
+                    .collect(),
+            }
         }))
     }
 
@@ -80,7 +97,12 @@ pub fn known(lexicons: &[&Lexicon], token: &str) -> bool {
 
 /// Try to repair one token given its glyphs; `first_in_line` allows a leading capital.
 /// Returns the corrected text, or `None` when the token is fine or nothing safe is found.
-pub fn repair(lexicons: &[&Lexicon], text: &str, glyphs: &[&Glyph], first_in_line: bool) -> Option<String> {
+pub fn repair(
+    lexicons: &[&Lexicon],
+    text: &str,
+    glyphs: &[&Glyph],
+    first_in_line: bool,
+) -> Option<String> {
     let (a, b) = Lexicon::core(text)?;
     let core = &text[a..b];
     let n = core.chars().count();
@@ -115,7 +137,9 @@ pub fn repair(lexicons: &[&Lexicon], text: &str, glyphs: &[&Glyph], first_in_lin
         let mut cand = chars.clone();
         cand[i] = alt;
         let s: String = cand.iter().collect();
-        let Some((ca, cb)) = Lexicon::core(&s) else { continue };
+        let Some((ca, cb)) = Lexicon::core(&s) else {
+            continue;
+        };
         if known(lexicons, &s[ca..cb]) && best.as_ref().is_none_or(|(p, _)| ap > *p) {
             best = Some((ap, s));
         }

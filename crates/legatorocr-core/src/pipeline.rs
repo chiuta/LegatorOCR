@@ -383,7 +383,7 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
         .map(|z| [px(z[0]), px(z[1]), px(z[2]), px(z[3])])
         .collect();
     rot90_rects(&mut zones, w0, h0, s.rotate_quarters);
-    let mut rgb = if s.rotate_quarters % 4 == 0 {
+    let mut rgb = if s.rotate_quarters.is_multiple_of(4) {
         base // nothing turned: no copy at all
     } else {
         transform::rot90(&base, s.rotate_quarters)
@@ -416,8 +416,7 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
                     Some(ang) if ang.abs() > 0.1f32.to_radians() => split::level(&a.ink, ang),
                     _ => a.ink,
                 };
-                split::find_gutter(&ink)
-                    .map(|x| (x * a.factor).min(rgb.width().saturating_sub(1)))
+                split::find_gutter(&ink).map(|x| (x * a.factor).min(rgb.width().saturating_sub(1)))
             }
         };
         cut_at = cut.filter(|&x| x > 0 && x < rgb.width());
@@ -727,7 +726,15 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
     let blank_canvas = blank && s.page_size_mm.is_some();
     let (lay, win) = match content {
         None if blank_canvas => (
-            layout(Rect { x: 0, y: 0, w: 0, h: 0 }, s),
+            layout(
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 0,
+                    h: 0,
+                },
+                s,
+            ),
             (0i64, 0i64, 0u32, 0u32),
         ),
         None => (
@@ -963,14 +970,26 @@ mod tests {
 
     #[test]
     fn blank_sheet_with_a_page_size_becomes_an_empty_page_of_that_size() {
-        let blank = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(900, 1300, Rgb([240, 240, 240])));
+        let blank = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            900,
+            1300,
+            Rgb([240, 240, 240]),
+        ));
         for mode in [OutputMode::BlackWhite, OutputMode::Color, OutputMode::Gray] {
-            let s = Settings { dpi: DPI, mode, page_size_mm: Some((100.0, 150.0)), ..Settings::default() };
+            let s = Settings {
+                dpi: DPI,
+                mode,
+                page_size_mm: Some((100.0, 150.0)),
+                ..Settings::default()
+            };
             let pages = process_page(&blank, &s);
             assert_eq!(pages.len(), 1);
             let (w, h) = (pages[0].image.width(), pages[0].image.height());
             // 100 × 150 mm at 300 dpi
-            assert!((1180..=1182).contains(&w) && (1771..=1773).contains(&h), "{mode:?}: {w}x{h}");
+            assert!(
+                (1180..=1182).contains(&w) && (1771..=1773).contains(&h),
+                "{mode:?}: {w}x{h}"
+            );
             assert!(pages[0].blank);
         }
     }
@@ -982,7 +1001,9 @@ mod tests {
             b.set(x, 200, true); // a 1-px horizontal rule
         }
         let small = scale_bw(&b, 200, 200);
-        let ink: u32 = (0..200).map(|x| small.get(x, 100) as u32 + small.get(x, 99) as u32).sum();
+        let ink: u32 = (0..200)
+            .map(|x| small.get(x, 100) as u32 + small.get(x, 99) as u32)
+            .sum();
         assert!(ink > 120, "the rule must survive halving, kept {ink} px");
     }
 

@@ -53,7 +53,11 @@ fn rotate_gray(g: &GrayImage, rad: f32, fill: u8) -> GrayImage {
                 + px(x1, y0) * fx * (1.0 - fy)
                 + px(x0, y1) * (1.0 - fx) * fy
                 + px(x1, y1) * fx * fy;
-            out.put_pixel(x as u32, y as u32, image::Luma([v.round().clamp(0.0, 255.0) as u8]));
+            out.put_pixel(
+                x as u32,
+                y as u32,
+                image::Luma([v.round().clamp(0.0, 255.0) as u8]),
+            );
         }
     }
     out
@@ -63,7 +67,12 @@ fn rotate_gray(g: &GrayImage, rad: f32, fill: u8) -> GrayImage {
 pub fn unrotate_box(b: (u32, u32, u32, u32), rad: f32, w: u32, h: u32) -> (u32, u32, u32, u32) {
     let (cx, cy) = ((w as f32 - 1.0) / 2.0, (h as f32 - 1.0) / 2.0);
     let (s, c) = rad.sin_cos();
-    let (x0, y0, x1, y1) = (b.0 as f32, b.1 as f32, (b.0 + b.2) as f32, (b.1 + b.3) as f32);
+    let (x0, y0, x1, y1) = (
+        b.0 as f32,
+        b.1 as f32,
+        (b.0 + b.2) as f32,
+        (b.1 + b.3) as f32,
+    );
     let mut lo = (f32::MAX, f32::MAX);
     let mut hi = (f32::MIN, f32::MIN);
     for (px, py) in [(x0, y0), (x1, y0), (x0, y1), (x1, y1)] {
@@ -75,7 +84,12 @@ pub fn unrotate_box(b: (u32, u32, u32, u32), rad: f32, w: u32, h: u32) -> (u32, 
     }
     let x = lo.0.max(0.0).floor() as u32;
     let y = lo.1.max(0.0).floor() as u32;
-    (x, y, (hi.0.ceil().max(0.0) as u32).saturating_sub(x).max(1), (hi.1.ceil().max(0.0) as u32).saturating_sub(y).max(1))
+    (
+        x,
+        y,
+        (hi.0.ceil().max(0.0) as u32).saturating_sub(x).max(1),
+        (hi.1.ceil().max(0.0) as u32).saturating_sub(y).max(1),
+    )
 }
 
 pub fn to_ink(page: &PageImage, dpi: u32) -> (GrayImage, BitImage) {
@@ -149,7 +163,12 @@ pub fn prepare(page: &PageImage, dpi: u32) -> Prepared {
             }
         }
     }
-    Prepared { gray, ink, med, skew }
+    Prepared {
+        gray,
+        ink,
+        med,
+        skew,
+    }
 }
 
 /// 3×3 median filter: removes single-pixel scanner noise before thresholding, keeps edges.
@@ -256,7 +275,11 @@ pub fn median_component_height(ink: &BitImage) -> u32 {
     hs.sort_unstable();
     // ignore dots, commas and dust: components far smaller than the upper-quartile letter
     let p75 = hs[hs.len() * 3 / 4];
-    let letters: Vec<u32> = hs.iter().copied().filter(|&v| v * 100 >= p75 * 45).collect();
+    let letters: Vec<u32> = hs
+        .iter()
+        .copied()
+        .filter(|&v| v * 100 >= p75 * 45)
+        .collect();
     letters[letters.len() / 2]
 }
 
@@ -354,7 +377,10 @@ impl Prof<'_> {
         (y0..y1)
             .map(|y| {
                 let s = y as usize * self.ink.w as usize;
-                self.ink.data[s + x0 as usize..s + x1 as usize].iter().map(|&b| b as u32).sum()
+                self.ink.data[s + x0 as usize..s + x1 as usize]
+                    .iter()
+                    .map(|&b| b as u32)
+                    .sum()
             })
             .collect()
     }
@@ -363,7 +389,10 @@ impl Prof<'_> {
         let mut v = vec![0u32; (x1 - x0) as usize];
         for y in y0..y1 {
             let s = y as usize * self.ink.w as usize;
-            for (i, &b) in self.ink.data[s + x0 as usize..s + x1 as usize].iter().enumerate() {
+            for (i, &b) in self.ink.data[s + x0 as usize..s + x1 as usize]
+                .iter()
+                .enumerate()
+            {
                 v[i] += b as u32;
             }
         }
@@ -377,19 +406,26 @@ impl Prof<'_> {
         let b = rows.iter().rposition(|&v| v > 0)?;
         let c = cols.iter().position(|&v| v > 0)?;
         let d = cols.iter().rposition(|&v| v > 0)?;
-        Some((r.0 + c as u32, r.1 + a as u32, r.0 + d as u32 + 1, r.1 + b as u32 + 1))
+        Some((
+            r.0 + c as u32,
+            r.1 + a as u32,
+            r.0 + d as u32 + 1,
+            r.1 + b as u32 + 1,
+        ))
     }
 }
 
 /// All maximal runs of "empty" entries (value ≤ `noise`) strictly inside `v`, as (start, len).
 fn gaps(v: &[u32], noise: u32) -> Vec<(usize, usize)> {
-    let (Some(first), Some(last)) =
-        (v.iter().position(|&x| x > noise), v.iter().rposition(|&x| x > noise))
-    else {
+    let (Some(first), Some(last)) = (
+        v.iter().position(|&x| x > noise),
+        v.iter().rposition(|&x| x > noise),
+    ) else {
         return Vec::new();
     };
     let mut out = Vec::new();
     let (mut start, mut len) = (0usize, 0usize);
+    #[allow(clippy::needless_range_loop)]
     for i in first..=last {
         if v[i] <= noise {
             if len == 0 {
@@ -407,7 +443,9 @@ fn gaps(v: &[u32], noise: u32) -> Vec<(usize, usize)> {
 }
 
 fn widest(g: &[(usize, usize)]) -> Option<(usize, usize)> {
-    g.iter().copied().max_by_key(|&(s, l)| (l, std::cmp::Reverse(s)))
+    g.iter()
+        .copied()
+        .max_by_key(|&(s, l)| (l, std::cmp::Reverse(s)))
 }
 
 /// Find the text lines of a page in reading order.
@@ -419,7 +457,11 @@ pub fn find_lines(ink: &BitImage, med_h: u32) -> Vec<Line> {
     attach_floating_marks(&mut out, med);
     // speckle: boxes that hold almost no ink are scanner dust, not text
     out.retain(|l| {
-        let n: u64 = p.rows((l.x, l.y, l.x + l.w, l.y + l.h)).iter().map(|&v| v as u64).sum();
+        let n: u64 = p
+            .rows((l.x, l.y, l.x + l.w, l.y + l.h))
+            .iter()
+            .map(|&v| v as u64)
+            .sum();
         n * 12 > med as u64 * med as u64
     });
     out
@@ -444,10 +486,8 @@ fn attach_floating_marks(lines: &mut Vec<Line>, med: u32) {
             }
             let vgap = if t.y + t.h <= l.y {
                 l.y - (t.y + t.h)
-            } else if l.y + l.h <= t.y {
-                t.y - (l.y + l.h)
             } else {
-                0
+                t.y.saturating_sub(l.y + l.h)
             };
             let ox = (t.x + t.w).min(l.x + l.w).saturating_sub(t.x.max(l.x));
             if vgap * 5 <= med * 2 && ox * 2 >= t.w && target.is_none_or(|(_, g)| vgap < g) {
@@ -459,7 +499,12 @@ fn attach_floating_marks(lines: &mut Vec<Line>, med: u32) {
                 let l = &mut lines[j];
                 let (x0, y0) = (l.x.min(t.x), l.y.min(t.y));
                 let (x1, y1) = ((l.x + l.w).max(t.x + t.w), (l.y + l.h).max(t.y + t.h));
-                *l = Line { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+                *l = Line {
+                    x: x0,
+                    y: y0,
+                    w: x1 - x0,
+                    h: y1 - y0,
+                };
                 gone[i] = true;
             }
             None if t.w < med * 3 => gone[i] = true, // an isolated speck
@@ -572,6 +617,7 @@ pub fn split_long(ink: &BitImage, line: &Line, max_w: u32) -> Vec<Line> {
         let (lo, hi) = (start + max_src as usize * 6 / 10, start + max_src as usize);
         // widest blank column run inside the window; fall back to a hard cut
         let (mut best, mut best_len, mut run_start, mut run) = (hi, 0usize, 0usize, 0usize);
+        #[allow(clippy::needless_range_loop)]
         for x in lo..hi.min(cols.len()) {
             if cols[x] == 0 {
                 if run == 0 {
@@ -586,10 +632,20 @@ pub fn split_long(ink: &BitImage, line: &Line, max_w: u32) -> Vec<Line> {
                 run = 0;
             }
         }
-        out.push(Line { x: line.x + start as u32, y: line.y, w: (best - start) as u32, h: line.h });
+        out.push(Line {
+            x: line.x + start as u32,
+            y: line.y,
+            w: (best - start) as u32,
+            h: line.h,
+        });
         start = best;
     }
-    out.push(Line { x: line.x + start as u32, y: line.y, w: line.w - start as u32, h: line.h });
+    out.push(Line {
+        x: line.x + start as u32,
+        y: line.y,
+        w: line.w - start as u32,
+        h: line.h,
+    });
     out
 }
 
@@ -674,5 +730,12 @@ pub fn extract(gray: &GrayImage, line: &Line, line_h: usize, invert: bool) -> Op
             data[oy * nw + ox] = ((paper_v - v) / range).clamp(0.0, 1.0);
         }
     }
-    Some(LineImage { data, w: nw, scale, x: x0, y: y0, h: (y1 - y0) })
+    Some(LineImage {
+        data,
+        w: nw,
+        scale,
+        x: x0,
+        y: y0,
+        h: (y1 - y0),
+    })
 }

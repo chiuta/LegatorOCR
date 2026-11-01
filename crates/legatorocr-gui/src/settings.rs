@@ -381,7 +381,10 @@ impl UiSettings {
     /// Per-machine choices that only the user's own config file may set (never a shared project
     /// or profile): the Tesseract program, which would be executed at the next OCR run.
     pub fn apply_machine(&mut self, p: &Project) {
-        if let Some(v) = p.get("tesseract").filter(|v| !v.is_empty() && !v.chars().any(char::is_control)) {
+        if let Some(v) = p
+            .get("tesseract")
+            .filter(|v| !v.is_empty() && !v.chars().any(char::is_control))
+        {
             self.tesseract = v.to_string();
         }
     }

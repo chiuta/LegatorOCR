@@ -433,7 +433,8 @@ impl App {
                             self.s.ocr_langs =
                                 langs.iter().filter(|l| *l == "eng").cloned().collect();
                         }
-                        self.has_osd = langs.iter().any(|l| l == "osd") || legatorocr_engine::ocr::native_available();
+                        self.has_osd = langs.iter().any(|l| l == "osd")
+                            || legatorocr_engine::ocr::native_available();
                         self.installed = langs.into_iter().filter(|l| l != "osd").collect();
                     }
                     Err(e) => {
@@ -615,7 +616,10 @@ impl App {
     /// a late answer is ignored (`pending` no longer matches), so one hung scan cannot freeze
     /// every later preview.
     fn preview_watchdog(&mut self) {
-        if self.preview_started.is_some_and(|t| t.elapsed() > std::time::Duration::from_secs(120)) {
+        if self
+            .preview_started
+            .is_some_and(|t| t.elapsed() > std::time::Duration::from_secs(120))
+        {
             for s in self.sheets.iter_mut() {
                 if let Some(k) = s.pending.take() {
                     s.failed = Some((k, "preview timed out".to_string()));

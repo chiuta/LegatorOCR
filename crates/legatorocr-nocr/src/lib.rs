@@ -26,7 +26,10 @@ pub struct NativeOptions {
 
 impl Default for NativeOptions {
     fn default() -> Self {
-        Self { min_conf: 0.0, lang: String::new() }
+        Self {
+            min_conf: 0.0,
+            lang: String::new(),
+        }
     }
 }
 
@@ -75,7 +78,10 @@ pub fn recognize(page: &PageImage, dpi: u32, model: &Model, o: &NativeOptions) -
 }
 
 fn lexicons_for(lang: &str) -> Vec<&'static lexicon::Lexicon> {
-    lexicon::codes(lang).into_iter().filter_map(lexicon::Lexicon::load).collect()
+    lexicon::codes(lang)
+        .into_iter()
+        .filter_map(lexicon::Lexicon::load)
+        .collect()
 }
 
 fn recognize_inner(page: &PageImage, dpi: u32, model: &Model, o: &NativeOptions) -> Vec<Word> {
@@ -129,12 +135,21 @@ struct Decoded {
     off_x: u32,
 }
 
-fn decode_line(gray: &GrayImage, ink: &BitImage, ln: &layout::Line, model: &Model) -> Option<Decoded> {
+fn decode_line(
+    gray: &GrayImage,
+    ink: &BitImage,
+    ln: &layout::Line,
+    model: &Model,
+) -> Option<Decoded> {
     // a box that is mostly ink is light text on a dark panel: read it inverted
     let invert = ink_fraction(ink, ln) > 0.62;
     let li = layout::extract(gray, ln, LINE_H, invert)?;
     let (t, lp) = model.forward(&li.data, li.w);
-    Some(Decoded { glyphs: ctc::greedy(&lp, t, model.nc, &model.charset), scale: li.scale, off_x: li.x })
+    Some(Decoded {
+        glyphs: ctc::greedy(&lp, t, model.nc, &model.charset),
+        scale: li.scale,
+        off_x: li.x,
+    })
 }
 
 fn recognise_line(
@@ -146,7 +161,9 @@ fn recognise_line(
     lexicons: &[&lexicon::Lexicon],
     ro: bool,
 ) -> Vec<Word> {
-    let Some(d) = decode_line(gray, ink, ln, model) else { return Vec::new() };
+    let Some(d) = decode_line(gray, ink, ln, model) else {
+        return Vec::new();
+    };
     if d.glyphs.is_empty() {
         return Vec::new();
     }
@@ -199,7 +216,15 @@ fn recognise_line(
         } else {
             (xa, ya, xb - xa, yb - ya)
         };
-        words.push(Word { text, x: bx, y: by, w: bw.max(1), h: bh.max(1), conf, line: 0 });
+        words.push(Word {
+            text,
+            x: bx,
+            y: by,
+            w: bw.max(1),
+            h: bh.max(1),
+            conf,
+            line: 0,
+        });
         cur.clear();
     };
     for g in &d.glyphs {
@@ -255,7 +280,12 @@ pub fn detect_orientation(page: &PageImage, dpi: u32, model: &Model, lang: &str)
 }
 
 /// Total length of the dictionary words read on the longest lines of one orientation.
-fn orientation_score(img: &GrayImage, dpi: u32, model: &Model, lexicons: &[&lexicon::Lexicon]) -> f32 {
+fn orientation_score(
+    img: &GrayImage,
+    dpi: u32,
+    model: &Model,
+    lexicons: &[&lexicon::Lexicon],
+) -> f32 {
     let prep = layout::prepare(&PageImage::Gray(img.clone()), dpi);
     if prep.med == 0 {
         return 0.0;
@@ -266,7 +296,9 @@ fn orientation_score(img: &GrayImage, dpi: u32, model: &Model, lexicons: &[&lexi
     lines.truncate(10);
     let mut score = 0.0;
     for ln in &lines {
-        let Some(d) = decode_line(&prep.gray, &prep.ink, ln, model) else { continue };
+        let Some(d) = decode_line(&prep.gray, &prep.ink, ln, model) else {
+            continue;
+        };
         let text: String = d.glyphs.iter().map(|g| g.ch).collect();
         for w in text.split(' ') {
             let core: String = w.chars().filter(|c| c.is_alphabetic()).collect();

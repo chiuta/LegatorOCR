@@ -142,7 +142,9 @@ pub fn measure_uniform_size(
                 bail!("cancelled");
             }
             // an unreadable sheet is reported by the main pass (honouring keep_going), not here
-            let Ok(img) = load_image(&sheet.path) else { return Ok(Vec::new()) };
+            let Ok(img) = load_image(&sheet.path) else {
+                return Ok(Vec::new());
+            };
             let (img, settings) = orient_with_osd(img, &sheet.settings, osd);
             Ok(legatorocr_core::measure_page(&img, &settings)
                 .into_iter()
@@ -813,14 +815,18 @@ pub fn run_export(
     } else {
         res.pdf = writer.map(PdfWriter::finish);
     }
-    res.failed.extend(ocr_warnings.into_inner().unwrap_or_default());
+    res.failed
+        .extend(ocr_warnings.into_inner().unwrap_or_default());
     Ok(res)
 }
 
 /// Bookmark title for a sheet: its file name without the `#page` suffix or extension.
 fn source_key(p: &Path) -> String {
     // only the file name carries the `#page` suffix: a folder called "Book #2" must not cut the path
-    let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = p
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let base = name.rsplit_once('#').map_or(name.as_str(), |(b, _)| b);
     Path::new(base)
         .file_stem()
@@ -887,7 +893,11 @@ pub fn check_writable(path: &Path) -> Result<()> {
 fn part_name(path: &Path) -> PathBuf {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let mut t = path.as_os_str().to_owned();
-    t.push(format!(".{}-{}.part", std::process::id(), SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+    t.push(format!(
+        ".{}-{}.part",
+        std::process::id(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     PathBuf::from(t)
 }
 

@@ -65,7 +65,10 @@ pub struct Model {
 struct Rd<'a>(&'a [u8], usize);
 impl<'a> Rd<'a> {
     fn u32(&mut self) -> Result<u32, ModelError> {
-        let s = self.0.get(self.1..self.1 + 4).ok_or(ModelError::Corrupt("eof"))?;
+        let s = self
+            .0
+            .get(self.1..self.1 + 4)
+            .ok_or(ModelError::Corrupt("eof"))?;
         self.1 += 4;
         Ok(u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
     }
@@ -150,7 +153,12 @@ impl Model {
                     }
                 }
             }
-            convs.push(Conv { cin, cout, w: wt, b: b.data.clone() });
+            convs.push(Conv {
+                cin,
+                cout,
+                w: wt,
+                b: b.data.clone(),
+            });
         }
         if convs[0].cin != 1 || convs.windows(2).any(|w| w[0].cout != w[1].cin) {
             return Err(ModelError::Corrupt("conv channel chain"));
@@ -161,7 +169,11 @@ impl Model {
             let whh = get(&format!("{layer}.{d}.weight_hh"), 2)?;
             let bih = get(&format!("{layer}.{d}.bias_ih"), 1)?;
             let bhh = get(&format!("{layer}.{d}.bias_hh"), 1)?;
-            if wih.dims != [3 * hid, nin] || whh.dims != [3 * hid, hid] || bih.data.len() != 3 * hid || bhh.data.len() != 3 * hid {
+            if wih.dims != [3 * hid, nin]
+                || whh.dims != [3 * hid, hid]
+                || bih.data.len() != 3 * hid
+                || bhh.data.len() != 3 * hid
+            {
                 return Err(ModelError::Corrupt("gru shape"));
             }
             Ok(GruDir {
@@ -173,8 +185,16 @@ impl Model {
         };
         let n1 = c_last * (LINE_H / 16);
         let gru = [
-            Bigru { nin: n1, f: gdir("gru1", "f", n1)?, r: gdir("gru1", "r", n1)? },
-            Bigru { nin: 2 * hid, f: gdir("gru2", "f", 2 * hid)?, r: gdir("gru2", "r", 2 * hid)? },
+            Bigru {
+                nin: n1,
+                f: gdir("gru1", "f", n1)?,
+                r: gdir("gru1", "r", n1)?,
+            },
+            Bigru {
+                nin: 2 * hid,
+                f: gdir("gru2", "f", 2 * hid)?,
+                r: gdir("gru2", "r", 2 * hid)?,
+            },
         ];
         let nc = charset.len() + 1;
         let fw = get("fc.w", 2)?;
@@ -182,7 +202,15 @@ impl Model {
         if fw.dims != [nc, 2 * hid] || fb.data.len() != nc {
             return Err(ModelError::Corrupt("fc shape"));
         }
-        Ok(Model { charset, hid, convs, gru, fc_w: transpose(&fw.data, nc, 2 * hid), fc_b: fb.data.clone(), nc })
+        Ok(Model {
+            charset,
+            hid,
+            convs,
+            gru,
+            fc_w: transpose(&fw.data, nc, 2 * hid),
+            fc_b: fb.data.clone(),
+            nc,
+        })
     }
 
     /// Per-column log-probabilities of a line image (`LINE_H` rows, ink = 1.0, paper = 0.0, row
@@ -209,7 +237,7 @@ impl Model {
         }
         let t = wd;
         let feat = h * ch; // per column, ordered [h][c]
-        // act is [h][w][c] → sequence [w][h*c]
+                           // act is [h][w][c] → sequence [w][h*c]
         let mut seq = vec![0.0f32; t * feat];
         for y in 0..h {
             for x in 0..t {
@@ -237,7 +265,10 @@ impl Model {
         for x in 0..t {
             let row = &mut out[x * nc..(x + 1) * nc];
             row.copy_from_slice(&self.fc_b);
-            for (k, &v) in cur[x * 2 * self.hid..(x + 1) * 2 * self.hid].iter().enumerate() {
+            for (k, &v) in cur[x * 2 * self.hid..(x + 1) * 2 * self.hid]
+                .iter()
+                .enumerate()
+            {
                 let wr = &self.fc_w[k * nc..(k + 1) * nc];
                 for (o, &wv) in row.iter_mut().zip(wr) {
                     *o += v * wv;
@@ -322,7 +353,18 @@ fn sigmoid(v: f32) -> f32 {
     1.0 / (1.0 + (-v).exp())
 }
 
-fn gru_dir(x: &[f32], t: usize, nin: usize, g: &GruDir, hid: usize, rev: bool, out: &mut [f32], stride: usize, off: usize) {
+#[allow(clippy::too_many_arguments)]
+fn gru_dir(
+    x: &[f32],
+    t: usize,
+    nin: usize,
+    g: &GruDir,
+    hid: usize,
+    rev: bool,
+    out: &mut [f32],
+    stride: usize,
+    off: usize,
+) {
     let h3 = 3 * hid;
     // input projections for all steps
     let mut gi = vec![0.0f32; t * h3];

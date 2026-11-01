@@ -131,7 +131,10 @@ mod tests {
         );
         assert_eq!(fold("Straße Œuvre"), "strasse oeuvre");
         // decomposed forms fold like the precomposed ones
-        assert_eq!(fold("Mobila\u{306} S\u{326}tiint\u{326}a\u{306}"), "mobila stiinta");
+        assert_eq!(
+            fold("Mobila\u{306} S\u{326}tiint\u{326}a\u{306}"),
+            "mobila stiinta"
+        );
     }
 
     #[test]

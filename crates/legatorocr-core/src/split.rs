@@ -12,7 +12,10 @@ pub fn level(ink: &BitImage, rad: f32) -> BitImage {
     for y in 0..h {
         for x in 0..w {
             let (dx, dy) = (x as f32 - cx, y as f32 - cy);
-            let (sx, sy) = ((cx + dx * c + dy * s).round() as i64, (cy - dx * s + dy * c).round() as i64);
+            let (sx, sy) = (
+                (cx + dx * c + dy * s).round() as i64,
+                (cy - dx * s + dy * c).round() as i64,
+            );
             if sx >= 0 && sy >= 0 && sx < w && sy < h && ink.data[(sy * w + sx) as usize] != 0 {
                 out.data[(y * w + x) as usize] = 1;
             }
@@ -179,7 +182,11 @@ mod level_tests {
         let theta = 3.0f32.to_radians();
         let skewed = level(&flat, -theta); // the same sheet scanned 3° crooked
         let ang = crate::deskew::detect_skew(&skewed, 6.0).expect("lines give an angle");
-        assert!((ang - theta).abs() < 0.8f32.to_radians(), "estimated {}°", ang.to_degrees());
+        assert!(
+            (ang - theta).abs() < 0.8f32.to_radians(),
+            "estimated {}°",
+            ang.to_degrees()
+        );
         let cut = find_gutter(&level(&skewed, ang)).expect("gutter after levelling");
         assert!((cut as i64 - (w / 2) as i64).abs() < 60, "cut at {cut}");
     }

@@ -90,7 +90,9 @@ pub fn read_checked(d: &[u8], e: &Entry) -> Result<Vec<u8>, String> {
         + 30
         + u16le(d, e.local + 26).ok_or_else(bad)?
         + u16le(d, e.local + 28).ok_or_else(bad)?;
-    let raw = d.get(start..start.checked_add(e.csize).ok_or_else(bad)?).ok_or_else(bad)?;
+    let raw = d
+        .get(start..start.checked_add(e.csize).ok_or_else(bad)?)
+        .ok_or_else(bad)?;
     let out = match e.method {
         0 => raw.to_vec(),
         8 => {

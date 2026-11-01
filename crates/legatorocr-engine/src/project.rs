@@ -296,7 +296,10 @@ impl Project {
         }
         for (p, a) in &self.sheets {
             let shown = base.and_then(|b| p.strip_prefix(b).ok()).unwrap_or(p);
-            out.push_str(&format!("\n[sheet]\npath = {}\n", escape_path(&shown.to_string_lossy())));
+            out.push_str(&format!(
+                "\n[sheet]\npath = {}\n",
+                escape_path(&shown.to_string_lossy())
+            ));
             if a.rotate_quarters % 4 != 0 {
                 out.push_str(&format!("rotate = {}\n", a.rotate_quarters % 4));
             }
@@ -475,14 +478,31 @@ mod tests {
 
     #[test]
     fn hostile_file_names_cannot_inject_lines_and_round_trip() {
-        for name in ["x\n[sheet]\npath = /etc/passwd", " lead.png", "trail.png ", "50%25.png", "tab\there.png", "a%b.png", "100%"] {
+        for name in [
+            "x\n[sheet]\npath = /etc/passwd",
+            " lead.png",
+            "trail.png ",
+            "50%25.png",
+            "tab\there.png",
+            "a%b.png",
+            "100%",
+        ] {
             let mut p = Project::default();
-            p.sheets.push((PathBuf::from(format!("/scans/{name}")), SheetAdj::default()));
+            p.sheets
+                .push((PathBuf::from(format!("/scans/{name}")), SheetAdj::default()));
             let text = p.to_text(None);
-            assert_eq!(text.lines().filter(|l| l.trim() == "[sheet]").count(), 1, "injected a sheet: {name:?}");
+            assert_eq!(
+                text.lines().filter(|l| l.trim() == "[sheet]").count(),
+                1,
+                "injected a sheet: {name:?}"
+            );
             let q = Project::parse(&text, None).unwrap();
             assert_eq!(q.sheets.len(), 1);
-            assert_eq!(q.sheets[0].0, PathBuf::from(format!("/scans/{name}")), "{name:?}");
+            assert_eq!(
+                q.sheets[0].0,
+                PathBuf::from(format!("/scans/{name}")),
+                "{name:?}"
+            );
         }
     }
 

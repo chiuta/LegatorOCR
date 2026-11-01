@@ -42,7 +42,13 @@ pub fn greedy(lp: &[f32], t: usize, nc: usize, charset: &[char]) -> Vec<Glyph> {
                     }
                 }
             } else if let Some(&ch) = charset.get(k - 1) {
-                out.push(Glyph { ch, c0: x, c1: x, p, alt: alt() });
+                out.push(Glyph {
+                    ch,
+                    c0: x,
+                    c1: x,
+                    p,
+                    alt: alt(),
+                });
             }
         }
         prev = k;

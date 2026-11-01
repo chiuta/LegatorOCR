@@ -76,7 +76,11 @@ pub fn work_dir() -> PathBuf {
             .unwrap_or(0);
         let stack = 0u8;
         let salt = t ^ ((&stack as *const u8 as u64) << 20) ^ ((std::process::id() as u64) << 40);
-        let d = std::env::temp_dir().join(format!("legatorocr-archives-{}-{:016x}", std::process::id(), salt));
+        let d = std::env::temp_dir().join(format!(
+            "legatorocr-archives-{}-{:016x}",
+            std::process::id(),
+            salt
+        ));
         let mut b = std::fs::DirBuilder::new();
         b.recursive(true);
         #[cfg(unix)]
@@ -148,7 +152,9 @@ fn dir_size(dir: &Path, depth: u32) -> u64 {
     if depth > 32 {
         return 0;
     }
-    let Ok(rd) = std::fs::read_dir(dir) else { return 0 };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return 0;
+    };
     rd.flatten()
         .map(|e| match e.file_type() {
             Ok(t) if t.is_dir() => dir_size(&e.path(), depth + 1),
@@ -235,7 +241,9 @@ fn tar_extract(mut r: impl Read, want: &dyn Fn(&str) -> bool, sink: &mut Sink) -
             let mut data = Vec::new();
             (&mut r).take(size).read_to_end(&mut data)?;
             if (data.len() as u64) < size {
-                eprintln!("warning: tar archive is truncated inside a member; keeping what was read");
+                eprintln!(
+                    "warning: tar archive is truncated inside a member; keeping what was read"
+                );
                 break;
             }
             let skip = padded - size;
@@ -467,7 +475,12 @@ pub fn extract(archive: &Path, want: &dyn Fn(&str) -> bool) -> Result<Vec<(Strin
     }
 }
 
-fn extract_into(k: Kind, archive: &Path, want: &dyn Fn(&str) -> bool, sink: &mut Sink) -> Result<()> {
+fn extract_into(
+    k: Kind,
+    archive: &Path,
+    want: &dyn Fn(&str) -> bool,
+    sink: &mut Sink,
+) -> Result<()> {
     match k {
         Kind::Zip => {
             let md = std::fs::metadata(archive)?;
@@ -492,7 +505,11 @@ fn extract_into(k: Kind, archive: &Path, want: &dyn Fn(&str) -> bool, sink: &mut
             if !unreadable.is_empty() {
                 // another method (LZMA, bzip2, deflate64), ZIP64 or a damaged member: an installed
                 // extractor may still read everything; otherwise say what is missing
-                let mut again = Sink { dir: fresh_dir()?, out: Vec::new(), total: 0 };
+                let mut again = Sink {
+                    dir: fresh_dir()?,
+                    out: Vec::new(),
+                    total: 0,
+                };
                 if external_extract(archive, want, &mut again).is_ok() && !again.out.is_empty() {
                     let _ = std::fs::remove_dir_all(&sink.dir);
                     sink.dir = again.dir;
@@ -565,7 +582,11 @@ mod tests {
         t.extend_from_slice(&tar_header("b.png", octal_field(100_000), b'0'));
         t.extend_from_slice(b"short");
         let d = tmp("tar_trunc");
-        let mut sink = Sink { dir: d.clone(), out: Vec::new(), total: 0 };
+        let mut sink = Sink {
+            dir: d.clone(),
+            out: Vec::new(),
+            total: 0,
+        };
         tar_extract(&t[..], &|_| true, &mut sink).expect("a truncated tar keeps what was read");
         assert_eq!(sink.out.len(), 1);
         assert_eq!(std::fs::read(&sink.out[0].1).unwrap(), b"HELLO");
@@ -582,13 +603,21 @@ mod tests {
         let at = damaged.windows(7).position(|w| w == b"payload").unwrap();
         damaged[at] ^= 0xFF;
         let list = zipmini::list(&damaged).unwrap();
-        assert_eq!(zipmini::read_checked(&damaged, &list[1]).unwrap_err(), "checksum mismatch");
+        assert_eq!(
+            zipmini::read_checked(&damaged, &list[1]).unwrap_err(),
+            "checksum mismatch"
+        );
         // an unknown compression method in the central directory
         let mut m = z.clone();
-        let cd = m.windows(4).rposition(|w| w == [0x50, 0x4b, 0x01, 0x02]).unwrap();
+        let cd = m
+            .windows(4)
+            .rposition(|w| w == [0x50, 0x4b, 0x01, 0x02])
+            .unwrap();
         m[cd + 10] = 99;
         let list = zipmini::list(&m).unwrap();
-        assert!(zipmini::read_checked(&m, &list[1]).unwrap_err().contains("method 99"));
+        assert!(zipmini::read_checked(&m, &list[1])
+            .unwrap_err()
+            .contains("method 99"));
     }
 
     fn tmp(tag: &str) -> PathBuf {

@@ -554,7 +554,11 @@ mod tests {
     #[test]
     fn words_hyphenated_across_a_line_end_are_found() {
         let d = tmp("hyphen");
-        std::fs::write(d.join("a.txt"), "the story con-\ntinued on the next page\nand more text").unwrap();
+        std::fs::write(
+            d.join("a.txt"),
+            "the story con-\ntinued on the next page\nand more text",
+        )
+        .unwrap();
         let o = SearchOptions::default();
         let (h, _) = run(&d, "continued", &o);
         assert_eq!(h.len(), 1, "{h:?}");

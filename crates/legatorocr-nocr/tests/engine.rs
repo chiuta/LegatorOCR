@@ -176,14 +176,24 @@ fn blank_page_recognises_nothing() {
 fn lexicon_codes_and_repair() {
     assert_eq!(lexicon::codes("ron+eng+xxx"), vec!["ro", "en"]);
     assert_eq!(lexicon::codes("hu+HU"), vec!["hu"]);
-    assert!(lexicon::all_supported("ron+eng") && !lexicon::all_supported("ron+rus") && !lexicon::all_supported(""));
+    assert!(
+        lexicon::all_supported("ron+eng")
+            && !lexicon::all_supported("ron+rus")
+            && !lexicon::all_supported("")
+    );
     let en = lexicon::Lexicon::load("en").unwrap();
     let ro = lexicon::Lexicon::load("ro").unwrap();
     assert!(en.contains("The") && en.contains("people") && !en.contains("peopie"));
     let mk = |s: &str, alt_at: usize, alt: char, p: f32| -> Vec<ctc::Glyph> {
         s.chars()
             .enumerate()
-            .map(|(i, ch)| ctc::Glyph { ch, c0: i, c1: i, p: if i == alt_at { p } else { 0.97 }, alt: (i == alt_at).then_some((alt, 0.4)) })
+            .map(|(i, ch)| ctc::Glyph {
+                ch,
+                c0: i,
+                c1: i,
+                p: if i == alt_at { p } else { 0.97 },
+                alt: (i == alt_at).then_some((alt, 0.4)),
+            })
             .collect()
     };
     let fix = |lx: &[&lexicon::Lexicon], t: &str, at: usize, alt: char, p: f32, first: bool| {
@@ -191,8 +201,14 @@ fn lexicon_codes_and_repair() {
         let r: Vec<&ctc::Glyph> = g.iter().collect();
         lexicon::repair(lx, t, &r, first)
     };
-    assert_eq!(fix(&[en], "peopie", 4, 'l', 0.5, false).as_deref(), Some("people"));
-    assert_eq!(fix(&[en], "„peopie,", 5, 'l', 0.5, false).as_deref(), Some("„people,"));
+    assert_eq!(
+        fix(&[en], "peopie", 4, 'l', 0.5, false).as_deref(),
+        Some("people")
+    );
+    assert_eq!(
+        fix(&[en], "„peopie,", 5, 'l', 0.5, false).as_deref(),
+        Some("„people,")
+    );
     // a known word, a confident glyph, a capitalised name mid-line, and an upper/lower swap are left alone
     assert_eq!(fix(&[en], "people", 4, 'x', 0.5, false), None);
     assert_eq!(fix(&[en], "peopie", 4, 'l', 0.95, false), None);
@@ -261,7 +277,10 @@ fn light_on_dark_page_is_inverted() {
         }
     }
     let prep = layout::prepare(&PageImage::Gray(g), 150);
-    assert!(prep.gray.get_pixel(0, 0).0[0] > 200, "paper must be light after inversion");
+    assert!(
+        prep.gray.get_pixel(0, 0).0[0] > 200,
+        "paper must be light after inversion"
+    );
     assert_eq!(layout::find_lines(&prep.ink, prep.med).len(), 2);
 }
 
@@ -279,13 +298,21 @@ fn long_lines_are_split_at_gaps_and_cover_the_line() {
         }
         x += 60; // 20-px word gaps
     }
-    let line = layout::Line { x: 10, y: 10, w: 5900, h: 30 };
+    let line = layout::Line {
+        x: 10,
+        y: 10,
+        w: 5900,
+        h: 30,
+    };
     let parts = layout::split_long(&b, &line, 600);
     assert!(parts.len() > 1);
     assert_eq!(parts[0].x, 10);
     let end = parts.last().map(|l| l.x + l.w).unwrap();
     assert_eq!(end, 5910);
-    assert!(parts.windows(2).all(|w| w[0].x + w[0].w == w[1].x), "parts must tile the line");
+    assert!(
+        parts.windows(2).all(|w| w[0].x + w[0].w == w[1].x),
+        "parts must tile the line"
+    );
     assert!(parts.iter().all(|l| l.w <= 600 * 30 * 124 / 100 / 32 + 1));
 }
 
@@ -328,7 +355,7 @@ fn tilted_lines_are_levelled_and_boxes_map_back() {
             let (dx, dy) = (x as f32 - 450.0, y as f32 - 350.0);
             let u = dx * cs + dy * sn + 450.0;
             let v = -dx * sn + dy * cs + 350.0;
-            if (60.0..840.0).contains(&u) && (u as u32 / 5) % 3 != 0 {
+            if (60.0..840.0).contains(&u) && !(u as u32 / 5).is_multiple_of(3) {
                 let r = (v - 90.0).rem_euclid(70.0);
                 if (0.0..16.0).contains(&r) && (90.0..580.0).contains(&v) {
                     g.put_pixel(x, y, image::Luma([25]));
@@ -342,10 +369,22 @@ fn tilted_lines_are_levelled_and_boxes_map_back() {
     assert_eq!(layout::find_lines(&prep.ink, prep.med).len(), 7);
     // a box on the levelled page maps back inside the original page, near the same spot
     let (x, y, bw, bh) = layout::unrotate_box((450, 300, 40, 20), prep.skew, w, h);
-    assert!((430..470).contains(&x) && (280..320).contains(&y) && bw >= 40 && bh >= 20, "{x},{y},{bw},{bh}");
+    assert!(
+        (430..470).contains(&x) && (280..320).contains(&y) && bw >= 40 && bh >= 20,
+        "{x},{y},{bw},{bh}"
+    );
     // an untilted page stays untouched
-    let flat = layout::prepare(&PageImage::Gray(image::GrayImage::from_fn(w, h, |x, y| {
-        image::Luma([if (y / 70) % 2 == 0 && (y % 70) < 16 && (x / 5) % 3 != 0 && x > 60 && x < 840 { 25 } else { 245 }])
-    })), 300);
+    let flat = layout::prepare(
+        &PageImage::Gray(image::GrayImage::from_fn(w, h, |x, y| {
+            image::Luma([
+                if (y / 70) % 2 == 0 && (y % 70) < 16 && (x / 5) % 3 != 0 && x > 60 && x < 840 {
+                    25
+                } else {
+                    245
+                },
+            ])
+        })),
+        300,
+    );
     assert_eq!(flat.skew, 0.0);
 }

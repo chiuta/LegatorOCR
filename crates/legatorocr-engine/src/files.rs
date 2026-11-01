@@ -375,9 +375,15 @@ mod safe_path_tests {
     fn option_like_names_are_made_explicitly_relative() {
         assert_eq!(safe_path(Path::new("-oX.7z")), Path::new("./-oX.7z"));
         assert_eq!(safe_path(Path::new("@list.7z")), Path::new("./@list.7z"));
-        assert_eq!(safe_path(Path::new("-dir/a.pdf")), Path::new("./-dir/a.pdf"));
+        assert_eq!(
+            safe_path(Path::new("-dir/a.pdf")),
+            Path::new("./-dir/a.pdf")
+        );
         assert_eq!(safe_path(Path::new("book.pdf")), Path::new("book.pdf"));
-        assert_eq!(safe_path(Path::new("/abs/-x.pdf")), Path::new("/abs/-x.pdf"));
+        assert_eq!(
+            safe_path(Path::new("/abs/-x.pdf")),
+            Path::new("/abs/-x.pdf")
+        );
         assert_eq!(safe_path(Path::new("dir/-x.pdf")), Path::new("dir/-x.pdf"));
     }
 }
@@ -394,6 +400,12 @@ mod archive_member_tests {
             })
         };
         assert!(want("a/page1.PNG") && want("x.tif") && want("dir.v2/p.pdf"));
-        assert!(!want("png") && !want("dir/pdf") && !want(".png") && !want("notes.txt") && !want("dir.png/readme"));
+        assert!(
+            !want("png")
+                && !want("dir/pdf")
+                && !want(".png")
+                && !want("notes.txt")
+                && !want("dir.png/readme")
+        );
     }
 }

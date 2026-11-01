@@ -370,7 +370,16 @@ fn tables() -> &'static Tables {
             }
             t
         };
-        Tables { sbox, inv, m2: mul(2), m3: mul(3), m9: mul(9), m11: mul(11), m13: mul(13), m14: mul(14) }
+        Tables {
+            sbox,
+            inv,
+            m2: mul(2),
+            m3: mul(3),
+            m9: mul(9),
+            m11: mul(11),
+            m13: mul(13),
+            m14: mul(14),
+        }
     })
 }
 

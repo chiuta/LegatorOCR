@@ -59,13 +59,17 @@ fn edit_distance_banded<T: PartialEq>(a: &[T], b: &[T], k: usize) -> usize {
     }
     for i in 1..=n {
         let (lo, hi) = (i.saturating_sub(k), (i + k).min(m));
-        cur[lo.saturating_sub(1)..=hi].iter_mut().for_each(|c| *c = inf);
+        cur[lo.saturating_sub(1)..=hi]
+            .iter_mut()
+            .for_each(|c| *c = inf);
         if lo == 0 {
             cur[0] = i;
         }
         for j in lo.max(1)..=hi {
             let sub = prev[j - 1] + usize::from(a[i - 1] != b[j - 1]);
-            cur[j] = sub.min(prev[j].saturating_add(1)).min(cur[j - 1].saturating_add(1));
+            cur[j] = sub
+                .min(prev[j].saturating_add(1))
+                .min(cur[j - 1].saturating_add(1));
         }
         std::mem::swap(&mut prev, &mut cur);
         if hi < m {
@@ -164,7 +168,11 @@ mod tests {
         big2[1234] = 255;
         let t = std::time::Instant::now();
         assert_eq!(edit_distance(&big, &big2), 1);
-        assert!(t.elapsed() < std::time::Duration::from_secs(20), "{:?}", t.elapsed());
+        assert!(
+            t.elapsed() < std::time::Duration::from_secs(20),
+            "{:?}",
+            t.elapsed()
+        );
     }
 
     #[test]

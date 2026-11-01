@@ -1041,9 +1041,14 @@ pub fn decode(data: &[u8], globals: Option<&[u8]>, w: usize, h: usize) -> R<Vec<
     let mut dict_px: u64 = 0;
     for s in &segs {
         let data: &[u8] = &s.data;
-        if matches!(s.kind, 4 | 6 | 7 | 20 | 22 | 23 | 36 | 38 | 39 | 40 | 42 | 43) && data.len() >= 8 {
-            region_px = region_px
-                .saturating_add(be32(data, 0).unwrap_or(0) as u64 * be32(data, 4).unwrap_or(0) as u64);
+        if matches!(
+            s.kind,
+            4 | 6 | 7 | 20 | 22 | 23 | 36 | 38 | 39 | 40 | 42 | 43
+        ) && data.len() >= 8
+        {
+            region_px = region_px.saturating_add(
+                be32(data, 0).unwrap_or(0) as u64 * be32(data, 4).unwrap_or(0) as u64,
+            );
             if region_px > 1_500_000_000 {
                 return fail("JBIG2 stream describes too much image data");
             }
@@ -1123,7 +1128,9 @@ pub fn decode(data: &[u8], globals: Option<&[u8]>, w: usize, h: usize) -> R<Vec<
                 // dictionaries that re-export their inputs copy every symbol: bound the total
                 // pixel count of everything exported by this stream
                 let exported = symbol_dict(data, &inputs)?;
-                dict_px = exported.iter().fold(dict_px, |a, b| a.saturating_add(b.w as u64 * b.h as u64));
+                dict_px = exported
+                    .iter()
+                    .fold(dict_px, |a, b| a.saturating_add(b.w as u64 * b.h as u64));
                 if dict_px > 600_000_000 {
                     return fail("JBIG2 symbol dictionaries hold too much data");
                 }
@@ -1229,7 +1236,11 @@ pub fn decode(data: &[u8], globals: Option<&[u8]>, w: usize, h: usize) -> R<Vec<
                     bpp += 1;
                 }
                 let (pw, ph) = (pats[0].w as i64, pats[0].h as i64);
-                if (gw as u64).saturating_mul(gh as u64).saturating_mul(pw as u64 * ph as u64) > 4_000_000_000 {
+                if (gw as u64)
+                    .saturating_mul(gh as u64)
+                    .saturating_mul(pw as u64 * ph as u64)
+                    > 4_000_000_000
+                {
                     return fail("JBIG2 halftone is too expensive to decode");
                 }
                 let pos = |m: usize, n: usize| -> (i64, i64) {

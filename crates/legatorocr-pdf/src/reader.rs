@@ -370,15 +370,13 @@ fn find(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
     let last_start = hay.len().checked_sub(needle.len())?;
     let mut i = from;
     while i <= last_start {
-        match hay[i..=last_start].iter().position(|&b| b == first) {
-            Some(k) => {
-                let at = i + k;
-                if &hay[at..at + needle.len()] == needle {
-                    return Some(at);
-                }
-                i = at + 1;
+        {
+            let k = hay[i..=last_start].iter().position(|&b| b == first)?;
+            let at = i + k;
+            if &hay[at..at + needle.len()] == needle {
+                return Some(at);
             }
-            None => return None,
+            i = at + 1;
         }
     }
     None
@@ -841,7 +839,6 @@ impl PdfDoc {
             doc.crypt = Some(doc.setup_crypt(&ev, &id0)?);
         }
         // oldest first: an object redefined in a later object stream replaces the earlier one
-        let mut objstms = objstms;
         objstms.sort_by_key(|n| doc.offs[n]);
         for n in objstms {
             doc.load_objstm(n);
@@ -1271,7 +1268,9 @@ impl PdfDoc {
             }
         };
         let info = PageInfo {
-            dpi: placed_dpi.or_else(|| self.composed_dpi(&img, page)).or(info.dpi),
+            dpi: placed_dpi
+                .or_else(|| self.composed_dpi(&img, page))
+                .or(info.dpi),
             ..info
         };
         let img = match info.rotate {
@@ -1286,12 +1285,29 @@ impl PdfDoc {
     /// Orient a single page image the way the content stream's matrix displays it (mirrored,
     /// turned by multiples of 90°) and measure its resolution from the size it is placed at.
     /// Anything unclear leaves the image and the resolution as they were.
-    fn apply_placement(&self, page: &Dict, s: usize, e: usize, img: DynamicImage) -> (DynamicImage, Option<u32>) {
-        let Some(res) = page.get("Resources") else { return (img, None) };
+    fn apply_placement(
+        &self,
+        page: &Dict,
+        s: usize,
+        e: usize,
+        img: DynamicImage,
+    ) -> (DynamicImage, Option<u32>) {
+        let Some(res) = page.get("Resources") else {
+            return (img, None);
+        };
         let content = self.page_content(page);
         let mut pl = Vec::new();
-        self.placements(&content, res, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], 0, &mut [0, 0, 0], &mut pl);
-        let Some(q) = pl.iter().find(|q| q.s == s && q.e == e) else { return (img, None) };
+        self.placements(
+            &content,
+            res,
+            [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            0,
+            &mut [0, 0, 0],
+            &mut pl,
+        );
+        let Some(q) = pl.iter().find(|q| q.s == s && q.e == e) else {
+            return (img, None);
+        };
         let [a, b, c, d, _, _] = q.m;
         let det = a * d - b * c;
         if !det.is_finite() || det.abs() < 1e-9 {
@@ -1313,7 +1329,11 @@ impl PdfDoc {
         let (jx, jy) = (-c, d);
         let dom = |x: f64, y: f64| -> (bool, bool) {
             // (horizontal?, positive?) of the dominant screen direction
-            if x.abs() >= y.abs() { (true, x > 0.0) } else { (false, y > 0.0) }
+            if x.abs() >= y.abs() {
+                (true, x > 0.0)
+            } else {
+                (false, y > 0.0)
+            }
         };
         let (i_h, i_pos) = dom(ix, iy);
         let (j_h, j_pos) = dom(jx, jy);
@@ -1321,14 +1341,14 @@ impl PdfDoc {
             return (img, dpi); // not a pure quarter-turn / mirror: leave it
         }
         let out = match (i_h, i_pos, j_pos) {
-            (true, true, true) => img,                                  // i→right, j→down
-            (true, false, true) => img.fliph(),                          // i→left,  j→down
-            (true, true, false) => img.flipv(),                          // i→right, j→up
-            (true, false, false) => img.rotate180(),                     // i→left,  j→up
-            (false, true, false) => img.rotate90(),                      // i→down,  j→left
-            (false, false, true) => img.rotate270(),                     // i→up,    j→right
-            (false, true, true) => img.rotate90().fliph(),               // i→down,  j→right
-            (false, false, false) => img.rotate90().flipv(),             // i→up,    j→left
+            (true, true, true) => img,                       // i→right, j→down
+            (true, false, true) => img.fliph(),              // i→left,  j→down
+            (true, true, false) => img.flipv(),              // i→right, j→up
+            (true, false, false) => img.rotate180(),         // i→left,  j→up
+            (false, true, false) => img.rotate90(),          // i→down,  j→left
+            (false, false, true) => img.rotate270(),         // i→up,    j→right
+            (false, true, true) => img.rotate90().fliph(),   // i→down,  j→right
+            (false, false, false) => img.rotate90().flipv(), // i→up,    j→left
         };
         (out, dpi)
     }
@@ -1792,7 +1812,7 @@ impl PdfDoc {
                 n == "Crypt"
                     && parms
                         .get("Name")
-                        .map_or(true, |v| self.resolve(v).name() == Some("Identity"))
+                        .is_none_or(|v| self.resolve(v).name() == Some("Identity"))
             });
             if !is_xref && !identity {
                 let (num, gen) = self.owner_of(s);
@@ -1913,27 +1933,31 @@ impl PdfDoc {
         let mut cs = if is_mask {
             Cs::Gray
         } else {
-            self.colour_space(dict.get("ColorSpace").or_else(|| dict.get("CS")), 0, Some(self.owner_of(s)))
-                .or_else(|err| {
-                    // a JPEG / JPEG 2000 / CCITT stream carries its own colour information;
-                    // for any other filter an unknown colour space must not be guessed as RGB
-                    let own_colour = |v: &Val| {
-                        matches!(
-                            self.resolve(v).name(),
-                            Some("DCTDecode" | "DCT" | "JPXDecode" | "CCITTFaxDecode" | "CCF")
-                        )
-                    };
-                    let codec_colour = match dict.get("Filter").map(|f| self.resolve(f)) {
-                        Some(Val::Arr(a)) => a.iter().any(own_colour),
-                        Some(f) => own_colour(&f),
-                        None => false,
-                    };
-                    if codec_colour {
-                        Ok(Cs::Rgb)
-                    } else {
-                        Err(err)
-                    }
-                })?
+            self.colour_space(
+                dict.get("ColorSpace").or_else(|| dict.get("CS")),
+                0,
+                Some(self.owner_of(s)),
+            )
+            .or_else(|err| {
+                // a JPEG / JPEG 2000 / CCITT stream carries its own colour information;
+                // for any other filter an unknown colour space must not be guessed as RGB
+                let own_colour = |v: &Val| {
+                    matches!(
+                        self.resolve(v).name(),
+                        Some("DCTDecode" | "DCT" | "JPXDecode" | "CCITTFaxDecode" | "CCF")
+                    )
+                };
+                let codec_colour = match dict.get("Filter").map(|f| self.resolve(f)) {
+                    Some(Val::Arr(a)) => a.iter().any(own_colour),
+                    Some(f) => own_colour(&f),
+                    None => false,
+                };
+                if codec_colour {
+                    Ok(Cs::Rgb)
+                } else {
+                    Err(err)
+                }
+            })?
         };
         let mut codec: Option<(String, Dict)> = None;
         let mut raw = self.decode_stream(dict, s, e, &mut |(n, p)| {
@@ -1962,7 +1986,8 @@ impl PdfDoc {
                     };
                     let k = pi("K", 0);
                     // the decoder allocates rows × columns: tie it to the declared width
-                    let columns = (pi("Columns", 1728).clamp(1, 1 << 20) as usize).min(w.saturating_add(64));
+                    let columns =
+                        (pi("Columns", 1728).clamp(1, 1 << 20) as usize).min(w.saturating_add(64));
                     let black_is_1 = matches!(
                         parms.get("BlackIs1").map(|v| self.resolve(v)),
                         Some(Val::Bool(true))
@@ -2501,7 +2526,13 @@ mod tests {
         v.extend_from_slice(b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n");
         v.extend_from_slice(b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n");
         v.extend_from_slice(b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 100 10]/Resources<</XObject<</Im0 4 0 R>>>>/Contents 5 0 R>>endobj\n");
-        v.extend_from_slice(format!("4 0 obj<</Type/XObject/Subtype/Image{dict}/Length {}>>stream\n", data.len()).as_bytes());
+        v.extend_from_slice(
+            format!(
+                "4 0 obj<</Type/XObject/Subtype/Image{dict}/Length {}>>stream\n",
+                data.len()
+            )
+            .as_bytes(),
+        );
         v.extend_from_slice(data);
         v.extend_from_slice(b"\nendstream endobj\n5 0 obj<</Length 27>>stream\nq 100 0 0 10 0 0 cm /Im0 Do Q\nendstream endobj\ntrailer<</Root 1 0 R/Size 6>>\n");
         v
@@ -2511,9 +2542,17 @@ mod tests {
     fn ccitt_columns_narrower_than_width_do_not_overrun_the_row() {
         for cols in [1, 8, 33, 100, 5000, 1 << 20] {
             let dict = format!("/Width 100/Height 10/BitsPerComponent 1/ColorSpace/DeviceGray/Filter/CCITTFaxDecode/DecodeParms<</K -1/Columns {cols}>>");
-            let doc = PdfDoc::open(tiny_pdf_with_image(&dict, &[0x00, 0x10, 0x01, 0x00, 0x55, 0xAA])).unwrap();
+            let doc = PdfDoc::open(tiny_pdf_with_image(
+                &dict,
+                &[0x00, 0x10, 0x01, 0x00, 0x55, 0xAA],
+            ))
+            .unwrap();
             if let Ok(p) = doc.page_image(0) {
-                assert_eq!((p.image.width(), p.image.height()), (100, 10), "columns {cols}");
+                assert_eq!(
+                    (p.image.width(), p.image.height()),
+                    (100, 10),
+                    "columns {cols}"
+                );
             }
         }
     }
@@ -2521,7 +2560,8 @@ mod tests {
     #[test]
     fn hostile_flate_predictor_in_a_pdf_is_survived() {
         let dict = "/Width 8/Height 8/BitsPerComponent 8/ColorSpace/DeviceGray/Filter/FlateDecode/DecodeParms<</Predictor 12/Colors 1000000000/Columns 16777216>>";
-        let doc = PdfDoc::open(tiny_pdf_with_image(dict, b"x\x9c\x03\x00\x00\x00\x00\x01")).unwrap();
+        let doc =
+            PdfDoc::open(tiny_pdf_with_image(dict, b"x\x9c\x03\x00\x00\x00\x00\x01")).unwrap();
         let _ = doc.page_image(0);
     }
 
@@ -2535,7 +2575,11 @@ mod tests {
         v.extend_from_slice(b"trailer<</Root 1 0 R/Size 30010>>\n");
         let t = std::time::Instant::now();
         let _ = PdfDoc::open(v);
-        assert!(t.elapsed() < std::time::Duration::from_secs(10), "took {:?}", t.elapsed());
+        assert!(
+            t.elapsed() < std::time::Duration::from_secs(10),
+            "took {:?}",
+            t.elapsed()
+        );
     }
 
     #[test]
@@ -2550,7 +2594,11 @@ mod tests {
             let _ = doc.page_image(0);
             let _ = doc.page_info(0);
         }
-        assert!(t.elapsed() < std::time::Duration::from_secs(10), "took {:?}", t.elapsed());
+        assert!(
+            t.elapsed() < std::time::Duration::from_secs(10),
+            "took {:?}",
+            t.elapsed()
+        );
     }
 
     fn pdf_with_gray_2x2(cm: &str) -> Vec<u8> {
@@ -2567,12 +2615,12 @@ mod tests {
     fn scans_placed_mirrored_or_turned_are_shown_the_way_the_pdf_displays_them() {
         // image rows: [10 20] / [30 40]; each matrix puts it on the 100×100 page differently
         let cases: [(&str, [u8; 4]); 6] = [
-            ("100 0 0 100 0 0", [10, 20, 30, 40]),     // as written
-            ("100 0 0 -100 0 100", [30, 40, 10, 20]),  // vertically flipped
-            ("-100 0 0 100 100 0", [20, 10, 40, 30]),  // horizontally flipped
+            ("100 0 0 100 0 0", [10, 20, 30, 40]),       // as written
+            ("100 0 0 -100 0 100", [30, 40, 10, 20]),    // vertically flipped
+            ("-100 0 0 100 100 0", [20, 10, 40, 30]),    // horizontally flipped
             ("-100 0 0 -100 100 100", [40, 30, 20, 10]), // turned 180°
-            ("0 -100 100 0 0 100", [30, 10, 40, 20]),  // turned 90° clockwise
-            ("0 100 -100 0 100 0", [20, 40, 10, 30]),  // turned 90° counter-clockwise
+            ("0 -100 100 0 0 100", [30, 10, 40, 20]),    // turned 90° clockwise
+            ("0 100 -100 0 100 0", [20, 40, 10, 30]),    // turned 90° counter-clockwise
         ];
         for (cm, want) in cases {
             let doc = PdfDoc::open(pdf_with_gray_2x2(cm)).unwrap();
@@ -2592,7 +2640,11 @@ mod tests {
         v.extend_from_slice(format!("6 0 obj<</Length {}>>stream\n{fake}\nendstream endobj\ntrailer<</Root 1 0 R/Size 7>>\n", fake.len()).as_bytes());
         let doc = PdfDoc::open(v).unwrap();
         let info = doc.page_info(0).unwrap();
-        assert_eq!((info.width_px, info.height_px), (2, 2), "the real page 3 must win");
+        assert_eq!(
+            (info.width_px, info.height_px),
+            (2, 2),
+            "the real page 3 must win"
+        );
     }
 
     #[test]
