@@ -3,10 +3,13 @@
 //! quality layers, precincts, SOP/EPH markers, the reversible 5/3 and irreversible 9/7
 //! wavelets, RCT/ICT colour transforms, component subsampling (nearest-neighbour upsampling),
 //! and the EBCOT tier-1 coder (MQ arithmetic decoder shared with the JBIG2 module) with the
-//! reset, vertically-causal and segmentation-symbol code-block styles.
+//! reset, vertically-causal, segmentation-symbol, predictable-termination, selective
+//! arithmetic-bypass ("lazy", raw sig-prop/mag-ref passes with bit-stuffing) and
+//! termination-on-every-pass styles (several codeword segments per code-block), progression
+//! order changes (POC) and packed packet headers (PPM and PPT).
 //!
-//! Not supported (reported as errors): selective arithmetic bypass and termination on every
-//! pass, packed packet headers (PPM/PPT), progression-order changes (POC), palettes.
+//! Not supported (reported as errors): palettes, the high-throughput (Part 15) and other
+//! extended code-block style bits (0x40, 0x80).
 
 use crate::jbig2::Mq;
 use rayon::prelude::*;
@@ -89,6 +92,7 @@ struct Params {
     g: CodG,
     cc: Vec<CompCod>,
     q: Vec<Quant>,
+    poc: Vec<Poc>,
 }
 
 struct Rd<'a> {
@@ -278,6 +282,12 @@ struct Cb {
     zbp: u32,
     lblock: u32,
     passes: u32,
+    segs: Vec<Seg>,
+}
+/// One codeword segment of a code-block: the passes it holds and the bytes that terminate it.
+struct Seg {
+    passes: u32,
+    max: u32,
     data: Vec<u8>,
 }
 struct PrecBand {
@@ -466,7 +476,7 @@ fn build_tile_comp(
                                     zbp: 0,
                                     lblock: 3,
                                     passes: 0,
-                                    data: Vec::new(),
+                                    segs: Vec::new(),
                                 });
                             }
                         }
@@ -506,158 +516,285 @@ fn build_tile_comp(
 
 // ---------------------------------------------------------------- packets
 
+/// One progression-order change (POC) entry; `re`/`ce`/`lye` are exclusive bounds.
+#[derive(Clone, Copy)]
+struct Poc {
+    rs: u32,
+    cs: u32,
+    lye: u32,
+    re: u32,
+    ce: u32,
+    prog: u8,
+}
+
+const MAX_POCS: usize = 256;
+const MAX_PROGRESSION_WORK: u64 = 150_000_000;
+
+type Packet = (u32, u32, u32, u32);
+
+/// Collects the packet sequence; with POC every packet is emitted once only.
+struct Sink {
+    out: Vec<Packet>,
+    seen: Option<Vec<u64>>,
+    base: Vec<Vec<usize>>,
+    layers: u32,
+    work: u64,
+}
+impl Sink {
+    fn tick(&mut self, n: u64) -> R<()> {
+        self.work += n;
+        if self.work > MAX_PROGRESSION_WORK {
+            return fail("too many packets");
+        }
+        Ok(())
+    }
+    fn push(&mut self, l: u32, r: u32, c: u32, p: u32) -> R<()> {
+        self.tick(1)?;
+        if let Some(seen) = &mut self.seen {
+            let i = (self.base[c as usize][r as usize] + p as usize) * self.layers as usize
+                + l as usize;
+            let (w, b) = (i / 64, 1u64 << (i % 64));
+            if seen[w] & b != 0 {
+                return Ok(());
+            }
+            seen[w] |= b;
+        }
+        self.out.push((l, r, c, p));
+        Ok(())
+    }
+}
+
 fn progression(
     g: &CodG,
     tcs: &[TileComp],
     comps: &[CompInfo],
     t: (u64, u64, u64, u64),
-) -> R<Vec<(u32, u32, u32, u32)>> {
+    poc: &[Poc],
+) -> R<Vec<Packet>> {
     let maxr = tcs.iter().map(|c| c.cc.nl).max().unwrap_or(0);
     let layers = g.layers;
     let mut total: u64 = 0;
+    let mut base = Vec::with_capacity(tcs.len());
     for c in tcs {
+        let mut b = Vec::with_capacity(c.res.len());
         for r in &c.res {
+            b.push((total / layers as u64) as usize);
             total += (r.npw * r.nph) as u64 * layers as u64;
         }
+        base.push(b);
     }
     if total > MAX_PACKETS {
         return fail("too many packets");
     }
-    let mut out = Vec::with_capacity(total as usize);
+    let mut sink = Sink {
+        out: Vec::with_capacity(total as usize),
+        seen: (!poc.is_empty()).then(|| vec![0u64; total as usize / 64 + 1]),
+        base,
+        layers,
+        work: 0,
+    };
+    let default = [Poc {
+        rs: 0,
+        cs: 0,
+        lye: layers,
+        re: maxr + 1,
+        ce: tcs.len() as u32,
+        prog: g.prog,
+    }];
+    let entries: &[Poc] = if poc.is_empty() { &default } else { poc };
     let nprec = |c: usize, r: u32| -> u32 {
         tcs[c]
             .res
             .get(r as usize)
             .map_or(0, |x| (x.npw * x.nph) as u32)
     };
-    match g.prog {
-        0 => {
-            for l in 0..layers {
-                for r in 0..=maxr {
-                    for c in 0..tcs.len() {
-                        for p in 0..nprec(c, r) {
-                            out.push((l, r, c as u32, p));
-                        }
-                    }
+    // step sizes of the position based orders
+    let mut stepx = u64::MAX;
+    let mut stepy = u64::MAX;
+    if entries.iter().any(|e| (2..=4).contains(&e.prog)) {
+        for (c, tc) in tcs.iter().enumerate() {
+            for (r, rs) in tc.res.iter().enumerate() {
+                let s = tc.cc.nl - r as u32;
+                if rs.ppx + s >= 40 || rs.ppy + s >= 40 {
+                    return fail("precinct too large");
                 }
+                stepx = stepx.min(comps[c].dx << (rs.ppx + s));
+                stepy = stepy.min(comps[c].dy << (rs.ppy + s));
             }
         }
-        1 => {
-            for r in 0..=maxr {
-                for l in 0..layers {
-                    for c in 0..tcs.len() {
-                        for p in 0..nprec(c, r) {
-                            out.push((l, r, c as u32, p));
-                        }
-                    }
-                }
-            }
-        }
-        2..=4 => {
-            // position based orders
-            let mut stepx = u64::MAX;
-            let mut stepy = u64::MAX;
-            for (c, tc) in tcs.iter().enumerate() {
-                for (r, rs) in tc.res.iter().enumerate() {
-                    let s = tc.cc.nl - r as u32;
-                    if rs.ppx + s >= 40 || rs.ppy + s >= 40 {
-                        return fail("precinct too large");
-                    }
-                    stepx = stepx.min(comps[c].dx << (rs.ppx + s));
-                    stepy = stepy.min(comps[c].dy << (rs.ppy + s));
-                }
-            }
-            let hit = |c: usize, r: u32, x: u64, y: u64| -> Option<u32> {
-                let tc = &tcs[c];
-                let rs = tc.res.get(r as usize)?;
-                if rs.npw == 0 || rs.nph == 0 {
-                    return None;
-                }
-                let s = tc.cc.nl - r;
-                let (dx, dy) = (comps[c].dx, comps[c].dy);
-                let okx = x.is_multiple_of(dx << (rs.ppx + s))
-                    || (x == t.0 && !(rs.x0 << s).is_multiple_of(1u64 << (rs.ppx + s)));
-                let oky = y.is_multiple_of(dy << (rs.ppy + s))
-                    || (y == t.1 && !(rs.y0 << s).is_multiple_of(1u64 << (rs.ppy + s)));
-                if !okx || !oky {
-                    return None;
-                }
-                let px = (ceil_div(x, dx << s) >> rs.ppx).checked_sub(rs.x0 >> rs.ppx)?;
-                let py = (ceil_div(y, dy << s) >> rs.ppy).checked_sub(rs.y0 >> rs.ppy)?;
-                if px as usize >= rs.npw || py as usize >= rs.nph {
-                    return None;
-                }
-                Some((py as usize * rs.npw + px as usize) as u32)
-            };
-            let positions = |f: &mut dyn FnMut(u64, u64)| {
-                let mut y = t.1;
-                while y < t.3 {
-                    let mut x = t.0;
-                    while x < t.2 {
-                        f(x, y);
-                        x = (x / stepx + 1) * stepx;
-                    }
-                    y = (y / stepy + 1) * stepy;
-                }
-            };
-            match g.prog {
-                2 => {
-                    for r in 0..=maxr {
-                        positions(&mut |x, y| {
-                            for c in 0..tcs.len() {
-                                if let Some(p) = hit(c, r, x, y) {
-                                    for l in 0..layers {
-                                        out.push((l, r, c as u32, p));
-                                    }
-                                }
-                            }
-                        });
-                    }
-                }
-                3 => positions(&mut |x, y| {
-                    for c in 0..tcs.len() {
-                        for r in 0..=maxr {
-                            if let Some(p) = hit(c, r, x, y) {
-                                for l in 0..layers {
-                                    out.push((l, r, c as u32, p));
-                                }
-                            }
-                        }
-                    }
-                }),
-                _ => {
-                    for c in 0..tcs.len() {
-                        positions(&mut |x, y| {
-                            for r in 0..=maxr {
-                                if let Some(p) = hit(c, r, x, y) {
-                                    for l in 0..layers {
-                                        out.push((l, r, c as u32, p));
-                                    }
-                                }
-                            }
-                        });
-                    }
-                }
-            }
-        }
-        _ => return fail("unknown progression order"),
     }
-    Ok(out)
+    let hit = |c: usize, r: u32, x: u64, y: u64| -> Option<u32> {
+        let tc = &tcs[c];
+        let rs = tc.res.get(r as usize)?;
+        if rs.npw == 0 || rs.nph == 0 {
+            return None;
+        }
+        let s = tc.cc.nl - r;
+        let (dx, dy) = (comps[c].dx, comps[c].dy);
+        let okx = x.is_multiple_of(dx << (rs.ppx + s))
+            || (x == t.0 && !(rs.x0 << s).is_multiple_of(1u64 << (rs.ppx + s)));
+        let oky = y.is_multiple_of(dy << (rs.ppy + s))
+            || (y == t.1 && !(rs.y0 << s).is_multiple_of(1u64 << (rs.ppy + s)));
+        if !okx || !oky {
+            return None;
+        }
+        let px = (ceil_div(x, dx << s) >> rs.ppx).checked_sub(rs.x0 >> rs.ppx)?;
+        let py = (ceil_div(y, dy << s) >> rs.ppy).checked_sub(rs.y0 >> rs.ppy)?;
+        if px as usize >= rs.npw || py as usize >= rs.nph {
+            return None;
+        }
+        Some((py as usize * rs.npw + px as usize) as u32)
+    };
+    let positions = |sink: &mut Sink, f: &mut dyn FnMut(&mut Sink, u64, u64) -> R<()>| -> R<()> {
+        let mut y = t.1;
+        while y < t.3 {
+            let mut x = t.0;
+            while x < t.2 {
+                f(sink, x, y)?;
+                x = (x / stepx + 1) * stepx;
+            }
+            y = (y / stepy + 1) * stepy;
+        }
+        Ok(())
+    };
+    for e in entries {
+        let re = e.re.min(maxr + 1);
+        let ce = (e.ce as usize).min(tcs.len());
+        let cs = e.cs as usize;
+        let lye = e.lye.min(layers);
+        let width = (ce.saturating_sub(cs) as u64) * (re.saturating_sub(e.rs) as u64);
+        match e.prog {
+            0 => {
+                for l in 0..lye {
+                    for r in e.rs..re {
+                        for c in cs..ce {
+                            for p in 0..nprec(c, r) {
+                                sink.push(l, r, c as u32, p)?;
+                            }
+                        }
+                    }
+                }
+            }
+            1 => {
+                for r in e.rs..re {
+                    for l in 0..lye {
+                        for c in cs..ce {
+                            for p in 0..nprec(c, r) {
+                                sink.push(l, r, c as u32, p)?;
+                            }
+                        }
+                    }
+                }
+            }
+            2 => {
+                for r in e.rs..re {
+                    positions(&mut sink, &mut |sink, x, y| {
+                        sink.tick(ce.saturating_sub(cs) as u64 + 1)?;
+                        for c in cs..ce {
+                            if let Some(p) = hit(c, r, x, y) {
+                                for l in 0..lye {
+                                    sink.push(l, r, c as u32, p)?;
+                                }
+                            }
+                        }
+                        Ok(())
+                    })?;
+                }
+            }
+            3 => positions(&mut sink, &mut |sink, x, y| {
+                sink.tick(width + 1)?;
+                for c in cs..ce {
+                    for r in e.rs..re {
+                        if let Some(p) = hit(c, r, x, y) {
+                            for l in 0..lye {
+                                sink.push(l, r, c as u32, p)?;
+                            }
+                        }
+                    }
+                }
+                Ok(())
+            })?,
+            4 => {
+                for c in cs..ce {
+                    positions(&mut sink, &mut |sink, x, y| {
+                        sink.tick(re.saturating_sub(e.rs) as u64 + 1)?;
+                        for r in e.rs..re {
+                            if let Some(p) = hit(c, r, x, y) {
+                                for l in 0..lye {
+                                    sink.push(l, r, c as u32, p)?;
+                                }
+                            }
+                        }
+                        Ok(())
+                    })?;
+                }
+            }
+            _ => return fail("unknown progression order"),
+        }
+    }
+    Ok(sink.out)
 }
 
-fn read_packets(g: &CodG, tcs: &mut [TileComp], order: &[(u32, u32, u32, u32)], d: &[u8]) -> R<()> {
+/// Maximum number of passes of the next codeword segment of a code-block.
+fn next_seg_max(style: u8, prev: Option<u32>) -> u32 {
+    if style & 4 != 0 {
+        1
+    } else if style & 1 != 0 {
+        match prev {
+            None => 10,
+            Some(1) | Some(10) => 2,
+            Some(_) => 1,
+        }
+    } else {
+        109
+    }
+}
+
+const MAX_SEGMENTS: usize = 256;
+
+/// Where each packet lies in the tile data: (start incl. SOP, header start, header end incl.
+/// EPH, body end). Only recorded by the tests, which rewrite streams with packed headers.
+#[cfg(test)]
+type PacketSpan = (usize, usize, usize, usize);
+#[cfg(test)]
+thread_local! {
+    static TRACE: std::cell::RefCell<Vec<Vec<PacketSpan>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn read_packets(
+    g: &CodG,
+    tcs: &mut [TileComp],
+    order: &[Packet],
+    d: &[u8],
+    packed: Option<&[u8]>,
+) -> R<()> {
     let mut pos = 0usize;
+    let mut hpos = 0usize;
+    #[cfg(test)]
+    let mut trace = Vec::new();
     for &(l, r, c, p) in order {
-        if pos >= d.len() {
+        let exhausted = match packed {
+            Some(h) => hpos >= h.len(),
+            None => pos >= d.len(),
+        };
+        if exhausted {
             break; // truncated tile: keep what we have
         }
+        #[cfg(test)]
+        let pkt_start = pos;
         if g.sop && d.len() >= pos + 6 && d[pos] == 0xFF && d[pos + 1] == 0x91 {
             pos += 6;
         }
+        let style = tcs[c as usize].cc.style;
         let rs = &mut tcs[c as usize].res[r as usize];
         let precs = &mut rs.precs[p as usize];
-        let mut b = Bits::new(d, pos);
-        let mut work: Vec<(usize, usize, usize)> = Vec::new(); // band, cb, len
+        let (hsrc, hstart) = match packed {
+            Some(h) => (h, hpos),
+            None => (d, pos),
+        };
+        let mut b = Bits::new(hsrc, hstart);
+        let mut work: Vec<(usize, usize, usize, usize)> = Vec::new(); // band, cb, segment, len
         if b.bit()? == 1 {
             for (bi, pb) in precs.iter_mut().enumerate() {
                 let nw = pb.nw;
@@ -706,29 +843,61 @@ fn read_packets(g: &CodG, tcs: &mut [TileComp], order: &[(u32, u32, u32, u32)], 
                             return fail("bad code-block length");
                         }
                     }
-                    let nbits = cb.lblock + (31 - np.leading_zeros());
-                    if nbits > 31 {
-                        return fail("bad code-block length");
+                    // the new passes may span several codeword segments, each with its own
+                    // length (T.800 B.10.7.2)
+                    let mut left = np;
+                    while left > 0 {
+                        if cb.segs.last().is_none_or(|s| s.passes >= s.max) {
+                            if cb.segs.len() >= MAX_SEGMENTS {
+                                return fail("too many code-block segments");
+                            }
+                            let max = next_seg_max(style, cb.segs.last().map(|s| s.max));
+                            cb.segs.push(Seg {
+                                passes: 0,
+                                max,
+                                data: Vec::new(),
+                            });
+                        }
+                        let si = cb.segs.len() - 1;
+                        let seg = &mut cb.segs[si];
+                        let k = left.min(seg.max - seg.passes);
+                        let nbits = cb.lblock + (31 - k.leading_zeros());
+                        if nbits > 31 {
+                            return fail("bad code-block length");
+                        }
+                        let len = b.bits(nbits)? as usize;
+                        seg.passes += k;
+                        cb.passes = cb.passes.saturating_add(k);
+                        left -= k;
+                        work.push((bi, ci, si, len));
                     }
-                    let len = b.bits(nbits)? as usize;
-                    cb.passes += np;
-                    work.push((bi, ci, len));
                 }
             }
         }
         b.align();
-        pos = b.p;
-        if g.eph && d.len() >= pos + 2 && d[pos] == 0xFF && d[pos + 1] == 0x92 {
-            pos += 2;
+        let mut hend = b.p;
+        if g.eph && hsrc.len() >= hend + 2 && hsrc[hend] == 0xFF && hsrc[hend + 1] == 0x92 {
+            hend += 2;
         }
-        for (bi, ci, len) in work {
+        #[cfg(test)]
+        let hdr_start = hstart;
+        if packed.is_some() {
+            hpos = hend;
+        } else {
+            pos = hend;
+        }
+        for (bi, ci, si, len) in work {
             let end = (pos + len).min(d.len());
-            precs[bi].cbs[ci]
+            precs[bi].cbs[ci].segs[si]
                 .data
                 .extend_from_slice(&d[pos.min(end)..end]);
             pos += len;
         }
+        #[cfg(test)]
+        trace.push((pkt_start, hdr_start, hend, pos));
     }
+    #[cfg(test)]
+    TRACE.with(|t| t.borrow_mut().push(trace));
     Ok(())
 }
 
@@ -838,15 +1007,58 @@ impl T1 {
     }
 }
 
-/// Decode one code-block into (magnitude, negative, last-plane) per sample.
+/// Raw (bypass) bit reader: bytes after 0xFF carry 7 bits only (bit-stuffing); reading past
+/// the segment yields 1 bits like a marker would.
+struct RawBits<'a> {
+    d: &'a [u8],
+    p: usize,
+    c: u32,
+    ct: u32,
+}
+impl<'a> RawBits<'a> {
+    fn new(d: &'a [u8]) -> Self {
+        RawBits {
+            d,
+            p: 0,
+            c: 0,
+            ct: 0,
+        }
+    }
+    fn bit(&mut self) -> u8 {
+        if self.ct == 0 {
+            let b = self.d.get(self.p).copied().unwrap_or(0xFF) as u32;
+            if self.c == 0xFF {
+                if b > 0x8F {
+                    self.c = 0xFF;
+                    self.ct = 8;
+                } else {
+                    self.c = b;
+                    self.p += 1;
+                    self.ct = 7;
+                }
+            } else {
+                self.c = b;
+                if self.p < self.d.len() {
+                    self.p += 1;
+                }
+                self.ct = 8;
+            }
+        }
+        self.ct -= 1;
+        ((self.c >> self.ct) & 1) as u8
+    }
+}
+
+/// Decode one code-block into (magnitude, negative, last-plane) per sample. `segs` are the
+/// codeword segments in order; every segment restarts the arithmetic (or raw) decoder, the
+/// context states carry over unless the reset style is on.
 fn t1_decode(
     w: usize,
     h: usize,
     orient: u8,
     style: u8,
     nbps: u32,
-    npasses: u32,
-    data: &[u8],
+    segs: &[Seg],
 ) -> (Vec<u32>, Vec<u8>, Vec<u8>) {
     let sw = w + 2;
     let n = sw * (h + 2);
@@ -865,104 +1077,125 @@ fn t1_decode(
     for (i, z) in zc.iter_mut().enumerate() {
         *z = zc_ctx(orient, i as u8);
     }
-    let mut mq = Mq::new(data);
     let mut cx = init_ctx();
     let mut p = nbps as i32 - 1;
     let mut kind = 2;
-    for _ in 0..npasses {
-        if p < 0 {
-            break;
-        }
-        let pl = p as u32;
-        match kind {
-            0 => {
-                for y0 in (0..h).step_by(4) {
-                    for x in 0..w {
-                        for y in y0..(y0 + 4).min(h) {
-                            let i = (y + 1) * sw + x + 1;
-                            if t.sig[i] == 0 && t.nb[i] != 0 {
-                                t.vis[i] = 1;
-                                if mq.decode(&mut cx[zc[t.nb[i] as usize]]) == 1 {
+    let mut k = 0u32; // absolute pass index
+    'segs: for seg in segs {
+        // bypass: from the 11th pass on, sig-prop and mag-ref passes are raw
+        let raw = style & 1 != 0 && k >= 10 && kind != 2;
+        let mut mq = Mq::new(&seg.data);
+        let mut rw = RawBits::new(&seg.data);
+        for _ in 0..seg.passes {
+            if p < 0 {
+                break 'segs;
+            }
+            let pl = p as u32;
+            match kind {
+                0 => {
+                    for y0 in (0..h).step_by(4) {
+                        for x in 0..w {
+                            for y in y0..(y0 + 4).min(h) {
+                                let i = (y + 1) * sw + x + 1;
+                                if t.sig[i] == 0 && t.nb[i] != 0 {
+                                    t.vis[i] = 1;
+                                    let b = if raw {
+                                        rw.bit()
+                                    } else {
+                                        mq.decode(&mut cx[zc[t.nb[i] as usize]])
+                                    };
+                                    if b == 1 {
+                                        let s = if raw {
+                                            rw.bit()
+                                        } else {
+                                            t.sign(&mut mq, &mut cx, x, y)
+                                        };
+                                        t.set_sig(x, y, s, pl);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                1 => {
+                    for y0 in (0..h).step_by(4) {
+                        for x in 0..w {
+                            for y in y0..(y0 + 4).min(h) {
+                                let i = (y + 1) * sw + x + 1;
+                                if t.sig[i] == 1 && t.vis[i] == 0 {
+                                    let b = if raw {
+                                        rw.bit()
+                                    } else {
+                                        let c = if t.refd[i] == 1 {
+                                            16
+                                        } else if t.nb[i] != 0 {
+                                            15
+                                        } else {
+                                            14
+                                        };
+                                        mq.decode(&mut cx[c])
+                                    };
+                                    if b == 1 {
+                                        t.mag[i] |= 1 << pl;
+                                    }
+                                    t.last[i] = pl as u8;
+                                    t.refd[i] = 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    for y0 in (0..h).step_by(4) {
+                        for x in 0..w {
+                            let mut start = y0;
+                            if y0 + 4 <= h {
+                                let free = (y0..y0 + 4).all(|y| {
+                                    let i = (y + 1) * sw + x + 1;
+                                    t.sig[i] == 0 && t.vis[i] == 0 && t.nb[i] == 0
+                                });
+                                if free {
+                                    if mq.decode(&mut cx[17]) == 0 {
+                                        continue;
+                                    }
+                                    let r = ((mq.decode(&mut cx[18]) as usize) << 1)
+                                        | mq.decode(&mut cx[18]) as usize;
+                                    let y = y0 + r;
+                                    let s = t.sign(&mut mq, &mut cx, x, y);
+                                    t.set_sig(x, y, s, pl);
+                                    start = y + 1;
+                                }
+                            }
+                            for y in start..(y0 + 4).min(h) {
+                                let i = (y + 1) * sw + x + 1;
+                                if t.sig[i] == 0
+                                    && t.vis[i] == 0
+                                    && mq.decode(&mut cx[zc[t.nb[i] as usize]]) == 1
+                                {
                                     let s = t.sign(&mut mq, &mut cx, x, y);
                                     t.set_sig(x, y, s, pl);
                                 }
                             }
                         }
                     }
-                }
-            }
-            1 => {
-                for y0 in (0..h).step_by(4) {
-                    for x in 0..w {
-                        for y in y0..(y0 + 4).min(h) {
-                            let i = (y + 1) * sw + x + 1;
-                            if t.sig[i] == 1 && t.vis[i] == 0 {
-                                let c = if t.refd[i] == 1 {
-                                    16
-                                } else if t.nb[i] != 0 {
-                                    15
-                                } else {
-                                    14
-                                };
-                                if mq.decode(&mut cx[c]) == 1 {
-                                    t.mag[i] |= 1 << pl;
-                                }
-                                t.last[i] = pl as u8;
-                                t.refd[i] = 1;
-                            }
+                    t.vis.iter_mut().for_each(|v| *v = 0);
+                    if style & 0x20 != 0 {
+                        for _ in 0..4 {
+                            mq.decode(&mut cx[18]);
                         }
                     }
                 }
             }
-            _ => {
-                for y0 in (0..h).step_by(4) {
-                    for x in 0..w {
-                        let mut start = y0;
-                        if y0 + 4 <= h {
-                            let free = (y0..y0 + 4).all(|y| {
-                                let i = (y + 1) * sw + x + 1;
-                                t.sig[i] == 0 && t.vis[i] == 0 && t.nb[i] == 0
-                            });
-                            if free {
-                                if mq.decode(&mut cx[17]) == 0 {
-                                    continue;
-                                }
-                                let r = ((mq.decode(&mut cx[18]) as usize) << 1)
-                                    | mq.decode(&mut cx[18]) as usize;
-                                let y = y0 + r;
-                                let s = t.sign(&mut mq, &mut cx, x, y);
-                                t.set_sig(x, y, s, pl);
-                                start = y + 1;
-                            }
-                        }
-                        for y in start..(y0 + 4).min(h) {
-                            let i = (y + 1) * sw + x + 1;
-                            if t.sig[i] == 0
-                                && t.vis[i] == 0
-                                && mq.decode(&mut cx[zc[t.nb[i] as usize]]) == 1
-                            {
-                                let s = t.sign(&mut mq, &mut cx, x, y);
-                                t.set_sig(x, y, s, pl);
-                            }
-                        }
-                    }
-                }
-                t.vis.iter_mut().for_each(|v| *v = 0);
-                if style & 0x20 != 0 {
-                    for _ in 0..4 {
-                        mq.decode(&mut cx[18]);
-                    }
-                }
+            if style & 2 != 0 {
+                cx = init_ctx();
             }
-        }
-        if style & 2 != 0 {
-            cx = init_ctx();
-        }
-        if kind == 2 {
-            p -= 1;
-            kind = 0;
-        } else {
-            kind += 1;
+            k += 1;
+            if kind == 2 {
+                p -= 1;
+                kind = 0;
+            } else {
+                kind += 1;
+            }
         }
     }
     let mut mag = Vec::with_capacity(w * h);
@@ -1120,6 +1353,43 @@ fn idwt_tile_comp(tc: &mut TileComp) -> Vec<f32> {
 struct Tile {
     params: Option<Params>,
     data: Vec<u8>,
+    /// Packed packet headers (PPM/PPT) of the whole tile, in codestream order.
+    packed: Vec<u8>,
+    has_packed: bool,
+    /// A POC in a tile-part header replaces the main header's list for that tile.
+    poc_own: bool,
+}
+
+/// POC marker segment body (T.800 A.6.6).
+fn read_poc(seg: &[u8], ncomp: usize, out: &mut Vec<Poc>) -> R<()> {
+    let wide = ncomp >= 257;
+    let mut r = Rd { d: seg, p: 0 };
+    while r.p < seg.len() {
+        let rs = r.u8()?;
+        let cs = if wide { r.u16()? } else { r.u8()? };
+        let lye = r.u16()?;
+        let re = r.u8()?;
+        let mut ce = if wide { r.u16()? } else { r.u8()? };
+        if ce == 0 {
+            ce = if wide { 16384 } else { 256 };
+        }
+        let prog = r.u8()? as u8;
+        if prog > 4 {
+            return fail("unknown progression order in POC");
+        }
+        if out.len() >= MAX_POCS {
+            return fail("too many progression order changes");
+        }
+        out.push(Poc {
+            rs,
+            cs,
+            lye,
+            re,
+            ce,
+            prog,
+        });
+    }
+    Ok(())
 }
 
 fn read_cod_body(r: &mut Rd, has_prec: bool) -> R<CompCod> {
@@ -1254,6 +1524,9 @@ fn decode_codestream(d: &[u8]) -> R<Raw> {
     let mut tiles: Vec<Tile> = Vec::new();
     let mut have_cod = false;
     let mut have_qcd = false;
+    let mut ppm_segs: Vec<(u8, Vec<u8>)> = Vec::new();
+    // PPM: one (length, headers) record per tile-part, spread over the marker segments
+    let mut ppm_stream: Option<(Vec<u8>, usize)> = None;
     loop {
         if p + 2 > d.len() {
             break;
@@ -1308,6 +1581,9 @@ fn decode_codestream(d: &[u8]) -> R<Raw> {
                     .map(|_| Tile {
                         params: None,
                         data: Vec::new(),
+                        packed: Vec::new(),
+                        has_packed: false,
+                        poc_own: false,
                     })
                     .collect();
                 let dummy = CompCod {
@@ -1335,6 +1611,7 @@ fn decode_codestream(d: &[u8]) -> R<Raw> {
                         };
                         n
                     ],
+                    poc: Vec::new(),
                 });
                 siz = Some(Siz {
                     x1,
@@ -1361,8 +1638,20 @@ fn decode_codestream(d: &[u8]) -> R<Raw> {
                 }
                 handle_cod_like(mk, seg, s.comps.len(), m)?;
             }
-            0xFF5F => return fail("progression order changes (POC) are not supported"),
-            0xFF60 => return fail("packed packet headers (PPM) are not supported"),
+            0xFF5F => {
+                let seg = marker_segment(d, &mut p)?;
+                let (Some(s), Some(m)) = (&siz, &mut main) else {
+                    return fail("marker before SIZ");
+                };
+                read_poc(seg, s.comps.len(), &mut m.poc)?;
+            }
+            0xFF60 => {
+                let seg = marker_segment(d, &mut p)?;
+                let (&z, body) = seg
+                    .split_first()
+                    .ok_or_else(|| JpxError("bad PPM".into()))?;
+                ppm_segs.push((z, body.to_vec()));
+            }
             0xFF90 => {
                 let sot_start = p - 2;
                 let seg = marker_segment(d, &mut p)?;
@@ -1387,6 +1676,29 @@ fn decode_codestream(d: &[u8]) -> R<Raw> {
                     return fail("bad tile-part length");
                 }
                 let mut tp = tile.params.take().unwrap_or_else(|| m.clone());
+                if !ppm_segs.is_empty() || ppm_stream.is_some() {
+                    if ppm_stream.is_none() {
+                        ppm_segs.sort_by_key(|x| x.0);
+                        let all: Vec<u8> =
+                            ppm_segs.iter().flat_map(|x| x.1.iter().copied()).collect();
+                        ppm_segs = Vec::new();
+                        ppm_stream = Some((all, 0));
+                    }
+                    let (all, at) = ppm_stream.as_mut().unwrap();
+                    if *at + 4 > all.len() {
+                        return fail("damaged PPM packed headers");
+                    }
+                    let n = u32::from_be_bytes([all[*at], all[*at + 1], all[*at + 2], all[*at + 3]])
+                        as usize;
+                    *at += 4;
+                    if n > all.len() - *at {
+                        return fail("damaged PPM packed headers");
+                    }
+                    tile.packed.extend_from_slice(&all[*at..*at + n]);
+                    tile.has_packed = true;
+                    *at += n;
+                }
+                let mut ppt: Vec<(u8, Vec<u8>)> = Vec::new();
                 // tile-part header
                 loop {
                     if p + 2 > end {
@@ -1399,10 +1711,31 @@ fn decode_codestream(d: &[u8]) -> R<Raw> {
                     }
                     let seg = marker_segment(d, &mut p)?;
                     match mk2 {
-                        0xFF5F => return fail("POC is not supported"),
-                        0xFF61 => return fail("PPT is not supported"),
+                        0xFF5F => {
+                            if !tile.poc_own {
+                                tile.poc_own = true;
+                                tp.poc.clear();
+                            }
+                            read_poc(seg, s.comps.len(), &mut tp.poc)?;
+                        }
+                        0xFF61 => {
+                            let (&z, body) = seg
+                                .split_first()
+                                .ok_or_else(|| JpxError("bad PPT".into()))?;
+                            ppt.push((z, body.to_vec()));
+                        }
                         _ => handle_cod_like(mk2, seg, s.comps.len(), &mut tp)?,
                     }
+                }
+                if !ppt.is_empty() {
+                    if ppm_stream.is_some() {
+                        return fail("both PPM and PPT present");
+                    }
+                    ppt.sort_by_key(|x| x.0);
+                    for (_, b) in &ppt {
+                        tile.packed.extend_from_slice(b);
+                    }
+                    tile.has_packed = true;
                 }
                 tile.params = Some(tp);
                 let body_end = end.max(p);
@@ -1427,7 +1760,7 @@ fn decode_codestream(d: &[u8]) -> R<Raw> {
     let main = main.unwrap();
     if tiles
         .iter()
-        .all(|t| t.params.is_none() || t.data.is_empty())
+        .all(|t| t.params.is_none() || (t.data.is_empty() && t.packed.is_empty()))
     {
         return fail("JPEG 2000 codestream carries no image data");
     }
@@ -1455,7 +1788,8 @@ fn decode_codestream(d: &[u8]) -> R<Raw> {
             (siz.ty0 + (qi + 1) * siz.th).min(siz.y1),
         );
         let _ = &main;
-        decode_tile(&siz, tp, &tile.data, t, &mut planes, &dims)?;
+        let packed = tile.has_packed.then_some(&tile.packed[..]);
+        decode_tile(&siz, tp, &tile.data, packed, t, &mut planes, &dims)?;
     }
     let _ = nc;
     Ok(Raw {
@@ -1472,6 +1806,7 @@ fn decode_tile(
     siz: &Siz,
     tp: &Params,
     data: &[u8],
+    packed: Option<&[u8]>,
     t: (u64, u64, u64, u64),
     planes: &mut [Vec<f32>],
     dims: &[(usize, usize)],
@@ -1488,8 +1823,8 @@ fn decode_tile(
             &mut total_prec,
         )?);
     }
-    let order = progression(&tp.g, &tcs, &siz.comps, t)?;
-    read_packets(&tp.g, &mut tcs, &order, data)?;
+    let order = progression(&tp.g, &tcs, &siz.comps, t, &tp.poc)?;
+    read_packets(&tp.g, &mut tcs, &order, data, packed)?;
     // tier-1 in parallel over all code-blocks
     struct Job<'a> {
         tc: usize,
@@ -1507,15 +1842,20 @@ fn decode_tile(
     }
     let mut jobs = Vec::new();
     for (ci, tc) in tcs.iter().enumerate() {
-        if tc.cc.style & 0x05 != 0 {
-            return fail("selective arithmetic bypass / per-pass termination are not supported");
+        if tc.cc.style & 0xC0 != 0 {
+            return fail(
+                "high-throughput / extended JPEG 2000 code-block styles are not supported",
+            );
         }
         for (ri, rs) in tc.res.iter().enumerate() {
             for precs in &rs.precs {
                 for (bi, pb) in precs.iter().enumerate() {
                     let b = &rs.bands[bi];
                     for cb in &pb.cbs {
-                        if cb.included && cb.passes > 0 && !cb.data.is_empty() {
+                        if cb.included
+                            && cb.passes > 0
+                            && cb.segs.iter().any(|s| !s.data.is_empty())
+                        {
                             jobs.push(Job {
                                 tc: ci,
                                 r: ri,
@@ -1554,8 +1894,7 @@ fn decode_tile(
             if nbps == 0 || nbps > 31 || w == 0 || h == 0 {
                 return vec![0f32; w * h];
             }
-            let (mag, neg, last) =
-                t1_decode(w, h, j.orient, j.style, nbps, j.cb.passes, &j.cb.data);
+            let (mag, neg, last) = t1_decode(w, h, j.orient, j.style, nbps, &j.cb.segs);
             mag.iter()
                 .zip(neg.iter())
                 .zip(last.iter())
@@ -1958,5 +2297,367 @@ mod tests {
                 let _ = decode(&d);
             }
         }
+    }
+
+    // ------------------------------------------------------------ code-block styles, POC, PPM/PPT
+
+    fn unhex(s: &str) -> Vec<u8> {
+        (0..s.len() / 2)
+            .map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// The 32 x 24 grey image behind the vectors (also what OpenJPEG decoded from them).
+    fn vector_image() -> Vec<u8> {
+        let mut v = Vec::new();
+        for y in 0..24usize {
+            for x in 0..32usize {
+                v.push(((x * 7 + y * 13 + ((x * y * 31 + x * 5 + y * 17) % 23) * 3) % 256) as u8);
+            }
+        }
+        v
+    }
+
+    /// The code-block style byte of the COD marker.
+    fn cod_style(cs: &[u8]) -> u8 {
+        let i = cs.windows(2).position(|w| w == [0xFF, 0x52]).unwrap();
+        cs[i + 12]
+    }
+
+    /// Lossless 5/3 streams written by OpenJPEG 2.5 (libopenjp2 through glymur) with the given
+    /// code-block style byte, 16 x 16 code-blocks; the decoded image is `vector_image()`.
+    /// (name, style, hex)
+    const VECTORS: &[(&str, u8, &str)] = &[
+        ("bypass", 1, "ff4fff510029000000000020000000180000000000000000000000200000001800000000000000000001070101ff52000c00000001000102020101ff5c00074040484850ff640025000143726561746564206279204f70656e4a5045472076657273696f6e20322e352e30ff90000a0000000003460001ff93df855f45a2c9648066bc0b664d846fb2f1e020fcf7fbc9fa1281631990f1a0dabcacb6fc1d42f8bfff0b1474075975ae5e768fda517622af0918266804ef0d6afd599157225d00eb9aefa9996ef98292b185f7a93c276ddb41663340d49d33c9470dcf9045b633b399e5f2f75a5abfae878790b0c80d56220aff7f7d48efae7fc45dc25911e80623369dcc8352a5ed64831d478fd5ff7ff275967ad32997d90c17729eeb6ff0f90fdc023f6e24225ad5ff7fbd2afecdd16d97758adf6d7fc5b4dd1ad69221b6b80ffd2a15ff7fcfc299d2e164b253f0a7f4b8582c94fcf22c02644c898132203da925a962724c553a4cfecee73d28735c375460439fab982d3187741f3a37fce90b8583ccaff509eee0bc3752c571c0143fae9cb5a2b209ff7c9d50d2be04521f755820dc2b018fc44e3e7fcf68579d16607e4087ccd69ff82b86427a0685bc41148aa0c0a03e3ab2ff7fcabe28be9d54bdce414918bbac66161e3404dbb8d5a2bd546bbcf965ff7f08f12894c952489627ce0ee2a60091442ed19c418232d1a92aff7f401a3d82f581a01c091e62505206ba8d497bce7f5220a550aaff7f46f30fd9f143e729496b15466869f1ab5e6e0f3cc6046849e4435c363d79a1ba5dc6d8f2c06fafdc0d0e754b9802aa829f505c69a82752456d744eb93f26f5f79b11a9ee801e50f0c9579ee690ff7fc7937c342f9ef1bb68d5b5f91d0a1a999018b6c6eb264399f1b2052b32ff7ffebe2ffcafaedd5404bb9df676ab47205999fbdcec485c572cb0323aff7f033805507a256869418939256c45e0a811e06e1338520c78ff7f06252950c8a7813a4b39897207944c2b46b6e4d56758b70baaff7f4e5c83a600405d90eb9a86841edef3a2f031fa560e60720167b6ba79298fc0c5d3babcf9fdfb48677c791297f5e45048d60b0fb2a55cff7bb0791bc800a8d8c9be322ea213737d2fff2aa7d3f2ebff72b1fef18ffa1ca90280186080439e0a280e83000615ff7f0d8000000000049b3b048022434640000002400000000058d5ff7f000004040000266dec1200c4869c8480000c8002000000b12aff7f000004aa474d2be1c48b495146a7a965c4d4cd4772a3da68ff7f000007ddbef664bb5c50a5aa75ba4cdefb77b3feff6e3ad52aff7fffd9"),
+        ("termall", 4, "ff4fff510029000000000020000000180000000000000000000000200000001800000000000000000001070101ff52000c00000001000102020401ff5c00074040484850ff640025000143726561746564206279204f70656e4a5045472076657273696f6e20322e352e30ff90000a0000000003780001ff93df862b4308284a988b5113020e441c0866bc0b664fb8d3f65e3c041f9eff3c9fa1277f0613321e341b579596df83a85f17ff6f993363277da04e5127db2b0dc15f083f249e6804ef0d6afd597fe53f60f242036b4b61a3dc8f1ce6292b185f7a93c276ddb41663340d49d33fff7fe80fc1f9f88a9af33848e0a814c438b7f98c32c1f62160bf6ba5ff7f4920b5df1ec3a15fca21ebc52f3f2c2e1128a537af73ad336a0f911bff7fcb42b536a17dd18fe3a5f4d1842f3dbb69d23b3e191041b84827ff7f7f594920db989ec4726c44dfdf800902939e5d63bd4a337f80ff7fcfc31ce12b469aa0af7895410ae216053f0ca588492a34713e0245442c083914fcf1cc132484d14d36088f10a2215c42a8803da925a962724c53ce4cfecee73f27d0bcb3253fc14f0fcc4af638beb637676b7f445f7f25e554ccb8b593b87f589d99b81a5f3aefab272d55d11adffe80dbd578dfdcb374a2c4a6644f21a7e5013f92b756bac0174a50092c92646761871ea08bd153290ab436f68d3d5e5ebbff7fb2955afdfb992ce6b4bffcdc4253b02a496b3e9b0fcb1480b82be308cab7ff7f919f190af29a806f11b07b337f6a1bd3fafcbf82381509f447ff7fec7f3748f32426e615b386b05f9fb5b70b113a03b59bbda64a7fff7f46f30fd9f143e729496f1f359a1a7c6ad79b83cf3fb5dffc519e73a2028f39fa113f54e62bcc0703c703484a4f702d024d04ee9c7849302b24c2daba72cc340530ef3a5dd3ff7e6b1f599e9579ee691fbc7f40b08411443d0519853899810504479af7a7ad9e0ca83bc93c81f568577ddfff7f87b334de4920127f99d39bf73e56bb0a0fe34f213396ff403cd6e8109fff7f015f9cc078e09d216d5aad5179056cc9953ccfa785bfb3385feaff7fcf7ebb6a3155a5452c056cb71652f782e6fc472b6bccdd09021fff7f4e5c83a600405f32c35cd4341f7f9f60a4305f5f3347b26c4dbbd6e19f22a4a63f41d4b2df4988f9fd08621c7ea855898346c877a6880f5c8ad072bbaf151f2ad60a8d8fedc4451d64dfac97a84f059e9dfc79bc984ccd0b0b71929c3f9d4cc884658b76e8e786cf31ff7f578a80bfff250d8cf20f878a805ccf06afa75fff7f89cbc39cf1351f921a9eaa86fcf815f409fd5fff7fff7f25d98312a5eede7a145beb66726bb7c12c6ce25edb371fff7fff7fd10b5c8c454fbcc8aca41f49d0bd800eb75c73674bff7fffd9"),
+        ("bypass_termall", 5, "ff4fff510029000000000020000000180000000000000000000000200000001800000000000000000001070101ff52000c00000001000102020501ff5c00074040484850ff640025000143726561746564206279204f70656e4a5045472076657273696f6e20322e352e30ff90000a00000000037d0001ff93df862b4308284a988b510ee20e041c0866bc0b664fb8d3f65e3c041f9eff3c9fa1277f0613321e341b579596df83a85f17ff6f993363277da04e5127db2b0dc15f083f249e6804ef0d6afd597fe53f60f242036b4b61a3dc8f1ce6292b185f7a93c276ddb41663340d49d33fff7fc9470dcf9045b633b399e5f2f75a5abfae878790b0c80d56220aff7f7d48efae7fc45dc25911e80623369dcc8352a5ed64831d478fd5ff7ff19d659eb4ca65f64305dca7badbfc3e43f7008fdb890896b5ff7fb5d2afecdd16d97758adf6d7fc5b4dd1ad69221b6b80ff6950ff7fcfc31ce12b469aa0af7893310ae215c53f0ca588492a34713de245041c083814fcf1cc132484d14d27089510ec21d843b0803da925a962724c53ce4cfecee73f27d0bcb3253fc14f0fcc4af638beb637676b7f445f7f25e554ccb8b593b87f589d99b81a5f3aefab272d55d11adffe80dbd578dfdcb374a2c4a6644f21a7e5013fcf68579d16607e4087ccd69ff82b951909e81a16f104522a830280f8eacaff7fcabe28be9d54bdce4514918bbac66161e3404dbb8d5a2bd546bbcf96ff7f08f0944a64a9244b13e70771530048a21768ce20c11968d495ff7f401568f60bd606807024798941481aea3525ef39fd48829542ff7f46f30fd9f143e729496f1f359a1a7c6ad79b83cf3fb5dffc519e73a2028f39fa113f54e62bcc0703c703484a4f702d024d04ee9c7849302b24c2daba72cc340530ef3a5dd3ff7e6b1f599e9579ee691fbc7fc7937c342f9ef1bb68d5b5f91d0a2a353320316d8dd64c8733e3640a5665ff7ffebe2ffcafaedd5404bb9df676ab47205999fbdcec485c572cb0323aff7f01ce01541e895a1a50624e495b11782a04781b84ce14831e15ff7f061294a86453c09d259cc4b903ca2615a35b726ab3ac5b85d5ff7f4e5c83a600405f32c35cd4341f7f9f60a4305f5f3347b26c4dbbd6e19f22a4a63f41d4b2df4988f9fd08621c7ea855898346c877a6880f5c8ad072bbaf151f2ad60a8d8fedc4451d64df737d2fff2aa7d3f2ebff72b1fef18ffa1ca940a006182010e7828a03a0c00185ff7f0d800015000000126cec1200890d1900000009000000000163ff7f0000040200001336f6090062434e4240000640010000005895ff7f0000029548e9a57c3891692a28d4f52cb89a99a8ee547b4d0aff7f000002fbb7decc976b8a14b54eb7499bdf6ef67fdffb8eb54aff7fffd9"),
+        ("all_styles", 63, "ff4fff510029000000000020000000180000000000000000000000200000001800000000000000000001070101ff52000c00000001000102023f01ff5c00074040484850ff640025000143726561746564206279204f70656e4a5045472076657273696f6e20322e352e30ff90000a0000000003800001ff93df86338308a8aa984b508ee10e021c0466bc0b664ecbcdfa865f076b07d2080d93687bd94c10e0c3397943e231b2e41a7e6d629f6e50ff3b1790ed8a22fd35c4e54d9157be4eb4b3f227f78de7f2dd90134156662ab1105264cfa6e7f4b473af0a0e67bfe6ccfd4c5e053a8e63b40d49d33635c9470dcf9045b633b399e5f2f75a5abfae878790b0c80d56220ab67d48efae7fc45dc25911e80623369dcc8352a5ed64831d478fd5b6f19d659eb4ca65f64305dca7badbfc3e43f7008fdb890896b5b6b5d2afecdd16d97758adf6d7fc5b4dd1ad69221b6b80ff6950b6cfc321013386ab1ccf7853308ae115c33f0cb508a92a72823de145021c04380cfcf1cc13a885c94f27049508ec11d823b0403da925a962724ce3261eb1285ed62f9420e8617972785395fecd152980b630025f3c6f65af8dae9b03a720dec8f9810efb274b65bd53c7fac926933450b0a720273b4b8e34464a7b86734a939c55710760ba4a459acf68579d16607e4087ccd69ff82b951909e81a16f104522a830280f8eacab6cabe28be9d54bdce4514918bbac66161e3404dbb8d5a2bd546bbcf96b608f0944a64a9244b13e70771530048a21768ce20c11968d495b6401568f60bd606807024798941481aea3525ef39fd48829542b646f30fd9f143e729496c4625dffaa2cc508c33f134b5dc388b9275fe9fdb5d12564a14713c459ba91e080ca88ea11bded1861ada0bcf0e9ecfd49fed5d21d6ecc76b3b91ea1d88f065300f0c9d1f0b2a9907345ef1e679c0c7937c342f9ef1bb68d5b5f91d0a2a353320316d8dd64c8733e3640a5665b6febe2ffcafaedd5404bb9df676ab47205999fbdcec485c572cb0323ab601ce01541e895a1a50624e495b11782a04781b84ce14831e15b6061294a86453c09d259cc4b903ca2615a35b726ab3ac5b85d5b64e5c83a6004073295694fa776f643945893fae6ab621929a1df4253da840feb198f7741d4fae45da1036151a5241e37415ff1f0568f7091412c5e1a5733b7959c115a039ecfad743808c328d8d737d2fff2aa7d3f2ebff72b1fef18ffa1ca940a006182010e7828a03a0c00185b60d800015000000126cec1200890d1900000009000000000163b60000040200001336f6090062434e4240000640010000005895b60000029548e9a57c3891692a28d4f52cb89a99a8ee547b4d0ab6000002fbb7decc976b8a14b54eb7499bdf6ef67fdffb8eb54ab6ffd9"),
+        ("bypass_layers", 1, "ff4fff510029000000000020000000180000000000000000000000200000001800000000000000000001070101ff52000c00000003000102020101ff5c00074040484850ff640025000143726561746564206279204f70656e4a5045472076657273696f6e20322e352e30ff90000a0000000003510001ff938080df151866bc0b664d846fb2f1e020fcf7fbc9fa1281631990f1a0dabcacb6fc1d42f8bfff0b1474075975ae5e768fda517622af0918266804ef0d6afd599157225d00eb9aefa9996ef9cf86ae7c14d3e1a23da925a962724c553a4cfecee73d28735c375460439fab982d3187741f3a37fce90b8583ccaff509eee0bc46f30fd9f143e729496b15466869f1ab5e6e0f3cc6046849e4435c363d79a1ba5dc6d8f2c06f4e5c83a600405d90eb9a86841edef3a2f031fa560e60720167b6ba79298fc0c5d3bafd08e8b4592c908292b185f7a93c276ddb41663340d49d33c9470dcf9045b633b399e5f2f75a5abfae878790b0c80d56220aff7f7d48efae7fc45dc25911e80623369dcc8352a5ed64831d478fd5ff7ff275967ad32997d90c17729eeb6ff0f90fdc023f6e24225ad5ff7fbd2afecdd16d97758adf6d7fc5b4dd1ad69221b6b80ffd2a15ff7ffd342e89c1322645f529e970b0592fb28e01322644c099103752c571c0143fae9cb5a2b209ff7c9d50d2be04521f755820dc2b018fc44e3e7fcf68579d16607e4087ccd69ff82b86427a0685bc41148aa0c0a03e3ab2ff7fcabe28be9d54bdce414918bbac66161e3404dbb8d5a2bd546bbcf965ff7f08f12894c952489627ce0ee2a60091442ed19c418232d1a92aff7f401a3d82f581a01c091e62505206ba8d497bce7f5220a550aaff7fafdc0d0e754b9802aa829f505c69a82752456d744eb93f26f5f79b11a9ee801e50f0c9579ee690ff7fc7937c342f9ef1bb68d5b5f91d0a1a999018b6c6eb264399f1b2052b32ff7ffebe2ffcafaedd5404bb9df676ab47205999fbdcec485c572cb0323aff7f033805507a256869418939256c45e0a811e06e1338520c78ff7f06252950c8a7813a4b39897207944c2b46b6e4d56758b70baaff7fbcf9fdfb48677c791297f5e45048d60b0fb2a55cff7bb0791bc800a8d8c9be322ea213737d2fff2aa7d3f2ebff72b1fef18ffa1ca90280186080439e0a280e83000615ff7f0d8000000000049b3b048022434640000002400000000058d5ff7f000004040000266dec1200c4869c8480000c8002000000b12aff7f000004aa474d2be1c48b495146a7a965c4d4cd4772a3da68ff7f000007ddbef664bb5c50a5aa75ba4cdefb77b3feff6e3ad52aff7fffd9"),
+        ("bypass_sop_eph", 1, "ff4fff510029000000000020000000180000000000000000000000200000001800000000000000000001070101ff52000c06000002000102020101ff5c00074040484850ff640025000143726561746564206279204f70656e4a5045472076657273696f6e20322e352e30ff90000a00000000036b0001ff93ff9100040000deb2ff9266bc0b664d846fb2f1e020fcf7fbc9fa1281631990f1a0dabcacb6fc1d42f8bfff0b1474075975ae5e768fda517622af0918ff9100040001cea9395e79b0ff923da925a962724c553a4cfecee73d28735c37546046f30fd9f143e729496b15466869f1ab5e6e0f3cc604684e5c83a600405d90eb9a86841edef3a2f031fa560e60720167b6baff9100040002fd69745a2c9648ff92266804ef0d6afd599157225d00eb9aefa9996ef98292b185f7a93c276ddb41663340d49d33c9470dcf9045b633b399e5f2f75a5abfae878790b0c80d56220aff7f7d48efae7fc45dc25911e80623369dcc8352a5ed64831d478fd5ff7ff275967ad32997d90c17729eeb6ff0f90fdc023f6e24225ad5ff7fbd2afecdd16d97758adf6d7fc5b4dd1ad69221b6b80ffd2a15ff7fff9100040003fd971d2e164b25f6b8e970b0592fbb2a804c8991302644ff92439fab982d3187741f3a37fce90b8583ccaff509eee0bc3752c571c0143fae9cb5a2b209ff7c9d50d2be04521f755820dc2b018fc44e3e7fcf68579d16607e4087ccd69ff82b86427a0685bc41148aa0c0a03e3ab2ff7fcabe28be9d54bdce414918bbac66161e3404dbb8d5a2bd546bbcf965ff7f08f12894c952489627ce0ee2a60091442ed19c418232d1a92aff7f401a3d82f581a01c091e62505206ba8d497bce7f5220a550aaff7f49e4435c363d79a1ba5dc6d8f2c06fafdc0d0e754b9802aa829f505c69a82752456d744eb93f26f5f79b11a9ee801e50f0c9579ee690ff7fc7937c342f9ef1bb68d5b5f91d0a1a999018b6c6eb264399f1b2052b32ff7ffebe2ffcafaedd5404bb9df676ab47205999fbdcec485c572cb0323aff7f033805507a256869418939256c45e0a811e06e1338520c78ff7f06252950c8a7813a4b39897207944c2b46b6e4d56758b70baaff7f79298fc0c5d3babcf9fdfb48677c791297f5e45048d60b0fb2a55cff7bb0791bc800a8d8c9be322ea213737d2fff2aa7d3f2ebff72b1fef18ffa1ca90280186080439e0a280e83000615ff7f0d8000000000049b3b048022434640000002400000000058d5ff7f000004040000266dec1200c4869c8480000c8002000000b12aff7f000004aa474d2be1c48b495146a7a965c4d4cd4772a3da68ff7f000007ddbef664bb5c50a5aa75ba4cdefb77b3feff6e3ad52aff7fffd9"),
+        ("poc", 5, "ff4fff510029000000000020000000180000000000000000000000200000001800000000000000000001070101ff52000c00000002000202020501ff5c000a4040484850484850ff640025000143726561746564206279204f70656e4a5045472076657273696f6e20322e352e30ff90000a00000000006e0002ff5f00100000000201010001000002030100ff93cd52801183aad155f4e991793fef7d5927effd632352162162162062b3f27fff7f0adadf1a283e493fff7f1115882965be7fff7fda4c6f9f022802ff7f95ad8234a61c0eff7ffb6eb173f531ff7fff90000a0000000003830102ff93a74d15311003ff1f81677f7d07239f99c9e6aae71f103da925a962724c46f30fd9f143e729496f1f359a1a7c6ad79b83cf3f4e5c83a600405f32c35cd4341f7fc7dab0accd89d432197d8c4e69d4b2391cbf1150965e69d4aa591c80280b222b5fca11ee7f7f5e5b572d034b06bf011a3f093a9e128f7fd1d1f19fff7fbb9d1a1e3e4d55d5ff7faf543bdba395ff7f1dee45cf481bff7f54e69b0a197fb87502b0988a22741ea6c7ff7f342a4aa43f98020aff7f8cd562cc54b6e62aff7f4ded7fc90218b5ff7f4a4c914002d6d1ff7f7f849f27568cbf3fa211c46ccc0d3827b64e2857dd8868ce15ff7f60b42a316a62710aff7f21a54981da64c0ff7fb62a7f27a6537555ff7ffdfe13c69a3e8aff7ffdf8e12b469aa0af7893310ae215c5f742124a8d1c4f78914107020e05f8632484d14d27089510ec21d843b08053ce4cfecee73f27d0bcb3253fc14f0fcc4af638beb637676b7f445f7f25e554ccb8b593b87f589d99b81a5f3aefab272d55d11adffe80dbd578dfdcb374a2c4a6644f21a7e5013fcf68579d16607e4087ccd69ff82b951909e81a16f104522a830280f8eacaff7fcabe28be9d54bdce4514918bbac66161e3404dbb8d5a2bd546bbcf96ff7f08f0944a64a9244b13e70771530048a21768ce20c11968d495ff7f401568f60bd606807024798941481aea3525ef39fd48829542ff7fb5dffc519e73a2028f39fa113f54e62bcc0703c703484a4f702d024d04ee9c7849302b24c2daba72cc340530ef3a5dd3ff7e6b1f599e9579ee691fbc7fc7937c342f9ef1bb68d5b5f91d0a2a353320316d8dd64c8733e3640a5665ff7ffebe2ffcafaedd5404bb9df676ab47205999fbdcec485c572cb0323aff7f01ce01541e895a1a50624e495b11782a04781b84ce14831e15ff7f061294a86453c09d259cc4b903ca2615a35b726ab3ac5b85d5ff7f9f60a4305f5f3347b26c4dbbd6e19f22a4a63f41d4b2df4988f9fd08621c7ea855898346c877a6880f5c8ad072bbaf151f2ad60a8d8fedc4451d64df737d2fff2aa7d3f2ebff72b1fef18ffa1ca940a006182010e7828a03a0c00185ff7f0d800015000000126cec1200890d1900000009000000000163ff7f0000040200001336f6090062434e4240000640010000005895ff7f0000029548e9a57c3891692a28d4f52cb89a99a8ee547b4d0aff7f000002fbb7decc976b8a14b54eb7499bdf6ef67fdffb8eb54aff7fffd9"),
+    ];
+
+    /// 9/7 stream with bypass (style 1), one layer, rate 2, and OpenJPEG's decoded pixels.
+    const LOSSY_BYPASS: &str = "ff4fff510029000000000020000000180000000000000000000000200000001800000000000000000001070101ff52000c00000001000102020100ff5c000b42482457d357d35762ff640025000143726561746564206279204f70656e4a5045472076657273696f6e20322e352e30ff90000a0000000001100001ff93cf8ab010e0c3397943dc56aaf585c28c5faa548b0f69e4c570aca948c16e5a79f461635127640abeb991b71e3708e5c216db345a18d74d712cdac853048eb1388077eef9b126ab0c01ddfbb8f01cddda21bca470e01cc853173097c7c35d3e45b3e5c5f43da925a962724c45dec6b6dfc653ca8d0dda3d96e4396cbfff845e04c0f798b3dc994105a8b45d9c7f3a80cdcc4046de3d4b2467d0ccc417502271d6eff26b4916395c77efacf43bcfa1c3e3eea5ec6a16e52e6a1721445be8911f4e6fdb40d9b04c8b0dccc854e05dbdd9343e41e61624e54739cc5747472649f5b91250380b407b99e82b27caaef0dfc2405b79ceaa9f99cf9929c382223cd030220168ffd9";
+    const LOSSY_BYPASS_RAW: &str = "012a304459213f375d895b5a828e6e9491aebba3929dd8b7bcc2d1f5c0defc15291e413d2d5b3a6e6784678d827594819aa9c2baa5d0b7dfb9fbe1e0e9ec08ff2f423e49313b8587918e8c938495929d969ccee2dadadbced7e0cedfd82b1d294e5769284e78825e6d809c73a6aca49c9cefedb8c2f100eae402e5fa2125fa1c6c666374626d9072a8947dab9cb8b8afd2d1f3d7dff7e32000f6160ff330203e697d607781868f85aa8a9f9dc29bacb1a6ffff02060013240c271e1a1a3c3832659261809d9b94a5b586b1b9babde9b0cfec08e1ff12f205260f0e1553484354809d8b9eb1b3b0bfc4acccc3b9dfd906f6ed2913ee2b2c083537224f423d6d5099a5bbbcbbc3cbd5dad1ddf6fe00020809251b2b353a50496153625457606771938b8f9db1c7d9afb3e8caf300e8f122f518480d1a422139163b6a4e5a7d5d7d849cb8ada2b7d8bcf5ffdec902fbef241c1341202e1d3d313e566141786867949ea9b0b5cfdbe2d9e4f0fd0005171c423b3a3f5c1f443f47554b665d86677e91bbb9b5c1d9e3d0f7cffc12ff163b082d06416440544b5c5e5f7a587b9b709b8be0c8b9ffe4dbc11815f7d9382d12513e383966623b4a5d7580598f827b77abbcdcc4e6f300191c26f3ff00241d24404144656a4d40575e80759298a9bab9c8a8e0e80eff21e91ff01d04195d2a65385a4464756b625785649bb596afb1d1a1d60e00fcf4341f1f110f51533b2c2e6753586485867e8071a5aa9fa6c2c5bcbeaa1214303bff021036344c5e1a495f575f7082907867819e9ab9bdcd8fb5b2cec1f12a00270a4c184624323d643f744875a271ac9ba8b3c695c5c7d5bef4b8f4c7f1473b30233a2e7b5d5b5652718691837777aebf9b969c9cd7d8e4d1d7bc06fb2f59182c3348614a4d5663828f567f8ea6b8bfa7a6b3c5d7dfcac4cdff1adfe747234f35595c665c63687e8d9a799295a0b9c6c3c2c3c5d1cffac5efdc24ec1f163b3d69637265686e6d97999a9c9a979ab2ccdaded6c9d7c9c9091a0315111115345058805f6f808bba84919da29bb2c8cbcbdce5dbcad0b8de0b2bf800141c";
+
+    #[test]
+    fn code_block_style_vectors_match_openjpeg() {
+        let want = vector_image();
+        for (name, style, hex) in VECTORS {
+            let cs = unhex(hex);
+            assert_eq!(cod_style(&cs), *style, "{name}: style byte");
+            let img = decode(&cs).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!((img.w, img.h, img.nc), (32, 24, 1), "{name}");
+            assert!(img.data == want, "{name}: pixels differ from OpenJPEG's");
+        }
+        let cs = unhex(LOSSY_BYPASS);
+        assert_eq!(cod_style(&cs), 1);
+        let img = decode(&cs).unwrap();
+        let raw = unhex(LOSSY_BYPASS_RAW);
+        assert_eq!(img.data.len(), raw.len());
+        let worst = img
+            .data
+            .iter()
+            .zip(&raw)
+            .map(|(&a, &b)| (a as i32 - b as i32).abs())
+            .max()
+            .unwrap();
+        assert!(worst <= 2, "lossy bypass: worst difference {worst}");
+    }
+
+    #[test]
+    fn extended_style_bits_are_refused() {
+        let mut cs = unhex(VECTORS[0].2);
+        let i = cs.windows(2).position(|w| w == [0xFF, 0x52]).unwrap();
+        for bit in [0x40u8, 0x80] {
+            cs[i + 12] = bit;
+            assert!(decode(&cs).is_err());
+        }
+    }
+
+    /// Rewrites a single-tile-part-per-tile codestream with PPT (or PPM) packed packet headers,
+    /// using the packet extents the decoder recorded. OpenJPEG decodes such streams, which is
+    /// how the rewriting was checked (see `jpx_repack_export`).
+    fn repack(cs: &[u8], ppm: bool) -> Option<Vec<u8>> {
+        TRACE.with(|t| t.borrow_mut().clear());
+        decode(cs).ok()?;
+        let spans = TRACE.with(|t| std::mem::take(&mut *t.borrow_mut()));
+        let mut p = 2;
+        while cs.get(p..p + 2)? != [0xFF, 0x90] {
+            p += 2 + (((cs[p + 2] as usize) << 8) | cs[p + 3] as usize);
+        }
+        let first_sot = p;
+        let mut out = cs[..p].to_vec();
+        let mut ppm_data = Vec::new();
+        let mut tiles = 0;
+        let mut last_isot = None;
+        while cs.get(p..p + 2) == Some(&[0xFF, 0x90]) {
+            let isot = ((cs[p + 4] as usize) << 8) | cs[p + 5] as usize;
+            let psot = u32::from_be_bytes(cs[p + 6..p + 10].try_into().ok()?) as usize;
+            if psot == 0 || cs[p + 10] != 0 || cs[p + 11] != 1 || last_isot >= Some(isot) {
+                return None;
+            }
+            last_isot = Some(isot);
+            let end = p + psot;
+            let mut r = p + 12;
+            while cs[r..r + 2] != [0xFF, 0x93] {
+                r += 2 + (((cs[r + 2] as usize) << 8) | cs[r + 3] as usize);
+            }
+            let (markers, data) = (&cs[p + 12..r], &cs[r + 2..end]);
+            let (mut hdrs, mut bodies, mut cur) = (Vec::new(), Vec::new(), 0);
+            for &(ps, hs, he, be) in spans.get(tiles)? {
+                let be = be.min(data.len());
+                bodies.extend_from_slice(&data[ps..hs]);
+                hdrs.extend_from_slice(&data[hs..he]);
+                bodies.extend_from_slice(&data[he.min(be)..be]);
+                cur = be;
+            }
+            bodies.extend_from_slice(&data[cur..]);
+            tiles += 1;
+            let mut ppt = Vec::new();
+            if ppm {
+                ppm_data.extend((hdrs.len() as u32).to_be_bytes());
+                ppm_data.extend(&hdrs);
+            } else {
+                for (z, ch) in hdrs.chunks(1500).enumerate() {
+                    ppt.extend([0xFF, 0x61]);
+                    ppt.extend((3 + ch.len() as u16).to_be_bytes());
+                    ppt.push(z as u8);
+                    ppt.extend(ch);
+                }
+            }
+            let new_psot = 12 + markers.len() + ppt.len() + 2 + bodies.len();
+            out.extend(&cs[p..p + 6]);
+            out.extend((new_psot as u32).to_be_bytes());
+            out.extend(&cs[p + 10..p + 12]);
+            out.extend(markers);
+            out.extend(&ppt);
+            out.extend([0xFF, 0x93]);
+            out.extend(&bodies);
+            p = end;
+        }
+        if tiles != spans.len() {
+            return None;
+        }
+        if ppm {
+            // records are cut into marker segments at arbitrary points, as the standard allows
+            let size = 1500.max(ppm_data.len().div_ceil(200));
+            let mut segs = Vec::new();
+            for (z, ch) in ppm_data.chunks(size).enumerate() {
+                segs.extend([0xFF, 0x60]);
+                segs.extend((3 + ch.len() as u16).to_be_bytes());
+                segs.push(z as u8);
+                segs.extend(ch);
+            }
+            out.splice(first_sot..first_sot, segs); // just before the first SOT
+        }
+        out.extend(&cs[p..]);
+        Some(out)
+    }
+
+    /// Moves the POC marker segment of a one-tile, one-tile-part stream into the main header.
+    fn poc_to_main(cs: &[u8]) -> Option<Vec<u8>> {
+        let mut p = 2;
+        while cs[p..p + 2] != [0xFF, 0x90] {
+            p += 2 + (((cs[p + 2] as usize) << 8) | cs[p + 3] as usize);
+        }
+        let mut r = p + 12;
+        while cs[r..r + 2] != [0xFF, 0x93] {
+            let l = 2 + (((cs[r + 2] as usize) << 8) | cs[r + 3] as usize);
+            if cs[r..r + 2] == [0xFF, 0x5F] {
+                let seg = cs[r..r + l].to_vec();
+                let psot = u32::from_be_bytes(cs[p + 6..p + 10].try_into().ok()?) as usize;
+                let mut out = cs[..p].to_vec();
+                out.extend(&seg);
+                out.extend(&cs[p..p + 6]);
+                out.extend(((psot - l) as u32).to_be_bytes());
+                out.extend(&cs[p + 10..r]);
+                out.extend(&cs[r + l..]);
+                return Some(out);
+            }
+            r += l;
+        }
+        None
+    }
+
+    #[test]
+    fn poc_vector_decodes_from_tile_part_and_main_header() {
+        let hex = VECTORS.iter().find(|v| v.0 == "poc").unwrap().2;
+        let cs = unhex(hex);
+        assert!(cs.windows(2).any(|w| w == [0xFF, 0x5F]));
+        let want = vector_image();
+        assert!(decode(&cs).unwrap().data == want);
+        let main = poc_to_main(&cs).unwrap();
+        assert!(decode(&main).unwrap().data == want);
+    }
+
+    #[test]
+    fn packed_packet_headers_decode_like_the_plain_stream() {
+        let mut streams: Vec<(String, Vec<u8>)> = VECTORS
+            .iter()
+            .map(|v| (v.0.to_string(), unhex(v.2)))
+            .collect();
+        for (name, stream, _, _) in cases() {
+            if let Ok((cs, _)) = unwrap_jp2(stream) {
+                streams.push((name.to_string(), cs.to_vec()));
+            }
+        }
+        let mut n = 0;
+        for (name, cs) in &streams {
+            let want = decode(cs).unwrap();
+            for ppm in [false, true] {
+                let Some(packed) = repack(cs, ppm) else {
+                    continue;
+                };
+                assert!(packed
+                    .windows(2)
+                    .any(|w| w == if ppm { [0xFF, 0x60] } else { [0xFF, 0x61] }));
+                let got = decode(&packed).unwrap_or_else(|e| panic!("{name} ppm={ppm}: {e}"));
+                assert!(got.data == want.data, "{name} ppm={ppm}");
+                n += 1;
+            }
+        }
+        assert!(n >= 20, "only {n} streams could be repacked");
+    }
+
+    /// PPM and PPT vectors (the "bypass_sop_eph" stream rewritten by `repack`), whose pixels
+    /// OpenJPEG reproduced exactly.
+    const PACKED: &[(&str, &str)] = &[
+        ("ppt", "ff4fff510029000000000020000000180000000000000000000000200000001800000000000000000001070101ff52000c06000002000102020101ff5c00074040484850ff640025000143726561746564206279204f70656e4a5045472076657273696f6e20322e352e30ff90000a0000000003700001ff61003100deb2ff92cea9395e79b0ff92fd69745a2c9648ff92fd971d2e164b25f6b8e970b0592fbb2a804c8991302644ff92ff93ff910004000066bc0b664d846fb2f1e020fcf7fbc9fa1281631990f1a0dabcacb6fc1d42f8bfff0b1474075975ae5e768fda517622af0918ff91000400013da925a962724c553a4cfecee73d28735c37546046f30fd9f143e729496b15466869f1ab5e6e0f3cc604684e5c83a600405d90eb9a86841edef3a2f031fa560e60720167b6baff9100040002266804ef0d6afd599157225d00eb9aefa9996ef98292b185f7a93c276ddb41663340d49d33c9470dcf9045b633b399e5f2f75a5abfae878790b0c80d56220aff7f7d48efae7fc45dc25911e80623369dcc8352a5ed64831d478fd5ff7ff275967ad32997d90c17729eeb6ff0f90fdc023f6e24225ad5ff7fbd2afecdd16d97758adf6d7fc5b4dd1ad69221b6b80ffd2a15ff7fff9100040003439fab982d3187741f3a37fce90b8583ccaff509eee0bc3752c571c0143fae9cb5a2b209ff7c9d50d2be04521f755820dc2b018fc44e3e7fcf68579d16607e4087ccd69ff82b86427a0685bc41148aa0c0a03e3ab2ff7fcabe28be9d54bdce414918bbac66161e3404dbb8d5a2bd546bbcf965ff7f08f12894c952489627ce0ee2a60091442ed19c418232d1a92aff7f401a3d82f581a01c091e62505206ba8d497bce7f5220a550aaff7f49e4435c363d79a1ba5dc6d8f2c06fafdc0d0e754b9802aa829f505c69a82752456d744eb93f26f5f79b11a9ee801e50f0c9579ee690ff7fc7937c342f9ef1bb68d5b5f91d0a1a999018b6c6eb264399f1b2052b32ff7ffebe2ffcafaedd5404bb9df676ab47205999fbdcec485c572cb0323aff7f033805507a256869418939256c45e0a811e06e1338520c78ff7f06252950c8a7813a4b39897207944c2b46b6e4d56758b70baaff7f79298fc0c5d3babcf9fdfb48677c791297f5e45048d60b0fb2a55cff7bb0791bc800a8d8c9be322ea213737d2fff2aa7d3f2ebff72b1fef18ffa1ca90280186080439e0a280e83000615ff7f0d8000000000049b3b048022434640000002400000000058d5ff7f000004040000266dec1200c4869c8480000c8002000000b12aff7f000004aa474d2be1c48b495146a7a965c4d4cd4772a3da68ff7f000007ddbef664bb5c50a5aa75ba4cdefb77b3feff6e3ad52aff7fffd9"),
+        ("ppm", "ff4fff510029000000000020000000180000000000000000000000200000001800000000000000000001070101ff52000c06000002000102020101ff5c00074040484850ff640025000143726561746564206279204f70656e4a5045472076657273696f6e20322e352e30ff600035000000002edeb2ff92cea9395e79b0ff92fd69745a2c9648ff92fd971d2e164b25f6b8e970b0592fbb2a804c8991302644ff92ff90000a00000000033d0001ff93ff910004000066bc0b664d846fb2f1e020fcf7fbc9fa1281631990f1a0dabcacb6fc1d42f8bfff0b1474075975ae5e768fda517622af0918ff91000400013da925a962724c553a4cfecee73d28735c37546046f30fd9f143e729496b15466869f1ab5e6e0f3cc604684e5c83a600405d90eb9a86841edef3a2f031fa560e60720167b6baff9100040002266804ef0d6afd599157225d00eb9aefa9996ef98292b185f7a93c276ddb41663340d49d33c9470dcf9045b633b399e5f2f75a5abfae878790b0c80d56220aff7f7d48efae7fc45dc25911e80623369dcc8352a5ed64831d478fd5ff7ff275967ad32997d90c17729eeb6ff0f90fdc023f6e24225ad5ff7fbd2afecdd16d97758adf6d7fc5b4dd1ad69221b6b80ffd2a15ff7fff9100040003439fab982d3187741f3a37fce90b8583ccaff509eee0bc3752c571c0143fae9cb5a2b209ff7c9d50d2be04521f755820dc2b018fc44e3e7fcf68579d16607e4087ccd69ff82b86427a0685bc41148aa0c0a03e3ab2ff7fcabe28be9d54bdce414918bbac66161e3404dbb8d5a2bd546bbcf965ff7f08f12894c952489627ce0ee2a60091442ed19c418232d1a92aff7f401a3d82f581a01c091e62505206ba8d497bce7f5220a550aaff7f49e4435c363d79a1ba5dc6d8f2c06fafdc0d0e754b9802aa829f505c69a82752456d744eb93f26f5f79b11a9ee801e50f0c9579ee690ff7fc7937c342f9ef1bb68d5b5f91d0a1a999018b6c6eb264399f1b2052b32ff7ffebe2ffcafaedd5404bb9df676ab47205999fbdcec485c572cb0323aff7f033805507a256869418939256c45e0a811e06e1338520c78ff7f06252950c8a7813a4b39897207944c2b46b6e4d56758b70baaff7f79298fc0c5d3babcf9fdfb48677c791297f5e45048d60b0fb2a55cff7bb0791bc800a8d8c9be322ea213737d2fff2aa7d3f2ebff72b1fef18ffa1ca90280186080439e0a280e83000615ff7f0d8000000000049b3b048022434640000002400000000058d5ff7f000004040000266dec1200c4869c8480000c8002000000b12aff7f000004aa474d2be1c48b495146a7a965c4d4cd4772a3da68ff7f000007ddbef664bb5c50a5aa75ba4cdefb77b3feff6e3ad52aff7fffd9"),
+    ];
+
+    #[test]
+    fn ppm_and_ppt_vectors_match_openjpeg() {
+        let want = vector_image();
+        for (name, hex) in PACKED {
+            let cs = unhex(hex);
+            let img = decode(&cs).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert!(img.data == want, "{name}");
+        }
+    }
+
+    /// `LEGATOROCR_JPX_DIR=sweep cargo test --release -- --ignored jpx_repack_export` writes
+    /// NAME_ppt / NAME_ppm variants of the sweep's streams (checked against OpenJPEG by the
+    /// generator script, then decoded by `jpx_differential`).
+    #[test]
+    #[ignore]
+    fn jpx_repack_export() {
+        let Ok(dir) = std::env::var("LEGATOROCR_JPX_DIR") else {
+            return;
+        };
+        let mut n = 0;
+        for e in std::fs::read_dir(&dir).unwrap() {
+            let p = e.unwrap().path();
+            let stem = p.file_stem().unwrap().to_string_lossy().to_string();
+            if p.extension().is_none_or(|x| x != "j2k") || stem.contains("_pp") {
+                continue;
+            }
+            let cs = std::fs::read(&p).unwrap();
+            for (tag, ppm) in [("_ppt", false), ("_ppm", true)] {
+                if let Some(v) = repack(&cs, ppm) {
+                    let q = format!("{dir}/{stem}{tag}");
+                    std::fs::write(format!("{q}.j2k"), v).unwrap();
+                    std::fs::copy(p.with_extension("raw"), format!("{q}.raw")).unwrap();
+                    std::fs::copy(p.with_extension("txt"), format!("{q}.txt")).unwrap();
+                    n += 1;
+                }
+            }
+        }
+        eprintln!("{n} repacked streams");
+    }
+
+    #[test]
+    fn styled_and_packed_streams_survive_damage() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut rnd = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let iters: usize = std::env::var("LEGATOROCR_FUZZ_ITERS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(150);
+        let mut streams: Vec<Vec<u8>> = VECTORS.iter().map(|v| unhex(v.2)).collect();
+        streams.extend(PACKED.iter().map(|v| unhex(v.1)));
+        streams.push(unhex(LOSSY_BYPASS));
+        let mut slowest = std::time::Duration::ZERO;
+        for s in &streams {
+            for _ in 0..iters {
+                let mut d = s.clone();
+                for _ in 0..1 + rnd() % 6 {
+                    let i = (rnd() as usize) % d.len();
+                    match rnd() % 4 {
+                        0 => d[i] = rnd() as u8,
+                        1 => d[i] ^= 1 << (rnd() % 8),
+                        2 => d.truncate(i.max(8)),
+                        _ => {
+                            // flip the style / POC / packed-header bytes near the front
+                            let j = (rnd() as usize) % d.len().min(200);
+                            d[j] = rnd() as u8;
+                        }
+                    }
+                    if d.len() < 8 {
+                        break;
+                    }
+                }
+                let t = std::time::Instant::now();
+                let _ = decode(&d);
+                slowest = slowest.max(t.elapsed());
+            }
+        }
+        // a damaged canvas size (up to MAX_SAMPLES) legitimately costs seconds of allocation
+        assert!(
+            slowest.as_secs() < 30,
+            "a damaged stream took {slowest:?} to decode"
+        );
+    }
+
+    /// Hostile POC lists: far too many entries are refused, a full list of absurd ranges is
+    /// bounded in time.
+    #[test]
+    fn hostile_poc_lists_are_bounded() {
+        let base = unhex(VECTORS[0].2);
+        let sot = base.windows(2).position(|w| w == [0xFF, 0x90]).unwrap();
+        for entries in [1usize, 255, 256, 300, 5000] {
+            let mut poc = vec![0xFF, 0x5F];
+            let body_len = 2 + entries * 7;
+            if body_len > 0xFFFF {
+                continue;
+            }
+            poc.extend((body_len as u16).to_be_bytes());
+            for i in 0..entries {
+                // RS CS LYE(2) RE CE P
+                poc.extend([0, 0, 0xFF, 0xFF, 0xFF, 0, (i % 5) as u8]);
+            }
+            let mut d = base[..sot].to_vec();
+            d.extend(&poc);
+            d.extend(&base[sot..]);
+            let t = std::time::Instant::now();
+            let r = decode(&d);
+            if entries > MAX_POCS {
+                assert!(r.is_err(), "{entries} POC entries accepted");
+            }
+            assert!(
+                t.elapsed().as_secs() < 10,
+                "{entries} POC entries took {:?}",
+                t.elapsed()
+            );
+        }
+    }
+
+    /// Many segment-producing contributions to one code-block never grow the segment list
+    /// beyond its cap.
+    #[test]
+    fn segment_count_is_capped() {
+        assert_eq!(next_seg_max(4, Some(1)), 1);
+        assert_eq!(next_seg_max(1, None), 10);
+        assert_eq!(next_seg_max(1, Some(10)), 2);
+        assert_eq!(next_seg_max(1, Some(2)), 1);
+        assert_eq!(next_seg_max(1, Some(1)), 2);
+        assert_eq!(next_seg_max(0, None), 109);
     }
 }
