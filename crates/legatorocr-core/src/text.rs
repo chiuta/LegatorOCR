@@ -15,6 +15,44 @@ pub struct Word {
 
 /// Romanian text must use comma-below `ș`/`ț`; OCR engines and old fonts often give the
 /// cedilla forms `ş`/`ţ` (U+015F/U+0163), which are different characters and break search.
+/// Does recognised Romanian text look as if the Romanian model was not used? Real Romanian has
+/// about 7 % of its letters among `ăâîșț`; OCR without the Romanian model drops them (plain
+/// `a`, `i`, `s`, `t`) or turns them into digits and symbols. Returns a short reason, or `None`
+/// when the text looks fine or is too short to judge.
+pub fn romanian_sanity(text: &str) -> Option<&'static str> {
+    let (mut letters, mut diac, mut words, mut digit_words) = (0usize, 0usize, 0usize, 0usize);
+    for w in text.split_whitespace() {
+        let (mut l, mut d) = (0usize, 0usize);
+        for c in w.chars() {
+            if c.is_alphabetic() {
+                l += 1;
+                if "ăâîșțşţĂÂÎȘȚŞŢ".contains(c) {
+                    diac += 1;
+                }
+            } else if c.is_ascii_digit() {
+                d += 1;
+            }
+        }
+        letters += l;
+        if l + d >= 3 {
+            words += 1;
+            if l >= 2 && d >= 1 {
+                digit_words += 1; // letters and digits inside one word: "m1ne", "t3xt"
+            }
+        }
+    }
+    if letters < 400 {
+        return None;
+    }
+    if (diac as f64) < 0.01 * letters as f64 {
+        return Some("almost no Romanian diacritics (ăâîșț) were recognised: is the Romanian language pack installed and selected (--lang ro)?");
+    }
+    if words >= 50 && (digit_words as f64) > 0.04 * words as f64 {
+        return Some("many words mix letters and digits: Romanian letters may be misread; check the language pack and the scan quality");
+    }
+    None
+}
+
 pub fn normalize_ro(s: &str) -> String {
     s.chars()
         .map(|c| match c {
@@ -88,5 +126,20 @@ mod tests {
             "mobila stiinta stiinta cluj-napoca"
         );
         assert_eq!(fold("Straße Œuvre"), "strasse oeuvre");
+    }
+
+    #[test]
+    fn romanian_sanity_flags_missing_diacritics_only() {
+        let ok =
+            "În această gândire românească, școala și țara își găsesc locul într-o lume mai bună. "
+                .repeat(8);
+        assert_eq!(romanian_sanity(&ok), None);
+        let stripped =
+            "In aceasta gandire romaneasca, scoala si tara isi gasesc locul intr-o lume mai buna. "
+                .repeat(8);
+        assert!(romanian_sanity(&stripped).is_some());
+        assert_eq!(romanian_sanity("scurt fara diacritice"), None);
+        let digits = "m1ne t3xt c4rte ".repeat(40) + &ok;
+        assert!(romanian_sanity(&digits).is_some());
     }
 }

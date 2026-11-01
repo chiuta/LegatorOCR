@@ -43,7 +43,7 @@ enum Fmt {
 #[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "verify_sums"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -293,6 +293,27 @@ struct Cli {
     #[arg(long, value_name = "X,Y,W,H")]
     erase: Vec<String>,
 
+    /// Rights statement written into the PDF (copyright holder, licence, contract reference):
+    /// XMP `dc:rights` with --pdfa, otherwise the `/Rights` info key plus a visible note icon on
+    /// page 2. Needs --pdf.
+    #[arg(long, value_name = "TEXT")]
+    rights_notice: Option<String>,
+
+    /// Write a `SHA256SUMS.txt` next to the PDF listing every file written (same format as
+    /// `sha256sum`), so recipients can verify the files. Needs --pdf.
+    #[arg(long)]
+    checksums: bool,
+
+    /// Check the files listed in a SHA256SUMS file (paths relative to it) and exit: status 0 when
+    /// all match, 1 otherwise.
+    #[arg(long, value_name = "SHA256SUMS")]
+    verify_sums: Option<PathBuf>,
+
+    /// Also write the recognised text next to each PDF as `<pdf name>.txt` (for full-text
+    /// indexers such as DocFetcher or Agent Ransack). Needs --pdf and --ocr.
+    #[arg(long)]
+    txt_each: bool,
+
     /// Always keep this rectangle as a colour picture (mixed / hybrid output): X,Y,WIDTH,HEIGHT in
     /// mm from the top-left of the deskewed page, like --erase (repeatable). For photos the
     /// automatic detector misses.
@@ -437,6 +458,28 @@ fn real_main() -> Result<()> {
             println!("{n:<20} {d}");
         }
         return Ok(());
+    }
+    if let Some(sums) = &cli.verify_sums {
+        let v = legatorocr_engine::checksums::verify(sums)?;
+        for n in &v.mismatched {
+            println!("MISMATCH  {n}");
+        }
+        for n in &v.missing {
+            println!("MISSING   {n}");
+        }
+        println!(
+            "{} ok, {} mismatched, {} missing",
+            v.ok,
+            v.mismatched.len(),
+            v.missing.len()
+        );
+        std::process::exit(if v.all_good() { 0 } else { 1 });
+    }
+    if (cli.checksums || cli.txt_each || cli.rights_notice.is_some()) && cli.pdf.is_none() {
+        bail!("--checksums, --txt-each and --rights-notice need --pdf");
+    }
+    if cli.txt_each && !cli.ocr {
+        bail!("--txt-each needs --ocr");
     }
     if cli.compare_text {
         let [r, h] = cli.inputs.as_slice() else {
@@ -611,6 +654,13 @@ fn real_main() -> Result<()> {
         tesseract: cli.tesseract.clone(),
         tessdata: cli.tessdata.clone(),
     };
+    if let Some(d) = cli.dpi.filter(|_| cli.ocr) {
+        if d < 200 {
+            eprintln!("note: {d} dpi is low for OCR; letters are often misread below 200 dpi (pages are enlarged for OCR, but a rescan at 300 dpi is better)");
+        } else if d > 400 {
+            eprintln!("note: above 400 dpi plain text gets much slower to recognise without becoming more accurate; 300 dpi is enough for most print");
+        }
+    }
     if cli.ocr {
         let v = check_ocr(&ocr_opts)?;
         eprintln!("OCR engine: {v}, language: {}", cli.lang);
@@ -781,6 +831,7 @@ fn real_main() -> Result<()> {
                 subject: cli.subject.clone(),
                 keywords: cli.keywords.clone(),
                 created_unix: Some(legatorocr_engine::now_unix()),
+                rights: cli.rights_notice.clone(),
             },
             bookmarks: cli.bookmarks,
             front_matter: cli.front_matter,
@@ -883,6 +934,7 @@ fn real_main() -> Result<()> {
     if res.skipped_duplicates > 0 {
         eprintln!("{} duplicate page(s) skipped", res.skipped_duplicates);
     }
+    let mut written: Vec<PathBuf> = Vec::new();
     if let (Some(pdf_path), true) = (&cli.pdf, !res.docs.is_empty()) {
         let stem = pdf_path
             .file_stem()
@@ -894,10 +946,21 @@ fn real_main() -> Result<()> {
             let p = pdf_path.with_file_name(legatorocr_engine::doc_file_name(&stem, i, name));
             write_atomic(&p, bytes)?;
             eprintln!("wrote {}", p.display());
+            written.push(p);
+        }
+        if cli.txt_each {
+            eprintln!("--txt-each: not available with one PDF per document (split); use --txt");
         }
     }
     if let (Some(pdf_path), Some(bytes)) = (&cli.pdf, &res.pdf) {
         write_atomic(pdf_path, bytes)?;
+        written.push(pdf_path.clone());
+        if let (true, Some(t)) = (cli.txt_each, &res.text) {
+            let tp = pdf_path.with_extension("txt");
+            write_atomic(&tp, t.replace('\x0c', "\n").as_bytes())?;
+            eprintln!("wrote {}", tp.display());
+            written.push(tp);
+        }
         eprintln!(
             "wrote {} ({} page(s){})",
             pdf_path.display(),
@@ -909,13 +972,26 @@ fn real_main() -> Result<()> {
             }
         );
     }
+    if let Some(t) = &res.text {
+        let wants_ro = ocr_opts
+            .lang
+            .split('+')
+            .any(|l| l.eq_ignore_ascii_case("ron"));
+        if wants_ro {
+            if let Some(why) = legatorocr_core::text::romanian_sanity(t) {
+                eprintln!("warning: {why}");
+            }
+        }
+    }
     if let (Some(p), Some(t)) = (&cli.txt, &res.text) {
         write_atomic(p, t.as_bytes())?;
         eprintln!("wrote {}", p.display());
+        written.push(p.clone());
     }
     if let (Some(p), Some(t)) = (&cli.hocr, &res.hocr) {
         write_atomic(p, t.as_bytes())?;
         eprintln!("wrote {}", p.display());
+        written.push(p.clone());
     }
     if let (Some(p), Some(t)) = (&cli.docx, res.paragraph_text.as_ref().or(res.text.as_ref())) {
         let pages: Vec<String> = t
@@ -928,6 +1004,17 @@ fn real_main() -> Result<()> {
             .unwrap_or("LegatorOCR");
         write_atomic(p, &legatorocr_engine::docx::from_pages(&pages, title))?;
         eprintln!("wrote {}", p.display());
+        written.push(p.clone());
+    }
+    if let (true, Some(pdf_path)) = (cli.checksums, &cli.pdf) {
+        let base = pdf_path
+            .parent()
+            .filter(|d| !d.as_os_str().is_empty())
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let sums = legatorocr_engine::checksums::render(base, &written)?;
+        let sp = base.join("SHA256SUMS.txt");
+        write_atomic(&sp, sums.as_bytes())?;
+        eprintln!("wrote {} ({} file(s))", sp.display(), written.len());
     }
     if !res.failed.is_empty() {
         eprintln!("{} input(s) could not be processed", res.failed.len());

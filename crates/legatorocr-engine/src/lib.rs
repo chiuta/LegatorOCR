@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 pub mod archive;
+pub mod checksums;
 pub mod docx;
 pub mod eval;
 pub mod extpdf;

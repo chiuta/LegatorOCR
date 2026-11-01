@@ -338,6 +338,7 @@ pub struct Xmp<'a> {
     pub author: Option<&'a str>,
     pub subject: Option<&'a str>,
     pub keywords: Option<&'a str>,
+    pub rights: Option<&'a str>,
     pub producer: &'a str,
     /// `D:...Z` date for creation and modification.
     pub date: Option<&'a str>,
@@ -371,6 +372,9 @@ impl Xmp<'_> {
         }
         if let Some(t) = self.subject {
             dc.push_str(&format!("<dc:description>{}</dc:description>", alt(t)));
+        }
+        if let Some(t) = self.rights {
+            dc.push_str(&format!("<dc:rights>{}</dc:rights>", alt(t)));
         }
         if !dc.is_empty() {
             s.push_str(&format!(
