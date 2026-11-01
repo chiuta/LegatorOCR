@@ -8,6 +8,7 @@
 
 use crate::jbig2huff::{Bits, Table};
 use std::fmt;
+use std::rc::Rc;
 
 #[derive(Debug)]
 pub struct Jbig2Error(pub String);
@@ -707,6 +708,9 @@ fn symbol_dict(data: &[u8], inputs: &[Bitmap]) -> R<Vec<Bitmap>> {
         idx += run as usize;
         flag = !flag;
     }
+    if out.len() != n_ex {
+        return fail("JBIG2 symbol dictionary exports a different number of symbols");
+    }
     Ok(out)
 }
 
@@ -716,19 +720,28 @@ fn herr(e: crate::jbig2huff::HuffError) -> Jbig2Error {
 
 /// Pick a Huffman table by its selection value: the standard ones listed, or the next
 /// user-supplied table (selection 3 / 1 for the single-bit fields).
-fn pick(sel: u16, std: &[(u16, u8)], ct: &[Table], used: &mut usize) -> R<Table> {
+fn pick(
+    sel: u16,
+    std: &[(u16, u8)],
+    custom: u16,
+    ct: &[Rc<Table>],
+    used: &mut usize,
+) -> R<Rc<Table>> {
     if let Some(&(_, n)) = std.iter().find(|(v, _)| *v == sel) {
-        return Ok(Table::standard(n));
+        return Ok(Rc::new(Table::standard(n)));
+    }
+    if sel != custom {
+        return fail("JBIG2 uses a reserved Huffman table selection");
     }
     let t = ct
         .get(*used)
         .ok_or_else(|| Jbig2Error("JBIG2 refers to a Huffman table that is missing".into()))?;
     *used += 1;
-    Ok(t.clone())
+    Ok(Rc::clone(t))
 }
 
 /// Symbol dictionary, Huffman coding without refinement or aggregation (T.88 6.5, 7.4.2).
-fn symbol_dict_huff(data: &[u8], inputs: &[Bitmap], ct: &[Table]) -> R<Vec<Bitmap>> {
+fn symbol_dict_huff(data: &[u8], inputs: &[Bitmap], ct: &[Rc<Table>]) -> R<Vec<Bitmap>> {
     let flags = be16(data, 0)?;
     if flags & 2 != 0 {
         return fail(
@@ -739,10 +752,10 @@ fn symbol_dict_huff(data: &[u8], inputs: &[Bitmap], ct: &[Table]) -> R<Vec<Bitma
         return fail("JBIG2 symbol dictionaries with retained contexts are not supported");
     }
     let mut used = 0usize;
-    let dh_t = pick((flags >> 2) & 3, &[(0, 4), (1, 5)], ct, &mut used)?;
-    let dw_t = pick((flags >> 4) & 3, &[(0, 2), (1, 3)], ct, &mut used)?;
-    let bm_t = pick((flags >> 6) & 1, &[(0, 1)], ct, &mut used)?;
-    let _agg = pick((flags >> 7) & 1, &[(0, 1)], ct, &mut used)?;
+    let dh_t = pick((flags >> 2) & 3, &[(0, 4), (1, 5)], 3, ct, &mut used)?;
+    let dw_t = pick((flags >> 4) & 3, &[(0, 2), (1, 3)], 3, ct, &mut used)?;
+    let bm_t = pick((flags >> 6) & 1, &[(0, 1)], 1, ct, &mut used)?;
+    let _agg = pick((flags >> 7) & 1, &[(0, 1)], 1, ct, &mut used)?;
     // no adaptive-template bytes with Huffman coding
     let n_ex = be32(data, 2)? as usize;
     let n_new = be32(data, 6)? as usize;
@@ -784,7 +797,12 @@ fn symbol_dict_huff(data: &[u8], inputs: &[Bitmap], ct: &[Table]) -> R<Vec<Bitma
             return fail("JBIG2 symbols are too large");
         }
         let rows: Vec<Vec<bool>> = if tw == 0 || h == 0 {
-            vec![Vec::new(); h]
+            // empty symbols: nothing to build, but any bitmap bytes are still skipped
+            if bmsize > 0 {
+                r.skip_bytes(usize::try_from(bmsize).unwrap_or(usize::MAX))
+                    .map_err(herr)?;
+            }
+            Vec::new()
         } else if bmsize == 0 {
             // uncompressed: rows padded to whole bytes
             let stride = tw.div_ceil(8);
@@ -855,7 +873,7 @@ fn text_region_huff(
     rw: usize,
     rh: usize,
     syms: &[Bitmap],
-    ct: &[Table],
+    ct: &[Rc<Table>],
 ) -> R<Vec<u8>> {
     let flags = be16(data, 0)?;
     if flags & 2 != 0 {
@@ -871,9 +889,15 @@ fn text_region_huff(
         return fail("too many JBIG2 symbol instances");
     }
     let mut used = 0usize;
-    let fs_t = pick(hf & 3, &[(0, 6), (1, 7)], ct, &mut used)?;
-    let ds_t = pick((hf >> 2) & 3, &[(0, 8), (1, 9), (2, 10)], ct, &mut used)?;
-    let dt_t = pick((hf >> 4) & 3, &[(0, 11), (1, 12), (2, 13)], ct, &mut used)?;
+    let fs_t = pick(hf & 3, &[(0, 6), (1, 7)], 3, ct, &mut used)?;
+    let ds_t = pick((hf >> 2) & 3, &[(0, 8), (1, 9), (2, 10)], 3, ct, &mut used)?;
+    let dt_t = pick(
+        (hf >> 4) & 3,
+        &[(0, 11), (1, 12), (2, 13)],
+        3,
+        ct,
+        &mut used,
+    )?;
     let tp = TextP {
         rw,
         rh,
@@ -1313,7 +1337,7 @@ pub fn decode(data: &[u8], globals: Option<&[u8]>, w: usize, h: usize) -> R<Vec<
     let mut region_px: u64 = 0;
     let mut dict_px: u64 = 0;
     // user-supplied Huffman tables (segment type 53)
-    let mut tables: std::collections::HashMap<u32, Table> = std::collections::HashMap::new();
+    let mut tables: std::collections::HashMap<u32, Rc<Table>> = std::collections::HashMap::new();
     for s in &segs {
         let data: &[u8] = &s.data;
         if matches!(
@@ -1328,16 +1352,22 @@ pub fn decode(data: &[u8], globals: Option<&[u8]>, w: usize, h: usize) -> R<Vec<
                 return fail("JBIG2 stream describes too much image data");
             }
         }
-        let ct: Vec<Table> = s
-            .refs
-            .iter()
-            .filter_map(|r| tables.get(r).cloned())
-            .collect();
+        // custom tables matter to dictionaries and text regions only, each once, a few at most
+        let mut ct: Vec<Rc<Table>> = Vec::new();
+        if matches!(s.kind, 0 | 4 | 6 | 7) {
+            for r in &s.refs {
+                if let Some(t) = tables.get(r) {
+                    if ct.len() < 16 {
+                        ct.push(Rc::clone(t));
+                    }
+                }
+            }
+        }
         match s.kind {
             53 => {
                 let t = Table::parse_custom(data).map_err(|e| Jbig2Error(e.to_string()))?;
                 if tables.len() < 256 {
-                    tables.insert(s.num, t);
+                    tables.insert(s.num, Rc::new(t));
                 }
             }
             48 => {
@@ -2762,6 +2792,17 @@ pub(crate) mod tests {
             .step_by(2)
             .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
             .collect()
+    }
+
+    #[test]
+    fn reserved_table_selections_are_errors_not_garbage() {
+        let t = vec![Rc::new(Table::standard(1))];
+        let mut used = 0;
+        assert!(pick(2, &[(0, 4), (1, 5)], 3, &t, &mut used).is_err());
+        assert!(pick(3, &[(0, 4), (1, 5)], 3, &[], &mut used).is_err());
+        assert!(pick(3, &[(0, 4), (1, 5)], 3, &t, &mut used).is_ok());
+        assert_eq!(used, 1);
+        assert!(pick(1, &[(0, 1)], 1, &t, &mut 0).is_ok());
     }
 
     #[test]

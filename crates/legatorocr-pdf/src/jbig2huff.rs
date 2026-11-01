@@ -83,7 +83,8 @@ impl<'a> Bits<'a> {
 #[derive(Clone, Debug)]
 pub struct Table {
     lines: Vec<Line>,
-    codes: Vec<u32>,
+    /// (prefix length, code) → line: decoding costs one lookup per bit, however many lines
+    index: std::collections::HashMap<(u8, u32), usize>,
 }
 
 impl Table {
@@ -113,7 +114,13 @@ impl Table {
                 }
             }
         }
-        Ok(Table { lines, codes })
+        let index = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.preflen > 0)
+            .map(|(i, l)| ((l.preflen, codes[i]), i))
+            .collect();
+        Ok(Table { lines, index })
     }
 
     /// Decode one value; `None` is the out-of-band value.
@@ -125,15 +132,14 @@ impl Table {
             if len > 32 {
                 return err("bad JBIG2 Huffman code");
             }
-            for (i, l) in self.lines.iter().enumerate() {
-                if l.preflen == len && self.codes[i] == code {
-                    return match l.kind {
-                        Kind::Oob => Ok(None),
-                        Kind::Normal => Ok(Some(l.low + r.bits(l.rangelen as u32)? as i64)),
-                        Kind::Upper => Ok(Some(l.low + r.bits(32)? as i64)),
-                        Kind::Lower => Ok(Some(l.low - r.bits(32)? as i64)),
-                    };
-                }
+            if let Some(&i) = self.index.get(&(len, code)) {
+                let l = &self.lines[i];
+                return match l.kind {
+                    Kind::Oob => Ok(None),
+                    Kind::Normal => Ok(Some(l.low + r.bits(l.rangelen as u32)? as i64)),
+                    Kind::Upper => Ok(Some(l.low + r.bits(32)? as i64)),
+                    Kind::Lower => Ok(Some(l.low - r.bits(32)? as i64)),
+                };
             }
         }
     }
