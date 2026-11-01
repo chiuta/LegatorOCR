@@ -17,6 +17,7 @@ pub mod docx;
 pub mod eval;
 pub mod extpdf;
 pub mod files;
+pub mod package;
 pub mod profiles;
 pub mod project;
 pub mod report;

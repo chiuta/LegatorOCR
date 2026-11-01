@@ -63,10 +63,19 @@ pub fn verify(sums: &Path) -> Result<Verification> {
         }
         // never follow a name out of the folder
         let n = Path::new(name);
-        if n.is_absolute()
-            || n.components()
-                .any(|c| matches!(c, std::path::Component::ParentDir))
-        {
+        // Rejected on every platform alike: a leading slash is not "absolute" on Windows, and a
+        // drive letter or `\\server` prefix is not one on Unix, so the text is checked as well.
+        let unsafe_text = name.starts_with(['/', '\\']) || name.contains(':');
+        let unsafe_path = n.is_absolute()
+            || n.components().any(|c| {
+                matches!(
+                    c,
+                    std::path::Component::ParentDir
+                        | std::path::Component::RootDir
+                        | std::path::Component::Prefix(_)
+                )
+            });
+        if unsafe_text || unsafe_path {
             bail!("{}: unsafe path {name:?}", sums.display());
         }
         lines += 1;
@@ -119,6 +128,8 @@ mod tests {
         for bad in [
             format!("{h}  ../etc/passwd\n"),
             format!("{h}  /etc/passwd\n"),
+            format!("{h}  C:\\Windows\\win.ini\n"),
+            format!("{h}  \\\\server\\share\\x\n"),
             "xyz  a\n".to_string(),
             String::new(),
         ] {

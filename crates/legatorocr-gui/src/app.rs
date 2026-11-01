@@ -58,9 +58,9 @@ struct Sheet {
     name: String,
     adj: SheetAdjust,
     adj_gen: u32,
-    /// Erase-zone history for Undo / Redo (snapshots of `adj.erase_mm`).
-    zone_undo: Vec<Vec<[f32; 4]>>,
-    zone_redo: Vec<Vec<[f32; 4]>>,
+    /// Zone history for Undo / Redo (snapshots of `adj.erase_mm` and `adj.picture_mm`).
+    zone_undo: Vec<ZoneSnap>,
+    zone_redo: Vec<ZoneSnap>,
     ready: Option<Ready>,
     pending: Option<u64>,
     failed: Option<(u64, String)>,
@@ -123,6 +123,8 @@ pub struct App {
     ocr_info: String,
     show_about: bool,
     draw_zones: bool,
+    /// What the mouse draws when `draw_zones` is on: picture zones instead of erase zones.
+    draw_pictures: bool,
     zone_drag: Option<egui::Pos2>,
     shot: Option<Shot>,
     /// Test hook: run an export without a file dialog (env LEGATOROCR_GUI_AUTOEXPORT_PDF).
@@ -161,6 +163,7 @@ impl App {
             ocr_info: String::new(),
             show_about: false,
             draw_zones: false,
+            draw_pictures: false,
             zone_drag: None,
             auto_export: std::env::var_os("LEGATOROCR_GUI_AUTOEXPORT_PDF")
                 .map(|p| (PathBuf::from(p), false)),
@@ -241,6 +244,7 @@ impl App {
                         skew_deg: a.skew_deg,
                         content_adjust_mm: a.content_adjust_mm,
                         erase_mm: a.erase_mm.clone(),
+                        picture_mm: a.picture_mm.clone(),
                     },
                 )
             })
@@ -286,6 +290,7 @@ impl App {
                         skew_deg: a.skew_deg,
                         content_adjust_mm: a.content_adjust_mm,
                         erase_mm: a.erase_mm.clone(),
+                        picture_mm: a.picture_mm.clone(),
                     };
                 }
                 self.settings_gen += 1;
@@ -1583,6 +1588,10 @@ impl App {
             ui.separator();
             ui.checkbox(&mut self.draw_zones, tr("zones.draw"))
                 .on_hover_text(tr("zones.hint"));
+            if self.draw_zones {
+                ui.selectable_value(&mut self.draw_pictures, false, tr("zones.kind_erase"));
+                ui.selectable_value(&mut self.draw_pictures, true, tr("zones.kind_picture"));
+            }
             ui.add_enabled(
                 !self.fit,
                 egui::Slider::new(&mut self.zoom, 0.2..=4.0).suffix("×"),
@@ -1601,7 +1610,7 @@ impl App {
             !self.sheets[i].zone_redo.is_empty(),
         );
         let (mut clear_zones, mut undo_zone, mut redo_zone) = (false, false, false);
-        let mut reset_snap: Option<Vec<[f32; 4]>> = None;
+        let mut reset_snap: Option<ZoneSnap> = None;
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(tr("adj.title")).strong());
             let adj = &mut self.sheets[i].adj;
@@ -1652,7 +1661,9 @@ impl App {
                     )
                     .changed();
             }
-            if ui.button(tr("zones.clear")).clicked() && !adj.erase_mm.is_empty() {
+            if ui.button(tr("zones.clear")).clicked()
+                && !(adj.erase_mm.is_empty() && adj.picture_mm.is_empty())
+            {
                 clear_zones = true;
             }
             if ui
@@ -1670,8 +1681,8 @@ impl App {
                 redo_zone = true;
             }
             if ui.button(tr("adj.reset")).clicked() {
-                if !adj.erase_mm.is_empty() {
-                    reset_snap = Some(adj.erase_mm.clone());
+                if !(adj.erase_mm.is_empty() && adj.picture_mm.is_empty()) {
+                    reset_snap = Some((adj.erase_mm.clone(), adj.picture_mm.clone()));
                 }
                 *adj = SheetAdjust::default();
                 adj_changed = true;
@@ -1721,21 +1732,27 @@ impl App {
                 sh.zone_undo.push(snap);
                 sh.zone_redo.clear();
             }
-            if clear_zones && !sh.adj.erase_mm.is_empty() {
-                sh.zone_undo.push(sh.adj.erase_mm.clone());
+            if clear_zones && !(sh.adj.erase_mm.is_empty() && sh.adj.picture_mm.is_empty()) {
+                sh.zone_undo
+                    .push((sh.adj.erase_mm.clone(), sh.adj.picture_mm.clone()));
                 sh.zone_redo.clear();
                 sh.adj.erase_mm.clear();
+                sh.adj.picture_mm.clear();
                 sh.adj_gen += 1;
             } else if undo_zone {
-                if let Some(prev) = sh.zone_undo.pop() {
-                    sh.zone_redo
-                        .push(std::mem::replace(&mut sh.adj.erase_mm, prev));
+                if let Some((e, p)) = sh.zone_undo.pop() {
+                    sh.zone_redo.push((
+                        std::mem::replace(&mut sh.adj.erase_mm, e),
+                        std::mem::replace(&mut sh.adj.picture_mm, p),
+                    ));
                     sh.adj_gen += 1;
                 }
             } else if redo_zone {
-                if let Some(next) = sh.zone_redo.pop() {
-                    sh.zone_undo
-                        .push(std::mem::replace(&mut sh.adj.erase_mm, next));
+                if let Some((e, p)) = sh.zone_redo.pop() {
+                    sh.zone_undo.push((
+                        std::mem::replace(&mut sh.adj.erase_mm, e),
+                        std::mem::replace(&mut sh.adj.picture_mm, p),
+                    ));
                     sh.adj_gen += 1;
                 }
             }
@@ -1802,8 +1819,10 @@ impl App {
         let osz = ready.original_size;
         let mm_per_px = 25.4 / self.s.dpi.max(36) as f32;
         let zones: Vec<[f32; 4]> = sheet.adj.erase_mm.clone();
+        let pic_zones: Vec<[f32; 4]> = sheet.adj.picture_mm.clone();
+        let draw_pictures = self.draw_pictures;
         let mut new_zone: Option<[f32; 4]> = None;
-        let mut remove_zone: Option<usize> = None;
+        let mut remove_zone: Option<(bool, usize)> = None;
         let drag = &mut self.zone_drag;
         let mut draw = |ui: &mut egui::Ui| {
             ui.horizontal_top(|ui| {
@@ -1857,6 +1876,23 @@ impl App {
                                     egui::StrokeKind::Inside,
                                 );
                             }
+                            for z in &pic_zones {
+                                let r = egui::Rect::from_two_pos(
+                                    to_screen(z[0], z[1]),
+                                    to_screen(z[0] + z[2], z[1] + z[3]),
+                                );
+                                painter.rect_filled(
+                                    r,
+                                    0.0,
+                                    Color32::from_rgba_unmultiplied(50, 110, 230, 60),
+                                );
+                                painter.rect_stroke(
+                                    r,
+                                    0.0,
+                                    egui::Stroke::new(1.5, Color32::from_rgb(50, 110, 230)),
+                                    egui::StrokeKind::Inside,
+                                );
+                            }
                             if draw_zones {
                                 if resp.drag_started() {
                                     *drag = resp.interact_pointer_pos();
@@ -1885,12 +1921,19 @@ impl App {
                                 if resp.secondary_clicked() {
                                     if let Some(p) = resp.interact_pointer_pos() {
                                         let (mx, my) = to_mm(p);
-                                        remove_zone = zones.iter().rposition(|z| {
+                                        let hit = |z: &[f32; 4]| {
                                             mx >= z[0]
                                                 && mx <= z[0] + z[2]
                                                 && my >= z[1]
                                                 && my <= z[1] + z[3]
-                                        });
+                                        };
+                                        remove_zone = pic_zones
+                                            .iter()
+                                            .rposition(hit)
+                                            .map(|k| (true, k))
+                                            .or_else(|| {
+                                                zones.iter().rposition(hit).map(|k| (false, k))
+                                            });
                                     }
                                 }
                             }
@@ -1909,23 +1952,40 @@ impl App {
         }
         if let Some(z) = new_zone {
             let a = &mut self.sheets[i].adj;
-            if a.erase_mm.len() < 64 {
-                let before = a.erase_mm.clone();
-                a.erase_mm.push(z);
+            let list = if draw_pictures {
+                &a.picture_mm
+            } else {
+                &a.erase_mm
+            };
+            if list.len() < 64 {
+                let before = (a.erase_mm.clone(), a.picture_mm.clone());
+                if draw_pictures {
+                    a.picture_mm.push(z);
+                } else {
+                    a.erase_mm.push(z);
+                }
                 self.sheets[i].zone_undo.push(before);
                 self.sheets[i].zone_redo.clear();
                 self.sheets[i].adj_gen += 1;
             }
         }
-        if let Some(k) = remove_zone {
-            let before = self.sheets[i].adj.erase_mm.clone();
-            self.sheets[i].adj.erase_mm.remove(k);
+        if let Some((is_pic, k)) = remove_zone {
+            let a = &mut self.sheets[i].adj;
+            let before = (a.erase_mm.clone(), a.picture_mm.clone());
+            if is_pic {
+                a.picture_mm.remove(k);
+            } else {
+                a.erase_mm.remove(k);
+            }
             self.sheets[i].zone_undo.push(before);
             self.sheets[i].zone_redo.clear();
             self.sheets[i].adj_gen += 1;
         }
     }
 }
+
+/// Hand-drawn zones of one sheet: (erase, picture), for Undo / Redo.
+type ZoneSnap = (Vec<[f32; 4]>, Vec<[f32; 4]>);
 
 /// Image, PDF and archive extensions for the "add" dialogs.
 fn all_input_ext() -> Vec<&'static str> {

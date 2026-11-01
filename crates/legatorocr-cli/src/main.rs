@@ -293,6 +293,19 @@ struct Cli {
     #[arg(long, value_name = "X,Y,W,H")]
     erase: Vec<String>,
 
+    /// Photographs from a phone have no usable resolution: assume each shot is framed on a page
+    /// of this size (`A4`, `A5`, `B5`, `Letter`, … or `WIDTHxHEIGHT` in mm) and derive the dpi
+    /// from it. Only used for images without a resolution in their header and without --dpi.
+    /// An estimate: it is off by the margin left around the page.
+    #[arg(long, value_name = "PAPER")]
+    phone_paper: Option<String>,
+
+    /// Collect everything written (PDFs, text, …) plus SHA256SUMS.txt and a MANIFEST.txt into a
+    /// new folder, or into one zip when the name ends in `.zip`, ready to hand over. Refuses to
+    /// overwrite. Needs --pdf. (A zip is limited to 3 GiB of content.)
+    #[arg(long, value_name = "FOLDER|FILE.zip")]
+    package: Option<PathBuf>,
+
     /// Rights statement written into the PDF (copyright holder, licence, contract reference):
     /// XMP `dc:rights` with --pdfa, otherwise the `/Rights` info key plus a visible note icon on
     /// page 2. Needs --pdf.
@@ -475,8 +488,10 @@ fn real_main() -> Result<()> {
         );
         std::process::exit(if v.all_good() { 0 } else { 1 });
     }
-    if (cli.checksums || cli.txt_each || cli.rights_notice.is_some()) && cli.pdf.is_none() {
-        bail!("--checksums, --txt-each and --rights-notice need --pdf");
+    if (cli.checksums || cli.txt_each || cli.rights_notice.is_some() || cli.package.is_some())
+        && cli.pdf.is_none()
+    {
+        bail!("--checksums, --txt-each, --rights-notice and --package need --pdf");
     }
     if cli.txt_each && !cli.ocr {
         bail!("--txt-each needs --ocr");
@@ -606,6 +621,7 @@ fn real_main() -> Result<()> {
         fingers: cli.fingers,
         remove_lines: cli.remove_lines,
         sheet_erase_zones: Vec::new(),
+        sheet_picture_zones: Vec::new(),
         erase_zones: legatorocr_core::cleanup::parse_zones(&cli.erase.join(";")).ok_or_else(
             || anyhow::anyhow!("--erase needs X,Y,WIDTH,HEIGHT in mm (width and height > 0)"),
         )?,
@@ -747,6 +763,12 @@ fn real_main() -> Result<()> {
     }
     let stems = output_stems(&inputs);
     let from_project = project.is_some();
+    let phone_paper = match &cli.phone_paper {
+        Some(n) => Some(legatorocr_engine::files::paper_mm(n).ok_or_else(|| {
+            anyhow::anyhow!("--phone-paper: unknown paper '{n}' (A3, A4, A5, A6, B5, Letter, Legal or WIDTHxHEIGHT in mm)")
+        })?),
+        None => None,
+    };
     let sheets: Vec<SheetInput> = inputs
         .iter()
         .zip(&adjusts)
@@ -755,6 +777,11 @@ fn real_main() -> Result<()> {
             let dpi = cli
                 .dpi
                 .or_else(|| if from_project { None } else { detect_dpi(p) })
+                .or_else(|| {
+                    phone_paper
+                        .filter(|_| !from_project)
+                        .and_then(|pp| legatorocr_engine::files::dpi_from_paper(p, pp))
+                })
                 .unwrap_or(settings.dpi);
             SheetInput {
                 path: p.clone(),
@@ -1005,6 +1032,20 @@ fn real_main() -> Result<()> {
         write_atomic(p, &legatorocr_engine::docx::from_pages(&pages, title))?;
         eprintln!("wrote {}", p.display());
         written.push(p.clone());
+    }
+    if let Some(dest) = &cli.package {
+        let p = legatorocr_engine::package::build(
+            dest,
+            &written,
+            legatorocr_engine::now_unix(),
+            cli.rights_notice.as_deref().unwrap_or(""),
+        )?;
+        eprintln!(
+            "package: {} ({} files, {} bytes of content)",
+            p.dest.display(),
+            p.files,
+            p.bytes
+        );
     }
     if let (true, Some(pdf_path)) = (cli.checksums, &cli.pdf) {
         let base = pdf_path

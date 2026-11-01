@@ -201,6 +201,40 @@ pub fn detect_dpi(path: &Path) -> Option<u32> {
     None
 }
 
+/// Paper size in millimetres from a name (`A3`…`A6`, `B5`, `Letter`, `Legal`) or `WIDTHxHEIGHT`.
+pub fn paper_mm(name: &str) -> Option<(f64, f64)> {
+    let n = name.trim().to_ascii_lowercase();
+    let known = match n.as_str() {
+        "a3" => Some((297.0, 420.0)),
+        "a4" => Some((210.0, 297.0)),
+        "a5" => Some((148.0, 210.0)),
+        "a6" => Some((105.0, 148.0)),
+        "b5" => Some((176.0, 250.0)),
+        "letter" => Some((215.9, 279.4)),
+        "legal" => Some((215.9, 355.6)),
+        _ => None,
+    };
+    if known.is_some() {
+        return known;
+    }
+    let (w, h) = n.split_once('x')?;
+    let (w, h): (f64, f64) = (w.trim().parse().ok()?, h.trim().parse().ok()?);
+    ((30.0..=2000.0).contains(&w) && (30.0..=2000.0).contains(&h)).then_some((w, h))
+}
+
+/// Resolution of a photograph that has none (phone cameras write no usable dpi): the shot is
+/// assumed to be framed on a page of `paper`, so the long side of the picture is the long side
+/// of the paper. Only an estimate, good to the margin left around the page (say 10–15 %); the
+/// result is kept within 100–1200 dpi.
+pub fn dpi_from_paper(path: &Path, paper: (f64, f64)) -> Option<u32> {
+    let (path, _) = &split_frame(path);
+    let (w, h) = image::image_dimensions(path).ok()?;
+    let long_px = w.max(h) as f64;
+    let long_mm = paper.0.max(paper.1);
+    let dpi = (long_px / (long_mm / 25.4)).round();
+    dpi.is_finite().then(|| (dpi as u32).clamp(100, 1200))
+}
+
 /// Is `w`×`h` pixels at `dpi` a believable sheet of paper (2–24 in, at most ~2:1 beyond A-series)?
 fn plausible_page(w: u32, h: u32, dpi: u32) -> bool {
     let (a, b) = (w as f64 / dpi as f64, h as f64 / dpi as f64);
@@ -251,6 +285,21 @@ fn dpi_from_header(b: &[u8]) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paper_names_and_dpi_estimate() {
+        assert_eq!(paper_mm("A4"), Some((210.0, 297.0)));
+        assert_eq!(paper_mm("200x300"), Some((200.0, 300.0)));
+        assert_eq!(paper_mm("A9"), None);
+        assert_eq!(paper_mm("5x5"), None);
+        let d = std::env::temp_dir().join(format!("lgr-paper-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let p = d.join("phone.png");
+        image::RgbImage::new(4000, 3000).save(&p).unwrap();
+        // 4000 px over 297 mm = 342 dpi
+        assert_eq!(dpi_from_paper(&p, (210.0, 297.0)), Some(342));
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     #[test]
     fn dpi_from_png_and_jpeg_headers() {
