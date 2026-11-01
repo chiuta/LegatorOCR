@@ -1,3 +1,4 @@
+#![allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
 //! LegatorOCR native OCR engine — pure Rust, no external program and no code from any other OCR
 //! project. Pipeline: binarise (polarity, ruling removal) → X-Y cut into text lines → normalise
 //! each line to 32 px high → CNN + 2×BiGRU + CTC recogniser → word boxes with confidences.
