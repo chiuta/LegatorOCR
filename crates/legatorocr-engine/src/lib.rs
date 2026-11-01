@@ -12,10 +12,13 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 pub mod archive;
+pub mod checksums;
 pub mod docx;
 pub mod eval;
 pub mod extpdf;
 pub mod files;
+pub mod iso;
+pub mod package;
 pub mod profiles;
 pub mod project;
 pub mod report;
@@ -979,6 +982,7 @@ mod tests {
             skew_deg: 0.0,
             blank: false,
             split_index: None,
+            content_box: None,
             layers: None,
         };
         let p = std::env::temp_dir().join(format!("lgr-jpeg-{}.jpg", std::process::id()));
@@ -1385,6 +1389,7 @@ mod tests {
             skew_deg: 0.0,
             blank: false,
             split_index: None,
+            content_box: None,
             layers: None,
         };
         let tif = d.join("p.tif");
@@ -1427,6 +1432,7 @@ mod pdf_input_tests {
                     skew_deg: 0.0,
                     blank: false,
                     split_index: None,
+                    content_box: None,
                     layers: None,
                 },
                 &[],

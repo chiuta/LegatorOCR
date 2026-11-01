@@ -60,6 +60,10 @@ pub struct Meta {
     pub keywords: Option<String>,
     /// Seconds since the Unix epoch; written as CreationDate / ModDate (UTC).
     pub created_unix: Option<u64>,
+    /// Rights statement (copyright holder, licence, contract reference). Written as XMP
+    /// `dc:rights` with `--pdfa`. Without it: Info key `/Rights`, plus a visible note (Text
+    /// annotation) on page 2 when the file has more than one page.
+    pub rights: Option<String>,
 }
 
 /// `D:YYYYMMDDHHmmSSZ` for a Unix time (UTC, proleptic Gregorian).
@@ -312,12 +316,27 @@ impl PdfWriter {
         let z = deflate(cs.as_bytes());
         self.stream_obj(cs_id, "/Filter /FlateDecode", &z);
         let page_id = self.alloc();
+        // A visible rights note: a Text annotation (sticky note) on page 2. PDF/A requires an
+        // appearance stream for annotations, so with --pdfa the rights live in the XMP only.
+        let annots = match self.meta.rights.as_deref().filter(|r| !r.trim().is_empty()) {
+            Some(r) if !self.pdfa && self.page_ids.len() == 1 => {
+                let (x0, y1) = (12.0f32, (hpt - 12.0).max(24.0));
+                format!(
+                    " /Annots [ << /Type /Annot /Subtype /Text /Rect [{x0:.1} {:.1} {:.1} {y1:.1}] \
+                     /Contents {} /Name /Comment /Open false /F 28 /C [1 0.85 0] >> ]",
+                    y1 - 24.0,
+                    x0 + 24.0,
+                    pdf_text_string(r)
+                )
+            }
+            _ => String::new(),
+        };
         self.plain_obj(
             page_id,
             &format!(
                 "<< /Type /Page /Parent {PAGES} 0 R /MediaBox [0 0 {wpt:.3} {hpt:.3}] \
                  /Resources << /XObject << {xobjects} >> /Font << /F1 {FONT} 0 R >> >> \
-                 /Contents {cs_id} 0 R >>"
+                 /Contents {cs_id} 0 R{annots} >>"
             ),
         );
         self.page_ids.push(page_id);
@@ -537,6 +556,7 @@ impl PdfWriter {
                     .as_deref()
                     .filter(|v| !v.trim().is_empty()),
                 producer: &producer,
+                rights: self.meta.rights.as_deref().filter(|v| !v.trim().is_empty()),
                 date: date.as_deref(),
             }
             .render();
@@ -570,6 +590,12 @@ impl PdfWriter {
         ] {
             if let Some(v) = v.as_deref().filter(|v| !v.trim().is_empty()) {
                 extra.push_str(&format!(" /{key} {}", pdf_text_string(v)));
+            }
+        }
+        if let Some(r) = self.meta.rights.as_deref().filter(|v| !v.trim().is_empty()) {
+            if !self.pdfa {
+                // custom Info key (PDF/A would need an XMP extension schema for it)
+                extra.push_str(&format!(" /Rights {}", pdf_text_string(r)));
             }
         }
         if let Some(d) = &date {
@@ -715,6 +741,7 @@ mod tests {
             skew_deg: 0.0,
             blank: false,
             split_index: None,
+            content_box: None,
             layers: None,
         }
     }
@@ -734,6 +761,7 @@ mod tests {
             subject: Some("Să\nvăd".into()),
             keywords: None,
             created_unix: Some(0),
+            rights: None,
         });
         w.add_page(
             &page(PageImage::Rgb(RgbImage::from_pixel(
@@ -816,6 +844,31 @@ mod tests {
         assert_eq!(&d[..3], &[2, 0x7F, 0xFF]); // first row vs. zero row
         assert_eq!(&d[3..], &[2, 0, 0]); // identical second row → zeros
     }
+
+    #[test]
+    fn rights_notice_in_xmp_and_as_a_note_on_page_two() {
+        let mk = |pdfa: bool| {
+            let mut w = PdfWriter::new(Compress::Flate);
+            w.set_pdfa(pdfa);
+            w.set_meta(Meta {
+                rights: Some("© Biblioteca, contract 12/2026 (Legea 8/1996)".into()),
+                ..Meta::default()
+            });
+            for _ in 0..2 {
+                w.add_page(&page(PageImage::Bw(BitImage::new(40, 40))), &[]);
+            }
+            String::from_utf8_lossy(&w.finish()).into_owned()
+        };
+        let plain = mk(false);
+        assert_eq!(plain.matches("/Subtype /Text").count(), 1);
+        assert!(plain.contains("/Rights "));
+        let a = mk(true);
+        assert!(a.contains("<dc:rights>"));
+        assert!(
+            !a.contains("/Subtype /Text"),
+            "PDF/A needs appearance streams"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -831,6 +884,7 @@ mod unicode_file {
             subject: Some("subiect".into()),
             keywords: Some("a, b".into()),
             created_unix: Some(1_793_000_000),
+            rights: Some("© Biblioteca X, contract 12/2026".into()),
         });
         let mut bw = BitImage::new(600, 300);
         bw.set(1, 1, true);
@@ -840,6 +894,7 @@ mod unicode_file {
             skew_deg: 0.0,
             blank: false,
             split_index: None,
+            content_box: None,
             layers: None,
         };
         let words: Vec<Word> = ["Școala", "țăranului"]
@@ -892,6 +947,7 @@ mod unicode_file {
                 skew_deg: 0.0,
                 blank: false,
                 split_index: None,
+                content_box: None,
                 layers: None,
             },
             &words,
@@ -924,6 +980,7 @@ mod unicode_file {
                 skew_deg: 0.0,
                 blank: false,
                 split_index: None,
+                content_box: None,
                 layers: None,
             },
             &[],
@@ -949,6 +1006,7 @@ mod unicode_file {
             skew_deg: 0.0,
             blank: false,
             split_index: None,
+            content_box: None,
             layers: None,
         };
         let words: Vec<Word> = ["Școala", "țăranului", "înființată", "Âțâră", "e", "😀ok"]
@@ -1030,6 +1088,7 @@ mod g4_roundtrip {
                 skew_deg: 0.0,
                 blank: false,
                 split_index: None,
+                content_box: None,
                 layers: None,
             };
             let mut wr = PdfWriter::new(Compress::Flate);
@@ -1071,6 +1130,7 @@ mod outline_tests {
             skew_deg: 0.0,
             blank: false,
             split_index: None,
+            content_box: None,
             layers: None,
         }
     }

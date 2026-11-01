@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/legatorocr-nocr", "crates/legatorocr-core", "crates/legatorocr-pdf", "crates/legatorocr-ocr", "crates/legatorocr-engine", "crates/legatorocr-cli", "crates/legatorocr-gui"]
 
 [workspace.package]
-version = "0.2.0-pre.3"
+version = "0.2.0-pre.5"
 edition = "2021"
 rust-version = "1.95"
 license = "MIT"

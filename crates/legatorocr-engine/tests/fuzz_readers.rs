@@ -102,6 +102,7 @@ fn sample_pdf() -> Vec<u8> {
         skew_deg: 0.0,
         blank: false,
         split_index: None,
+        content_box: None,
         layers: None,
     };
     let words = vec![

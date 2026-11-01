@@ -179,6 +179,7 @@ pub struct SheetAdjust {
     pub content_adjust_mm: [f32; 4],
     /// Erase rectangles drawn on the original (x, y, w, h in mm).
     pub erase_mm: Vec<[f32; 4]>,
+    pub picture_mm: Vec<[f32; 4]>,
 }
 
 impl UiSettings {
@@ -215,6 +216,7 @@ impl UiSettings {
             dewarp: self.dewarp,
             content_adjust_mm: adj.content_adjust_mm,
             sheet_erase_zones: adj.erase_mm.clone(),
+            sheet_picture_zones: adj.picture_mm.clone(),
             align: self.align,
             threshold: self.threshold,
             normalize_bg: self.normalize_bg,

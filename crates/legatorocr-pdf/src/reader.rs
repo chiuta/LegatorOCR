@@ -2466,6 +2466,7 @@ mod tests {
             skew_deg: 0.0,
             blank: false,
             split_index: None,
+            content_box: None,
             layers: None,
         }
     }

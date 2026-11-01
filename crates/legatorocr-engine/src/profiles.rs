@@ -44,6 +44,21 @@ const BUILTIN: &[(&str, &str, &str)] = &[
         "mode = gray\nauto_invert = true\nauto_levels = true\n",
     ),
     (
+        "doc-birou",
+        "Office documents and invoices (scan at 300 dpi): black & white, searchable PDF",
+        "mode = bw\nthreshold = auto\nauto_levels = true\ndespeckle = true\n",
+    ),
+    (
+        "schite-desene",
+        "Architectural / pencil sketches (scan at 400 dpi): grey, even lighting, light compression",
+        "mode = gray\nnormalize = true\nauto_levels = true\npdf_quality = 90\n",
+    ),
+    (
+        "registre-manuscrise",
+        "Old registers and manuscripts (scan at 300-600 dpi): colour kept faithfully, high quality",
+        "mode = color\nsharpen = 0.15\npdf_quality = 92\n",
+    ),
+    (
         "flux-1-optim",
         "Flux 1 (optim, scan at 300 dpi): sharp 1-bit text, pictures in colour, margins cleaned, best quality",
         "mode = mixed\nthreshold = auto\nauto_levels = true\npunch_holes = true\nsharpen = 0.2\npdf_quality = 85\n",

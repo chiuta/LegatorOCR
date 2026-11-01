@@ -84,6 +84,7 @@ fn gen_page(r: &mut Rng) -> Page {
         skew_deg: 0.0,
         blank: false,
         split_index: None,
+        content_box: None,
         layers,
     }
 }
@@ -336,6 +337,7 @@ fn too_many_distinct_characters_do_not_corrupt_the_font() {
         skew_deg: 0.0,
         blank: false,
         split_index: None,
+        content_box: None,
         layers: None,
     };
     for _ in 0..4 {

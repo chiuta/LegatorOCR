@@ -29,6 +29,8 @@ pub struct SheetAdj {
     pub content_adjust_mm: [f32; 4],
     /// Hand-drawn erase rectangles (x, y, w, h in mm of the loaded scan).
     pub erase_mm: Vec<[f32; 4]>,
+    /// Hand-drawn picture rectangles (x, y, w, h in mm of the loaded scan).
+    pub picture_mm: Vec<[f32; 4]>,
 }
 
 impl SheetAdj {
@@ -41,6 +43,7 @@ impl SheetAdj {
         s.manual_skew_deg = self.skew_deg;
         s.content_adjust_mm = self.content_adjust_mm;
         s.sheet_erase_zones = self.erase_mm.clone();
+        s.sheet_picture_zones = self.picture_mm.clone();
         s
     }
 }
@@ -307,6 +310,12 @@ impl Project {
                 let [w, x, y, z] = a.content_adjust_mm;
                 out.push_str(&format!("adjust = {w},{x},{y},{z}\n"));
             }
+            if !a.picture_mm.is_empty() {
+                out.push_str(&format!(
+                    "picture = {}\n",
+                    legatorocr_core::cleanup::zones_to_string(&a.picture_mm)
+                ));
+            }
             if !a.erase_mm.is_empty() {
                 out.push_str(&format!(
                     "erase = {}\n",
@@ -369,6 +378,10 @@ impl Project {
                             v.parse()
                                 .map_err(|e: std::num::ParseFloatError| at(e.into()))?,
                         )
+                    }
+                    "picture" => {
+                        adj.picture_mm = legatorocr_core::cleanup::parse_zones(v)
+                            .ok_or_else(|| at(anyhow::anyhow!("invalid picture zones '{v}'")))?
                     }
                     "erase" => {
                         adj.erase_mm = legatorocr_core::cleanup::parse_zones(v)
@@ -443,6 +456,7 @@ mod tests {
                 skew_deg: Some(-1.25),
                 content_adjust_mm: [0.0, 1.0, 2.0, -3.0],
                 erase_mm: vec![[10.0, 20.5, 30.0, 40.0], [0.0, 0.0, 5.0, 5.0]],
+                picture_mm: vec![[50.0, 60.0, 70.5, 80.0]],
             },
         ));
         p.sheets

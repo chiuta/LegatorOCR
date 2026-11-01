@@ -99,6 +99,11 @@ pub struct Settings {
     /// Rectangles (x, y, width, height in mm, same frame as `erase_zones`) that are always
     /// kept as colour pictures in mixed / hybrid output, whatever the automatic detector says.
     pub picture_zones: Vec<[f32; 4]>,
+    /// Like `picture_zones` but in millimetres of the *scanned sheet as loaded* (before
+    /// rotation, splitting and deskew); drawn with the mouse in the GUI, stored per sheet.
+    /// Followed through those steps, so they stay on the picture. Not followed through
+    /// perspective correction (then they are dropped) or dewarping (position approximate).
+    pub sheet_picture_zones: Vec<[f32; 4]>,
     /// Like `erase_zones` but in millimetres of the *scanned sheet as loaded* (before
     /// rotation and page splitting); drawn with the mouse in the GUI, stored per sheet.
     pub sheet_erase_zones: Vec<[f32; 4]>,
@@ -145,6 +150,7 @@ impl Default for Settings {
             remove_lines: false,
             erase_zones: Vec::new(),
             picture_zones: Vec::new(),
+            sheet_picture_zones: Vec::new(),
             sheet_erase_zones: Vec::new(),
             dropout: Dropout::Off,
             despeckle_strength: 1.0,
@@ -204,6 +210,10 @@ pub struct Page {
     pub blank: bool,
     /// Which half of a split spread this is: `Some(0)` left, `Some(1)` right.
     pub split_index: Option<u8>,
+    /// Where the detected content box (after the per-page adjustment) lies on this page:
+    /// x, y, width, height in pixels of `image`. `None` for blank pages. Lets a viewer draw
+    /// the box and turn a drag of its edges into `Settings::content_adjust_mm`.
+    pub content_box: Option<[u32; 4]>,
     /// Layered form (`Mixed`/`Hybrid`): the PDF writer stores these instead of `image`.
     pub layers: Option<Layers>,
 }
@@ -297,6 +307,20 @@ impl Settings {
                 ]
             })
             .collect();
+        s.sheet_picture_zones = s
+            .sheet_picture_zones
+            .iter()
+            .filter(|z| z.iter().all(|v| v.is_finite()) && z[2] > 0.0 && z[3] > 0.0)
+            .take(64)
+            .map(|z| {
+                [
+                    z[0].clamp(-5000.0, 5000.0),
+                    z[1].clamp(-5000.0, 5000.0),
+                    z[2].min(5000.0),
+                    z[3].min(5000.0),
+                ]
+            })
+            .collect();
         s.picture_zones = s
             .picture_zones
             .iter()
@@ -331,20 +355,50 @@ impl Settings {
 }
 
 /// Stages shared by [`process_page`] and [`measure_page`]: orientation and page split.
-fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<(RgbImage, Option<u8>)> {
-    let mut rgb = src.to_rgb8();
-    if s.rotate_quarters % 4 != 0 {
-        rgb = transform::rot90(&rgb, s.rotate_quarters); // no copy at all when nothing is turned
+/// One page cut from a sheet: the image, which half it is, and the hand-marked picture zones
+/// (x, y, width, height in pixels of this image).
+type SheetPart = (RgbImage, Option<u8>, Vec<[f32; 4]>);
+
+/// Rotate a pixel rectangle together with an image of `w`×`h` by `turns` quarter turns
+/// clockwise; returns the new image size too.
+fn rot90_rects(rects: &mut [[f32; 4]], w: u32, h: u32, turns: u8) -> (u32, u32) {
+    let (mut w, mut h) = (w, h);
+    for _ in 0..turns % 4 {
+        for r in rects.iter_mut() {
+            // (x, y) -> (H - y, x) for a point, so a rectangle keeps its corner nearest the origin
+            *r = [h as f32 - r[1] - r[3], r[0], r[3], r[2]];
+        }
+        std::mem::swap(&mut w, &mut h);
     }
+    (w, h)
+}
+
+fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
+    let base = src.to_rgb8();
+    let (w0, h0) = base.dimensions();
+    let px = |mm: f32| mm / 25.4 * s.dpi as f32;
+    let mut zones: Vec<[f32; 4]> = s
+        .sheet_picture_zones
+        .iter()
+        .map(|z| [px(z[0]), px(z[1]), px(z[2]), px(z[3])])
+        .collect();
+    rot90_rects(&mut zones, w0, h0, s.rotate_quarters);
+    let mut rgb = if s.rotate_quarters % 4 == 0 {
+        base // nothing turned: no copy at all
+    } else {
+        transform::rot90(&base, s.rotate_quarters)
+    };
     if s.perspective {
         if let Some(flat) = crate::perspective::correct(&rgb) {
             rgb = flat;
+            zones.clear(); // a projective warp is not followed
         }
     }
 
     if s.auto_orient {
         let a = analyse(&imageops::grayscale(&rgb), s.dpi);
         if orient::needs_quarter_turn(&a.ink, a.dpi) {
+            rot90_rects(&mut zones, rgb.width(), rgb.height(), 1);
             rgb = transform::rot90(&rgb, 1);
         }
     }
@@ -372,9 +426,19 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<(RgbImage, Option<u8>)> 
         Some(x) => {
             let l = imageops::crop_imm(&rgb, 0, 0, x, rgb.height()).to_image();
             let r = imageops::crop_imm(&rgb, x, 0, rgb.width() - x, rgb.height()).to_image();
-            vec![(l, Some(0)), (r, Some(1))]
+            let clip = |z: &[f32; 4], x0: f32, x1: f32| {
+                let (a, b) = (z[0].max(x0), (z[0] + z[2]).min(x1));
+                (b > a).then_some([a - x0, z[1], b - a, z[3]])
+            };
+            let xf = x as f32;
+            let lz = zones.iter().filter_map(|z| clip(z, 0.0, xf)).collect();
+            let rz = zones
+                .iter()
+                .filter_map(|z| clip(z, xf, rgb.width() as f32))
+                .collect();
+            vec![(l, Some(0), lz), (r, Some(1), rz)]
         }
-        None => vec![(rgb, None)],
+        None => vec![(rgb, None, zones)],
     }
 }
 
@@ -395,7 +459,7 @@ pub fn process_page(src: &DynamicImage, s: &Settings) -> Vec<Page> {
     let src = &*erase_on_sheet(src, s);
     split_sheet(src, s)
         .into_iter()
-        .map(|(img, idx)| render(prepare(img, s), idx, s))
+        .map(|(img, idx, zones)| render(prepare(img, s, zones), idx, s))
         .collect()
 }
 
@@ -407,8 +471,8 @@ pub fn measure_page(src: &DynamicImage, s: &Settings) -> Vec<Option<(f32, f32)>>
     let src = &*erase_on_sheet(src, s);
     split_sheet(src, s)
         .into_iter()
-        .map(|(img, _)| {
-            let p = prepare(img, s);
+        .map(|(img, _, zones)| {
+            let p = prepare(img, s, zones);
             p.content.map(|r| {
                 let [ml, mt, mr, mb] = s.margins_mm;
                 let mm = |px: u32| px as f32 * 25.4 / s.dpi as f32;
@@ -426,9 +490,11 @@ struct Prepared {
     skew_deg: f32,
     /// Content box in `img` coordinates, after the per-page adjustment.
     content: Option<Rect>,
+    /// Hand-marked picture zones (x, y, w, h) in `img` pixels: typed ones and mouse-drawn ones.
+    pictures: Vec<[f32; 4]>,
 }
 
-fn prepare(mut img: RgbImage, s: &Settings) -> Prepared {
+fn prepare(mut img: RgbImage, s: &Settings, mut pictures: Vec<[f32; 4]>) -> Prepared {
     // --- clean-up: fixes that make every later stage's job easier ----------
     if s.auto_invert {
         cleanup::invert_if_negative(&mut img);
@@ -489,8 +555,30 @@ fn prepare(mut img: RgbImage, s: &Settings) -> Prepared {
     };
     if let Some(a) = angle {
         if a.abs() > 0.05f32.to_radians() {
+            let (w, h) = img.dimensions();
             img = transform::rotate_cw(&img, a, bg);
             skew_deg = a.to_degrees();
+            // follow the zones through the rotation (bounding box of the rotated corners)
+            let (sn, cs) = (a.sin(), a.cos());
+            let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0);
+            let (ncx, ncy) = (img.width() as f32 / 2.0, img.height() as f32 / 2.0);
+            for z in pictures.iter_mut() {
+                let pts = [
+                    (z[0], z[1]),
+                    (z[0] + z[2], z[1]),
+                    (z[0], z[1] + z[3]),
+                    (z[0] + z[2], z[1] + z[3]),
+                ]
+                .map(|(x, y)| {
+                    let (dx, dy) = (x - cx, y - cy);
+                    (ncx + dx * cs - dy * sn, ncy + dx * sn + dy * cs)
+                });
+                let x0 = pts.iter().map(|p| p.0).fold(f32::MAX, f32::min);
+                let x1 = pts.iter().map(|p| p.0).fold(f32::MIN, f32::max);
+                let y0 = pts.iter().map(|p| p.1).fold(f32::MAX, f32::min);
+                let y1 = pts.iter().map(|p| p.1).fold(f32::MIN, f32::max);
+                *z = [x0, y0, x1 - x0, y1 - y0];
+            }
         }
     }
 
@@ -533,11 +621,19 @@ fn prepare(mut img: RgbImage, s: &Settings) -> Prepared {
         };
         rect
     });
+    // typed zones are in millimetres of the deskewed page
+    let mm_px = |mm: f32| mm / 25.4 * s.dpi as f32;
+    pictures.extend(
+        s.picture_zones
+            .iter()
+            .map(|z| [mm_px(z[0]), mm_px(z[1]), mm_px(z[2]), mm_px(z[3])]),
+    );
     Prepared {
         img,
         bg,
         skew_deg,
         content,
+        pictures,
     }
 }
 
@@ -599,6 +695,7 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
         bg,
         skew_deg,
         content,
+        pictures,
     } = p;
     let blank = content.is_none();
     // Output resolution: only ever *down*-sampled.
@@ -735,15 +832,13 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
             } else {
                 let gray = imageops::grayscale(&rgb);
                 let mut zones = pictures::detect(&gray, out_dpi, s.picture_sensitivity);
-                // Hand-marked pictures: mm in the deskewed page → source px → canvas px.
-                for z in &s.picture_zones {
-                    let px = |mm: f32| mm / 25.4 * s.dpi as f32;
-                    let x0 = (((px(z[0]) as i64 - lay.cx) as f32 * f).round() as i64).max(0);
-                    let y0 = (((px(z[1]) as i64 - lay.cy) as f32 * f).round() as i64).max(0);
-                    let x1 = ((((px(z[0] + z[2])) as i64 - lay.cx) as f32 * f).round() as i64)
-                        .min(cw as i64);
-                    let y1 = ((((px(z[1] + z[3])) as i64 - lay.cy) as f32 * f).round() as i64)
-                        .min(ch as i64);
+                // Hand-marked pictures: pixels of the deskewed page -> canvas pixels.
+                for z in &pictures {
+                    let to = |v: f32, o: i64| ((v - o as f32) * f).round() as i64;
+                    let x0 = to(z[0], lay.cx).max(0);
+                    let y0 = to(z[1], lay.cy).max(0);
+                    let x1 = to(z[0] + z[2], lay.cx).min(cw as i64);
+                    let y1 = to(z[1] + z[3], lay.cy).min(ch as i64);
                     if x1 > x0 && y1 > y0 {
                         zones.push(pictures::Zone {
                             rect: Rect {
@@ -799,12 +894,22 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
             }
         }
     };
+    let content_box = content.map(|r| {
+        let px = |v: i64| ((v as f32) * f).round().max(0.0) as u32;
+        [
+            px(r.x as i64 - lay.cx),
+            px(r.y as i64 - lay.cy),
+            px(r.w as i64).max(1),
+            px(r.h as i64).max(1),
+        ]
+    });
     Page {
         image,
         dpi: out_dpi,
         skew_deg,
         blank,
         split_index,
+        content_box,
         layers,
     }
 }
@@ -938,6 +1043,119 @@ mod tests {
             .as_ref()
             .expect("layers when a picture is forced");
         assert!(l.patches.len() > n0, "{} patches vs {n0}", l.patches.len());
+    }
+
+    fn red_share(p: &Page) -> Option<f32> {
+        let l = p.layers.as_ref()?;
+        let (mut red, mut n) = (0u64, 0u64);
+        for pt in &l.patches {
+            for px in pt.img.pixels() {
+                n += 1;
+                if px[0] > 150 && px[1] < 90 {
+                    red += 1;
+                }
+            }
+        }
+        (n > 0).then(|| red as f32 / n as f32)
+    }
+
+    #[test]
+    fn mouse_drawn_zone_follows_the_picture_through_rotation_and_skew() {
+        let g = text_page(1200, 900, 100, 1100);
+        let mut rgb = to_rgb(&g);
+        // red block at x 150..400, y 700..800 of the loaded sheet
+        for y in 700..800 {
+            for x in 150..400 {
+                rgb.put_pixel(x, y, Rgb([200, 40, 40]));
+            }
+        }
+        let src = image::DynamicImage::ImageRgb8(rgb);
+        let mm = |px: f32| px / 300.0 * 25.4;
+        for (quarters, skew) in [
+            (0u8, None),
+            (1, None),
+            (3, None),
+            (0, Some(3.0f32)),
+            (1, Some(-4.0)),
+        ] {
+            let s = Settings {
+                mode: OutputMode::Mixed,
+                dpi: 300,
+                deskew: false,
+                manual_skew_deg: skew,
+                auto_orient: false,
+                rotate_quarters: quarters,
+                sheet_picture_zones: vec![[mm(140.0), mm(690.0), mm(270.0), mm(120.0)]],
+                ..Settings::default()
+            };
+            let page = &process_page(&src, &s)[0];
+            let share = red_share(page).unwrap_or(0.0);
+            assert!(
+                share > 0.5,
+                "quarters {quarters}, skew {skew:?}: only {share} of the patch is the block"
+            );
+        }
+    }
+
+    #[test]
+    fn mouse_drawn_zone_lands_on_the_right_half_of_a_split_spread() {
+        let g = text_page(2400, 900, 100, 2300);
+        let mut rgb = to_rgb(&g);
+        for y in 600..800 {
+            for x in 1700..2000 {
+                rgb.put_pixel(x, y, Rgb([200, 40, 40]));
+            }
+        }
+        let src = image::DynamicImage::ImageRgb8(rgb);
+        let mm = |px: f32| px / 300.0 * 25.4;
+        let s = Settings {
+            mode: OutputMode::Mixed,
+            dpi: 300,
+            deskew: false,
+            split: SplitMode::Middle,
+            sheet_picture_zones: vec![[mm(1690.0), mm(590.0), mm(320.0), mm(220.0)]],
+            ..Settings::default()
+        };
+        let pages = process_page(&src, &s);
+        assert_eq!(pages.len(), 2);
+        assert!(red_share(&pages[0]).is_none(), "left page has no picture");
+        assert!(red_share(&pages[1]).unwrap_or(0.0) > 0.5);
+    }
+
+    #[test]
+    fn content_box_is_reported_on_the_output_page_and_follows_the_nudge() {
+        let g = text_page(1200, 900, 100, 1100);
+        let src = image::DynamicImage::ImageRgb8(to_rgb(&g));
+        let base = Settings {
+            mode: OutputMode::BlackWhite,
+            dpi: 300,
+            deskew: false,
+            auto_orient: false,
+            margins_mm: [10.0; 4],
+            ..Settings::default()
+        };
+        let p0 = &process_page(&src, &base)[0];
+        let b0 = p0.content_box.expect("box");
+        let margin = (10.0f32 / 25.4 * 300.0).round() as i64;
+        assert!((b0[0] as i64 - margin).abs() <= 2, "{b0:?}");
+        assert!((b0[1] as i64 - margin).abs() <= 2, "{b0:?}");
+        // box + margins = page
+        assert!((b0[0] as i64 + b0[2] as i64 + margin - p0.image.width() as i64).abs() <= 3);
+        // grow the box by 5 mm on the left: it gets 5 mm wider
+        let nudged = Settings {
+            content_adjust_mm: [5.0, 0.0, 0.0, 0.0],
+            ..base.clone()
+        };
+        let b1 = process_page(&src, &nudged)[0].content_box.unwrap();
+        let five = (5.0f32 / 25.4 * 300.0).round() as i64;
+        assert!(
+            (b1[2] as i64 - b0[2] as i64 - five).abs() <= 2,
+            "{b0:?} -> {b1:?}"
+        );
+        // blank page: no box
+        let blank =
+            image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(300, 300, Rgb([240; 3])));
+        assert!(process_page(&blank, &base)[0].content_box.is_none());
     }
 
     #[test]
@@ -1248,6 +1466,16 @@ mod tests {
                 fingers: rnd(2) == 0,
                 remove_lines: rnd(2) == 0,
                 sheet_erase_zones: vec![],
+                sheet_picture_zones: if rnd(3) == 0 {
+                    vec![[
+                        rnd(300) as f32 - 50.0,
+                        rnd(300) as f32 - 50.0,
+                        rnd(200) as f32,
+                        rnd(200) as f32,
+                    ]]
+                } else {
+                    vec![]
+                },
                 picture_zones: if rnd(3) == 0 {
                     vec![[
                         rnd(200) as f32 - 20.0,
