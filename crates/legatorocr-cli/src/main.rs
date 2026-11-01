@@ -1125,6 +1125,7 @@ fn real_main() -> Result<()> {
         bail!("--multitiff needs black & white pages (use --mode bw, or a profile / project that is black & white)");
     }
     let first_err: Mutex<Option<String>> = Mutex::new(None);
+    let saved_images: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
     if cli.multitiff.is_some()
         && (cli.skip_duplicates || cli.split_on_blank || cli.split_on_barcode || cli.skip_blank)
     {
@@ -1239,11 +1240,14 @@ fn real_main() -> Result<()> {
             }
             if save_images {
                 let path = cli.out_dir.join(format!("{name}.{ext}"));
-                if let Err(e) = legatorocr_engine::save_page_image_q(pg, &path, cli.jpeg_quality) {
-                    first_err
-                        .lock()
-                        .unwrap()
-                        .get_or_insert(format!("{}: {e}", path.display()));
+                match legatorocr_engine::save_page_image_q(pg, &path, cli.jpeg_quality) {
+                    Ok(_) => saved_images.lock().unwrap().push(path),
+                    Err(e) => {
+                        first_err
+                            .lock()
+                            .unwrap()
+                            .get_or_insert(format!("{}: {e}", path.display()));
+                    }
                 }
             }
         },
@@ -1290,6 +1294,7 @@ fn real_main() -> Result<()> {
         eprintln!("{} duplicate page(s) skipped", res.skipped_duplicates);
     }
     let mut written: Vec<PathBuf> = Vec::new();
+    let saved_images = saved_images.into_inner().unwrap();
     if let (Some(pdf_path), true) = (&cli.pdf, !res.docs.is_empty()) {
         let stem = pdf_path
             .file_stem()
@@ -1415,17 +1420,23 @@ fn real_main() -> Result<()> {
         }
         let sums = legatorocr_engine::checksums::render(base, &inside)?;
         let sp = base.join("SHA256SUMS.txt");
-        // a folder that collects several documents keeps the hashes of the earlier ones
-        let merged = match std::fs::read_to_string(&sp) {
-            Ok(old) => legatorocr_engine::checksums::merge(&old, &sums),
-            Err(_) => sums,
-        };
-        write_atomic(&sp, merged.as_bytes())?;
-        eprintln!(
-            "wrote {} ({} file(s) added or updated)",
-            sp.display(),
-            inside.len()
-        );
+        if inside.is_empty() {
+            eprintln!("note: nothing to list: SHA256SUMS.txt not written");
+        } else {
+            // a folder that collects several documents keeps the hashes of the earlier ones
+            let merged = match std::fs::read_to_string(&sp) {
+                Ok(old) => legatorocr_engine::checksums::merge(&old, &sums),
+                Err(_) => sums,
+            };
+            write_atomic(&sp, merged.as_bytes())?;
+            eprintln!(
+                "wrote {} ({} file(s) added or updated)",
+                sp.display(),
+                inside.len()
+            );
+            // the sums file is itself a file this run wrote
+            written.push(sp.clone());
+        }
     }
     if let Some(log) = &cli.audit_log {
         let o = legatorocr_engine::audit::Options {
@@ -1433,17 +1444,20 @@ fn real_main() -> Result<()> {
             legal_hold: cli.legal_hold,
             note: String::new(),
         };
+        // every file this run wrote, page images and the sums file included
+        let mut logged = written.clone();
+        logged.extend(saved_images.iter().cloned());
         let text = legatorocr_engine::audit::render(
             concat!("LegatorOCR ", env!("CARGO_PKG_VERSION")),
             &cli.inputs,
-            &written,
+            &logged,
             legatorocr_engine::now_unix(),
             &o,
         )?;
         legatorocr_engine::audit::append(log, &text)?;
         eprintln!(
             "audit log: {} record(s) appended to {}",
-            written.len(),
+            logged.len(),
             log.display()
         );
     }

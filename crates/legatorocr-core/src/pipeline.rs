@@ -660,11 +660,15 @@ fn prepare(
             .map(|p| ((p.0 / iw).clamp(0.0, 1.0), (p.1 / ih).clamp(0.0, 1.0)))
             .collect()
     }));
+    // unusable guides (straight, too short, junk) leave the automatic estimate in charge
+    let mut guided = false;
     if !all.is_empty() {
         if let Some(flat) = dewarp::dewarp_guides(&img, &all, bg) {
             img = flat;
+            guided = true;
         }
-    } else if s.dewarp {
+    }
+    if !guided && s.dewarp {
         if let Some(flat) = dewarp::dewarp(&img, s.dpi, bg) {
             img = flat;
         }

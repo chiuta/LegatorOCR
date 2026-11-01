@@ -249,7 +249,8 @@ pub fn dewarp_guides(
     if fw < 8 || fh < 8 {
         return None;
     }
-    let mut table: Vec<(f32, Vec<f32>)> = Vec::new();
+    // (mean height, per-column offset, first x, last x)
+    let mut table: Vec<(f32, Vec<f32>, usize, usize)> = Vec::new();
     let mut bent = false;
     for g in guides.iter().take(64) {
         let mut pts: Vec<(f32, f32)> = g
@@ -265,6 +266,11 @@ pub fn dewarp_guides(
         pts.sort_by(|a, b| a.0.total_cmp(&b.0));
         pts.dedup_by(|b, a| (b.0 - a.0).abs() < 1.0);
         if pts.len() < 2 {
+            continue;
+        }
+        // a guide has to run mostly across the page; a (nearly) vertical stroke is a slip
+        let (x0, x1) = (pts[0].0, pts[pts.len() - 1].0);
+        if x1 - x0 < 0.3 * fw as f32 {
             continue;
         }
         let mean = pts.iter().map(|p| p.1).sum::<f32>() / pts.len() as f32;
@@ -285,15 +291,44 @@ pub fn dewarp_guides(
             .collect();
         let range = row.iter().cloned().fold(f32::MIN, f32::max)
             - row.iter().cloned().fold(f32::MAX, f32::min);
+        // like the automatic estimate: a bend of more than 5 % of the height is not a text line
+        let worst = row.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        if worst > 0.05 * fh as f32 {
+            continue;
+        }
         bent |= range >= 1.0;
-        table.push((mean, row));
+        table.push((
+            mean,
+            row,
+            x0.max(0.0) as usize,
+            (x1.max(0.0) as usize).min(fw - 1),
+        ));
     }
     if !bent {
         return None;
     }
     table.sort_by(|a, b| a.0.total_cmp(&b.0));
-    // guides on (almost) the same row would make the interpolation singular
-    table.dedup_by(|b, a| (b.0 - a.0).abs() < 4.0);
+    // guides on (almost) the same row would make the interpolation singular: two halves of
+    // one line are joined (each column takes the guide that covers it), not one dropped
+    let mut merged: Vec<(f32, Vec<f32>, usize, usize)> = Vec::new();
+    for g in table {
+        match merged.last_mut() {
+            Some(m) if (g.0 - m.0).abs() < 4.0 => {
+                for x in 0..fw {
+                    let in_m = x >= m.2 && x <= m.3;
+                    let in_g = x >= g.2 && x <= g.3;
+                    if !in_m && in_g {
+                        m.1[x] = g.1[x];
+                    }
+                }
+                m.0 = (m.0 + g.0) * 0.5;
+                m.2 = m.2.min(g.2);
+                m.3 = m.3.max(g.3);
+            }
+            _ => merged.push(g),
+        }
+    }
+    let table: Vec<(f32, Vec<f32>)> = merged.into_iter().map(|m| (m.0, m.1)).collect();
     Some(resample(img, &table, fill))
 }
 
@@ -311,7 +346,7 @@ pub fn parse_guides(s: &str) -> Option<Vec<Vec<(f32, f32)>>> {
             }
             pts.push((x, y));
         }
-        if pts.len() < 2 || pts.len() > 256 {
+        if pts.len() < 2 || pts.len() > 256 || out.len() >= 64 {
             return None;
         }
         out.push(pts);
@@ -320,7 +355,10 @@ pub fn parse_guides(s: &str) -> Option<Vec<Vec<(f32, f32)>>> {
 }
 
 pub fn guides_to_string(g: &[Vec<(f32, f32)>]) -> String {
+    let ok = |p: &(f32, f32)| (0.0..=1.0).contains(&p.0) && (0.0..=1.0).contains(&p.1);
     g.iter()
+        .take(64)
+        .filter(|l| (2..=256).contains(&l.len()) && l.iter().all(ok))
         .map(|l| {
             l.iter()
                 .map(|p| format!("{},{}", p.0, p.1))
@@ -408,6 +446,46 @@ mod tests {
         assert!(dewarp_guides(&img, &[], Rgb([238; 3])).is_none());
         let junk = vec![(f32::NAN, 0.5), (2.0, f32::INFINITY), (-3.0, 9.0)];
         let _ = dewarp_guides(&img, &[junk], Rgb([238; 3]));
+    }
+
+    #[test]
+    fn vertical_strokes_are_ignored_and_halves_of_one_line_are_joined() {
+        let bend = |u: f32| 26.0 * (u - 0.5) * (u - 0.5) * 4.0 - 8.0 * (u - 0.5);
+        let img = page(900, 1200, bend);
+        // a near-vertical slip is not a text line
+        let slip = vec![(0.5, 0.1), (0.505, 0.9)];
+        assert!(dewarp_guides(&img, &[slip], Rgb([238; 3])).is_none());
+        // left and right half of the same line, with equal means, act together
+        let half = |a: i32, b: i32| -> Vec<(f32, f32)> {
+            (a..=b)
+                .map(|i| {
+                    let u = i as f32 / 10.0;
+                    (u, (126.0 + bend(u)) / 1200.0)
+                })
+                .collect()
+        };
+        let both = dewarp_guides(&img, &[half(0, 5), half(5, 10)], Rgb([238; 3])).unwrap();
+        let left = dewarp_guides(&img, &[half(0, 5)], Rgb([238; 3]));
+        // the left half alone cannot reach the 30 % rule differently, but joined it must
+        // straighten at least as well as either half on its own
+        let s_both = sharp(&both);
+        assert!(s_both > sharp(&img) * 1.1, "{} → {s_both}", sharp(&img));
+        if let Some(l) = left {
+            assert!(s_both >= sharp(&l) * 0.99);
+        }
+    }
+
+    #[test]
+    fn serialised_guides_always_parse_back() {
+        let g = vec![
+            vec![(0.1, 0.2), (0.9, 0.2)],
+            vec![(0.5, f32::NAN), (1.0, 0.5)],
+            vec![(0.5, 0.5)],
+            vec![],
+            vec![(0.0, 1.0000001), (1.0, 0.5)],
+        ];
+        let t = guides_to_string(&g);
+        assert_eq!(parse_guides(&t).unwrap().len(), 1, "{t}");
     }
 
     #[test]

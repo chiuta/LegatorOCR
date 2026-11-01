@@ -71,7 +71,7 @@ pub fn blocks_from_words(words: &[legatorocr_core::text::Word]) -> Vec<Block> {
     }
 }
 
-/// A page set in two columns: a gutter of at least 2.5 line heights, free of text on nearly
+/// A page set in two columns: a gutter of at least 1.2 line heights, free of text on nearly
 /// every line, between two bands that each hold a fifth or more of the words. Lines that run
 /// across the gutter (a title) must all sit above the columns. Returns the words of those
 /// heading lines and of each column.
@@ -81,14 +81,12 @@ fn split_columns(
     Vec<legatorocr_core::text::Word>,
     Vec<Vec<legatorocr_core::text::Word>>,
 )> {
-    let ws: Vec<&legatorocr_core::text::Word> = words
-        .iter()
-        .filter(|w| !w.text.trim().is_empty() && w.w > 0 && w.h > 0)
-        .collect();
+    let ws: Vec<&legatorocr_core::text::Word> =
+        words.iter().filter(|w| !w.text.trim().is_empty()).collect();
     if ws.len() < 40 {
         return None;
     }
-    let mut hs: Vec<f32> = ws.iter().map(|w| w.h as f32).collect();
+    let mut hs: Vec<f32> = ws.iter().map(|w| (w.h as f32).max(1.0)).collect();
     hs.sort_by(|a, b| a.total_cmp(b));
     let med = hs[hs.len() / 2];
     let x0 = ws.iter().map(|w| w.x as f32).fold(f32::MAX, f32::min);
@@ -140,7 +138,7 @@ fn split_columns(
     }
     let gutter_w = (best_run.1 - best_run.0) as f32 * 0.4 * width / probes as f32;
 
-    if gutter_w < 2.5 * med {
+    if gutter_w < 1.2 * med {
         return None;
     }
     let (gl, gr) = (
@@ -178,7 +176,33 @@ fn split_columns(
     if left.len() * 5 < ws.len() || right.len() * 5 < ws.len() {
         return None;
     }
+    // running text fills its column; the cells of a table (a list of terms next to their
+    // definitions) mostly do not, and must stay a table
+    if !fills_measure(&left, med) || !fills_measure(&right, med) {
+        return None;
+    }
     Some((head, vec![left, right]))
+}
+
+/// Whether most lines of `col` run across most of the column's width.
+fn fills_measure(col: &[legatorocr_core::text::Word], med: f32) -> bool {
+    let x0 = col.iter().map(|w| w.x as f32).fold(f32::MAX, f32::min);
+    let x1 = col
+        .iter()
+        .map(|w| w.x as f32 + w.w as f32)
+        .fold(f32::MIN, f32::max);
+    let width = x1 - x0;
+    if !width.is_finite() || width <= 4.0 * med {
+        return false;
+    }
+    let mut lines: std::collections::BTreeMap<u32, (f32, f32)> = std::collections::BTreeMap::new();
+    for w in col {
+        let e = lines.entry(w.line).or_insert((f32::MAX, f32::MIN));
+        e.0 = e.0.min(w.x as f32);
+        e.1 = e.1.max(w.x as f32 + w.w as f32);
+    }
+    let full = lines.values().filter(|(a, b)| b - a >= 0.7 * width).count();
+    full * 2 >= lines.len()
 }
 
 fn blocks_flat(words: &[legatorocr_core::text::Word]) -> Vec<Block> {
@@ -283,7 +307,15 @@ fn blocks_flat(words: &[legatorocr_core::text::Word]) -> Vec<Block> {
                 e += 1;
             }
         }
-        if e - k >= 3 {
+        // cells of running prose (long runs of words) are columns of text, not a table; they
+        // stay in the order the OCR gave
+        let long_cells = row_cells[k..e.max(k)]
+            .iter()
+            .flatten()
+            .filter(|&&(_, li, ci)| lines[li].cells[ci].text.split_whitespace().count() > 6)
+            .count();
+        let all_cells: usize = row_cells[k..e.max(k)].iter().map(Vec::len).sum();
+        if e - k >= 3 && long_cells * 2 <= all_cells {
             let mut first = usize::MAX;
             let mut table: Vec<Vec<String>> = Vec::new();
             for r in k..e {
@@ -354,7 +386,7 @@ fn blocks_xml(blocks: &[Block]) -> String {
                 // section of their own, closed by the paragraph that carries its properties
                 body.push_str(
                     "<w:p><w:pPr><w:sectPr><w:type w:val=\"continuous\"/>\
-                     <w:pgSz w:w=\"11906\" w:h=\"16838\"/></w:sectPr></w:pPr></w:p>",
+                     <w:pgSz w:w=\"11906\" w:h=\"16838\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"708\" w:footer=\"708\" w:gutter=\"0\"/></w:sectPr></w:pPr></w:p>",
                 );
                 for (k, c) in cols.iter().enumerate() {
                     if k > 0 {
@@ -364,7 +396,7 @@ fn blocks_xml(blocks: &[Block]) -> String {
                 }
                 body.push_str(&format!(
                     "<w:p><w:pPr><w:sectPr><w:type w:val=\"continuous\"/>\
-                     <w:pgSz w:w=\"11906\" w:h=\"16838\"/>\
+                     <w:pgSz w:w=\"11906\" w:h=\"16838\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"708\" w:footer=\"708\" w:gutter=\"0\"/>\
                      <w:cols w:num=\"{}\" w:space=\"567\"/></w:sectPr></w:pPr></w:p>",
                     cols.len().clamp(1, 8)
                 ));
@@ -380,6 +412,12 @@ fn blocks_xml(blocks: &[Block]) -> String {
                      <w:insideV w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"808080\"/>\
                      </w:tblBorders></w:tblPr>",
                 );
+                let n = rows.iter().map(Vec::len).max().unwrap_or(1).clamp(1, 32);
+                body.push_str("<w:tblGrid>");
+                for _ in 0..n {
+                    body.push_str(&format!("<w:gridCol w:w=\"{}\"/>", 9000 / n));
+                }
+                body.push_str("</w:tblGrid>");
                 for r in rows {
                     body.push_str("<w:tr>");
                     for c in r {
@@ -420,7 +458,7 @@ pub fn from_blocks(pages: &[Vec<Block>], title: &str) -> Vec<u8> {
     let doc = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n\
          <w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body>{body}\
-         <w:sectPr><w:pgSz w:w=\"11906\" w:h=\"16838\"/></w:sectPr></w:body></w:document>"
+         <w:sectPr><w:type w:val=\"continuous\"/><w:pgSz w:w=\"11906\" w:h=\"16838\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"708\" w:footer=\"708\" w:gutter=\"0\"/></w:sectPr></w:body></w:document>"
     );
     let ct = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n\
         <Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
@@ -557,6 +595,69 @@ mod tests {
         assert!(blocks_from_words(&one)
             .iter()
             .all(|b| !matches!(b, Block::Columns(_))));
+    }
+
+    #[test]
+    fn narrow_gutter_prose_stays_columns_and_a_term_table_stays_a_table() {
+        // 1.5-line gutter (30 px at 20 px lines), a centred page number underneath
+        let mut v = Vec::new();
+        let mut id = 0;
+        for r in 0..14u32 {
+            for x0 in [100u32, 100 + 5 * 110 + 30] {
+                for c in 0..5u32 {
+                    v.push(w(
+                        &format!("p{x0}r{r}w{c}"),
+                        x0 + c * 110,
+                        100 + r * 30,
+                        100,
+                        id,
+                    ));
+                }
+                id += 1;
+            }
+        }
+        v.push(w("12", 540, 560, 30, id));
+        let b = blocks_from_words(&v);
+        assert!(b.iter().any(|b| matches!(b, Block::Columns(_))), "{b:?}");
+        assert!(b.iter().all(|b| !matches!(b, Block::Table(_))), "{b:?}");
+        // term | definition: short terms, long definitions are a table, not columns
+        let mut t = Vec::new();
+        for r in 0..12u32 {
+            t.push(w(&format!("term{r}"), 100, 100 + r * 30, 80, r));
+            for c in 0..5u32 {
+                t.push(w(&format!("d{r}w{c}"), 400 + c * 110, 100 + r * 30, 100, r));
+            }
+        }
+        let b = blocks_from_words(&t);
+        assert!(b.iter().any(|b| matches!(b, Block::Table(_))), "{b:?}");
+        assert!(b.iter().all(|b| !matches!(b, Block::Columns(_))), "{b:?}");
+    }
+
+    #[test]
+    fn no_blank_page_follows_a_columns_page_and_zero_width_words_survive() {
+        let mut v = Vec::new();
+        let mut id = 0;
+        for r in 0..14u32 {
+            for x0 in [100u32, 700] {
+                for c in 0..4u32 {
+                    v.push(w(
+                        &format!("w{x0}_{r}_{c}"),
+                        x0 + c * 130,
+                        100 + r * 30,
+                        110,
+                        id,
+                    ));
+                }
+                id += 1;
+            }
+        }
+        v.push(w("ZERO", 100, 100, 0, 0));
+        let b = blocks_from_words(&v);
+        let text = format!("{b:?}");
+        assert!(text.contains("ZERO"), "{text}");
+        let xml = zipmini_text(&from_blocks(&[b], "t"));
+        let tail = xml.rsplit("<w:sectPr>").next().unwrap();
+        assert!(tail.contains("w:type w:val=\"continuous\""), "{tail}");
     }
 
     fn zipmini_text(zip: &[u8]) -> String {

@@ -23,13 +23,38 @@ pub fn file_hash(p: &Path) -> Result<String> {
 pub fn render(base: &Path, files: &[PathBuf]) -> Result<String> {
     let mut out = String::new();
     for f in files {
-        let rel = f
-            .strip_prefix(base)
+        let rel = relative(base, f)
             .with_context(|| format!("{}: is not inside {}", f.display(), base.display()))?;
-        let name = rel.to_string_lossy().replace('\\', "/");
-        out.push_str(&format!("{}  {name}\n", file_hash(f)?));
+        // components joined with '/' on every platform; on Unix a backslash is an ordinary
+        // character of a name and is escaped the way GNU sha256sum does it
+        let name = rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("/");
+        let hash = file_hash(f)?;
+        if name.contains(['\\', '\n']) {
+            let esc = name.replace('\\', "\\\\").replace('\n', "\\n");
+            out.push_str(&format!("\\{hash}  {esc}\n"));
+        } else {
+            out.push_str(&format!("{hash}  {name}\n"));
+        }
     }
     Ok(out)
+}
+
+/// `f` relative to `base`; a leading `./` on either (the folder of a bare `out.pdf` is `.`) does
+/// not make a file "outside".
+fn relative(base: &Path, f: &Path) -> Option<PathBuf> {
+    let clean = |p: &Path| -> PathBuf {
+        p.components()
+            .filter(|c| !matches!(c, std::path::Component::CurDir))
+            .collect()
+    };
+    clean(f)
+        .strip_prefix(clean(base))
+        .ok()
+        .map(Path::to_path_buf)
 }
 
 /// The files of `files` that lie below `base`, and those that do not.
@@ -37,7 +62,7 @@ pub fn below(base: &Path, files: &[PathBuf]) -> (Vec<PathBuf>, Vec<PathBuf>) {
     files
         .iter()
         .cloned()
-        .partition(|f| f.strip_prefix(base).is_ok())
+        .partition(|f| relative(base, f).is_some())
 }
 
 /// Add `new` lines to an `existing` sums file: an entry for the same name is replaced, the other
@@ -78,8 +103,33 @@ pub fn verify(sums: &Path) -> Result<Verification> {
     let mut v = Verification::default();
     let mut lines = 0;
     for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        // GNU escaping: a leading backslash says that the name has `\\` and `\n` escapes
+        let (escaped, line) = match line.strip_prefix('\\') {
+            Some(r) => (true, r),
+            None => (false, line),
+        };
         let Some((hash, name)) = line.split_once("  ").or_else(|| line.split_once(" *")) else {
             bail!("{}: malformed line: {line:?}", sums.display());
+        };
+        let name_owned;
+        let name = if escaped {
+            let mut o = String::new();
+            let mut it = name.chars();
+            while let Some(c) = it.next() {
+                if c == '\\' {
+                    match it.next() {
+                        Some('n') => o.push('\n'),
+                        Some('\\') => o.push('\\'),
+                        _ => bail!("{}: bad escape in {name:?}", sums.display()),
+                    }
+                } else {
+                    o.push(c);
+                }
+            }
+            name_owned = o;
+            name_owned.as_str()
+        } else {
+            name
         };
         if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
             bail!("{}: not a SHA-256 digest: {hash:?}", sums.display());
@@ -121,6 +171,34 @@ pub fn verify(sums: &Path) -> Result<Verification> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dot_base_and_odd_names_work() {
+        let d = std::env::temp_dir().join(format!("lgr-sums2-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("a.pdf"), b"one").unwrap();
+        // a bare file name has the folder "." (and no "./" in the file's own path)
+        assert_eq!(
+            below(Path::new("."), &[PathBuf::from("a.pdf")]).0.len(),
+            1,
+            "file next to a '.' base is inside"
+        );
+        assert_eq!(
+            below(Path::new("."), &[PathBuf::from("./a.pdf")]).0.len(),
+            1
+        );
+        // names with a newline (and on Unix a backslash) survive our own verify
+        #[cfg(unix)]
+        {
+            std::fs::write(d.join("li\nne.txt"), b"two").unwrap();
+            std::fs::write(d.join("back\\slash.txt"), b"three").unwrap();
+            let s = render(&d, &[d.join("li\nne.txt"), d.join("back\\slash.txt")]).unwrap();
+            std::fs::write(d.join("SHA256SUMS.txt"), &s).unwrap();
+            let v = verify(&d.join("SHA256SUMS.txt")).unwrap();
+            assert!(v.all_good() && v.ok == 2, "{s:?} {v:?}");
+        }
+        std::fs::remove_dir_all(&d).ok();
+    }
 
     #[test]
     fn known_digest_and_roundtrip() {

@@ -319,10 +319,20 @@ impl PdfWriter {
                     .map(|w| (w.y as f32 + w.h as f32) * 72.0 / dpi)
                     .collect(),
             );
-            let y = hpt - bottom + size * 0.2;
+            // a baseline that falls off the page (a box at the very bottom edge) is kept on it
+            let y = (hpt - bottom + size * 0.2).clamp(0.0, hpt);
             let mut body = String::new();
             for w in group {
-                let n = w.text.chars().count() as f32;
+                // control characters and the non-characters are not text
+                let text: String = w
+                    .text
+                    .chars()
+                    .filter(|c| !c.is_control() && *c != '\u{FFFE}' && *c != '\u{FFFF}')
+                    .collect();
+                let n = text.chars().count() as f32;
+                if n == 0.0 {
+                    continue;
+                }
                 let x = w.x as f32 * 72.0 / dpi;
                 // Words outside the page or taller than it are garbage (a PDF reader may choke on
                 // 10-digit coordinates): drop them rather than write absurd numbers.
@@ -336,7 +346,7 @@ impl PdfWriter {
                 // Glyph advance is 0.5 em; scale horizontally to the word box (kept within sane bounds).
                 let tz = ((w.w as f32 * 72.0 / dpi) / (n * 0.5 * size) * 100.0).clamp(5.0, 2000.0);
                 let mut hex = String::new();
-                for ch in w.text.chars().chain(std::iter::once(' ')) {
+                for ch in text.chars().chain(std::iter::once(' ')) {
                     match self.cid(ch) {
                         Some(id) => hex.push_str(&format!("{id:04X}")),
                         None => {
@@ -852,6 +862,32 @@ mod tests {
         assert!(s.starts_with("%PDF-1.5"));
         assert!(s.contains("/Count 2"));
         assert!(s.trim_end().ends_with("%%EOF"));
+    }
+
+    #[test]
+    fn control_characters_stay_out_of_the_text_layer_and_baselines_stay_on_the_page() {
+        let mut w = PdfWriter::new(Compress::Flate);
+        let mk = |t: &str, y: u32| Word {
+            text: t.into(),
+            x: 2,
+            y,
+            w: 12,
+            h: 6,
+            conf: 90.0,
+            line: y,
+        };
+        // 100 x 100 px at 72 dpi: a word at the bottom edge would put its baseline below 0
+        let words = [mk("a\nb\0c", 10), mk("edge", 98)];
+        let mut cs = String::new();
+        w.text_ops(&mut cs, &words, 72.0, 100.0, 100.0);
+        // "abc" + space: four glyph codes
+        assert!(cs.contains("Tj"), "{cs}");
+        for l in cs.lines().filter(|l| l.ends_with("Tj")) {
+            let hex = l.split('<').nth(1).unwrap().split('>').next().unwrap();
+            assert!(hex.len() == 16 || hex.len() == 20, "{l}");
+            let y: f32 = l.split_whitespace().nth(6).unwrap().parse().unwrap();
+            assert!((0.0..=100.0).contains(&y), "{l}");
+        }
     }
 
     #[test]

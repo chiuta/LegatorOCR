@@ -1822,7 +1822,9 @@ impl App {
                     .changed();
             }
             if ui.button(tr("zones.clear")).clicked()
-                && !(adj.erase_mm.is_empty() && adj.picture_mm.is_empty())
+                && !(adj.erase_mm.is_empty()
+                    && adj.picture_mm.is_empty()
+                    && adj.dewarp_guides.is_empty())
             {
                 clear_zones = true;
             }
@@ -1841,8 +1843,11 @@ impl App {
                 redo_zone = true;
             }
             if ui.button(tr("adj.reset")).clicked() {
-                if !(adj.erase_mm.is_empty() && adj.picture_mm.is_empty()) {
-                    reset_snap = Some((adj.erase_mm.clone(), adj.picture_mm.clone()));
+                if !(adj.erase_mm.is_empty()
+                    && adj.picture_mm.is_empty()
+                    && adj.dewarp_guides.is_empty())
+                {
+                    reset_snap = Some(ZoneSnap::of(adj));
                 }
                 *adj = SheetAdjust::default();
                 adj_changed = true;
@@ -1892,27 +1897,25 @@ impl App {
                 sh.zone_undo.push(snap);
                 sh.zone_redo.clear();
             }
-            if clear_zones && !(sh.adj.erase_mm.is_empty() && sh.adj.picture_mm.is_empty()) {
-                sh.zone_undo
-                    .push((sh.adj.erase_mm.clone(), sh.adj.picture_mm.clone()));
+            if clear_zones
+                && !(sh.adj.erase_mm.is_empty()
+                    && sh.adj.picture_mm.is_empty()
+                    && sh.adj.dewarp_guides.is_empty())
+            {
+                sh.zone_undo.push(ZoneSnap::of(&sh.adj));
                 sh.zone_redo.clear();
                 sh.adj.erase_mm.clear();
                 sh.adj.picture_mm.clear();
+                sh.adj.dewarp_guides.clear();
                 sh.adj_gen += 1;
             } else if undo_zone {
-                if let Some((e, p)) = sh.zone_undo.pop() {
-                    sh.zone_redo.push((
-                        std::mem::replace(&mut sh.adj.erase_mm, e),
-                        std::mem::replace(&mut sh.adj.picture_mm, p),
-                    ));
+                if let Some(z) = sh.zone_undo.pop() {
+                    sh.zone_redo.push(z.swap_into(&mut sh.adj));
                     sh.adj_gen += 1;
                 }
             } else if redo_zone {
-                if let Some((e, p)) = sh.zone_redo.pop() {
-                    sh.zone_undo.push((
-                        std::mem::replace(&mut sh.adj.erase_mm, e),
-                        std::mem::replace(&mut sh.adj.picture_mm, p),
-                    ));
+                if let Some(z) = sh.zone_redo.pop() {
+                    sh.zone_undo.push(z.swap_into(&mut sh.adj));
                     sh.adj_gen += 1;
                 }
             }
@@ -2110,7 +2113,9 @@ impl App {
                                 if resp.drag_stopped() {
                                     // thin the path to at most 24 points, fractions of the image
                                     let n = gpath.len();
-                                    if n >= 2 && (gpath[0] - gpath[n - 1]).length() >= 12.0 {
+                                    if n >= 2
+                                        && (gpath[0].x - gpath[n - 1].x).abs() >= 0.3 * rect.width()
+                                    {
                                         let step = n.div_ceil(24).max(1);
                                         let mut v: Vec<(f32, f32)> = gpath
                                             .iter()
@@ -2133,24 +2138,29 @@ impl App {
                                 }
                                 if resp.secondary_clicked() {
                                     if let Some(p) = resp.interact_pointer_pos() {
-                                        let (fx, fy) = (
-                                            (p.x - rect.min.x) / rect.width().max(1.0),
-                                            (p.y - rect.min.y) / rect.height().max(1.0),
-                                        );
-                                        // nearest guide (by its closest point), within 4 % of the page
+                                        // nearest guide (distance to its segments, in screen
+                                        // pixels), within 12 px
+                                        let to_screen = |q: &(f32, f32)| {
+                                            egui::pos2(
+                                                rect.min.x + q.0 * rect.width(),
+                                                rect.min.y + q.1 * rect.height(),
+                                            )
+                                        };
                                         let best = guide_list
                                             .iter()
                                             .enumerate()
                                             .map(|(k, g)| {
-                                                let d = g
-                                                    .iter()
-                                                    .map(|q| (q.0 - fx).hypot(q.1 - fy))
+                                                let pts: Vec<egui::Pos2> =
+                                                    g.iter().map(to_screen).collect();
+                                                let d = pts
+                                                    .windows(2)
+                                                    .map(|w| dist_to_segment(p, w[0], w[1]))
                                                     .fold(f32::MAX, f32::min);
                                                 (k, d)
                                             })
                                             .min_by(|a, b| a.1.total_cmp(&b.1));
                                         if let Some((k, d)) = best {
-                                            if d < 0.04 {
+                                            if d < 12.0 {
                                                 remove_guide = Some(k);
                                             }
                                         }
@@ -2326,14 +2336,20 @@ impl App {
         if let Some(g) = new_guide {
             let a = &mut self.sheets[i].adj;
             if a.dewarp_guides.len() < 64 {
+                let before = ZoneSnap::of(a);
                 a.dewarp_guides.push(g);
+                self.sheets[i].zone_undo.push(before);
+                self.sheets[i].zone_redo.clear();
                 self.sheets[i].adj_gen += 1;
             }
         }
         if let Some(k) = remove_guide {
             let a = &mut self.sheets[i].adj;
             if k < a.dewarp_guides.len() {
+                let before = ZoneSnap::of(a);
                 a.dewarp_guides.remove(k);
+                self.sheets[i].zone_undo.push(before);
+                self.sheets[i].zone_redo.clear();
                 self.sheets[i].adj_gen += 1;
             }
         }
@@ -2345,7 +2361,7 @@ impl App {
                 &a.erase_mm
             };
             if list.len() < 64 {
-                let before = (a.erase_mm.clone(), a.picture_mm.clone());
+                let before = ZoneSnap::of(a);
                 if draw_pictures {
                     a.picture_mm.push(z);
                 } else {
@@ -2358,7 +2374,7 @@ impl App {
         }
         if let Some((is_pic, k)) = remove_zone {
             let a = &mut self.sheets[i].adj;
-            let before = (a.erase_mm.clone(), a.picture_mm.clone());
+            let before = ZoneSnap::of(a);
             if is_pic {
                 a.picture_mm.remove(k);
             } else {
@@ -2371,8 +2387,43 @@ impl App {
     }
 }
 
-/// Hand-drawn zones of one sheet: (erase, picture), for Undo / Redo.
-type ZoneSnap = (Vec<[f32; 4]>, Vec<[f32; 4]>);
+/// Hand-drawn zones and dewarp guides of one sheet, for Undo / Redo.
+#[derive(Clone, Default)]
+struct ZoneSnap {
+    erase: Vec<[f32; 4]>,
+    picture: Vec<[f32; 4]>,
+    guides: Vec<Vec<(f32, f32)>>,
+}
+
+impl ZoneSnap {
+    fn of(a: &SheetAdjust) -> Self {
+        Self {
+            erase: a.erase_mm.clone(),
+            picture: a.picture_mm.clone(),
+            guides: a.dewarp_guides.clone(),
+        }
+    }
+    /// Put this state into `a`, returning what was there.
+    fn swap_into(self, a: &mut SheetAdjust) -> Self {
+        Self {
+            erase: std::mem::replace(&mut a.erase_mm, self.erase),
+            picture: std::mem::replace(&mut a.picture_mm, self.picture),
+            guides: std::mem::replace(&mut a.dewarp_guides, self.guides),
+        }
+    }
+}
+
+/// Distance from `p` to the segment `a`–`b`.
+fn dist_to_segment(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f32 {
+    let ab = b - a;
+    let l2 = ab.length_sq();
+    let t = if l2 <= f32::EPSILON {
+        0.0
+    } else {
+        ((p - a).dot(ab) / l2).clamp(0.0, 1.0)
+    };
+    p.distance(a + ab * t)
+}
 
 /// Image, PDF and archive extensions for the "add" dialogs.
 fn all_input_ext() -> Vec<&'static str> {
