@@ -304,3 +304,33 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// A path that is safe to hand to an external program as an argument: a relative name that
+/// starts with `-` or `@` would be read as an option or a list file (`-oX.7z`, `@list.7z`), so it
+/// is made explicitly relative (`./-oX.7z`). Absolute paths and ordinary names are unchanged.
+pub fn safe_path(p: &std::path::Path) -> std::path::PathBuf {
+    let first = p.components().next();
+    let risky = p.is_relative()
+        && matches!(first, Some(std::path::Component::Normal(n))
+            if n.to_string_lossy().starts_with(['-', '@']));
+    if risky {
+        std::path::Path::new(".").join(p)
+    } else {
+        p.to_path_buf()
+    }
+}
+
+#[cfg(test)]
+mod safe_path_tests {
+    use super::safe_path;
+    use std::path::Path;
+    #[test]
+    fn option_like_names_are_made_explicitly_relative() {
+        assert_eq!(safe_path(Path::new("-oX.7z")), Path::new("./-oX.7z"));
+        assert_eq!(safe_path(Path::new("@list.7z")), Path::new("./@list.7z"));
+        assert_eq!(safe_path(Path::new("-dir/a.pdf")), Path::new("./-dir/a.pdf"));
+        assert_eq!(safe_path(Path::new("book.pdf")), Path::new("book.pdf"));
+        assert_eq!(safe_path(Path::new("/abs/-x.pdf")), Path::new("/abs/-x.pdf"));
+        assert_eq!(safe_path(Path::new("dir/-x.pdf")), Path::new("dir/-x.pdf"));
+    }
+}

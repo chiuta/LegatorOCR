@@ -91,7 +91,8 @@ pub fn renderer() -> Option<String> {
 
 /// Number of pages according to qpdf, pdfinfo or mutool (handles encrypted files).
 pub fn page_count(path: &Path) -> Option<u32> {
-    let p = path.as_os_str();
+    let safe = crate::files::safe_path(path);
+    let p = safe.as_os_str();
     let num = |out: std::process::Output, key: Option<&str>| -> Option<u32> {
         let t = String::from_utf8_lossy(&out.stdout).into_owned();
         match key {
@@ -121,6 +122,8 @@ pub fn page_count(path: &Path) -> Option<u32> {
 
 /// Rasterise page `page` (1-based) at [`DPI`].
 pub fn rasterize(path: &Path, page: u32) -> Result<DynamicImage> {
+    let safe = crate::files::safe_path(path);
+    let path = safe.as_path();
     // unique per call (pid + counter + time): two PDFs rasterised at once must never share a folder
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!(

@@ -499,7 +499,7 @@ impl App {
                             }
                             self.say(msg, !d.failed.is_empty());
                         }
-                        Err(e) if e.contains("cancelled") => {
+                        Err(e) if e == "cancelled" || e.ends_with(": cancelled") => {
                             let m = self.tr("status.cancelled").to_string();
                             self.say(m, false)
                         }
