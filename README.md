@@ -54,12 +54,18 @@ scripts/package.sh <target>    # e.g. x86_64-unknown-linux-gnu → dist/LegatorO
 | Windows x86-64 | `.zip` | needs OpenGL 2+ (any GPU driver; plain RDP sessions may lack it) |
 | macOS Apple-silicon / Intel | `.zip` with `LegatorOCR.app` | **unsigned**: first launch via right-click → Open, or `xattr -dr com.apple.quarantine LegatorOCR.app` |
 
-**OCR needs Tesseract** (run as a separate program; the app finds it on `PATH`):
+**OCR works out of the box** with the built-in native engine (`legatorocr-nocr`, pure Rust, no
+install; `--engine native`). It reads the eight interface languages with one model plus per-language
+word lists. Its model is trained on synthetic text only: on clean and moderately degraded synthetic
+pages it makes under 1 % character errors, but real scans of old or unusual print can be worse than
+Tesseract. `--engine auto` (default) therefore uses **Tesseract when it is installed with the
+requested languages** and falls back to the native engine otherwise; `--engine tesseract` forces it.
+Tesseract (run as a separate program; the app finds it on `PATH`):
 `sudo apt install tesseract-ocr tesseract-ocr-ron` · `brew install tesseract tesseract-lang` ·
 Windows: `winget install UB-Mannheim.TesseractOCR` (add it to `PATH`).
 The app also looks in the usual install folders (Homebrew `/opt/homebrew/bin`, `/usr/local/bin`,
 `C:\Program Files\Tesseract-OCR`), so a double-clicked app works without editing `PATH`.
-Without Tesseract everything else works; the OCR switch is disabled and says why.
+Without Tesseract the native engine is used (the OCR switch stays enabled).
 `--auto-rotate` / the OSD checkbox additionally need `osd.traineddata` (part of the standard packages).
 
 ## Pipeline
@@ -90,7 +96,7 @@ Without Tesseract everything else works; the OCR switch is disabled and says why
 | QC and archive | `--report r.html` (contact sheet, flags blank / size-outlier / strongly deskewed pages), `--multitiff out.tif` (multi-page Group 4 TIFF, black & white only) |
 | Text output | `--txt` (plain text), `--hocr` (word boxes + confidences), `--docx` (editable Word document, one page break per scanned page), PDF author/subject/keywords/dates. With `--lang ron` the cedilla letters ş/ţ are corrected to the proper comma-below ș/ț |
 | Archives as input | Give `.zip`/`.cbz`, `.tar`, `.tar.gz`/`.tgz` (built in) or `.7z`, `.rar`/`.cbr`, `.cab`, `.iso`, `.tar.bz2`, `.tar.xz` … (through an installed 7-Zip, unrar, bsdtar or unar) instead of a folder: the images and PDFs inside are processed in natural order of their names, in the CLI and the GUI (add / drag and drop), and are searched by `--search`. Extraction goes to a temporary folder that is removed on exit; names are flattened and sizes capped |
-| OCR languages | `--lang` takes Tesseract names or two-letter codes (`ro+en` = `ron+eng`) for the eight interface languages ro, en, fr, it, es, pt, de, hu; `--ocr-languages` shows which models are installed and how to add the missing ones; the GUI warns about missing ones. Recognition is done by the separately installed Tesseract — a native engine is planned, not written |
+| OCR languages | `--lang` takes Tesseract names or two-letter codes (`ro+en` = `ron+eng`) for the eight interface languages ro, en, fr, it, es, pt, de, hu; `--ocr-languages` shows which models are installed and how to add the missing ones; the GUI warns about missing ones. Recognition is done by Tesseract when installed, else by the built-in native engine (see above); the training and benchmark tools are in `tools/ocr-train` |
 | Full-text search | `legatorocr --search "text" FOLDER-OR-FILE…` finds a phrase in PDF text layers (LegatorOCR, ABBYY FineReader, PDF24, Word …), `.txt`, `.hocr`/`.html`, `.docx` and inside archives (`.zip`, `.tar`, `.tgz`, and `.7z`/`.rar` with an extractor installed); ignores case and diacritics (`mobila` finds `Mobilă`, also across a line break); `--search-regex`, `--search-exact`, `--search-max N`; exit status 1 when nothing is found. Scans without a text layer are reported so you know they still need `--ocr` |
 | PDF input | own tolerant reader: pages of scanned PDFs become `book.pdf#N` (Flate/LZW/ASCII85/RunLength, PNG/TIFF predictors, JPEG, CCITT G4, Gray/RGB/CMYK/Indexed, /Rotate, DPI from the page size); object streams and damaged cross-reference tables are fine; **layered / scanner-MRC pages** (several images placed by their transformation matrices, stencil masks in the fill colour, form XObjects) are composited at the sharpest image's resolution; CCITT **Group 3** (1-D, 2-D and byte-aligned) and **JBIG2 generic regions** (arithmetic templates 0–3 with adaptive pixels and typical prediction, MMR) are decoded; **encrypted files** (RC4 40/128, AES-128, AES-256 R5/R6, empty user password) are opened natively; JBIG2 **symbol dictionaries and text regions** (arithmetic coding) and **rotated/skewed placements** are handled; **JPEG 2000** (JP2 or raw codestream: tiles, all five progression orders, layers, precincts, 5/3 and 9/7 wavelets, RCT/ICT) and JBIG2 **generic refinement, refinement/aggregate symbols and halftone regions** are decoded natively; what is still outside the built-in reader (JBIG2 Huffman coding, JPEG 2000 bypass/termall code-block styles, POC/PPM/PPT) is rendered through an installed `pdftoppm`, `mutool` or Ghostscript when one exists, otherwise refused with a clear message |
 | Profiles | `--profile NAME` / `--list-profiles` / `--save-profile NAME` (11 built in: book-bw, book-small-color, document-text, photo-archive, newspaper, form-dropout-red, negatives, flux-1-optim, flux-2-draft, flux-3-volum, phone-photos; user profiles in the config folder) and a GUI selector |

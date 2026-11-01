@@ -4,8 +4,11 @@ LegatorOCR itself is MIT-licensed (see `LICENSE`). It is built from the Rust cra
 its own licence (the choice in an `OR` expression is yours). The graphical interface also embeds the
 fonts shipped with `epaint_default_fonts` (Ubuntu Font Licence, SIL OFL, MIT/Apache).
 
-Optical character recognition runs the separately installed **Tesseract** program (Apache-2.0);
-nothing from Tesseract is linked or bundled.
+Optical character recognition uses either the built-in native engine (`legatorocr-nocr`, MIT, own code; its model
+was trained on text rendered from DejaVu, Liberation, GNU FreeFont, Carlito/Caladea and Inter fonts, none of which
+is embedded) or the separately installed **Tesseract** program (Apache-2.0); nothing from Tesseract is linked or
+bundled. The native engine's word lists (`crates/legatorocr-nocr/lexicons`) derive from the `wordfreq` data and are
+licensed **CC BY-SA 4.0** — see the README there.
 
 | Crate | Version | Licence |
 |---|---|---|
