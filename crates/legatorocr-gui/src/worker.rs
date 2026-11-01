@@ -27,6 +27,9 @@ pub struct PageInfo {
     pub h: u32,
     pub skew_deg: f32,
     pub blank: bool,
+    /// Content box on the page (x, y, w, h in full-resolution pixels) and the page's dpi.
+    pub content_box: Option<[u32; 4]>,
+    pub dpi: u32,
 }
 
 pub struct Preview {
@@ -84,6 +87,8 @@ pub fn render(req: &PreviewRequest) -> Result<Preview, String> {
                 h: p.image.height(),
                 skew_deg: p.skew_deg,
                 blank: p.blank,
+                content_box: p.content_box,
+                dpi: p.dpi,
             };
             (to_thumb(&page_rgba(&p.image), PREVIEW_MAX), info)
         })

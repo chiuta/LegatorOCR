@@ -301,9 +301,10 @@ struct Cli {
     phone_paper: Option<String>,
 
     /// Collect everything written (PDFs, text, …) plus SHA256SUMS.txt and a MANIFEST.txt into a
-    /// new folder, or into one zip when the name ends in `.zip`, ready to hand over. Refuses to
-    /// overwrite. Needs --pdf. (A zip is limited to 3 GiB of content.)
-    #[arg(long, value_name = "FOLDER|FILE.zip")]
+    /// new folder, or into one zip (`.zip`) or ISO image (`.iso`, ISO 9660 with Joliet long names;
+    /// the file name is the volume label), ready to hand over. Refuses to overwrite. Needs --pdf.
+    /// (A zip is limited to 3 GiB of content, an ISO file to 4 GiB each.)
+    #[arg(long, value_name = "FOLDER|FILE.zip|FILE.iso")]
     package: Option<PathBuf>,
 
     /// Rights statement written into the PDF (copyright holder, licence, contract reference):

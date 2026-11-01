@@ -741,6 +741,7 @@ mod tests {
             skew_deg: 0.0,
             blank: false,
             split_index: None,
+            content_box: None,
             layers: None,
         }
     }
@@ -893,6 +894,7 @@ mod unicode_file {
             skew_deg: 0.0,
             blank: false,
             split_index: None,
+            content_box: None,
             layers: None,
         };
         let words: Vec<Word> = ["Școala", "țăranului"]
@@ -945,6 +947,7 @@ mod unicode_file {
                 skew_deg: 0.0,
                 blank: false,
                 split_index: None,
+                content_box: None,
                 layers: None,
             },
             &words,
@@ -977,6 +980,7 @@ mod unicode_file {
                 skew_deg: 0.0,
                 blank: false,
                 split_index: None,
+                content_box: None,
                 layers: None,
             },
             &[],
@@ -1002,6 +1006,7 @@ mod unicode_file {
             skew_deg: 0.0,
             blank: false,
             split_index: None,
+            content_box: None,
             layers: None,
         };
         let words: Vec<Word> = ["Școala", "țăranului", "înființată", "Âțâră", "e", "😀ok"]
@@ -1083,6 +1088,7 @@ mod g4_roundtrip {
                 skew_deg: 0.0,
                 blank: false,
                 split_index: None,
+                content_box: None,
                 layers: None,
             };
             let mut wr = PdfWriter::new(Compress::Flate);
@@ -1124,6 +1130,7 @@ mod outline_tests {
             skew_deg: 0.0,
             blank: false,
             split_index: None,
+            content_box: None,
             layers: None,
         }
     }

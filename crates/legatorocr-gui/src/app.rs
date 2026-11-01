@@ -43,6 +43,8 @@ struct PageTex {
     h: u32,
     skew_deg: f32,
     blank: bool,
+    content_box: Option<[u32; 4]>,
+    dpi: u32,
 }
 
 struct Ready {
@@ -125,6 +127,10 @@ pub struct App {
     draw_zones: bool,
     /// What the mouse draws when `draw_zones` is on: picture zones instead of erase zones.
     draw_pictures: bool,
+    /// Processed pages show the content box with draggable edges.
+    edit_box: bool,
+    /// Edge being dragged: (0 left, 1 top, 2 right, 3 bottom, screen position at the start).
+    box_drag: Option<(usize, egui::Pos2)>,
     zone_drag: Option<egui::Pos2>,
     shot: Option<Shot>,
     /// Test hook: run an export without a file dialog (env LEGATOROCR_GUI_AUTOEXPORT_PDF).
@@ -138,6 +144,14 @@ pub struct App {
     /// Last language written to config (so a menu change marks it dirty once).
     saved_lang: Lang,
 }
+
+/// One page cell of the preview: texture, caption, is-processed, content box + dpi + size.
+type Cell<'a> = (
+    &'a TextureHandle,
+    String,
+    bool,
+    Option<([u32; 4], u32, (u32, u32))>,
+);
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, files: Vec<PathBuf>) -> Self {
@@ -164,6 +178,8 @@ impl App {
             show_about: false,
             draw_zones: false,
             draw_pictures: false,
+            edit_box: false,
+            box_drag: None,
             zone_drag: None,
             auto_export: std::env::var_os("LEGATOROCR_GUI_AUTOEXPORT_PDF")
                 .map(|p| (PathBuf::from(p), false)),
@@ -455,6 +471,8 @@ impl App {
                             h: info.h,
                             skew_deg: info.skew_deg,
                             blank: info.blank,
+                            content_box: info.content_box,
+                            dpi: info.dpi,
                         })
                         .collect();
                     sheet.ready = Some(Ready {
@@ -1588,6 +1606,8 @@ impl App {
             ui.separator();
             ui.checkbox(&mut self.draw_zones, tr("zones.draw"))
                 .on_hover_text(tr("zones.hint"));
+            ui.checkbox(&mut self.edit_box, tr("box.edit"))
+                .on_hover_text(tr("box.hint"));
             if self.draw_zones {
                 ui.selectable_value(&mut self.draw_pictures, false, tr("zones.kind_erase"));
                 ui.selectable_value(&mut self.draw_pictures, true, tr("zones.kind_picture"));
@@ -1774,7 +1794,7 @@ impl App {
             });
             return;
         };
-        let mut cells: Vec<(&TextureHandle, String, bool)> = Vec::new();
+        let mut cells: Vec<Cell> = Vec::new();
         if self.view != View::Processed {
             cells.push((
                 &ready.original,
@@ -1785,6 +1805,7 @@ impl App {
                     ready.original_size.1
                 ),
                 true,
+                None,
             ));
         }
         if self.view != View::Original {
@@ -1807,6 +1828,7 @@ impl App {
                         blank
                     ),
                     false,
+                    p.content_box.map(|b| (b, p.dpi, (p.w, p.h))),
                 ));
             }
         }
@@ -1821,12 +1843,15 @@ impl App {
         let zones: Vec<[f32; 4]> = sheet.adj.erase_mm.clone();
         let pic_zones: Vec<[f32; 4]> = sheet.adj.picture_mm.clone();
         let draw_pictures = self.draw_pictures;
+        let edit_box = self.edit_box;
+        let mut box_delta: Option<(usize, f32)> = None;
+        let bdrag = &mut self.box_drag;
         let mut new_zone: Option<[f32; 4]> = None;
         let mut remove_zone: Option<(bool, usize)> = None;
         let drag = &mut self.zone_drag;
         let mut draw = |ui: &mut egui::Ui| {
             ui.horizontal_top(|ui| {
-                for (tex, caption, is_orig) in &cells {
+                for (tex, caption, is_orig, boxinfo) in &cells {
                     ui.vertical(|ui| {
                         let ts = tex.size_vec2();
                         let scale = if fit {
@@ -1836,6 +1861,9 @@ impl App {
                         };
                         let mut img = egui::Image::from_texture(*tex).fit_to_exact_size(ts * scale);
                         if *is_orig && draw_zones {
+                            img = img.sense(egui::Sense::click_and_drag());
+                        }
+                        if !*is_orig && edit_box && boxinfo.is_some() {
                             img = img.sense(egui::Sense::click_and_drag());
                         }
                         let resp = ui.add(img);
@@ -1938,6 +1966,104 @@ impl App {
                                 }
                             }
                         }
+                        if let (false, true, Some((b, dpi, (pw, ph)))) =
+                            (*is_orig, edit_box, boxinfo)
+                        {
+                            // content box of this page: green frame, edges draggable
+                            let rect = resp.rect;
+                            let (kx, ky) = (
+                                rect.width() / (*pw).max(1) as f32,
+                                rect.height() / (*ph).max(1) as f32,
+                            );
+                            let br = egui::Rect::from_min_max(
+                                egui::pos2(
+                                    rect.min.x + b[0] as f32 * kx,
+                                    rect.min.y + b[1] as f32 * ky,
+                                ),
+                                egui::pos2(
+                                    rect.min.x + (b[0] + b[2]) as f32 * kx,
+                                    rect.min.y + (b[1] + b[3]) as f32 * ky,
+                                ),
+                            );
+                            let painter = ui.painter_at(rect.expand(2.0));
+                            let green = Color32::from_rgb(40, 170, 70);
+                            painter.rect_stroke(
+                                br,
+                                0.0,
+                                egui::Stroke::new(1.5, green),
+                                egui::StrokeKind::Middle,
+                            );
+                            // which edge is the pointer on (within 8 px)?
+                            let edge_at = |p: egui::Pos2| -> Option<usize> {
+                                let near = |a: f32, b: f32| (a - b).abs() <= 8.0;
+                                let in_x = p.x >= br.min.x - 8.0 && p.x <= br.max.x + 8.0;
+                                let in_y = p.y >= br.min.y - 8.0 && p.y <= br.max.y + 8.0;
+                                let c = [
+                                    (near(p.x, br.min.x) && in_y, (p.x - br.min.x).abs()),
+                                    (near(p.y, br.min.y) && in_x, (p.y - br.min.y).abs()),
+                                    (near(p.x, br.max.x) && in_y, (p.x - br.max.x).abs()),
+                                    (near(p.y, br.max.y) && in_x, (p.y - br.max.y).abs()),
+                                ];
+                                c.iter()
+                                    .enumerate()
+                                    .filter(|(_, (ok, _))| *ok)
+                                    .min_by(|a, b| a.1 .1.total_cmp(&b.1 .1))
+                                    .map(|(i, _)| i)
+                            };
+                            if let Some(p) = resp.hover_pos() {
+                                if let Some(e) = edge_at(p) {
+                                    ui.ctx().set_cursor_icon(if e % 2 == 0 {
+                                        egui::CursorIcon::ResizeHorizontal
+                                    } else {
+                                        egui::CursorIcon::ResizeVertical
+                                    });
+                                }
+                            }
+                            if resp.drag_started() {
+                                // egui reports a drag only after the pointer has moved a few
+                                // pixels: the edge is the one under the press, not under the pointer
+                                *bdrag = ui
+                                    .input(|i| i.pointer.press_origin())
+                                    .and_then(|p| edge_at(p).map(|e| (e, p)));
+                            }
+                            if let (Some((e, start)), Some(now)) =
+                                (*bdrag, ui.input(|i| i.pointer.latest_pos()))
+                            {
+                                // the edge follows the pointer while dragging (drawn inside the
+                                // image; the value may go beyond it: the page grows with the box)
+                                let shown = now.clamp(rect.min, rect.max);
+                                let (a, c) = match e {
+                                    0 | 2 => (
+                                        egui::pos2(shown.x, br.min.y),
+                                        egui::pos2(shown.x, br.max.y),
+                                    ),
+                                    _ => (
+                                        egui::pos2(br.min.x, shown.y),
+                                        egui::pos2(br.max.x, shown.y),
+                                    ),
+                                };
+                                painter.line_segment(
+                                    [a, c],
+                                    egui::Stroke::new(2.0, Color32::from_rgb(255, 160, 0)),
+                                );
+                                if resp.drag_stopped() {
+                                    let mm_per_px = 25.4 / (*dpi).max(1) as f32;
+                                    // outward = grow: left/top grow when moved left/up
+                                    let grow = match e {
+                                        0 => -(now.x - start.x) / kx,
+                                        1 => -(now.y - start.y) / ky,
+                                        2 => (now.x - start.x) / kx,
+                                        _ => (now.y - start.y) / ky,
+                                    } * mm_per_px;
+                                    if grow.abs() > 0.05 {
+                                        box_delta = Some((e, grow));
+                                    }
+                                    *bdrag = None;
+                                }
+                            } else if resp.drag_stopped() {
+                                *bdrag = None;
+                            }
+                        }
                         ui.label(RichText::new(caption).small());
                     });
                 }
@@ -1949,6 +2075,11 @@ impl App {
             egui::ScrollArea::both()
                 .auto_shrink([false, false])
                 .show(ui, draw);
+        }
+        if let Some((e, mm)) = box_delta {
+            let a = &mut self.sheets[i].adj.content_adjust_mm[e];
+            *a = (*a + mm).clamp(-100.0, 100.0);
+            self.sheets[i].adj_gen += 1;
         }
         if let Some(z) = new_zone {
             let a = &mut self.sheets[i].adj;

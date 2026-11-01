@@ -210,6 +210,10 @@ pub struct Page {
     pub blank: bool,
     /// Which half of a split spread this is: `Some(0)` left, `Some(1)` right.
     pub split_index: Option<u8>,
+    /// Where the detected content box (after the per-page adjustment) lies on this page:
+    /// x, y, width, height in pixels of `image`. `None` for blank pages. Lets a viewer draw
+    /// the box and turn a drag of its edges into `Settings::content_adjust_mm`.
+    pub content_box: Option<[u32; 4]>,
     /// Layered form (`Mixed`/`Hybrid`): the PDF writer stores these instead of `image`.
     pub layers: Option<Layers>,
 }
@@ -862,12 +866,22 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
             }
         }
     };
+    let content_box = content.map(|r| {
+        let px = |v: i64| ((v as f32) * f).round().max(0.0) as u32;
+        [
+            px(r.x as i64 - lay.cx),
+            px(r.y as i64 - lay.cy),
+            px(r.w as i64).max(1),
+            px(r.h as i64).max(1),
+        ]
+    });
     Page {
         image,
         dpi: out_dpi,
         skew_deg,
         blank,
         split_index,
+        content_box,
         layers,
     }
 }
@@ -1053,6 +1067,42 @@ mod tests {
         assert_eq!(pages.len(), 2);
         assert!(red_share(&pages[0]).is_none(), "left page has no picture");
         assert!(red_share(&pages[1]).unwrap_or(0.0) > 0.5);
+    }
+
+    #[test]
+    fn content_box_is_reported_on_the_output_page_and_follows_the_nudge() {
+        let g = text_page(1200, 900, 100, 1100);
+        let src = image::DynamicImage::ImageRgb8(to_rgb(&g));
+        let base = Settings {
+            mode: OutputMode::BlackWhite,
+            dpi: 300,
+            deskew: false,
+            auto_orient: false,
+            margins_mm: [10.0; 4],
+            ..Settings::default()
+        };
+        let p0 = &process_page(&src, &base)[0];
+        let b0 = p0.content_box.expect("box");
+        let margin = (10.0f32 / 25.4 * 300.0).round() as i64;
+        assert!((b0[0] as i64 - margin).abs() <= 2, "{b0:?}");
+        assert!((b0[1] as i64 - margin).abs() <= 2, "{b0:?}");
+        // box + margins = page
+        assert!((b0[0] as i64 + b0[2] as i64 + margin - p0.image.width() as i64).abs() <= 3);
+        // grow the box by 5 mm on the left: it gets 5 mm wider
+        let nudged = Settings {
+            content_adjust_mm: [5.0, 0.0, 0.0, 0.0],
+            ..base.clone()
+        };
+        let b1 = process_page(&src, &nudged)[0].content_box.unwrap();
+        let five = (5.0f32 / 25.4 * 300.0).round() as i64;
+        assert!(
+            (b1[2] as i64 - b0[2] as i64 - five).abs() <= 2,
+            "{b0:?} -> {b1:?}"
+        );
+        // blank page: no box
+        let blank =
+            image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(300, 300, Rgb([240; 3])));
+        assert!(process_page(&blank, &base)[0].content_box.is_none());
     }
 
     #[test]

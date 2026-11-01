@@ -19,6 +19,7 @@ fn reads_qpdf_object_streams() {
                 skew_deg: 0.0,
                 blank: false,
                 split_index: None,
+                content_box: None,
                 layers: None,
             },
             &[],

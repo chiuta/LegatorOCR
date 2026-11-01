@@ -144,6 +144,7 @@ mod tests {
             skew_deg: skew,
             blank,
             split_index: None,
+            content_box: None,
             layers: None,
         }
     }

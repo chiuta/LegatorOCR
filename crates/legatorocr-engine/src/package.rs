@@ -1,5 +1,5 @@
 //! A delivery package: the produced files, a `SHA256SUMS.txt` and a human-readable
-//! `MANIFEST.txt`, either in a new folder or in one `.zip` (for handing over to an archive or a
+//! `MANIFEST.txt`, in a new folder, one `.zip` or one `.iso` image (for handing over to an archive or a
 //! library). Nothing is overwritten: an existing destination is an error.
 
 use crate::checksums::file_hash;
@@ -53,7 +53,7 @@ fn manifest_text(names: &[(String, u64, String)], when: u64, note: &str) -> Stri
 }
 
 /// Collect `files` (flat, by file name) plus `SHA256SUMS.txt` and `MANIFEST.txt` into `dest`
-/// (a `.zip` file name makes a zip, anything else a folder). `note` goes into the manifest
+/// (`.iso` makes a Joliet ISO 9660 image, `.zip` a zip, anything else a folder). `note` goes into the manifest
 /// (for example the rights statement).
 pub fn build(dest: &Path, files: &[PathBuf], when: u64, note: &str) -> Result<Packaged> {
     if dest.exists() {
@@ -85,10 +85,35 @@ pub fn build(dest: &Path, files: &[PathBuf], when: u64, note: &str) -> Result<Pa
         total += size;
     }
     let manifest = manifest_text(&listing, when, note);
+    let is_iso = dest
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("iso"));
     let is_zip = dest
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("zip"));
-    if is_zip {
+    if is_iso {
+        use crate::iso::{write_iso, IsoFile, Source};
+        let mut list: Vec<IsoFile> = entries
+            .iter()
+            .map(|(n, p)| IsoFile {
+                name: n.clone(),
+                source: Source::Path(p.clone()),
+            })
+            .collect();
+        list.push(IsoFile {
+            name: "SHA256SUMS.txt".into(),
+            source: Source::Bytes(sums.into_bytes()),
+        });
+        list.push(IsoFile {
+            name: "MANIFEST.txt".into(),
+            source: Source::Bytes(manifest.into_bytes()),
+        });
+        let label = dest
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("LEGATOROCR");
+        write_iso(dest, label, when, &list)?;
+    } else if is_zip {
         if total > MAX_ZIP_BYTES {
             bail!("the files total more than 3 GiB: package into a folder instead of a .zip");
         }
