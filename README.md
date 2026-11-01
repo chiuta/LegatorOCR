@@ -133,7 +133,7 @@ See `COMPARISON.md` for what other tools do that this one does not. In short:
 
 ## Credits
 
-**Co-author: [Alexandru Dumbravă](https://competentedigitalizare.blogspot.com/)** (HUB DIGITAL — digitisation, OCR and archiving
+**Co-author: [Alexandru Dumbravă](https://competentedigitalizare.blogspot.com/)** ([portfolio and digitisation guide](https://dumbravaalex.github.io/Portofoliu/), ORCID 0009-0008-4896-4489; HUB DIGITAL — digitisation, OCR and archiving
 workshop). The three ready-made digitisation flows (`flux-1-optim`, `flux-2-draft`, `flux-3-volum`: optimal quality at
 300 dpi / quick draft / high volume), the full-text search over scans (the job Agent Ransack and DocFetcher do in his
 workflow), the editable Word export (what ABBYY FineReader is used for) and the attention to Romanian diacritics follow his

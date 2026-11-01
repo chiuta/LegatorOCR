@@ -1989,6 +1989,8 @@ impl eframe::App for App {
                             "Alexandru Dumbravă",
                             "https://competentedigitalizare.blogspot.com/",
                         );
+                        ui.label("·");
+                        ui.hyperlink_to("portfolio", "https://dumbravaalex.github.io/Portofoliu/");
                     });
                 });
             self.show_about = open;
