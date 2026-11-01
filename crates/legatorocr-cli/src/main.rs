@@ -157,6 +157,11 @@ struct Cli {
     #[arg(long)]
     split_on_barcode: bool,
 
+    /// Compare two text files, REFERENCE then OCR-OUTPUT (the two INPUTS), and print the
+    /// character and word error rates. Case counts, whitespace and ş/ţ vs ș/ț do not.
+    #[arg(long)]
+    compare_text: bool,
+
     /// Show which of the eight interface languages (ro en fr it es pt de hu) have a
     /// recognition model installed, and how to get the missing ones; then exit.
     #[arg(long)]
@@ -293,6 +298,12 @@ struct Cli {
     #[arg(long, value_name = "X,Y,W,H")]
     erase: Vec<String>,
 
+    /// Always keep this rectangle as a colour picture (mixed / hybrid output): X,Y,WIDTH,HEIGHT in
+    /// mm from the top-left of the deskewed page, like --erase (repeatable). For photos the
+    /// automatic detector misses.
+    #[arg(long, value_name = "X,Y,W,H")]
+    picture_zone: Vec<String>,
+
     /// Drop one printed colour: off, red, green, blue.
     #[arg(long, default_value = "off")]
     dropout: String,
@@ -404,6 +415,21 @@ fn parse_page_size(s: &str) -> Result<(f32, f32)> {
 }
 
 fn main() -> Result<()> {
+    // `legatorocr … | head` closes our stdout early: end quietly like other Unix tools
+    // instead of panicking inside println!.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let msg = info
+            .payload()
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| info.payload().downcast_ref::<&str>().copied())
+            .unwrap_or("");
+        if msg.contains("Broken pipe") {
+            std::process::exit(0);
+        }
+        default_hook(info);
+    }));
     let r = real_main();
     legatorocr_engine::archive::cleanup();
     r
@@ -415,6 +441,23 @@ fn real_main() -> Result<()> {
         for (n, d) in legatorocr_engine::profiles::list() {
             println!("{n:<20} {d}");
         }
+        return Ok(());
+    }
+    if cli.compare_text {
+        let [r, h] = cli.inputs.as_slice() else {
+            bail!("--compare-text needs exactly two files: REFERENCE and OCR-OUTPUT");
+        };
+        let rd = |p: &PathBuf| {
+            std::fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))
+        };
+        let x = legatorocr_engine::eval::rates(&rd(r)?, &rd(h)?);
+        println!(
+            "CER {:.2}%  WER {:.2}%  (reference: {} characters, {} words)",
+            x.cer * 100.0,
+            x.wer * 100.0,
+            x.ref_chars,
+            x.ref_words
+        );
         return Ok(());
     }
     if cli.ocr_languages {
@@ -528,6 +571,12 @@ fn real_main() -> Result<()> {
         erase_zones: legatorocr_core::cleanup::parse_zones(&cli.erase.join(";")).ok_or_else(
             || anyhow::anyhow!("--erase needs X,Y,WIDTH,HEIGHT in mm (width and height > 0)"),
         )?,
+        picture_zones: legatorocr_core::cleanup::parse_zones(&cli.picture_zone.join(";"))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--picture-zone needs X,Y,WIDTH,HEIGHT in mm (width and height > 0)"
+                )
+            })?,
         dropout: legatorocr_core::Dropout::from_name(&cli.dropout)
             .ok_or_else(|| anyhow::anyhow!("--dropout must be off, red, green or blue"))?,
         despeckle_strength: cli.despeckle_strength,
@@ -874,7 +923,7 @@ fn real_main() -> Result<()> {
         write_atomic(p, t.as_bytes())?;
         eprintln!("wrote {}", p.display());
     }
-    if let (Some(p), Some(t)) = (&cli.docx, &res.text) {
+    if let (Some(p), Some(t)) = (&cli.docx, res.paragraph_text.as_ref().or(res.text.as_ref())) {
         let pages: Vec<String> = t
             .split('\x0c')
             .map(|s| s.trim_start_matches('\n').to_string())

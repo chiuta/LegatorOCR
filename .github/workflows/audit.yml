@@ -1,0 +1,24 @@
+name: Security audit
+# Known-vulnerability check of the dependency tree (RustSec advisory database) + licence/source policy.
+on:
+  push:
+    paths: ["Cargo.lock", "**/Cargo.toml", ".github/workflows/audit.yml"]
+  pull_request:
+    paths: ["Cargo.lock", "**/Cargo.toml"]
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo-audit
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit

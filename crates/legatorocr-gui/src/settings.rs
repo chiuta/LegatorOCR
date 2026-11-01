@@ -81,6 +81,7 @@ pub struct UiSettings {
     pub remove_lines: bool,
     /// `x,y,w,h;…` in mm (see `legatorocr_core::cleanup::parse_zones`).
     pub erase: String,
+    pub picture_zones: String,
     pub dropout: legatorocr_core::Dropout,
     pub despeckle_strength: f32,
     pub show_through: bool,
@@ -138,6 +139,7 @@ impl Default for UiSettings {
             fingers: false,
             remove_lines: false,
             erase: String::new(),
+            picture_zones: String::new(),
             dropout: legatorocr_core::Dropout::Off,
             despeckle_strength: 1.0,
             show_through: false,
@@ -226,6 +228,8 @@ impl UiSettings {
             fingers: self.fingers,
             remove_lines: self.remove_lines,
             erase_zones: legatorocr_core::cleanup::parse_zones(&self.erase).unwrap_or_default(),
+            picture_zones: legatorocr_core::cleanup::parse_zones(&self.picture_zones)
+                .unwrap_or_default(),
             dropout: self.dropout,
             despeckle_strength: self.despeckle_strength,
             show_through: self.show_through,
@@ -317,6 +321,7 @@ impl UiSettings {
         self.fingers = c.fingers;
         self.remove_lines = c.remove_lines;
         self.erase = legatorocr_core::cleanup::zones_to_string(&c.erase_zones);
+        self.picture_zones = legatorocr_core::cleanup::zones_to_string(&c.picture_zones);
         self.dropout = c.dropout;
         self.despeckle_strength = c.despeckle_strength;
         self.show_through = c.show_through;
@@ -443,6 +448,7 @@ mod tests {
             punch_holes: true,
             remove_lines: true,
             erase: "10,20,30,15;0,0,5,5".into(),
+            picture_zones: "5,5,40,30".into(),
             dropout: legatorocr_core::Dropout::Blue,
             despeckle_strength: 2.5,
             show_through: true,
@@ -470,6 +476,7 @@ mod tests {
         );
         assert_eq!((back.pdf_quality, back.uniform_size), (55, true));
         assert_eq!(back.erase, "10,20,30,15;0,0,5,5");
+        assert_eq!(back.picture_zones, "5,5,40,30");
         assert_eq!(
             (back.split_on_barcode, back.bookmarks, back.front_matter),
             (true, true, 4)

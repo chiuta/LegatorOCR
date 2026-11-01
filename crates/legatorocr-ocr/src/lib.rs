@@ -482,6 +482,66 @@ pub fn words_to_text(words: &[Word]) -> String {
     out
 }
 
+/// Like [`words_to_text`] but with a blank line between paragraphs. A new paragraph starts
+/// where the vertical gap to the previous line is clearly larger than the normal line
+/// spacing (more than ≈ 0.6 × the median line height beyond it), or where the line is indented
+/// by more than ≈ 1.5 line heights relative to the left edge of the text block above while the
+/// previous line ended short of the right edge.
+pub fn words_to_paragraphs(words: &[Word]) -> String {
+    struct L {
+        text: String,
+        x0: u32,
+        x1: u32,
+        y0: u32,
+        y1: u32,
+    }
+    let mut lines: Vec<(u32, L)> = Vec::new();
+    for w in words {
+        match lines.last_mut() {
+            Some((id, l)) if *id == w.line => {
+                l.text.push(' ');
+                l.text.push_str(&w.text);
+                l.x0 = l.x0.min(w.x);
+                l.x1 = l.x1.max(w.x.saturating_add(w.w));
+                l.y0 = l.y0.min(w.y);
+                l.y1 = l.y1.max(w.y.saturating_add(w.h));
+            }
+            _ => lines.push((
+                w.line,
+                L {
+                    text: w.text.clone(),
+                    x0: w.x,
+                    x1: w.x.saturating_add(w.w),
+                    y0: w.y,
+                    y1: w.y.saturating_add(w.h),
+                },
+            )),
+        }
+    }
+    if lines.is_empty() {
+        return String::new();
+    }
+    let mut hs: Vec<u32> = lines.iter().map(|(_, l)| l.y1 - l.y0).collect();
+    hs.sort_unstable();
+    let med_h = hs[hs.len() / 2].max(1);
+    let left = lines.iter().map(|(_, l)| l.x0).min().unwrap_or(0);
+    let right = lines.iter().map(|(_, l)| l.x1).max().unwrap_or(0);
+    let mut out = String::new();
+    for (i, (_, l)) in lines.iter().enumerate() {
+        if i > 0 {
+            let p = &lines[i - 1].1;
+            let gap = l.y0 as i64 - p.y1 as i64;
+            // normal spacing is a fraction of the line height; a paragraph break is a clear extra
+            let big_gap = gap as f64 > 0.6 * med_h as f64;
+            let indented = l.x0 as i64 - left as i64 > (1.5 * med_h as f64) as i64
+                && (right as i64 - p.x1 as i64) > (2.0 * med_h as f64) as i64;
+            out.push_str(if big_gap || indented { "\n\n" } else { "\n" });
+        }
+        out.push_str(&l.text);
+    }
+    out
+}
+
 fn xml_escape(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
     for c in s.chars() {
@@ -575,6 +635,37 @@ mod lang_tests {
         assert_eq!(canonical_lang("script/Latin"), "script/Latin");
         assert_eq!(UI_LANGUAGES.len(), 8);
         assert!(install_hint("ron").contains("ron"));
+    }
+}
+
+#[cfg(test)]
+mod paragraph_tests {
+    use super::*;
+    fn w(t: &str, x: u32, y: u32, line: u32) -> Word {
+        Word {
+            text: t.into(),
+            x,
+            y,
+            w: 60,
+            h: 30,
+            conf: 90.0,
+            line,
+        }
+    }
+    #[test]
+    fn big_vertical_gap_starts_a_paragraph_and_normal_spacing_does_not() {
+        let words = vec![
+            w("one", 100, 100, 0),
+            w("two", 100, 140, 1),
+            w("three", 100, 180, 2),
+            w("four", 100, 260, 3), // 50 px gap > 0.6 × 30
+            w("five", 100, 300, 4),
+        ];
+        assert_eq!(words_to_paragraphs(&words), "one\ntwo\nthree\n\nfour\nfive");
+    }
+    #[test]
+    fn empty_is_empty() {
+        assert_eq!(words_to_paragraphs(&[]), "");
     }
 }
 

@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 pub mod archive;
 pub mod docx;
+pub mod eval;
 pub mod extpdf;
 pub mod files;
 pub mod profiles;
@@ -174,6 +175,8 @@ pub struct ExportResult {
     pub skipped_blank: usize,
     /// Plain text of all pages (pages separated by form feed) when OCR ran.
     pub text: Option<String>,
+    /// Same text with a blank line between paragraphs (for DOCX).
+    pub paragraph_text: Option<String>,
     /// hOCR document when OCR ran.
     pub hocr: Option<String>,
     /// Consecutive duplicate pages dropped.
@@ -631,6 +634,7 @@ pub fn run_export(
         .and_then(|p| p.ocr.as_ref())
         .or(job.text_ocr.as_ref());
     let mut texts: Vec<String> = Vec::new();
+    let mut par_texts: Vec<String> = Vec::new();
     let mut hocr_pages: Vec<String> = Vec::new();
     // Pass 1 (optional): a common page size for the whole book.
     let uniform = if job.uniform_size {
@@ -742,6 +746,7 @@ pub fn run_export(
                 res.words += words.len();
                 if ocr_opts.is_some() {
                     texts.push(legatorocr_ocr::words_to_text(&words));
+                    par_texts.push(legatorocr_ocr::words_to_paragraphs(&words));
                     hocr_pages.push(legatorocr_ocr::hocr_page(
                         &words,
                         pg.image.width(),
@@ -778,6 +783,7 @@ pub fn run_export(
     }
     if ocr_opts.is_some() {
         res.text = Some(texts.join("\n\x0c"));
+        res.paragraph_text = Some(par_texts.join("\n\x0c"));
         res.hocr = Some(legatorocr_ocr::hocr_document(&hocr_pages));
     }
     if job.split_on_blank || job.split_on_barcode {

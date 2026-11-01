@@ -6,6 +6,10 @@ use crate::BitImage;
 /// Returns the angle (radians) by which the page must be rotated clockwise to
 /// level the text lines, or `None` when the page has too little ink to judge.
 pub fn detect_skew(ink: &BitImage, max_deg: f32) -> Option<f32> {
+    // Scanner-bed shadows and page edges are axis-aligned even when the page is not: leave
+    // them out so only the text decides.
+    let cleaned = crate::orient::without_long_runs(ink, 150);
+    let ink = &cleaned;
     let (ang, prom, share) = profile_skew(ink, max_deg)?;
     // A page with only a line or two of ink (a title, a folio) cannot be judged: stay put.
     if share < MIN_INK_SHARE {
@@ -196,5 +200,31 @@ mod tests {
         let mut img = BitImage::new(900, 1200);
         line(&mut img, 300.0, 100.0, 600.0, 112.0);
         assert_eq!(detect_skew(&img, 7.0), None);
+    }
+
+    #[test]
+    fn axis_aligned_edge_bars_do_not_hide_the_skew() {
+        // Text tilted by 2 degrees plus scanner-edge bars that stay vertical.
+        let (w, h) = (600u32, 800u32);
+        let mut b = BitImage::new(w, h);
+        let t = (2.0f32).to_radians().tan();
+        for line in 0..26u32 {
+            for x in 80..520u32 {
+                if (x / 14 + line) % 5 == 4 {
+                    continue;
+                }
+                let y = (90 + line * 24) as f32 + t * (x as f32 - 300.0);
+                for dy in 0..5 {
+                    b.data[((y as u32 + dy) * w + x) as usize] = 1;
+                }
+            }
+        }
+        for y in 0..h {
+            for x in (0..45).chain(w - 25..w) {
+                b.data[(y * w + x) as usize] = 1;
+            }
+        }
+        let a = detect_skew(&b, 7.0).unwrap().to_degrees();
+        assert!((a + 2.0).abs() < 0.4, "got {a}"); // the correction undoes the tilt
     }
 }
