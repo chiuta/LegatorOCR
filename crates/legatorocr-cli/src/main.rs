@@ -43,7 +43,7 @@ enum Fmt {
 #[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "verify_sums"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "verify_sums", "search_preset", "search_help"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -118,6 +118,11 @@ struct Cli {
     #[arg(long)]
     hocr: Option<PathBuf>,
 
+    /// Also write the recognised words as structured JSON: per page its size and dpi, per word
+    /// the text, box (pixels of the processed page), confidence and line (needs --ocr).
+    #[arg(long)]
+    json: Option<PathBuf>,
+
     /// Also write the recognised text as an editable Word document, one page break per
     /// scanned page (needs --ocr).
     #[arg(long)]
@@ -129,6 +134,15 @@ struct Cli {
     /// when nothing is found.
     #[arg(long, value_name = "TEXT")]
     search: Option<String>,
+
+    /// SEARCH for a ready-made pattern instead of text: cui, iban-ro, invoice, email,
+    /// phone-ro, date, amount (see --search-help). Same files and options as --search.
+    #[arg(long, value_name = "NAME", conflicts_with = "search")]
+    search_preset: Option<String>,
+
+    /// List the --search-preset names and what each finds.
+    #[arg(long)]
+    search_help: bool,
 
     /// With --search: TEXT is a regular expression, matched line by line.
     #[arg(long, requires = "search")]
@@ -565,6 +579,18 @@ fn real_main() -> Result<()> {
         }
         return Ok(());
     }
+    if cli.search_help {
+        for (name, what, pat) in legatorocr_engine::search::PRESETS {
+            println!("{name:<9} {what}\n          {pat}");
+        }
+        println!(
+            "\nIn --search text: ? = one letter, * = any letters, `A NEAR/5 B` = within 5 words."
+        );
+        return Ok(());
+    }
+    if let Some(name) = &cli.search_preset {
+        return run_search(&cli, legatorocr_engine::search::preset(name)?);
+    }
     if let Some(q) = &cli.search {
         return run_search(&cli, q);
     }
@@ -792,16 +818,25 @@ fn real_main() -> Result<()> {
         };
         check_ocr(&o).context("--auto-rotate needs Tesseract with the 'osd' language data")?;
     }
-    if (cli.txt.is_some() || cli.hocr.is_some() || cli.docx.is_some()) && !cli.ocr {
-        bail!("--txt, --hocr and --docx need --ocr");
+    if (cli.txt.is_some() || cli.hocr.is_some() || cli.docx.is_some() || cli.json.is_some())
+        && !cli.ocr
+    {
+        bail!("--txt, --hocr, --json and --docx need --ocr");
     }
-    for p in cli.txt.iter().chain(cli.hocr.iter()).chain(cli.docx.iter()) {
+    for p in cli
+        .txt
+        .iter()
+        .chain(cli.hocr.iter())
+        .chain(cli.json.iter())
+        .chain(cli.docx.iter())
+    {
         legatorocr_engine::check_writable(p)?;
     }
     if cli.pdf.is_none()
         && matches!(cli.format, Fmt::None)
         && cli.txt.is_none()
         && cli.hocr.is_none()
+        && cli.json.is_none()
         && cli.docx.is_none()
         && cli.report.is_none()
         && cli.multitiff.is_none()
@@ -1128,6 +1163,11 @@ fn real_main() -> Result<()> {
         eprintln!("wrote {}", p.display());
         written.push(p.clone());
     }
+    if let (Some(p), Some(t)) = (&cli.json, &res.json) {
+        write_atomic(p, t.as_bytes())?;
+        eprintln!("wrote {}", p.display());
+        written.push(p.clone());
+    }
     if let (Some(p), Some(t)) = (&cli.hocr, &res.hocr) {
         write_atomic(p, t.as_bytes())?;
         eprintln!("wrote {}", p.display());
@@ -1187,7 +1227,7 @@ fn run_search(cli: &Cli, query: &str) -> Result<()> {
         bail!("--search needs at least one file or folder to look in");
     }
     let o = legatorocr_engine::search::SearchOptions {
-        regex: cli.search_regex,
+        regex: cli.search_regex || cli.search_preset.is_some(),
         exact: cli.search_exact,
         max_hits: cli.search_max,
     };

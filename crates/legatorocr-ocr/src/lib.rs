@@ -650,6 +650,54 @@ fn xml_escape(s: &str) -> String {
 }
 
 /// One hOCR `ocr_page` block (`page_no` starts at 1).
+fn json_str(s: &str) -> String {
+    let mut o = String::with_capacity(s.len() + 2);
+    o.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => o.push_str("\\\""),
+            '\\' => o.push_str("\\\\"),
+            '\n' => o.push_str("\\n"),
+            '\r' => o.push_str("\\r"),
+            '\t' => o.push_str("\\t"),
+            c if (c as u32) < 0x20 => o.push_str(&format!("\\u{:04x}", c as u32)),
+            c => o.push(c),
+        }
+    }
+    o.push('"');
+    o
+}
+
+/// One page of the structured JSON export: size, resolution and every word with its box
+/// (pixels of the processed page, origin top-left), confidence (null when unknown) and line.
+pub fn json_page(words: &[Word], width: u32, height: u32, dpi: u32, page_no: usize) -> String {
+    let mut o = format!(
+        "    {{\"page\": {page_no}, \"width\": {width}, \"height\": {height}, \"dpi\": {dpi}, \"words\": [\n"
+    );
+    for (i, w) in words.iter().enumerate() {
+        let conf = if w.conf >= 0.0 && w.conf.is_finite() {
+            format!("{:.1}", w.conf)
+        } else {
+            "null".to_string()
+        };
+        o.push_str(&format!(
+            "      {{\"text\": {}, \"x\": {}, \"y\": {}, \"w\": {}, \"h\": {}, \"conf\": {conf}, \"line\": {}}}{}\n",
+            json_str(&w.text), w.x, w.y, w.w, w.h, w.line,
+            if i + 1 < words.len() { "," } else { "" }
+        ));
+    }
+    o.push_str("    ]}");
+    o
+}
+
+/// The pages of [`json_page`] as one JSON document.
+pub fn json_document(pages: &[String]) -> String {
+    format!(
+        "{{\n  \"generator\": \"LegatorOCR\",\n  \"pages\": [\n{}\n  ]\n}}\n",
+        pages.join(",\n")
+    )
+}
+
 pub fn hocr_page(words: &[Word], width: u32, height: u32, dpi: u32, page_no: usize) -> String {
     let mut o = format!(
         "<div class='ocr_page' id='page_{page_no}' title='bbox 0 0 {width} {height}; ppageno {}; scan_res {dpi} {dpi}'>\n",
@@ -843,6 +891,24 @@ mod tests {
 #[cfg(test)]
 mod engine_choice_tests {
     use super::*;
+
+    #[test]
+    fn json_export_escapes_and_keeps_boxes() {
+        let w = |t: &str, conf: f32| Word {
+            text: t.into(),
+            x: 1,
+            y: 2,
+            w: 3,
+            h: 4,
+            conf,
+            line: 0,
+        };
+        let page = json_page(&[w("a\"b\\c", 91.5), w("ț", -1.0)], 100, 200, 300, 1);
+        let doc = json_document(&[page]);
+        assert!(doc.contains(r#""text": "a\"b\\c""#), "{doc}");
+        assert!(doc.contains(r#""conf": 91.5"#) && doc.contains(r#""conf": null"#));
+        assert!(doc.contains("\"width\": 100") && doc.contains("\"text\": \"ț\""));
+    }
 
     #[test]
     fn engine_names_parse() {

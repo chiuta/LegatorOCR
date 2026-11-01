@@ -49,9 +49,106 @@ pub struct Summary {
     pub truncated: bool,
 }
 
+/// Ready-made regular expressions for what archives are searched for most: (name, what it
+/// finds, pattern). Used with `--search-preset`.
+pub const PRESETS: &[(&str, &str, &str)] = &[
+    (
+        "cui",
+        "Romanian fiscal code (CUI / CIF, optionally RO-prefixed)",
+        r"\b(?:(?:CUI|CIF|C\.U\.I\.|C\.I\.F\.)\s*:?\s*(?:RO)?\s*\d{2,10}|RO\s?\d{2,10})\b",
+    ),
+    (
+        "iban-ro",
+        "Romanian IBAN (RO + 2 digits + 4 letters + 16 digits, spaces allowed)",
+        r"\bRO\d{2}\s?[A-Z]{4}(?:\s?[A-Z0-9]{4}){4}\b",
+    ),
+    (
+        "invoice",
+        "invoice / series and number (seria AB nr. 1234, factura 567)",
+        r"\b(?:seria|serie|factura|factură|fact\.|nr\.?)\s*[A-Z]{0,5}\s*(?:nr\.?\s*)?\d{1,10}\b",
+    ),
+    (
+        "email",
+        "e-mail address",
+        r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b",
+    ),
+    (
+        "phone-ro",
+        "Romanian mobile or landline number (+40 / 0040 / 0 prefix)",
+        r"(?:\+40|0040|\b0)\s?[237]\d{2}[\s.-]?\d{3}[\s.-]?\d{3}\b",
+    ),
+    (
+        "date",
+        "date such as 31.10.2026, 1/11/26 or 2026-11-01",
+        r"\b(?:\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}-\d{2}-\d{2})\b",
+    ),
+    (
+        "amount",
+        "amount of money (1.234,56 lei / RON / EUR / €)",
+        r"\b\d{1,3}(?:[.\s]\d{3})*(?:,\d{1,2})?\s?(?:lei|RON|EUR|€|USD)\b",
+    ),
+];
+
+/// The regular expression of a preset, or an error naming the available ones.
+pub fn preset(name: &str) -> Result<&'static str> {
+    PRESETS
+        .iter()
+        .find(|p| p.0.eq_ignore_ascii_case(name))
+        .map(|p| p.2)
+        .with_context(|| {
+            format!(
+                "unknown search preset {name:?}; available: {}",
+                PRESETS.iter().map(|p| p.0).collect::<Vec<_>>().join(", ")
+            )
+        })
+}
+
 enum Matcher {
-    Plain { needle: String, exact: bool },
+    Plain {
+        needle: String,
+        exact: bool,
+    },
     Re(regex::Regex),
+    /// `?` / `*` wildcards inside a plain query: the pattern runs on each (folded) line.
+    Wild {
+        re: regex::Regex,
+        exact: bool,
+    },
+    /// `A NEAR/n B`: both words within `n` words of each other.
+    Near {
+        a: regex::Regex,
+        b: regex::Regex,
+        n: usize,
+        exact: bool,
+    },
+}
+
+/// `A NEAR/5 B` (or `A NEAR B`, default 5 words) → (A, B, n).
+fn parse_near(q: &str) -> Option<(String, String, usize)> {
+    let words: Vec<&str> = q.split_whitespace().collect();
+    let i = words.iter().position(|w| {
+        w.eq_ignore_ascii_case("near")
+            || w.get(..5).is_some_and(|p| p.eq_ignore_ascii_case("near/"))
+    })?;
+    let n = words[i]
+        .get(5..)
+        .and_then(|d| d.parse::<usize>().ok())
+        .unwrap_or(5)
+        .clamp(1, 200);
+    let (a, b) = (words[..i].join(" "), words[i + 1..].join(" "));
+    (!a.is_empty() && !b.is_empty()).then_some((a, b, n))
+}
+
+fn wildcard_regex(q: &str) -> String {
+    let mut o = String::new();
+    for c in q.chars() {
+        match c {
+            '?' => o.push_str(r"\w"),
+            '*' => o.push_str(r"\w*"),
+            c => o.push_str(&regex::escape(&c.to_string())),
+        }
+    }
+    o
 }
 
 impl Matcher {
@@ -68,6 +165,39 @@ impl Matcher {
             return Ok(Matcher::Re(re));
         }
         let norm = q.split_whitespace().collect::<Vec<_>>().join(" ");
+        if let Some((a, b, n)) = parse_near(&norm) {
+            let f = |t: &str| if o.exact { t.to_string() } else { fold(t) };
+            // a term with ? or * must match a whole word; a plain term of 3+ letters may sit
+            // inside a longer word (mobil → mobila), a shorter one must be the whole word
+            let term = |t: &str| -> Result<regex::Regex> {
+                let t = f(t);
+                let pat = if t.contains(['?', '*']) {
+                    format!("^{}$", wildcard_regex(&t))
+                } else if t.chars().count() >= 3 {
+                    regex::escape(&t)
+                } else {
+                    format!("^{}$", regex::escape(&t))
+                };
+                RegexBuilder::new(&pat)
+                    .size_limit(8 << 20)
+                    .build()
+                    .with_context(|| format!("not a valid search term: {t}"))
+            };
+            return Ok(Matcher::Near {
+                a: term(&a)?,
+                b: term(&b)?,
+                n,
+                exact: o.exact,
+            });
+        }
+        if norm.contains(['?', '*']) {
+            let pat = wildcard_regex(&if o.exact { norm.clone() } else { fold(&norm) });
+            let re = RegexBuilder::new(&pat)
+                .size_limit(8 << 20)
+                .build()
+                .with_context(|| format!("not a valid wildcard pattern: {q}"))?;
+            return Ok(Matcher::Wild { re, exact: o.exact });
+        }
         let needle = if o.exact { norm } else { fold(&norm) };
         Ok(Matcher::Plain {
             needle,
@@ -84,6 +214,38 @@ impl Matcher {
                 .filter(|(_, l)| re.is_match(l))
                 .map(|(i, _)| i + 1)
                 .collect(),
+            Matcher::Wild { re, exact } => text
+                .lines()
+                .enumerate()
+                .filter(|(_, l)| re.is_match(&if *exact { l.to_string() } else { fold(l) }))
+                .map(|(i, _)| i + 1)
+                .collect(),
+            Matcher::Near { a, b, n, exact } => {
+                // every word with the line it is on
+                let mut ws: Vec<(String, usize)> = Vec::new();
+                for (i, l) in text.lines().enumerate() {
+                    for w in l.split_whitespace() {
+                        let w = w.trim_matches(|c: char| !c.is_alphanumeric());
+                        if !w.is_empty() {
+                            ws.push((if *exact { w.to_string() } else { fold(w) }, i + 1));
+                        }
+                    }
+                }
+                let is = |w: &str, t: &regex::Regex| t.is_match(w);
+                let mut out: Vec<usize> = Vec::new();
+                for (i, (w, line)) in ws.iter().enumerate() {
+                    if !is(w, a) {
+                        continue;
+                    }
+                    let lo = i.saturating_sub(*n);
+                    let hi = (i + n + 1).min(ws.len());
+                    if (lo..hi).any(|j| j != i && is(&ws[j].0, b)) && !out.contains(line) {
+                        out.push(*line);
+                    }
+                }
+                out.sort_unstable();
+                out
+            }
             Matcher::Plain { needle, exact } => {
                 // One string for the whole unit, lines joined by a space, so that a phrase
                 // broken over a line end is still found; remember where each line starts.
@@ -726,11 +888,46 @@ mod tests {
 
 #[cfg(test)]
 mod entity_boundary_tests {
+    use super::*;
     #[test]
     fn entity_window_ending_inside_a_multibyte_char_does_not_panic() {
         // '&' followed by bytes so that byte 12 falls inside a 2-byte character
         let s = format!("&{}\u{81}\u{81}tail", "a".repeat(10));
         let _ = super::decode_entities(&s);
         assert_eq!(super::decode_entities("a &amp; b"), "a & b");
+    }
+
+    #[test]
+    fn presets_wildcards_and_proximity() {
+        let m = |q: &str, regex: bool| {
+            Matcher::new(
+                q,
+                &SearchOptions {
+                    regex,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+        let text = "Cont: RO49 AAAA 1B31 0075 9384 0000 la banca\nCUI: RO12345678\nSuna la 0722 123 456 sau \
+                    scrie la a.b@exemplu.ro\nData 31.10.2026, total 1.234,56 lei\nMobila veche si frumoasa\n\
+                    ambalajul foarte lung de carton pentru mobila";
+        for (name, line) in [
+            ("iban-ro", 1),
+            ("cui", 2),
+            ("phone-ro", 3),
+            ("email", 3),
+            ("date", 4),
+            ("amount", 4),
+        ] {
+            let hits = m(preset(name).unwrap(), true).lines(text);
+            assert!(hits.contains(&line), "{name}: {hits:?}");
+        }
+        assert!(preset("nope").is_err());
+        assert_eq!(m("mobil?", false).lines(text), vec![5, 6]);
+        assert_eq!(m("mob*", false).lines(text), vec![5, 6]);
+        assert_eq!(m("mobila NEAR/2 veche", false).lines(text), vec![5]);
+        assert!(m("mobila NEAR/1 frumoasa", false).lines(text).is_empty());
+        assert_eq!(m("mobila NEAR/10 ambalajul", false).lines(text), vec![5, 6]);
     }
 }
