@@ -558,9 +558,20 @@ fn cut(p: &Prof, r: Region, med: u32, depth: u32, out: &mut Vec<Line>) {
     let rows = p.rows(r);
     let cols = p.cols(r);
     // a little scanner noise must not bridge a gap
-    let (noise_r, noise_c) = (w / 400, h / 400);
+    // (scan dust in a gutter is ink too: allow about one speck per 60 rows of the region)
+    let (noise_r, noise_c) = (w / 400, (h / 60).max(1));
     let hgaps = gaps(&rows, noise_r);
-    let vg = widest(&gaps(&cols, noise_c)).filter(|&(_, l)| l as u32 * 10 >= med * 18);
+    // a gutter is at least 1.8 line heights wide; a narrower one (tightly set columns, 0.9 to
+    // 1.8) counts only in a tall block with real text on both sides, where a river of white
+    // between the words of a justified paragraph is unlikely to run all the way down
+    let vg = widest(&gaps(&cols, noise_c)).filter(|&(s, l)| {
+        let l32 = l as u32;
+        l32 * 10 >= med * 18
+            || (l32 * 10 >= med * 9
+                && h > med * 8
+                && s as u32 * 5 >= w
+                && (w - s as u32 - l32) * 5 >= w)
+    });
     let hg = widest(&hgaps);
     // a whitespace column running through several lines is a gutter: read it column by column
     // unless a blank row band is clearly bigger (a heading above two columns)

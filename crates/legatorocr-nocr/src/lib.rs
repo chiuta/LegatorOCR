@@ -188,6 +188,12 @@ fn recognise_line(
     if mean_p < MIN_LINE_P {
         return Vec::new();
     }
+    // a scanner-edge strip, a ruling or a speck read as one or two marks is not text; a page
+    // number or a single letter in its own box is kept when the network is sure of it
+    let alnum = letters.iter().filter(|g| g.ch.is_alphanumeric()).count();
+    if alnum == 0 || (alnum <= 2 && (mean_p < 0.85 || ln.h > ln.w.saturating_mul(2))) {
+        return Vec::new();
+    }
     let mut words = Vec::new();
     let mut cur: Vec<&ctc::Glyph> = Vec::new();
     let flush = |cur: &mut Vec<&ctc::Glyph>, words: &mut Vec<Word>| {

@@ -98,10 +98,12 @@ pub fn render(
     for f in written {
         let data = std::fs::read(f).with_context(|| format!("{}: cannot read", f.display()))?;
         out.push_str(&format!(
-            "{{\"time\":{},\"tool\":{},\"output\":{},\"bytes\":{},\"sha256\":{},\"inputs\":[{}],\"retain_until\":{},\"legal_hold\":{},\"note\":{}}}\n",
+            "{{\"time\":{},\"tool\":{},\"output\":{},\"output_exact\":{},\"bytes\":{},\"sha256\":{},\"inputs\":[{}],\"retain_until\":{},\"legal_hold\":{},\"note\":{}}}\n",
             jstr(&iso(when)),
             jstr(tool),
             jstr(&f.to_string_lossy()),
+            // false when the name was not valid UTF-8 and the text above is an approximation
+            f.to_str().is_some(),
             data.len(),
             jstr(&crate::checksums::sha256_hex(&data)),
             ins,
@@ -121,6 +123,20 @@ pub fn append(log: &Path, text: &str) -> Result<()> {
         .append(true)
         .open(log)
         .with_context(|| format!("{}: cannot open the audit log", log.display()))?;
+    // a log whose last record was cut short (a crash, a full disk) must not swallow the next one
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    if len > 0 {
+        use std::io::{Read, Seek, SeekFrom};
+        if let Ok(mut r) = std::fs::File::open(log) {
+            let mut last = [0u8; 1];
+            if r.seek(SeekFrom::Start(len - 1)).is_ok()
+                && r.read_exact(&mut last).is_ok()
+                && last[0] != b'\n'
+            {
+                f.write_all(b"\n")?;
+            }
+        }
+    }
     f.write_all(text.as_bytes())?;
     f.sync_all().ok();
     Ok(())
@@ -129,6 +145,20 @@ pub fn append(log: &Path, text: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cut_short_record_does_not_swallow_the_next_one() {
+        let d = std::env::temp_dir().join(format!("lgr-audit-cut-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let log = d.join("audit.jsonl");
+        std::fs::write(&log, b"{\"time\":\"cut off").unwrap();
+        append(&log, "{\"ok\":1}\n").unwrap();
+        let t = std::fs::read_to_string(&log).unwrap();
+        let lines: Vec<&str> = t.lines().collect();
+        assert_eq!(lines.len(), 2, "{t:?}");
+        assert_eq!(lines[1], "{\"ok\":1}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     #[test]
     fn dates_are_validated() {

@@ -373,14 +373,38 @@ fn blocks_flat(words: &[legatorocr_core::text::Word]) -> Vec<Block> {
     out
 }
 
+/// Whether most letters of `t` are from a right-to-left script (Hebrew, Arabic, Syriac, Thaana…).
+fn is_rtl(t: &str) -> bool {
+    let (mut rtl, mut other) = (0usize, 0usize);
+    for c in t.chars().filter(|c| c.is_alphabetic()) {
+        match c as u32 {
+            0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF => rtl += 1,
+            _ => other += 1,
+        }
+    }
+    rtl > other
+}
+
+fn para_xml(t: &str) -> String {
+    if is_rtl(t) {
+        format!(
+            "<w:p><w:pPr><w:bidi/></w:pPr><w:r><w:rPr><w:rtl/></w:rPr>\
+             <w:t xml:space=\"preserve\">{}</w:t></w:r></w:p>",
+            esc(t)
+        )
+    } else {
+        format!(
+            "<w:p><w:r><w:t xml:space=\"preserve\">{}</w:t></w:r></w:p>",
+            esc(t)
+        )
+    }
+}
+
 fn blocks_xml(blocks: &[Block]) -> String {
     let mut body = String::new();
     for b in blocks {
         match b {
-            Block::Para(t) => body.push_str(&format!(
-                "<w:p><w:r><w:t xml:space=\"preserve\">{}</w:t></w:r></w:p>",
-                esc(t)
-            )),
+            Block::Para(t) => body.push_str(&para_xml(t)),
             Block::Columns(cols) => {
                 // the single-column part so far ends here; the columns form a continuous
                 // section of their own, closed by the paragraph that carries its properties
@@ -389,10 +413,25 @@ fn blocks_xml(blocks: &[Block]) -> String {
                      <w:pgSz w:w=\"11906\" w:h=\"16838\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"708\" w:footer=\"708\" w:gutter=\"0\"/></w:sectPr></w:pPr></w:p>",
                 );
                 for (k, c) in cols.iter().enumerate() {
+                    let x = blocks_xml(c);
                     if k > 0 {
-                        body.push_str("<w:p><w:r><w:br w:type=\"column\"/></w:r></w:p>");
+                        // the break goes into the column's first paragraph (no empty line at
+                        // the top of the column); before a table it needs a paragraph of its own
+                        let brk = "<w:r><w:br w:type=\"column\"/></w:r>";
+                        let plain = "<w:p>";
+                        let rtl = "<w:p><w:pPr><w:bidi/></w:pPr>";
+                        if let Some(r) = x.strip_prefix(rtl) {
+                            body.push_str(&format!("{rtl}{brk}{r}"));
+                        } else if let Some(r) =
+                            x.strip_prefix(plain).filter(|_| !x.starts_with("<w:p/>"))
+                        {
+                            body.push_str(&format!("{plain}{brk}{r}"));
+                        } else {
+                            body.push_str(&format!("<w:p>{brk}</w:p>{x}"));
+                        }
+                    } else {
+                        body.push_str(&x);
                     }
-                    body.push_str(&blocks_xml(c));
                 }
                 body.push_str(&format!(
                     "<w:p><w:pPr><w:sectPr><w:type w:val=\"continuous\"/>\
@@ -658,6 +697,25 @@ mod tests {
         let xml = zipmini_text(&from_blocks(&[b], "t"));
         let tail = xml.rsplit("<w:sectPr>").next().unwrap();
         assert!(tail.contains("w:type w:val=\"continuous\""), "{tail}");
+    }
+
+    #[test]
+    fn right_to_left_paragraphs_are_marked_and_column_breaks_leave_no_empty_line() {
+        let b = vec![Block::Para("שלום עולם".into()), Block::Para("plain".into())];
+        let x = blocks_xml(&b);
+        assert!(x.contains("<w:bidi/>") && x.contains("<w:rtl/>"));
+        assert_eq!(x.matches("<w:bidi/>").count(), 1, "{x}");
+        let cols = vec![Block::Columns(vec![
+            vec![Block::Para("left".into())],
+            vec![Block::Para("right".into())],
+        ])];
+        let x = blocks_xml(&cols);
+        assert!(
+            x.contains(
+                "<w:p><w:r><w:br w:type=\"column\"/></w:r><w:r><w:t xml:space=\"preserve\">right"
+            ),
+            "{x}"
+        );
     }
 
     fn zipmini_text(zip: &[u8]) -> String {

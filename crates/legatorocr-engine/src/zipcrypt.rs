@@ -136,6 +136,15 @@ pub fn write_encrypted(entries: &[(&str, &[u8])], password: &str) -> Result<Vec<
     let mut out = Vec::new();
     let mut central = Vec::new();
     for (name, data) in entries {
+        if out.len() as u64 + data.len() as u64 > u32::MAX as u64 - 1_000_000 {
+            bail!("{name}: the zip would pass 4 GiB (no Zip64 support); split the package");
+        }
+        if name.len() > u16::MAX as usize {
+            bail!(
+                "a file name of {} bytes does not fit a zip entry",
+                name.len()
+            );
+        }
         if data.len() as u64 > u32::MAX as u64 - 1_000_000 {
             bail!("{name}: too large for a zip entry (4 GiB limit)");
         }

@@ -474,10 +474,12 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
         transform::rot90(&base, s.rotate_quarters)
     };
     if s.perspective {
-        if let Some(flat) = crate::perspective::correct(&rgb) {
+        // guide points are carried through the projective warp; zones are not followed
+        let mut moved: Guides = guides.clone();
+        if let Some(flat) = crate::perspective::correct_tracking(&rgb, &mut moved) {
             rgb = flat;
-            zones.clear(); // a projective warp is not followed
-            guides.clear();
+            zones.clear();
+            guides = moved;
         }
     }
 

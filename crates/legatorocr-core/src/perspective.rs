@@ -159,6 +159,12 @@ pub fn find_page_quad(img: &RgbImage) -> Option<[Pt; 4]> {
 /// Warp the quad to a rectangle of the average edge lengths. `None` when no page quad is
 /// found or the result would be unreasonably large/small.
 pub fn correct(img: &RgbImage) -> Option<RgbImage> {
+    correct_tracking(img, &mut [])
+}
+
+/// Like [`correct`], and the polylines in `follow` (pixel points of `img`) are moved to where
+/// the same spots land in the corrected page.
+pub fn correct_tracking(img: &RgbImage, follow: &mut [Vec<(f32, f32)>]) -> Option<RgbImage> {
     let q = find_page_quad(img)?;
     let d = |a: Pt, b: Pt| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
     let ow = ((d(q[0], q[1]) + d(q[3], q[2])) / 2.0).round();
@@ -182,6 +188,43 @@ pub fn correct(img: &RgbImage) -> Option<RgbImage> {
     let hh = (dx1 * dy3 - dx3 * dy1) / den;
     let (a, b, c) = (x1 - x0 + g * x1, x3 - x0 + hh * x3, x0);
     let (dd, e, ff) = (y1 - y0 + g * y1, y3 - y0 + hh * y3, y0);
+    // inverse of (u,v) -> ((a u + b v + c) / den, (d u + e v + f) / den): source → page
+    {
+        let m = [[a, b, c], [dd, e, ff], [g, hh, 1.0]];
+        let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+            - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+            + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+        if det.abs() > 1e-12 {
+            let inv = [
+                [
+                    (m[1][1] * m[2][2] - m[1][2] * m[2][1]) / det,
+                    (m[0][2] * m[2][1] - m[0][1] * m[2][2]) / det,
+                    (m[0][1] * m[1][2] - m[0][2] * m[1][1]) / det,
+                ],
+                [
+                    (m[1][2] * m[2][0] - m[1][0] * m[2][2]) / det,
+                    (m[0][0] * m[2][2] - m[0][2] * m[2][0]) / det,
+                    (m[0][2] * m[1][0] - m[0][0] * m[1][2]) / det,
+                ],
+                [
+                    (m[1][0] * m[2][1] - m[1][1] * m[2][0]) / det,
+                    (m[0][1] * m[2][0] - m[0][0] * m[2][1]) / det,
+                    (m[0][0] * m[1][1] - m[0][1] * m[1][0]) / det,
+                ],
+            ];
+            for p in follow.iter_mut().flat_map(|l| l.iter_mut()) {
+                let (x, y) = (p.0 + 0.5, p.1 + 0.5);
+                let den = inv[2][0] * x + inv[2][1] * y + inv[2][2];
+                if den.abs() > 1e-9 {
+                    let u = (inv[0][0] * x + inv[0][1] * y + inv[0][2]) / den;
+                    let v = (inv[1][0] * x + inv[1][1] * y + inv[1][2]) / den;
+                    *p = (u * ow as f32 - 0.5, v * oh as f32 - 0.5);
+                } else {
+                    *p = (f32::NAN, f32::NAN);
+                }
+            }
+        }
+    }
     let (w, h) = img.dimensions();
     let src = img.as_raw();
     let mut out = RgbImage::new(ow, oh);
@@ -281,6 +324,45 @@ mod tests {
                 out.get_pixel(x, y)
             );
         }
+    }
+
+    #[test]
+    fn tracked_points_land_on_the_same_ink_after_the_warp() {
+        let q = [
+            (150.0, 100.0),
+            (750.0, 160.0),
+            (820.0, 1100.0),
+            (80.0, 1050.0),
+        ];
+        let img = photo(q);
+        // dark (bar) pixels spread over the page
+        let mut pts = Vec::new();
+        for y in (250..1000).step_by(97) {
+            for x in (200..700).step_by(53) {
+                if img.get_pixel(x, y).0[0] < 60 {
+                    pts.push((x as f32, y as f32));
+                }
+            }
+        }
+        assert!(pts.len() > 10, "{}", pts.len());
+        let mut follow = vec![pts.clone()];
+        let out = correct_tracking(&img, &mut follow).expect("warp");
+        let mut dark = 0;
+        for &(x, y) in &follow[0] {
+            assert!(x.is_finite() && y.is_finite());
+            let (xi, yi) = (x.round() as i64, y.round() as i64);
+            if (0..out.width() as i64).contains(&xi)
+                && (0..out.height() as i64).contains(&yi)
+                && out.get_pixel(xi as u32, yi as u32).0[0] < 110
+            {
+                dark += 1;
+            }
+        }
+        assert!(
+            dark * 10 >= pts.len() * 8,
+            "only {dark} of {} tracked points sit on ink",
+            pts.len()
+        );
     }
 
     #[test]
