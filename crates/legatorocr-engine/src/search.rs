@@ -20,6 +20,9 @@ pub struct SearchOptions {
     pub exact: bool,
     /// Stop after this many hits (0 = no limit).
     pub max_hits: usize,
+    /// The text is a boolean query (AND / OR / NOT, "phrase", wildcards, /regex/, `~N` fuzzy);
+    /// see [`crate::fuzzy`]. Matching is per line.
+    pub query: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,6 +112,7 @@ enum Matcher {
         exact: bool,
     },
     Re(regex::Regex),
+    Query(crate::fuzzy::Query),
     /// `?` / `*` wildcards inside a plain query: the pattern runs on each (folded) line.
     Wild {
         re: regex::Regex,
@@ -155,6 +159,10 @@ impl Matcher {
     fn new(q: &str, o: &SearchOptions) -> Result<Matcher> {
         if q.trim().is_empty() {
             bail!("the search text is empty");
+        }
+        if o.query {
+            let parsed = crate::fuzzy::parse_query(q).map_err(|e| anyhow::anyhow!("query: {e}"))?;
+            return Ok(Matcher::Query(parsed));
         }
         if o.regex {
             let re = RegexBuilder::new(q)
@@ -208,6 +216,12 @@ impl Matcher {
     /// 1-based line numbers of `text` that match (each at most once, ascending).
     fn lines(&self, text: &str) -> Vec<usize> {
         match self {
+            Matcher::Query(qy) => text
+                .lines()
+                .enumerate()
+                .filter(|(_, l)| crate::fuzzy::is_match(qy, l))
+                .map(|(i, _)| i + 1)
+                .collect(),
             Matcher::Re(re) => text
                 .lines()
                 .enumerate()
@@ -686,6 +700,27 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn boolean_fuzzy_query_finds_lines_without_diacritics() {
+        let d = tmp("query");
+        std::fs::write(
+            d.join("a.txt"),
+            "Primăria Brașov a emis factura\nFactura din Cluj\nTotal general",
+        )
+        .unwrap();
+        let o = SearchOptions {
+            query: true,
+            ..SearchOptions::default()
+        };
+        let lines = |q: &str| run(&d, q, &o).0.iter().map(|h| h.line).collect::<Vec<_>>();
+        assert_eq!(lines("brasov AND factura"), vec![1]);
+        assert_eq!(lines("factura NOT brasov"), vec![2]);
+        assert_eq!(lines("brasoc~1"), vec![1]);
+        assert_eq!(lines("cluj OR total"), vec![2, 3]);
+        assert!(search(&[d.clone()], "(", &o, &mut |_| {}).is_err());
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

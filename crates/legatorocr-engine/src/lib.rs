@@ -869,6 +869,14 @@ pub fn run_export(
     if ocr_opts.is_some() {
         res.text = Some(texts.join("\n\x0c"));
         res.paragraph_text = Some(par_texts.join("\n\x0c"));
+        if ropost::enabled() {
+            let o = ropost::PostOptions::default();
+            res.text = res.text.take().map(|t| ropost::postprocess_pages(&t, &o));
+            res.paragraph_text = res
+                .paragraph_text
+                .take()
+                .map(|t| ropost::postprocess_pages(&t, &o));
+        }
         res.hocr = Some(legatorocr_ocr::hocr_document(&hocr_pages));
         res.alto = Some(legatorocr_ocr::alto_document(&alto_pages, "LegatorOCR"));
         res.page_xml = page_xml_docs;

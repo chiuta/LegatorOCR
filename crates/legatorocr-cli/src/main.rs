@@ -120,6 +120,12 @@ struct Cli {
     #[arg(long)]
     hocr: Option<PathBuf>,
 
+    /// Clean the .txt and .docx text for Romanian: ș/ț with comma-below, words split at a line end
+    /// joined, typographic quotes, spacing around punctuation. The PDF text layer and hOCR keep
+    /// the raw words (needs --ocr).
+    #[arg(long)]
+    clean_text: bool,
+
     /// Also write ALTO v4 XML (word boxes and confidences, the library standard) (needs --ocr).
     #[arg(long)]
     alto: Option<PathBuf>,
@@ -157,6 +163,12 @@ struct Cli {
     /// With --search: TEXT is a regular expression, matched line by line.
     #[arg(long)]
     search_regex: bool,
+
+    /// With --search: the text is a boolean query: AND / OR / NOT (or + and -), "phrase", ? and *
+    /// wildcards, /regex/ and `word~1` for one-letter OCR slips; case and Romanian diacritics are
+    /// ignored. Per line. Example: --search 'brasov AND (factura OR contract~1)'.
+    #[arg(long)]
+    search_query: bool,
 
     /// With --search: match case and diacritics exactly.
     #[arg(long)]
@@ -1256,6 +1268,7 @@ fn real_main() -> Result<()> {
         split_on_barcode: cli.split_on_barcode,
     };
     legatorocr_engine::profile::enable(cli.timings);
+    legatorocr_engine::ropost::set_enabled(cli.clean_text);
     legatorocr_engine::qa::enable(cli.quality_report);
     let res = run_export(
         &job,
@@ -1566,6 +1579,7 @@ fn run_search(cli: &Cli, query: &str) -> Result<()> {
         regex: cli.search_regex || cli.search_preset.is_some(),
         exact: cli.search_exact,
         max_hits: cli.search_max,
+        query: cli.search_query,
     };
     let mut out = std::io::BufWriter::new(std::io::stdout().lock());
     let mut write_err = None;

@@ -583,3 +583,23 @@ mod tests {
         assert!(stats(&s, &a) <= s.chars().count());
     }
 }
+
+static CLEAN_TEXT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Switch the Romanian clean-up of the plain-text and Word outputs on or off (`--clean-text`).
+pub fn set_enabled(on: bool) {
+    CLEAN_TEXT.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn enabled() -> bool {
+    CLEAN_TEXT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Apply [`postprocess`] page by page to text whose pages are separated by form feeds, so
+/// nothing is joined across a page break.
+pub fn postprocess_pages(text: &str, o: &PostOptions) -> String {
+    text.split('\x0c')
+        .map(|p| postprocess(p, o))
+        .collect::<Vec<_>>()
+        .join("\x0c")
+}
