@@ -43,7 +43,7 @@ enum Fmt {
 #[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_bag", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "search_preset", "search_help"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_bag", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "decode_worker", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "search_preset", "search_help"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -427,6 +427,24 @@ struct Cli {
     /// CA / TSA certificate file (PEM) for --timestamp-verify.
     #[arg(long, value_name = "PEM")]
     tsa_ca: Option<PathBuf>,
+
+    /// Decode every input in a separate worker process with a memory limit, a CPU-time limit
+    /// (Unix) and a timeout, so a hostile or corrupt file can crash only the worker, not the
+    /// run. Process isolation, not a security sandbox (no seccomp or namespaces).
+    #[arg(long)]
+    isolate_decoders: bool,
+
+    /// Memory limit per decoder worker, in MB (--isolate-decoders; Unix only).
+    #[arg(long, value_name = "MB", default_value_t = 4096)]
+    decoder_memory: u64,
+
+    /// Wall-clock limit per decoder worker, in seconds (--isolate-decoders).
+    #[arg(long, value_name = "SECONDS", default_value_t = 120)]
+    decoder_timeout: u64,
+
+    /// Internal: decode INPUT to a BMP at OUTPUT (used by --isolate-decoders).
+    #[arg(long, num_args = 2, value_names = ["INPUT", "OUTPUT"], hide = true)]
+    decode_worker: Vec<PathBuf>,
 
     /// Reprocessable archive package: a NEW folder with the original inputs, project.lgr (settings
     /// and per-page adjustments, relative paths), derived/ (outputs and ocr.json with every word,
@@ -1223,6 +1241,20 @@ fn real_main() -> Result<()> {
             }
         }
         return Ok(());
+    }
+    if let [i, o] = cli.decode_worker.as_slice() {
+        if let Err(e) = legatorocr_engine::isolate::worker(i, o) {
+            eprintln!("{e}");
+            std::process::exit(2);
+        }
+        return Ok(());
+    }
+    if cli.isolate_decoders {
+        legatorocr_engine::isolate::enable(legatorocr_engine::isolate::Config {
+            exe: std::env::current_exe()?,
+            memory_mb: cli.decoder_memory,
+            timeout_s: cli.decoder_timeout,
+        });
     }
     if let Some(f) = &cli.sign_pdf {
         let out = match &cli.pdf {

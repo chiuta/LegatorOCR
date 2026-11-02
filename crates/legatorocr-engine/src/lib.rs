@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 pub mod altbin;
 pub mod audit;
+pub mod isolate;
 pub mod reprocess;
 pub mod bagit;
 pub mod burst;
@@ -584,6 +585,14 @@ fn load_pdf_page_builtin(path: &Path, index: u32) -> Result<DynamicImage> {
 /// Open an image the way a person sees it: EXIF orientation applied (phone and
 /// camera JPEGs), transparency flattened onto white.
 pub fn load_image(path: &Path) -> Result<DynamicImage> {
+    if isolate::enabled() {
+        return isolate::decode(path, &pdf_password());
+    }
+    load_image_direct(path)
+}
+
+/// [`load_image`] in this process (what the isolated worker runs).
+pub fn load_image_direct(path: &Path) -> Result<DynamicImage> {
     let (base, frame) = files::split_frame(path);
     if files::is_pdf(&base) {
         return load_pdf_page(&base, frame.unwrap_or(1) - 1);
