@@ -41,6 +41,7 @@ pub mod mcp;
 pub mod memcap;
 pub mod pdftools;
 pub mod pagenum;
+pub mod redact;
 pub mod provenance;
 pub mod qa;
 pub mod textcheck;
@@ -222,6 +223,8 @@ pub struct ExportResult {
     pub json: Option<String>,
     /// Consecutive duplicate pages dropped.
     pub skipped_duplicates: usize,
+    /// Words removed by `--redact`.
+    pub redacted: usize,
     /// Per page, tables and paragraphs found from the word positions (for the Word export).
     pub docx_blocks: Option<Vec<Vec<docx::Block>>>,
     /// With `split_on_blank`: one PDF per document (then `pdf` is `None`).
@@ -822,7 +825,10 @@ pub fn run_export(
                 last_src = None;
                 continue;
             }
-            for (pg, words) in pages {
+            for (mut pg, mut words) in pages {
+                if redact::enabled() {
+                    res.redacted += redact::apply(&mut pg, &mut words);
+                }
                 if job.split_on_blank && pg.blank {
                     if let Some(w) = writer.take().filter(|w| w.page_count() > 0) {
                         res.docs.push(w.finish());

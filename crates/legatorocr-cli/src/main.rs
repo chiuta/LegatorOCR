@@ -387,6 +387,17 @@ struct Cli {
     #[arg(long, value_name = "FILE")]
     efactura: Option<PathBuf>,
 
+    /// Remove personal data for hand-over (needs --ocr): words matching these presets (comma
+    /// list from --search-help: cui, iban-ro, email, phone-ro, date, ...) are painted black in
+    /// the page and dropped from every text output. Only what OCR read is found: check the
+    /// result by eye. Not with image output, --multitiff, --package or --ocr-cache.
+    #[arg(long, value_name = "PRESETS", value_delimiter = ',')]
+    redact: Vec<String>,
+
+    /// Like --redact, with your own regular expression (repeatable), matched line by line.
+    #[arg(long, value_name = "REGEX")]
+    redact_regex: Vec<String>,
+
     /// Run as a Model Context Protocol server on stdin/stdout (JSON-RPC, one message per line)
     /// so an AI assistant can call a few narrow tools: scan_to_pdf, pdf_toolbox, efactura,
     /// measure_edge, search. Each tool starts this program with a fixed argument list.
@@ -1789,6 +1800,16 @@ fn real_main() -> Result<()> {
     legatorocr_engine::ropost::set_enabled(cli.clean_text);
     legatorocr_engine::pagenum::set_enabled(cli.page_labels);
     legatorocr_engine::memcap::set(cli.max_memory);
+    if !cli.redact.is_empty() || !cli.redact_regex.is_empty() {
+        if !cli.ocr {
+            bail!("--redact needs --ocr (it works on the words OCR reads)");
+        }
+        if !matches!(cli.format, Fmt::None) || cli.multitiff.is_some() || cli.package.is_some() || cli.ocr_cache.is_some() {
+            bail!("--redact cannot be combined with image output (add --format none), --multitiff, --package or --ocr-cache: those would hold the original pixels or words");
+        }
+        let pats = legatorocr_engine::redact::compile(&cli.redact, &cli.redact_regex)?;
+        legatorocr_engine::redact::set(pats);
+    }
     if cli.bookmarks_headings && !cli.ocr {
         bail!("--bookmarks-headings reads the recognised text; add --ocr");
     }
