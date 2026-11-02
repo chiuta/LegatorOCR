@@ -1,10 +1,36 @@
 # LegatorOCR roadmap (draft of 2 November 2026)
 
 Ordered from simple to complex and by logical dependency. **D** = difficulty 1 (hours) to 5 (months, research risk).
-Effort figures are rough estimates by the author of this plan, not measurements. Nothing here is implemented yet unless
-the README says so. Ideas that depend on research carry a **gate**: a measurement that decides whether to continue.
+Effort figures are rough estimates by the author of this plan, not measurements. Status as of 2 November 2026 is in the next section; items not listed there are not started. Ideas that depend on research carry a **gate**: a measurement that decides whether to continue.
 
 Working rule for every item: record a number *before*, build, record a number *after*; if it does not improve, remove it.
+
+## Status (2 November 2026)
+
+"Done" means implemented, covered by a test and CI green; it does not mean tuned on real material.
+
+| ID | State | Note |
+|---|---|---|
+| 0.3 | done | as `--timings` (time per stage, peak memory) |
+| 0.4 | done | `--doctor` |
+| 1.1 | partial | `--skip-text` only; `redo` / `force` modes not done |
+| 1.2 | done | `--clean-text`; limits: joins hyphenated lowercase compounds |
+| 1.3 | done | `--alto`, `--page-xml`; only checked for well-formedness, not against the XSDs |
+| 1.5, 1.13 | done | `--quality-report`; thresholds are untuned heuristics |
+| 1.6 | done | `--page-lang` |
+| 1.7 | done | `--explain` |
+| 1.8 | done | `--page-labels`; needs OCR to see the printed number |
+| 1.9 | done | `{title}` naming token (needs `--ocr`), plus `{date}` `{year}` `{month}` `{day}` `{name}` |
+| 1.10, 1.19 | done | `--search-query` (boolean, fuzzy, diacritic-insensitive) with CUI and invoice-series finders; words match whole tokens |
+| 1.12 | partial | lone page numbers in the head/foot margin recovered (CER on 12 real pages unchanged at 15.2 %); gutter, "." vs ",", I/l, word spacing not fixed |
+| 1.14 | done | `--burst`; thresholds untuned on real phone photos |
+| 1.15 | done | `--scan-active` (static; no online hash lookup) |
+| 1.16, 1.18 | done | `--catalog` (HTML / CSV with SHA-256) and `--dublin-core` sidecars; need `--pdf` |
+| 1.17 | done | `--verify-text` |
+| 1.4 | deferred | no reference set to prove a gain, and the exact definitions of Fox / LCaM / EdgeDiv could not be checked here |
+| 0.1, 0.2, 0.5, 0.6, 1.11 | not started | 0.1 needs hand-verified text from a person |
+
+Everything from Phase 2 on is not started.
 
 ## Phase 0 - Measure first (D1-3)
 
