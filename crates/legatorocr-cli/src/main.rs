@@ -43,7 +43,7 @@ enum Fmt {
 #[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_bag", "efactura", "merkle_root", "merkle_verify", "verify_sums", "search_preset", "search_help"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_bag", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "search_preset", "search_help"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -367,6 +367,19 @@ struct Cli {
     /// check that amounts add up and CUI check digits pass (exit 1 on a problem).
     #[arg(long, value_name = "FILE")]
     efactura: Option<PathBuf>,
+
+    /// Backup helper: copy this folder to every --backup-to folder, read each copy back and
+    /// compare SHA-256 (exit 1 on a mismatch); writes SHA256SUMS.txt in each destination.
+    #[arg(long, value_name = "DIR")]
+    backup_from: Option<PathBuf>,
+
+    /// Destination folder for --backup-from (repeat for several).
+    #[arg(long, value_name = "DIR")]
+    backup_to: Vec<PathBuf>,
+
+    /// Mark the backup copies read-only.
+    #[arg(long)]
+    backup_read_only: bool,
 
     /// PDF toolbox: join all input PDFs into one file (name from --pdf, else merged.pdf in -o).
     #[arg(long)]
@@ -1064,6 +1077,22 @@ fn real_main() -> Result<()> {
         let written = legatorocr_engine::pdftools::run(&cli.inputs, &cli.out_dir, cli.pdf.as_deref(), &plan)?;
         for w in &written {
             println!("wrote {}", w.display());
+        }
+        return Ok(());
+    }
+    if let Some(src) = &cli.backup_from {
+        let reports = legatorocr_engine::backup::run(src, &cli.backup_to, cli.backup_read_only)?;
+        let mut bad = false;
+        for r in &reports {
+            println!("{}: {} files, {} bytes verified", r.dest.display(), r.files, r.bytes);
+            for p in &r.problems {
+                bad = true;
+                println!("  PROBLEM: {p}");
+            }
+        }
+        print!("{}", legatorocr_engine::backup::checklist(reports.len()));
+        if bad {
+            std::process::exit(1);
         }
         return Ok(());
     }
