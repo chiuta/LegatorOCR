@@ -96,6 +96,7 @@ No gate promises near-zero CER. Report CER with a confidence interval; zero erro
 | 5.6 | Reprocessable archive package (original pixels + transform graph + text with per-word provenance; re-run when engines improve) | 5 | 2.1, 5.3 |
 | 5.7 | PAdES signing with the user's own certificate (PKCS#12) and RFC 3161 timestamp, plus signature verification on input files (eIDAS levels are the user's certificate, not ours) | 4 | 5.3 |
 | 5.8 | BagIt / OCFL packaging and a 3-2-1 backup helper: copies to several destinations, hash-verified, with a read-only / cold-storage checklist | 3 | 1.16 |
+| 5.9 | Target-based quality report in the spirit of FADGI / Metamorfoze: detect a standard test target in a scan and measure sharpness (SFR), colour error (delta E), noise and illumination uniformity, then state the level reached. Needs the official standard documents before any threshold is coded (see note below) | 5 | - |
 
 ## Phase 6 - Outputs (D3-5)
 
@@ -155,6 +156,14 @@ What the guide recommends and where we stand:
 
 The guide does not cover naming conventions, PDF/A, e-Factura, 3-2-1 backup, GDPR or retention periods. Items 6.10, 7.12 and 5.8
 come from the wider HUB DIGITAL course topics, not from these pages, and should be checked with the author before being treated as his recommendations.
+
+### Sources we could not read (2 Nov 2026)
+
+- The blog competentedigitalizare.blogspot.com, its RSS feed and the Internet Archive copy: blocked by this environment's allowlist; search engines do not index the blog.
+- The PMC article on documentary heritage in Romanian libraries (PMC9870124) and Europeana's tier requirements for text: not readable here.
+- FADGI / Metamorfoze: only a vendor overview (Digital Transitions) was read. It gives the star levels and the measured quantities
+  (SFR, delta E, noise, uniformity) but not the standard's full thresholds, and it states no ppi values. Item 5.9 must wait for the
+  official documents. Europeana requirements should be checked before the library-oriented outputs (1.18, 6.x) are finalised.
 
 ## Not promised
 
