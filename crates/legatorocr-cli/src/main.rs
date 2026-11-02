@@ -387,6 +387,12 @@ struct Cli {
     #[arg(long, value_name = "FILE")]
     efactura: Option<PathBuf>,
 
+    /// Make a scanned paper form fillable: ruled boxes, check boxes and underlines become PDF
+    /// form fields over the scan. Needs --pdf; not with --pdfa. Scans with broken or faint
+    /// lines lose fields: look at the result in a PDF viewer.
+    #[arg(long)]
+    form_fields: bool,
+
     /// Remove personal data for hand-over (needs --ocr): words matching these presets (comma
     /// list from --search-help: cui, iban-ro, email, phone-ro, date, ...) are painted black in
     /// the page and dropped from every text output. Only what OCR read is found: check the
@@ -1800,6 +1806,15 @@ fn real_main() -> Result<()> {
     legatorocr_engine::ropost::set_enabled(cli.clean_text);
     legatorocr_engine::pagenum::set_enabled(cli.page_labels);
     legatorocr_engine::memcap::set(cli.max_memory);
+    if cli.form_fields {
+        if cli.pdf.is_none() {
+            bail!("--form-fields needs --pdf");
+        }
+        if cli.pdfa {
+            bail!("--form-fields cannot be combined with --pdfa (form widgets need appearance streams there)");
+        }
+        legatorocr_engine::formfields::set_enabled(true);
+    }
     if !cli.redact.is_empty() || !cli.redact_regex.is_empty() {
         if !cli.ocr {
             bail!("--redact needs --ocr (it works on the words OCR reads)");

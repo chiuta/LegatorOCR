@@ -20,6 +20,7 @@ pub mod certify;
 pub mod checksums;
 pub mod doctor;
 pub mod explain;
+pub mod formfields;
 pub mod docx;
 pub mod eval;
 pub mod extpdf;
@@ -225,6 +226,8 @@ pub struct ExportResult {
     pub skipped_duplicates: usize,
     /// Words removed by `--redact`.
     pub redacted: usize,
+    /// Fillable fields written by `--form-fields`.
+    pub form_fields: usize,
     /// Per page, tables and paragraphs found from the word positions (for the Word export).
     pub docx_blocks: Option<Vec<Vec<docx::Block>>>,
     /// With `split_on_blank`: one PDF per document (then `pdf` is `None`).
@@ -907,6 +910,11 @@ pub fn run_export(
                         }
                     }
                     certify::record(&pg);
+                    if formfields::enabled() {
+                        let f = formfields::for_page(&pg);
+                        res.form_fields += f.len();
+                        w.set_form_fields(f);
+                    }
                     w.add_page(&pg, &words);
                 }
                 if pagenum::enabled() {

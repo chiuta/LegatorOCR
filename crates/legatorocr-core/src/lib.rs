@@ -12,6 +12,7 @@ pub mod cleanup;
 pub mod content;
 pub mod deskew;
 pub mod dewarp;
+pub mod forms;
 pub mod layers;
 pub mod orient;
 pub mod perspective;

@@ -43,6 +43,10 @@ pub struct PdfWriter {
     labels: Vec<(usize, LabelStyle, String, u32)>,
     pdfa: bool,
     pdfa_part: u8,
+    /// Form fields for the next page: (checkbox?, [x0, y0, x1, y1] in points).
+    next_fields: Vec<(bool, [f32; 4])>,
+    /// Widget object ids of all fields written so far (for /AcroForm).
+    field_ids: Vec<u32>,
 }
 
 /// Numbering style of a page-label range.
@@ -119,6 +123,8 @@ impl PdfWriter {
             labels: Vec::new(),
             pdfa: false,
             pdfa_part: DEFAULT_PDFA_PART.load(std::sync::atomic::Ordering::Relaxed),
+            next_fields: Vec::new(),
+            field_ids: Vec::new(),
         };
         w.buf.extend_from_slice(b"%PDF-1.5\n%\xE2\xE3\xCF\xD3\n");
         w
@@ -179,6 +185,12 @@ impl PdfWriter {
 
     pub fn set_title(&mut self, t: &str) {
         self.title = Some(t.to_string());
+    }
+
+    /// Fillable fields (AcroForm text boxes / check boxes) for the next page added, as
+    /// `(is_checkbox, [x0, y0, x1, y1])` in points from the bottom-left. Not with PDF/A.
+    pub fn set_form_fields(&mut self, fields: Vec<(bool, [f32; 4])>) {
+        self.next_fields = fields;
     }
 
     pub fn set_meta(&mut self, m: Meta) {
@@ -403,6 +415,28 @@ impl PdfWriter {
         let page_id = self.alloc();
         // A visible rights note: a Text annotation (sticky note) on page 2. PDF/A requires an
         // appearance stream for annotations, so with --pdfa the rights live in the XMP only.
+        let mut widget_refs = String::new();
+        let fields = std::mem::take(&mut self.next_fields);
+        if !self.pdfa {
+            for (check, r) in fields {
+                let id = self.alloc();
+                let n = self.field_ids.len() + 1;
+                let body = if check {
+                    format!(
+                        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (check_{n}) /Rect [{:.2} {:.2} {:.2} {:.2}] /F 4 /V /Off /AS /Off /P {page_id} 0 R /MK << /BC [0] >> >>",
+                        r[0], r[1], r[2], r[3]
+                    )
+                } else {
+                    format!(
+                        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (field_{n}) /Rect [{:.2} {:.2} {:.2} {:.2}] /F 4 /DA (/Helv 0 Tf 0 g) /P {page_id} 0 R >>",
+                        r[0], r[1], r[2], r[3]
+                    )
+                };
+                self.plain_obj(id, &body);
+                self.field_ids.push(id);
+                widget_refs.push_str(&format!(" {id} 0 R"));
+            }
+        }
         let annots = match self.meta.rights.as_deref().filter(|r| !r.trim().is_empty()) {
             Some(r) if !self.pdfa && self.page_ids.len() == 1 => {
                 let (x0, y1) = (12.0f32, (hpt - 12.0).max(24.0));
@@ -415,6 +449,13 @@ impl PdfWriter {
                 )
             }
             _ => String::new(),
+        };
+        let annots = if widget_refs.is_empty() {
+            annots
+        } else if let Some(rest) = annots.strip_prefix(" /Annots [") {
+            format!(" /Annots [{widget_refs} {rest}")
+        } else {
+            format!(" /Annots [{widget_refs} ]")
         };
         self.plain_obj(
             page_id,
@@ -656,6 +697,14 @@ impl PdfWriter {
                 " /Metadata {mid} 0 R /OutputIntents [<< /Type /OutputIntent /S /GTS_PDFA1 \
                  /OutputConditionIdentifier (sRGB IEC61966-2.1) /Info (sRGB IEC61966-2.1) \
                  /RegistryName (http://www.color.org) /DestOutputProfile {iid} 0 R >>]"
+            ));
+        }
+        if !self.field_ids.is_empty() {
+            let helv = self.alloc();
+            self.plain_obj(helv, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>");
+            let list: String = self.field_ids.iter().map(|i| format!("{i} 0 R ")).collect();
+            cat_extra.push_str(&format!(
+                " /AcroForm << /Fields [{list}] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv {helv} 0 R >> >> /NeedAppearances true >>"
             ));
         }
         self.plain_obj(
