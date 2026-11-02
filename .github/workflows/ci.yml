@@ -26,6 +26,26 @@ jobs:
         run: cargo build --locked --workspace --all-targets
       - name: Test
         run: cargo test --locked --workspace
+      - name: Whole chain with the network cut off
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          # the tool must work with no network at all (privacy claim): run it in an empty network namespace
+          python3 - <<'PY'
+          import struct
+          w, h = 600, 800
+          # a white page with dark text-like bars, written as a BMP so no image library is needed
+          px = bytearray()
+          for y in range(h - 1, -1, -1):
+              for x in range(w):
+                  dark = 100 < y < 700 and 80 < x < 520 and y % 40 < 12
+                  px += b"\x00\x00\x00" if dark else b"\xff\xff\xff"
+          hdr = b"BM" + struct.pack("<IHHI", 54 + len(px), 0, 0, 54) + struct.pack("<IiiHHIIiiII", 40, w, h, 1, 24, 0, len(px), 2835, 2835, 0, 0)
+          open("page.bmp", "wb").write(hdr + bytes(px))
+          PY
+          sudo unshare -n target/debug/legatorocr page.bmp --pdf offline.pdf
+          test -s offline.pdf
+          head -c 5 offline.pdf | grep -q '%PDF-'
       - name: Clippy
         if: matrix.os == 'ubuntu-latest'
         shell: bash
