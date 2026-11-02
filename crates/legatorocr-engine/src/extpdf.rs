@@ -81,6 +81,11 @@ fn first_working(names: &[&str], probe: &[&str]) -> Option<(String, PathBuf)> {
     None
 }
 
+/// Path of a working helper program, probed by running it with `probe` (e.g. `-v`).
+pub fn find_tool(name: &str, probe: &[&str]) -> Option<PathBuf> {
+    first_working(&[name], probe).map(|(_, p)| p)
+}
+
 /// Name of the first available renderer (for messages and tests).
 pub fn renderer() -> Option<String> {
     first_working(&["pdftoppm"], &["-v"])

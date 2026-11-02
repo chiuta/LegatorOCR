@@ -43,7 +43,7 @@ enum Fmt {
 #[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "verify_sums", "search_preset", "search_help"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "verify_sums", "search_preset", "search_help"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -182,6 +182,11 @@ struct Cli {
     /// recognition model installed, and how to get the missing ones; then exit.
     #[arg(long)]
     ocr_languages: bool,
+
+    /// Check which optional helpers (Tesseract and its language models, pdftoppm, mutool,
+    /// Ghostscript, qpdf) are installed and what a missing one costs; then exit.
+    #[arg(long)]
+    doctor: bool,
 
     /// Add one PDF outline entry (bookmark) per source file.
     #[arg(long)]
@@ -694,6 +699,11 @@ fn real_main() -> Result<()> {
             x.ref_chars,
             x.ref_words
         );
+        return Ok(());
+    }
+    if cli.doctor {
+        let checks = legatorocr_engine::doctor::run(&cli.tesseract);
+        print!("{}", legatorocr_engine::doctor::render(&checks));
         return Ok(());
     }
     if cli.ocr_languages {

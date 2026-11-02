@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 pub mod archive;
 pub mod audit;
 pub mod checksums;
+pub mod doctor;
 pub mod docx;
 pub mod eval;
 pub mod extpdf;
