@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 pub mod archive;
 pub mod audit;
+pub mod burst;
 pub mod catalog;
 pub mod checksums;
 pub mod doctor;

@@ -249,6 +249,15 @@ struct Cli {
     #[arg(long, value_name = "RULES")]
     page_lang: Option<String>,
 
+    /// Phone-capture ingest: order the photos by EXIF capture time (when every file has one)
+    /// and keep only the sharpest frame of each burst; lists what was left out.
+    #[arg(long)]
+    burst: bool,
+
+    /// With --burst: frames closer than this many seconds count as one burst.
+    #[arg(long, default_value_t = 3, value_name = "SECONDS")]
+    burst_gap: i64,
+
     /// Print time per stage (load, orientation, clean-up, OCR) and peak memory at the end.
     #[arg(long)]
     timings: bool,
@@ -1176,6 +1185,33 @@ fn real_main() -> Result<()> {
             } else {
                 inputs.extend(pages);
             }
+        }
+    }
+    adjusts.resize(inputs.len(), SheetAdj::default());
+    if cli.burst {
+        if project.is_some() {
+            bail!("--burst cannot be combined with --project (its per-page adjustments follow the old order)");
+        }
+        let imgs: Vec<PathBuf> = inputs
+            .iter()
+            .filter(|p| !legatorocr_engine::files::is_pdf(&legatorocr_engine::files::split_frame(p).0))
+            .cloned()
+            .collect();
+        if imgs.len() == inputs.len() && !imgs.is_empty() {
+            let r = legatorocr_engine::burst::ingest(&imgs, cli.burst_gap);
+            if r.reordered {
+                eprintln!("--burst: pages put in capture-time order (EXIF)");
+            }
+            for (d, k) in &r.dropped {
+                eprintln!("--burst: left out {} (weaker copy of {})", d.display(), k.display());
+            }
+            if r.dropped.is_empty() {
+                eprintln!("--burst: no repeated frames found");
+            }
+            inputs = r.paths;
+            adjusts = Vec::new();
+        } else {
+            eprintln!("--burst: only applies to plain image inputs; skipped");
         }
     }
     adjusts.resize(inputs.len(), SheetAdj::default());
