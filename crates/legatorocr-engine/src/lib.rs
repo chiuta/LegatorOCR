@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 pub mod archive;
 pub mod audit;
+pub mod bagit;
 pub mod burst;
 pub mod catalog;
 pub mod checksums;
@@ -36,6 +37,7 @@ pub mod qa;
 pub mod textcheck;
 pub mod report;
 pub mod ropost;
+pub mod rights;
 pub mod search;
 pub mod watch;
 pub mod zipcrypt;

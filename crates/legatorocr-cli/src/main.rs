@@ -43,7 +43,7 @@ enum Fmt {
 #[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_sums", "search_preset", "search_help"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_bag", "verify_sums", "search_preset", "search_help"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -277,6 +277,26 @@ struct Cli {
     /// the OCR engine or this program is upgraded. Needs --ocr.
     #[arg(long, value_name = "DIR")]
     ocr_cache: Option<PathBuf>,
+
+    /// Write the rights notice from the author's year of death (Romanian law: life + 70 years,
+    /// counted from 1 January of the year after the death) instead of typing it. Information
+    /// only; special cases need checking. Needs --pdf; not together with --rights-notice.
+    #[arg(long, value_name = "YEAR")]
+    rights_death_year: Option<i32>,
+
+    /// Author's name for --rights-death-year.
+    #[arg(long, value_name = "NAME", requires = "rights_death_year")]
+    rights_author: Option<String>,
+
+    /// Also copy everything this run wrote into a BagIt 1.0 bag in DIR (a new folder): files
+    /// under data/, SHA-256 manifest and tag manifest. Needs --pdf.
+    #[arg(long, value_name = "DIR")]
+    bagit: Option<PathBuf>,
+
+    /// Check a BagIt bag (such as one made by --bagit): every file against its manifest, the
+    /// tag files, and files the manifest does not list; exit 1 on any problem; then exit.
+    #[arg(long, value_name = "DIR")]
+    verify_bag: Option<PathBuf>,
 
     /// Print time per stage (load, orientation, clean-up, OCR) and peak memory at the end.
     #[arg(long)]
@@ -777,6 +797,13 @@ fn real_main() -> Result<()> {
     if let Some(dir) = cli.watch.clone() {
         return watch_loop(&cli, &dir);
     }
+    if let Some(y) = cli.rights_death_year {
+        if cli.rights_notice.is_some() {
+            bail!("--rights-death-year and --rights-notice both write the rights notice; use one");
+        }
+        let today = 1970 + (legatorocr_engine::now_unix() / 31_556_952) as i32;
+        cli.rights_notice = Some(legatorocr_engine::rights::notice(y, today, cli.rights_author.as_deref())?);
+    }
     if let Some(pw) = cli
         .pdf_password
         .clone()
@@ -845,12 +872,13 @@ fn real_main() -> Result<()> {
     if (cli.checksums
         || cli.txt_each
         || cli.rights_notice.is_some()
+        || cli.bagit.is_some()
         || cli.package.is_some()
         || cli.catalog.is_some()
         || cli.dublin_core)
         && cli.pdf.is_none()
     {
-        bail!("--checksums, --txt-each, --rights-notice, --package, --catalog and --dublin-core need --pdf");
+        bail!("--checksums, --txt-each, --rights-notice, --bagit, --package, --catalog and --dublin-core need --pdf");
     }
     if !cli.ocr
         && [&cli.pdf, &cli.txt, &cli.hocr, &cli.alto, &cli.page_xml, &cli.json, &cli.docx, &cli.package]
@@ -902,6 +930,17 @@ fn real_main() -> Result<()> {
             }
         }
         return Ok(());
+    }
+    if let Some(bag) = &cli.verify_bag {
+        let problems = legatorocr_engine::bagit::verify(bag)?;
+        if problems.is_empty() {
+            println!("{}: bag is intact", bag.display());
+            return Ok(());
+        }
+        for p in &problems {
+            println!("{}: {p}", bag.display());
+        }
+        std::process::exit(1);
     }
     if cli.doctor {
         let checks = legatorocr_engine::doctor::run(&cli.tesseract);
@@ -1820,6 +1859,10 @@ fn real_main() -> Result<()> {
             // the sums file is itself a file this run wrote
             written.push(sp.clone());
         }
+    }
+    if let Some(bag) = &cli.bagit {
+        let s = legatorocr_engine::bagit::write(bag, &written, legatorocr_engine::now_unix(), None)?;
+        eprintln!("bag: {} ({} files, {} bytes)", bag.display(), s.files, s.bytes);
     }
     if cli.catalog.is_some() || cli.dublin_core {
         let pdfs: Vec<PathBuf> = written

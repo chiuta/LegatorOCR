@@ -27,6 +27,8 @@ Working rule for every item: record a number *before*, build, record a number *a
 | 1.15 | done | `--scan-active` (static; no online hash lookup) |
 | 1.16, 1.18 | done | `--catalog` (HTML / CSV with SHA-256) and `--dublin-core` sidecars; need `--pdf` |
 | 1.17 | done | `--verify-text` |
+| 5.8 | partial | `--bagit DIR` (BagIt 1.0 bag with SHA-256 manifest and tag manifest) and `--verify-bag DIR`; no multi-destination 3-2-1 copy helper yet |
+| 6.9 | partial | `--rights-death-year` / `--rights-author` write the life + 70 years notice (Law 8/1996); assignment-deed fields not done; informational only |
 | 2.1 | partial | `--ocr-cache DIR` caches the OCR stage only (key: page pixels + OCR settings + engine and program version); the clean-up stages are not cached |
 | 2.3 | done | `--watch DIR` (needs `--pdf` with `{name}`; runs the program once per new file; polls, no OS file events) |
 | 1.4 | deferred | no reference set to prove a gain, and the exact definitions of Fox / LCaM / EdgeDiv could not be checked here |
