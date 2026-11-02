@@ -363,6 +363,26 @@ struct Cli {
     #[arg(long)]
     pdfa: bool,
 
+    /// PDF toolbox: join all input PDFs into one file (name from --pdf, else merged.pdf in -o).
+    #[arg(long)]
+    merge_pdf: bool,
+
+    /// PDF toolbox: keep only these pages of each input PDF, e.g. 1-3,7 or 5- (order kept).
+    #[arg(long, value_name = "RANGES")]
+    extract_pages: Option<String>,
+
+    /// PDF toolbox: cut the result into files of N pages (name_001.pdf, name_002.pdf, ...).
+    #[arg(long, value_name = "N")]
+    split_pdf_every: Option<usize>,
+
+    /// PDF toolbox: diagonal grey text across every page.
+    #[arg(long, value_name = "TEXT")]
+    watermark: Option<String>,
+
+    /// PDF toolbox: number the pages at the bottom; FORMAT uses {n} and {total} (default {n}).
+    #[arg(long, value_name = "FORMAT", num_args = 0..=1, default_missing_value = "{n}")]
+    number_pages: Option<String>,
+
     /// Memory budget in MB: process fewer pages at once so the working set stays near it
     /// (estimate from the largest page; at least one page always runs). 0 = no limit.
     #[arg(long, default_value_t = 0)]
@@ -1025,6 +1045,20 @@ fn real_main() -> Result<()> {
                 std::process::exit(1);
             }
             println!("root matches the expected value");
+        }
+        return Ok(());
+    }
+    let plan = legatorocr_engine::pdftools::Plan {
+        merge: cli.merge_pdf,
+        pages: cli.extract_pages.clone(),
+        split_every: cli.split_pdf_every,
+        watermark: cli.watermark.clone(),
+        number_format: cli.number_pages.clone(),
+    };
+    if plan.active() {
+        let written = legatorocr_engine::pdftools::run(&cli.inputs, &cli.out_dir, cli.pdf.as_deref(), &plan)?;
+        for w in &written {
+            println!("wrote {}", w.display());
         }
         return Ok(());
     }

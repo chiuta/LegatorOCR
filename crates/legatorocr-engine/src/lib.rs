@@ -36,6 +36,7 @@ pub mod merkle;
 pub mod ocrcache;
 pub mod pagelang;
 pub mod memcap;
+pub mod pdftools;
 pub mod pagenum;
 pub mod provenance;
 pub mod qa;

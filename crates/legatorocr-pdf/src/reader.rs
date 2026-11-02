@@ -23,6 +23,8 @@ impl std::fmt::Display for ReadError {
 }
 impl std::error::Error for ReadError {}
 
+pub mod edit;
+
 type R<T> = Result<T, ReadError>;
 
 fn fail<T>(m: impl Into<String>) -> R<T> {
