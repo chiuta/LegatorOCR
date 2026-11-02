@@ -34,6 +34,7 @@ pub mod project;
 pub mod ocrcache;
 pub mod pagelang;
 pub mod pagenum;
+pub mod provenance;
 pub mod qa;
 pub mod textcheck;
 pub mod report;

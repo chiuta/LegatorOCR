@@ -304,6 +304,12 @@ struct Cli {
     #[arg(long)]
     certify: bool,
 
+    /// Store a provenance record in the PDF (Info key /LegatorOCRProvenance, JSON): program
+    /// version, time, the input files with SHA-256 and the command-line options (passwords are
+    /// left out). Documentation, not a signature. Not with --pdfa. Needs --pdf.
+    #[arg(long)]
+    provenance: bool,
+
     /// Print time per stage (load, orientation, clean-up, OCR) and peak memory at the end.
     #[arg(long)]
     timings: bool,
@@ -1509,6 +1515,15 @@ fn real_main() -> Result<()> {
     if (cli.split_on_blank || cli.split_on_barcode) && cli.pdf.is_none() {
         bail!("--split-on-blank / --split-on-barcode need --pdf");
     }
+    let provenance = if cli.provenance && cli.pdfa {
+        eprintln!("note: --provenance is not written into PDF/A files (it would need an XMP extension schema)");
+        None
+    } else if cli.provenance {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        Some(legatorocr_engine::provenance::build(&inputs, &args, legatorocr_engine::now_unix()))
+    } else {
+        None
+    };
     let job = ExportJob {
         sheets: &sheets,
         pdf: cli.pdf.as_ref().map(|pdf_path| PdfExport {
@@ -1525,6 +1540,7 @@ fn real_main() -> Result<()> {
                 keywords: cli.keywords.clone(),
                 created_unix: Some(legatorocr_engine::now_unix()),
                 rights: cli.rights_notice.clone(),
+                provenance: provenance.clone(),
             },
             bookmarks: cli.bookmarks,
             front_matter: cli.front_matter,

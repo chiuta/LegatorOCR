@@ -65,6 +65,10 @@ pub struct Meta {
     /// `dc:rights` with `--pdfa`. Without it: Info key `/Rights`, plus a visible note (Text
     /// annotation) on page 2 when the file has more than one page.
     pub rights: Option<String>,
+    /// Provenance record (JSON text): program version, inputs with hashes, options. Written as
+    /// the custom Info key `/LegatorOCRProvenance` (not with PDF/A, which would need an XMP
+    /// extension schema for it).
+    pub provenance: Option<String>,
 }
 
 /// `D:YYYYMMDDHHmmSSZ` for a Unix time (UTC, proleptic Gregorian).
@@ -660,6 +664,11 @@ impl PdfWriter {
                 extra.push_str(&format!(" /Rights {}", pdf_text_string(r)));
             }
         }
+        if let Some(p) = self.meta.provenance.as_deref().filter(|v| !v.trim().is_empty()) {
+            if !self.pdfa {
+                extra.push_str(&format!(" /LegatorOCRProvenance {}", pdf_text_string(p)));
+            }
+        }
         if let Some(d) = &date {
             extra.push_str(&format!(" /CreationDate ({d}) /ModDate ({d})"));
         }
@@ -824,6 +833,7 @@ mod tests {
             keywords: None,
             created_unix: Some(0),
             rights: None,
+            provenance: Some("{\"software\":\"x\"}".into()),
         });
         w.add_page(
             &page(PageImage::Rgb(RgbImage::from_pixel(
@@ -837,6 +847,7 @@ mod tests {
         assert!(pdf.contains("/Author (Ana)") && pdf.contains("/Subject <FEFF"));
         assert!(pdf.contains("/CreationDate (D:19700101000000Z)"));
         assert!(!pdf.contains("/Keywords"));
+        assert!(pdf.contains("/LegatorOCRProvenance ("), "provenance missing from the Info dictionary");
     }
 
     #[test]
@@ -973,6 +984,7 @@ mod unicode_file {
             keywords: Some("a, b".into()),
             created_unix: Some(1_793_000_000),
             rights: Some("© Biblioteca X, contract 12/2026".into()),
+            provenance: Some("{\"software\":\"x\"}".into()),
         });
         let mut bw = BitImage::new(600, 300);
         bw.set(1, 1, true);
