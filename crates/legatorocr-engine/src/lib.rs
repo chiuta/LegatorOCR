@@ -48,6 +48,7 @@ pub mod ropost;
 pub mod rights;
 pub mod search;
 pub mod tables;
+pub mod tei;
 pub mod watch;
 pub mod zipcrypt;
 pub mod zipmini;

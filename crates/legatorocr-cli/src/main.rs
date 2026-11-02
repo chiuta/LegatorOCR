@@ -165,6 +165,11 @@ struct Cli {
     #[arg(long)]
     docx: Option<PathBuf>,
 
+    /// Also write the recognised text as TEI P5 XML: a page break per scanned page, paragraphs,
+    /// tables, columns (needs --ocr). Page structure only; no headings, notes or index markup.
+    #[arg(long)]
+    tei: Option<PathBuf>,
+
     /// SEARCH instead of processing: find this phrase in the given files and folders (PDF
     /// text layers, .txt, .hocr/.html, .docx, and all of these inside .zip). Ignores case
     /// and diacritics (`mobila` finds `Mobilă`, also across a line break). Exit status 1
@@ -936,6 +941,7 @@ fn real_main() -> Result<()> {
             &mut cli.page_xml,
             &mut cli.json,
             &mut cli.docx,
+            &mut cli.tei,
             &mut cli.package,
         ] {
             expand_path(p, &name)?;
@@ -1415,10 +1421,11 @@ fn real_main() -> Result<()> {
         || cli.alto.is_some()
         || cli.page_xml.is_some()
         || cli.docx.is_some()
+        || cli.tei.is_some()
         || cli.json.is_some())
         && !cli.ocr
     {
-        bail!("--txt, --hocr, --alto, --page-xml, --json and --docx need --ocr");
+        bail!("--txt, --hocr, --alto, --page-xml, --json, --docx and --tei need --ocr");
     }
     for p in cli
         .txt
@@ -1427,6 +1434,7 @@ fn real_main() -> Result<()> {
         .chain(cli.alto.iter())
         .chain(cli.json.iter())
         .chain(cli.docx.iter())
+        .chain(cli.tei.iter())
     {
         legatorocr_engine::check_writable(p)?;
     }
@@ -1438,6 +1446,7 @@ fn real_main() -> Result<()> {
         && cli.page_xml.is_none()
         && cli.json.is_none()
         && cli.docx.is_none()
+        && cli.tei.is_none()
         && cli.report.is_none()
         && cli.multitiff.is_none()
         && !cli.report_outliers
@@ -1825,6 +1834,7 @@ fn real_main() -> Result<()> {
             &mut cli.page_xml,
             &mut cli.json,
             &mut cli.docx,
+            &mut cli.tei,
             &mut cli.package,
         ] {
             resolve_title(p, &title)?;
@@ -2025,6 +2035,22 @@ fn real_main() -> Result<()> {
             _ => legatorocr_engine::docx::from_pages(&pages, title),
         };
         write_atomic(p, &bytes)?;
+        eprintln!("wrote {}", p.display());
+        written.push(p.clone());
+    }
+    if let (Some(p), Some(b)) = (&cli.tei, &res.docx_blocks) {
+        let title = p.file_stem().and_then(|s| s.to_str()).unwrap_or("LegatorOCR");
+        let lang = cli.lang.split('+').next().map(|l| match l {
+            "ron" => "ro",
+            "eng" => "en",
+            "fra" => "fr",
+            "deu" => "de",
+            "ita" => "it",
+            "spa" => "es",
+            "hun" => "hu",
+            other => other,
+        });
+        write_atomic(p, legatorocr_engine::tei::render(b, title, lang, &[]).as_bytes())?;
         eprintln!("wrote {}", p.display());
         written.push(p.clone());
     }
