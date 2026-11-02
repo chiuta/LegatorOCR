@@ -538,6 +538,15 @@ fn is_searchable(name: &str) -> bool {
     )
 }
 
+/// Does this PDF already carry text on at least one page? (`false` for scans without a text
+/// layer and for files that cannot be read.)
+pub fn pdf_has_text(path: &Path) -> bool {
+    match std::fs::read(path) {
+        Ok(d) => matches!(read_units("x.pdf", d), Read::Units(u) if !u.is_empty()),
+        Err(_) => false,
+    }
+}
+
 struct Ctx<'a> {
     m: &'a Matcher,
     o: &'a SearchOptions,
@@ -719,7 +728,7 @@ mod tests {
         assert_eq!(lines("factura NOT brasov"), vec![2]);
         assert_eq!(lines("brasoc~1"), vec![1]);
         assert_eq!(lines("cluj OR total"), vec![2, 3]);
-        assert!(search(&[d.clone()], "(", &o, &mut |_| {}).is_err());
+        assert!(search(std::slice::from_ref(&d), "(", &o, &mut |_| {}).is_err());
         let _ = std::fs::remove_dir_all(&d);
     }
 

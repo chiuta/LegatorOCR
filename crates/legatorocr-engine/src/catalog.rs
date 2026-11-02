@@ -215,7 +215,7 @@ mod tests {
         std::fs::create_dir_all(&d).unwrap();
         let f = d.join("x.pdf");
         std::fs::write(&f, b"abc").unwrap();
-        let r = rows(&[f.clone()], None).unwrap();
+        let r = rows(std::slice::from_ref(&f), None).unwrap();
         assert_eq!(r[0].bytes, 3);
         assert_eq!(r[0].title, "x");
         assert_eq!(

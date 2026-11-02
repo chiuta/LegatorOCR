@@ -222,11 +222,13 @@ fn search_and_markup_stripping_survive_corrupt_files() {
             regex: false,
             exact: false,
             max_hits: 0,
+            query: false,
         },
         search::SearchOptions {
             regex: true,
             exact: true,
             max_hits: 5,
+            query: false,
         },
     ];
     for i in 0..iters(2000).min(4000) {
@@ -252,6 +254,7 @@ fn hostile_regexes_are_bounded() {
         regex: true,
         exact: false,
         max_hits: 0,
+        query: false,
     };
     let t = std::time::Instant::now();
     for q in ["(a+)+$", "(a|aa)+b", "(.*)*x", "((a*)*)*b"] {

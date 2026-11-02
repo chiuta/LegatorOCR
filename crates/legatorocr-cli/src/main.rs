@@ -126,6 +126,11 @@ struct Cli {
     #[arg(long)]
     clean_text: bool,
 
+    /// Leave out PDF inputs that already have a text layer (only scans without text are
+    /// processed), so a half-finished batch can be run again without redoing finished files.
+    #[arg(long)]
+    skip_text: bool,
+
     /// Write a table of the PDFs this run produced (title, file, size, SHA-256) to this file; the
     /// extension picks the format: `.csv`, else HTML (needs --pdf).
     #[arg(long)]
@@ -1092,6 +1097,34 @@ fn real_main() -> Result<()> {
         }
     }
     adjusts.resize(inputs.len(), SheetAdj::default());
+    if cli.skip_text {
+        // inputs are PDF pages as `file.pdf#N`; decide once per file
+        let mut seen: std::collections::HashMap<PathBuf, bool> = std::collections::HashMap::new();
+        let mut keep = Vec::with_capacity(inputs.len());
+        for p in &inputs {
+            let base = legatorocr_engine::files::split_frame(p).0;
+            let has = legatorocr_engine::files::is_pdf(&base)
+                && *seen
+                    .entry(base.clone())
+                    .or_insert_with(|| legatorocr_engine::search::pdf_has_text(&base));
+            keep.push(!has);
+        }
+        let skipped = keep.iter().filter(|k| !**k).count();
+        if skipped > 0 {
+            let files = seen.values().filter(|h| **h).count();
+            eprintln!(
+                "--skip-text: left out {skipped} page(s) of {files} PDF(s) that already have text"
+            );
+            let mut it = keep.iter();
+            inputs.retain(|_| *it.next().unwrap());
+            let mut it = keep.iter();
+            adjusts.retain(|_| *it.next().unwrap());
+            if inputs.is_empty() {
+                eprintln!("nothing to do: every PDF already has text");
+                return Ok(());
+            }
+        }
+    }
     if inputs.is_empty() {
         bail!("the project lists no pages");
     }
