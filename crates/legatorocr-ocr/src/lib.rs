@@ -2,8 +2,10 @@
 //! process — no linking, no code reuse). Output TSV is parsed into [`Word`]s.
 
 use legatorocr_core::{PageImage, Word};
+pub mod xmlout;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+pub use xmlout::{alto_document, alto_page, page_xml, page_xml_named};
 
 #[derive(Debug, thiserror::Error)]
 pub enum OcrError {
@@ -642,58 +644,80 @@ pub fn words_to_text(words: &[Word]) -> String {
 /// by more than ≈ 1.5 line heights relative to the left edge of the text block above while the
 /// previous line ended short of the right edge.
 pub fn words_to_paragraphs(words: &[Word]) -> String {
-    struct L {
-        text: String,
-        x0: u32,
-        x1: u32,
-        y0: u32,
-        y1: u32,
-    }
-    let mut lines: Vec<(u32, L)> = Vec::new();
-    for w in words {
-        match lines.last_mut() {
-            Some((id, l)) if *id == w.line => {
-                l.text.push(' ');
-                l.text.push_str(&w.text);
-                l.x0 = l.x0.min(w.x);
-                l.x1 = l.x1.max(w.x.saturating_add(w.w));
-                l.y0 = l.y0.min(w.y);
-                l.y1 = l.y1.max(w.y.saturating_add(w.h));
-            }
-            _ => lines.push((
-                w.line,
-                L {
-                    text: w.text.clone(),
-                    x0: w.x,
-                    x1: w.x.saturating_add(w.w),
-                    y0: w.y,
-                    y1: w.y.saturating_add(w.h),
-                },
-            )),
-        }
-    }
-    if lines.is_empty() {
-        return String::new();
-    }
-    let mut hs: Vec<u32> = lines.iter().map(|(_, l)| l.y1 - l.y0).collect();
-    hs.sort_unstable();
-    let med_h = hs[hs.len() / 2].max(1);
-    let left = lines.iter().map(|(_, l)| l.x0).min().unwrap_or(0);
-    let right = lines.iter().map(|(_, l)| l.x1).max().unwrap_or(0);
+    let lines = line_boxes(words);
+    let starts = paragraph_starts(&lines);
     let mut out = String::new();
-    for (i, (_, l)) in lines.iter().enumerate() {
+    for (i, l) in lines.iter().enumerate() {
         if i > 0 {
-            let p = &lines[i - 1].1;
-            let gap = l.y0 as i64 - p.y1 as i64;
-            // normal spacing is a fraction of the line height; a paragraph break is a clear extra
-            let big_gap = gap as f64 > 0.6 * med_h as f64;
-            let indented = l.x0 as i64 - left as i64 > (1.5 * med_h as f64) as i64
-                && (right as i64 - p.x1 as i64) > (2.0 * med_h as f64) as i64;
-            out.push_str(if big_gap || indented { "\n\n" } else { "\n" });
+            out.push_str(if starts[i] { "\n\n" } else { "\n" });
         }
-        out.push_str(&l.text);
+        let t: Vec<&str> = words[l.first..l.end]
+            .iter()
+            .map(|w| w.text.as_str())
+            .collect();
+        out.push_str(&t.join(" "));
     }
     out
+}
+
+/// One text line: the run of consecutive words sharing a `line` id, with its bounding box.
+pub(crate) struct LineBox {
+    pub first: usize,
+    pub end: usize,
+    pub x0: u32,
+    pub y0: u32,
+    pub x1: u32,
+    pub y1: u32,
+}
+
+/// Group consecutive words with the same `line` id into lines (same rule as hOCR).
+pub(crate) fn line_boxes(words: &[Word]) -> Vec<LineBox> {
+    let mut lines: Vec<LineBox> = Vec::new();
+    for (i, w) in words.iter().enumerate() {
+        let (x1, y1) = (w.x.saturating_add(w.w), w.y.saturating_add(w.h));
+        match lines.last_mut() {
+            Some(l) if words[l.first].line == w.line => {
+                l.end = i + 1;
+                l.x0 = l.x0.min(w.x);
+                l.x1 = l.x1.max(x1);
+                l.y0 = l.y0.min(w.y);
+                l.y1 = l.y1.max(y1);
+            }
+            _ => lines.push(LineBox {
+                first: i,
+                end: i + 1,
+                x0: w.x,
+                y0: w.y,
+                x1,
+                y1,
+            }),
+        }
+    }
+    lines
+}
+
+/// For each line, does a new paragraph start there? (Index 0 is always `false`.) See
+/// [`words_to_paragraphs`] for the rule.
+pub(crate) fn paragraph_starts(lines: &[LineBox]) -> Vec<bool> {
+    let mut starts = vec![false; lines.len()];
+    if lines.is_empty() {
+        return starts;
+    }
+    let mut hs: Vec<u32> = lines.iter().map(|l| l.y1 - l.y0).collect();
+    hs.sort_unstable();
+    let med_h = hs[hs.len() / 2].max(1);
+    let left = lines.iter().map(|l| l.x0).min().unwrap_or(0);
+    let right = lines.iter().map(|l| l.x1).max().unwrap_or(0);
+    for i in 1..lines.len() {
+        let (p, l) = (&lines[i - 1], &lines[i]);
+        let gap = l.y0 as i64 - p.y1 as i64;
+        // normal spacing is a fraction of the line height; a paragraph break is a clear extra
+        let big_gap = gap as f64 > 0.6 * med_h as f64;
+        let indented = l.x0 as i64 - left as i64 > (1.5 * med_h as f64) as i64
+            && (right as i64 - p.x1 as i64) > (2.0 * med_h as f64) as i64;
+        starts[i] = big_gap || indented;
+    }
+    starts
 }
 
 fn xml_escape(s: &str) -> String {
