@@ -551,6 +551,7 @@ pub fn recognize(page: &PageImage, dpi: u32, o: &OcrOptions) -> Result<Vec<Word>
             w.text = legatorocr_core::text::normalize_ro(&w.text);
         }
     }
+    rescue_page_numbers(&img, dpi, o, &mut words);
     if k > 1 {
         for w in &mut words {
             let (x1, y1) = (w.x + w.w, w.y + w.h);
@@ -561,6 +562,92 @@ pub fn recognize(page: &PageImage, dpi: u32, o: &OcrOptions) -> Result<Vec<Word>
         }
     }
     Ok(words)
+}
+
+/// Tesseract's page layout analysis often leaves out a lone page number in the head or foot
+/// margin (a single digit especially). Ink in the top and bottom eighth of the page that no
+/// recognised word covers is read again as one line of digits; only a clean 1–4 digit result
+/// with confidence ≥ 50 is added. Coordinates are those of `img`.
+fn rescue_page_numbers(
+    img: &image::DynamicImage,
+    dpi: u32,
+    o: &OcrOptions,
+    words: &mut Vec<Word>,
+) {
+    let g = img.to_luma8();
+    let (w, h) = g.dimensions();
+    if w < 64 || h < 64 {
+        return;
+    }
+    let band = h / 8;
+    let pad = (w / 80).max(4);
+    let covered = |x: u32, y: u32| {
+        words
+            .iter()
+            .any(|k| x + pad >= k.x && x <= k.x + k.w + pad && y + pad >= k.y && y <= k.y + k.h + pad)
+    };
+    let mut found: Vec<(bool, Word)> = Vec::new();
+    for top in [true, false] {
+        let (y0, y1) = if top { (0, band) } else { (h - band, h) };
+        // uncovered dark pixels in the band, away from the very edge (scanner shadow)
+        let edge = (w / 50).max(3);
+        let (mut x_min, mut x_max, mut y_min, mut y_max, mut n) = (w, 0, h, 0, 0u32);
+        for y in y0.max(edge)..y1.min(h - edge) {
+            for x in edge..w - edge {
+                if g.get_pixel(x, y).0[0] < 110 && !covered(x, y) {
+                    x_min = x_min.min(x);
+                    x_max = x_max.max(x);
+                    y_min = y_min.min(y);
+                    y_max = y_max.max(y);
+                    n += 1;
+                }
+            }
+        }
+        if n < 20 || x_max < x_min {
+            continue;
+        }
+        let (bw, bh) = (x_max - x_min + 1, y_max - y_min + 1);
+        // a digit string: wider than nothing, at most a fifth of the page wide, line-sized tall
+        if bw > w / 5 || bh < h / 200 || bh > h / 16 {
+            continue;
+        }
+        let m = (bh / 2).max(8);
+        let (cx0, cy0) = (x_min.saturating_sub(m), y_min.saturating_sub(m));
+        let (cx1, cy1) = ((x_max + m).min(w - 1), (y_max + m).min(h - 1));
+        let crop = image::imageops::crop_imm(&g, cx0, cy0, cx1 - cx0 + 1, cy1 - cy0 + 1).to_image();
+        let Ok(png) = png_bytes(&image::DynamicImage::ImageLuma8(crop)) else {
+            continue;
+        };
+        let mut cmd = base_cmd(o);
+        cmd.args(["stdin", "stdout", "-l", "eng", "--psm", "7"]);
+        if dpi > 0 {
+            cmd.args(["--dpi", &dpi.to_string()]);
+        }
+        cmd.args(["-c", "tessedit_char_whitelist=0123456789", "tsv"]);
+        let Ok(out) = run_stdin(cmd, png) else { continue };
+        if !out.status.success() {
+            continue;
+        }
+        for mut c in parse_tsv(&String::from_utf8_lossy(&out.stdout), 50.0) {
+            if (1..=4).contains(&c.text.len()) && c.text.chars().all(|d| d.is_ascii_digit()) {
+                c.x += cx0;
+                c.y += cy0;
+                found.push((top, c));
+            }
+        }
+    }
+    for (top, mut c) in found {
+        if top {
+            for k in words.iter_mut() {
+                k.line += 1;
+            }
+            c.line = 0;
+            words.insert(0, c);
+        } else {
+            c.line = words.iter().map(|k| k.line + 1).max().unwrap_or(0);
+            words.push(c);
+        }
+    }
 }
 
 fn recognize_native(page: &PageImage, dpi: u32, o: &OcrOptions) -> Result<Vec<Word>, OcrError> {
