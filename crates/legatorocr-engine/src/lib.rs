@@ -29,6 +29,7 @@ pub mod package;
 pub mod profile;
 pub mod profiles;
 pub mod project;
+pub mod ocrcache;
 pub mod pagelang;
 pub mod pagenum;
 pub mod qa;
@@ -758,7 +759,7 @@ pub fn run_export(
                                 None => o,
                             };
                             match profile::time("ocr", || {
-                                legatorocr_ocr::recognize(&pg.image, pg.dpi, o)
+                                ocrcache::recognize(&pg.image, pg.dpi, o)
                             }) {
                                 Ok(w) => w,
                                 Err(e) if job.keep_going => {

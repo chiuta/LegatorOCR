@@ -272,6 +272,12 @@ struct Cli {
     #[arg(long)]
     watch_skip_existing: bool,
 
+    /// Remember OCR results in DIR, keyed by the page's pixels and the OCR settings: a re-run
+    /// whose page images are unchanged skips OCR. Entries stop matching by themselves when
+    /// the OCR engine or this program is upgraded. Needs --ocr.
+    #[arg(long, value_name = "DIR")]
+    ocr_cache: Option<PathBuf>,
+
     /// Print time per stage (load, orientation, clean-up, OCR) and peak memory at the end.
     #[arg(long)]
     timings: bool,
@@ -1491,6 +1497,14 @@ fn real_main() -> Result<()> {
     legatorocr_engine::profile::enable(cli.timings);
     legatorocr_engine::ropost::set_enabled(cli.clean_text);
     legatorocr_engine::pagenum::set_enabled(cli.page_labels);
+    if let Some(dir) = &cli.ocr_cache {
+        if !cli.ocr {
+            bail!("--ocr-cache needs --ocr");
+        }
+        let v = check_ocr(&ocr_opts).context("no OCR engine is available")?;
+        legatorocr_engine::ocrcache::set(dir.clone(), &v)
+            .with_context(|| format!("{}: cannot create the cache folder", dir.display()))?;
+    }
     if let Some(spec) = &cli.page_lang {
         if !cli.ocr {
             bail!("--page-lang needs --ocr");
@@ -1571,6 +1585,10 @@ fn real_main() -> Result<()> {
         ] {
             resolve_title(p, &title)?;
         }
+    }
+    if cli.ocr_cache.is_some() {
+        let (h, m) = legatorocr_engine::ocrcache::stats();
+        eprintln!("OCR cache: {h} page(s) reused, {m} recognised");
     }
     if cli.explain {
         for l in legatorocr_engine::explain::report() {

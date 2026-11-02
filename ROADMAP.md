@@ -27,6 +27,7 @@ Working rule for every item: record a number *before*, build, record a number *a
 | 1.15 | done | `--scan-active` (static; no online hash lookup) |
 | 1.16, 1.18 | done | `--catalog` (HTML / CSV with SHA-256) and `--dublin-core` sidecars; need `--pdf` |
 | 1.17 | done | `--verify-text` |
+| 2.1 | partial | `--ocr-cache DIR` caches the OCR stage only (key: page pixels + OCR settings + engine and program version); the clean-up stages are not cached |
 | 2.3 | done | `--watch DIR` (needs `--pdf` with `{name}`; runs the program once per new file; polls, no OS file events) |
 | 1.4 | deferred | no reference set to prove a gain, and the exact definitions of Fox / LCaM / EdgeDiv could not be checked here |
 | 0.5 | done | CI step runs the whole chain in an empty network namespace (Linux) |
