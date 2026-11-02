@@ -43,7 +43,7 @@ enum Fmt {
 #[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_bag", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "search_preset", "search_help"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_bag", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "search_preset", "search_help"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -386,6 +386,12 @@ struct Cli {
     /// check that amounts add up and CUI check digits pass (exit 1 on a problem).
     #[arg(long, value_name = "FILE")]
     efactura: Option<PathBuf>,
+
+    /// Run as a Model Context Protocol server on stdin/stdout (JSON-RPC, one message per line)
+    /// so an AI assistant can call a few narrow tools: scan_to_pdf, pdf_toolbox, efactura,
+    /// measure_edge, search. Each tool starts this program with a fixed argument list.
+    #[arg(long)]
+    mcp: bool,
 
     /// Sharpness: measure the spatial frequency response (MTF50, MTF10) on a slanted black /
     /// white edge in this image (ISO 12233 style, near-vertical edge, a few degrees of tilt).
@@ -1108,6 +1114,11 @@ fn real_main() -> Result<()> {
         for w in &written {
             println!("wrote {}", w.display());
         }
+        return Ok(());
+    }
+    if cli.mcp {
+        let exe = std::env::current_exe()?;
+        legatorocr_engine::mcp::serve(&exe, std::io::stdin().lock(), std::io::stdout().lock())?;
         return Ok(());
     }
     if let Some(f) = &cli.measure_edge {

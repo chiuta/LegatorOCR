@@ -37,6 +37,7 @@ pub mod ocrcache;
 pub mod pagelang;
 pub mod backup;
 pub mod efactura;
+pub mod mcp;
 pub mod memcap;
 pub mod pdftools;
 pub mod pagenum;
