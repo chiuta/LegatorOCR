@@ -25,6 +25,7 @@ pub mod package;
 pub mod profile;
 pub mod profiles;
 pub mod project;
+pub mod qa;
 pub mod report;
 pub mod search;
 pub mod zipcrypt;
@@ -699,6 +700,7 @@ pub fn run_export(
                 }
                 let img = profile::time("load", || load_image(&sheet.path))
                     .with_context(|| format!("reading {}", sheet.path.display()))?;
+                qa::record(base + i, &sheet.path, &img);
                 let (img, mut settings) = profile::time("orientation", || {
                     orient_with_osd(img, &sheet.settings, job.osd.as_ref())
                 });

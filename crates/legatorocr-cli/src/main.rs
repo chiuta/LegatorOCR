@@ -200,6 +200,11 @@ struct Cli {
     #[arg(long)]
     timings: bool,
 
+    /// After the run, list scans that may be blurred, cut off at the edge, duplicated or too
+    /// low / too high in resolution (heuristics, not verdicts).
+    #[arg(long)]
+    quality_report: bool,
+
     /// Add one PDF outline entry (bookmark) per source file.
     #[arg(long)]
     bookmarks: bool,
@@ -1251,6 +1256,7 @@ fn real_main() -> Result<()> {
         split_on_barcode: cli.split_on_barcode,
     };
     legatorocr_engine::profile::enable(cli.timings);
+    legatorocr_engine::qa::enable(cli.quality_report);
     let res = run_export(
         &job,
         &AtomicBool::new(false),
@@ -1302,6 +1308,17 @@ fn real_main() -> Result<()> {
     )?;
     if cli.timings {
         eprint!("{}", legatorocr_engine::profile::report());
+    }
+    if cli.quality_report {
+        let alerts = legatorocr_engine::qa::report();
+        if alerts.is_empty() {
+            eprintln!("quality report: nothing stands out");
+        } else {
+            eprintln!("quality report ({} note(s)):", alerts.len());
+            for a in alerts {
+                eprintln!("  - {a}");
+            }
+        }
     }
     let save_error = first_err.into_inner().unwrap();
     for (p, e) in &res.failed {
