@@ -120,7 +120,7 @@ pub fn verify_pdf(file: &Path, ca: Option<&Path>) -> Result<Vec<SigReport>> {
             std::fs::write(&c, signed).map_err(|e| e.to_string())?;
             std::fs::write(&d, der).map_err(|e| e.to_string())?;
             let mut cmd = openssl();
-            cmd.args(["cms", "-verify", "-binary", "-inform", "DER", "-in"]).arg(&d).arg("-content").arg(&c).args(["-out", "/dev/null"]);
+            cmd.args(["cms", "-verify", "-binary", "-inform", "DER", "-in"]).arg(&d).arg("-content").arg(&c).arg("-out").arg(tmp.0.join(format!("o{i}.bin")));
             match ca {
                 Some(p) => {
                     cmd.arg("-CAfile").arg(p);
