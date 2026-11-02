@@ -18,6 +18,7 @@ pub mod docx;
 pub mod eval;
 pub mod extpdf;
 pub mod files;
+pub mod fuzzy;
 pub mod iso;
 pub mod naming;
 pub mod package;
