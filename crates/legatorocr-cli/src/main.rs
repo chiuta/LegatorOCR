@@ -446,6 +446,12 @@ struct Cli {
     #[arg(long)]
     verify_document: bool,
 
+    /// Also write the pages as a DjVu document (bundled multi-page): black & white pages as
+    /// lossless JB2, grey / colour pages as a JB2 foreground mask over an IW44 background, with
+    /// the OCR text as a hidden text layer (--ocr). Uses the MIT-licensed djvu-rs encoders.
+    #[arg(long, value_name = "FILE")]
+    djvu: Option<PathBuf>,
+
     /// Read the machine-readable zone (ICAO 9303 passport / ID card lines) from the OCR text and
     /// check every check digit; prints the fields, or which check failed. Needs --ocr. Reads the
     /// printed zone only; does not prove the document is genuine.
@@ -1747,6 +1753,7 @@ fn real_main() -> Result<()> {
         legatorocr_engine::check_writable(p)?;
     }
     if cli.pdf.is_none()
+        && cli.djvu.is_none()
         && matches!(cli.format, Fmt::None)
         && cli.txt.is_none()
         && cli.hocr.is_none()
@@ -2110,6 +2117,9 @@ fn real_main() -> Result<()> {
     legatorocr_engine::qa::enable(cli.quality_report);
     legatorocr_engine::explain::enable(cli.explain);
     legatorocr_engine::certify::enable(cli.certify);
+    if cli.djvu.is_some() {
+        legatorocr_engine::djvu::begin();
+    }
     let res = run_export(
         &job,
         &AtomicBool::new(false),
@@ -2374,6 +2384,11 @@ fn real_main() -> Result<()> {
             _ => legatorocr_engine::docx::from_pages(&pages, title),
         };
         write_atomic(p, &bytes)?;
+        eprintln!("wrote {}", p.display());
+        written.push(p.clone());
+    }
+    if let (Some(p), Some(d)) = (&cli.djvu, &res.djvu) {
+        write_atomic(p, d)?;
         eprintln!("wrote {}", p.display());
         written.push(p.clone());
     }

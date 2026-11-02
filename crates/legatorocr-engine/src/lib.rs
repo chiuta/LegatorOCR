@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 pub mod altbin;
 pub mod audit;
+pub mod djvu;
 pub mod isolate;
 pub mod mrz;
 pub mod reprocess;
@@ -233,6 +234,8 @@ pub struct ExportResult {
     pub skipped_duplicates: usize,
     /// Words removed by `--redact`.
     pub redacted: usize,
+    /// DjVu document of all pages when `djvu::begin` was called before the run.
+    pub djvu: Option<Vec<u8>>,
     /// Fillable fields written by `--form-fields`.
     pub form_fields: usize,
     /// Per page, tables and paragraphs found from the word positions (for the Word export).
@@ -938,6 +941,9 @@ pub fn run_export(
                     }
                     w.add_page(&pg, &words);
                 }
+                if djvu::enabled() {
+                    djvu::record(&pg, &words)?;
+                }
                 if pagenum::enabled() {
                     printed_nums.push(legatorocr_core::quality::detect_page_number(
                         &words,
@@ -953,6 +959,7 @@ pub fn run_export(
             None => bail!("no pages produced"),
         }
     }
+    res.djvu = djvu::finish()?;
     if ocr_opts.is_some() {
         res.text = Some(texts.join("\n\x0c"));
         res.paragraph_text = Some(par_texts.join("\n\x0c"));

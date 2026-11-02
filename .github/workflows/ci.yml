@@ -72,7 +72,7 @@ jobs:
       - name: Install Tesseract, its language models, fonts and Pillow
         run: |
           sudo apt-get update
-          sudo apt-get install -y tesseract-ocr tesseract-ocr-ron tesseract-ocr-eng tesseract-ocr-fra tesseract-ocr-ita tesseract-ocr-spa tesseract-ocr-por tesseract-ocr-deu tesseract-ocr-hun fonts-dejavu-core python3-pil
+          sudo apt-get install -y tesseract-ocr tesseract-ocr-ron tesseract-ocr-eng tesseract-ocr-fra tesseract-ocr-ita tesseract-ocr-spa tesseract-ocr-por tesseract-ocr-deu tesseract-ocr-hun fonts-dejavu-core python3-pil djvulibre-bin
       - name: Build
         run: cargo build --locked --release -p legatorocr-cli
       - name: CER regression gate
