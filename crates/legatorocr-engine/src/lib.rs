@@ -31,6 +31,7 @@ pub mod package;
 pub mod profile;
 pub mod profiles;
 pub mod project;
+pub mod merkle;
 pub mod ocrcache;
 pub mod pagelang;
 pub mod pagenum;

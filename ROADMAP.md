@@ -27,6 +27,7 @@ Working rule for every item: record a number *before*, build, record a number *a
 | 1.15 | done | `--scan-active` (static; no online hash lookup) |
 | 1.16, 1.18 | done | `--catalog` (HTML / CSV with SHA-256) and `--dublin-core` sidecars; need `--pdf` |
 | 1.17 | done | `--verify-text` |
+| 5.4 | partial | `--merkle-root SUMS` (RFC 6962 style tree over SHA256SUMS.txt; tested for every leaf of trees up to 17 leaves), `--merkle-proof NAME`, `--merkle-verify`, `--merkle-expect`; the RFC 3161 timestamp is NOT done (needs a timestamp service the user chooses) |
 | 5.3 | partial | `--provenance` stores program version, time, input SHA-256 and options (passwords removed) in the PDF Info key `/LegatorOCRProvenance`; not in PDF/A files, not an XMP schema, not signed; output bytes are not reproducible (the time is in the file) |
 | 5.2 | partial | `--certify` reads the PDF back and checks page count, pixel size and a 96x128 thumbnail per page (exit 1 on a fault); layered pages: count and size only; no check of the text layer image beyond `--verify-text` |
 | 5.8 | partial | `--bagit DIR` (BagIt 1.0 bag with SHA-256 manifest and tag manifest) and `--verify-bag DIR`; no multi-destination 3-2-1 copy helper yet |

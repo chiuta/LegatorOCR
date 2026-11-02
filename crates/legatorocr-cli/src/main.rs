@@ -43,7 +43,7 @@ enum Fmt {
 #[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_bag", "verify_sums", "search_preset", "search_help"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_bag", "merkle_root", "merkle_verify", "verify_sums", "search_preset", "search_help"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -309,6 +309,26 @@ struct Cli {
     /// left out). Documentation, not a signature. Not with --pdfa. Needs --pdf.
     #[arg(long)]
     provenance: bool,
+
+    /// Print the Merkle root (RFC 6962 style, SHA-256) of a SHA256SUMS.txt and the number of
+    /// files; one short value that stands for the whole collection (publish or timestamp it
+    /// elsewhere; this program does not call a timestamp service). With --merkle-proof NAME,
+    /// also print that file's audit path. With --merkle-expect HEX, exit 1 unless the root matches.
+    #[arg(long, value_name = "SHA256SUMS")]
+    merkle_root: Option<PathBuf>,
+
+    /// With --merkle-root: print the proof that this file name belongs to the collection.
+    #[arg(long, value_name = "NAME", requires = "merkle_root")]
+    merkle_proof: Option<String>,
+
+    /// Root to compare with (for --merkle-root and --merkle-verify).
+    #[arg(long, value_name = "HEX")]
+    merkle_expect: Option<String>,
+
+    /// Check a proof line printed by --merkle-proof ("name hash index count path,path,...")
+    /// against the root given with --merkle-expect; exit 1 if it does not lead to that root.
+    #[arg(long, value_name = "LINE", requires = "merkle_expect")]
+    merkle_verify: Option<String>,
 
     /// Print time per stage (load, orientation, clean-up, OCR) and peak memory at the end.
     #[arg(long)]
@@ -940,6 +960,42 @@ fn real_main() -> Result<()> {
                 }
                 Err(e) => println!("{}: could not be read ({e})", f.display()),
             }
+        }
+        return Ok(());
+    }
+    if let Some(line) = &cli.merkle_verify {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        let ok = f.len() >= 4
+            && match (f[2].parse::<usize>(), f[3].parse::<usize>()) {
+                (Ok(m), Ok(n)) => {
+                    let path: Vec<String> = f.get(4).map(|p| p.split(',').map(str::to_string).collect()).unwrap_or_default();
+                    legatorocr_engine::merkle::check(f[0], f[1], m, n, &path, cli.merkle_expect.as_deref().unwrap_or(""))
+                }
+                _ => false,
+            };
+        println!("{}", if ok { "proof is valid: the file belongs to the collection with that root" } else { "proof does NOT lead to that root" });
+        std::process::exit(if ok { 0 } else { 1 });
+    }
+    if let Some(sums) = &cli.merkle_root {
+        use legatorocr_engine::merkle as mk;
+        let text = std::fs::read_to_string(sums).with_context(|| format!("{}: cannot read", sums.display()))?;
+        let entries = mk::parse_sums(&text)?;
+        let leaves = mk::leaves_of(&entries);
+        let r = mk::hex(&mk::root(&leaves));
+        println!("merkle root of {} file(s): {r}", entries.len());
+        if let Some(name) = &cli.merkle_proof {
+            let Some(i) = entries.iter().position(|(n, _)| n == name) else {
+                bail!("{name} is not listed in {}", sums.display());
+            };
+            let path: Vec<String> = mk::proof(&leaves, i).iter().map(|h| mk::hex(h)).collect();
+            println!("proof: {} {} {} {} {}", entries[i].0, entries[i].1, i, entries.len(), path.join(","));
+        }
+        if let Some(e) = &cli.merkle_expect {
+            if !e.eq_ignore_ascii_case(&r) {
+                println!("root does NOT match the expected value");
+                std::process::exit(1);
+            }
+            println!("root matches the expected value");
         }
         return Ok(());
     }
