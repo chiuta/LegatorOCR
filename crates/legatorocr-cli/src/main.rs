@@ -120,6 +120,14 @@ struct Cli {
     #[arg(long)]
     hocr: Option<PathBuf>,
 
+    /// Also write ALTO v4 XML (word boxes and confidences, the library standard) (needs --ocr).
+    #[arg(long)]
+    alto: Option<PathBuf>,
+
+    /// Also write PAGE XML, one `page_NNNN.xml` per page, into this folder (needs --ocr).
+    #[arg(long)]
+    page_xml: Option<PathBuf>,
+
     /// Also write the recognised words as structured JSON: per page its size and dpi, per word
     /// the text, box (pixels of the processed page), confidence and line (needs --ocr).
     #[arg(long)]
@@ -635,6 +643,8 @@ fn real_main() -> Result<()> {
             &mut cli.pdf,
             &mut cli.txt,
             &mut cli.hocr,
+            &mut cli.alto,
+            &mut cli.page_xml,
             &mut cli.json,
             &mut cli.docx,
             &mut cli.package,
@@ -984,15 +994,21 @@ fn real_main() -> Result<()> {
         };
         check_ocr(&o).context("--auto-rotate needs Tesseract with the 'osd' language data")?;
     }
-    if (cli.txt.is_some() || cli.hocr.is_some() || cli.docx.is_some() || cli.json.is_some())
+    if (cli.txt.is_some()
+        || cli.hocr.is_some()
+        || cli.alto.is_some()
+        || cli.page_xml.is_some()
+        || cli.docx.is_some()
+        || cli.json.is_some())
         && !cli.ocr
     {
-        bail!("--txt, --hocr, --json and --docx need --ocr");
+        bail!("--txt, --hocr, --alto, --page-xml, --json and --docx need --ocr");
     }
     for p in cli
         .txt
         .iter()
         .chain(cli.hocr.iter())
+        .chain(cli.alto.iter())
         .chain(cli.json.iter())
         .chain(cli.docx.iter())
     {
@@ -1002,6 +1018,8 @@ fn real_main() -> Result<()> {
         && matches!(cli.format, Fmt::None)
         && cli.txt.is_none()
         && cli.hocr.is_none()
+        && cli.alto.is_none()
+        && cli.page_xml.is_none()
         && cli.json.is_none()
         && cli.docx.is_none()
         && cli.report.is_none()
@@ -1133,6 +1151,7 @@ fn real_main() -> Result<()> {
             &cli.pdf,
             &cli.txt,
             &cli.hocr,
+            &cli.alto,
             &cli.json,
             &cli.docx,
             &cli.multitiff,
@@ -1388,6 +1407,24 @@ fn real_main() -> Result<()> {
         write_atomic(p, t.as_bytes())?;
         eprintln!("wrote {}", p.display());
         written.push(p.clone());
+    }
+    if let (Some(p), Some(t)) = (&cli.alto, &res.alto) {
+        write_atomic(p, t.as_bytes())?;
+        eprintln!("wrote {}", p.display());
+        written.push(p.clone());
+    }
+    if let Some(dir) = &cli.page_xml {
+        std::fs::create_dir_all(dir)?;
+        for (n, x) in res.page_xml.iter().enumerate() {
+            let f = dir.join(format!("page_{:04}.xml", n + 1));
+            write_atomic(&f, x.as_bytes())?;
+            written.push(f);
+        }
+        eprintln!(
+            "wrote {} PAGE XML file(s) to {}",
+            res.page_xml.len(),
+            dir.display()
+        );
     }
     if let (Some(p), Some(t)) = (&cli.docx, res.paragraph_text.as_ref().or(res.text.as_ref())) {
         let pages: Vec<String> = t

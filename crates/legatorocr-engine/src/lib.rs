@@ -189,6 +189,10 @@ pub struct ExportResult {
     pub paragraph_text: Option<String>,
     /// hOCR document when OCR ran.
     pub hocr: Option<String>,
+    /// ALTO v4 XML of all pages (with `--ocr`).
+    pub alto: Option<String>,
+    /// One complete PAGE XML document per page (with `--ocr`).
+    pub page_xml: Vec<String>,
     /// Structured JSON (pages, words with boxes and confidences) when OCR ran.
     pub json: Option<String>,
     /// Consecutive duplicate pages dropped.
@@ -667,6 +671,8 @@ pub fn run_export(
     let mut texts: Vec<String> = Vec::new();
     let mut par_texts: Vec<String> = Vec::new();
     let mut hocr_pages: Vec<String> = Vec::new();
+    let mut alto_pages: Vec<String> = Vec::new();
+    let mut page_xml_docs: Vec<String> = Vec::new();
     let mut json_pages: Vec<String> = Vec::new();
     let mut block_pages: Vec<Vec<docx::Block>> = Vec::new();
     // Pass 1 (optional): a common page size for the whole book.
@@ -815,6 +821,20 @@ pub fn run_export(
                         pg.dpi,
                         res.pages,
                     ));
+                    alto_pages.push(legatorocr_ocr::alto_page(
+                        &words,
+                        pg.image.width(),
+                        pg.image.height(),
+                        pg.dpi,
+                        res.pages,
+                    ));
+                    page_xml_docs.push(legatorocr_ocr::page_xml_named(
+                        &words,
+                        pg.image.width(),
+                        pg.image.height(),
+                        res.pages,
+                        &format!("page_{:04}.png", res.pages),
+                    ));
                 }
                 if let (Some(w), Some(p)) = (writer.as_mut(), job.pdf.as_ref()) {
                     if p.front_matter > 0 {
@@ -846,6 +866,8 @@ pub fn run_export(
         res.text = Some(texts.join("\n\x0c"));
         res.paragraph_text = Some(par_texts.join("\n\x0c"));
         res.hocr = Some(legatorocr_ocr::hocr_document(&hocr_pages));
+        res.alto = Some(legatorocr_ocr::alto_document(&alto_pages, "LegatorOCR"));
+        res.page_xml = page_xml_docs;
         res.json = Some(legatorocr_ocr::json_document(&json_pages));
         res.docx_blocks = Some(block_pages);
     }
