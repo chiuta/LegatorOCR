@@ -538,6 +538,13 @@ fn is_searchable(name: &str) -> bool {
     )
 }
 
+/// Features of a PDF that can run code or fetch things in a viewer (static look only).
+pub fn pdf_active_content(data: Vec<u8>) -> Result<Vec<(&'static str, usize)>, String> {
+    legatorocr_pdf::reader::PdfDoc::open_with_password(data, &crate::pdf_password())
+        .map(|d| d.active_content())
+        .map_err(|e| e.to_string())
+}
+
 /// Does this PDF already carry text on at least one page? (`false` for scans without a text
 /// layer and for files that cannot be read.)
 pub fn pdf_has_text(path: &Path) -> bool {

@@ -223,6 +223,12 @@ struct Cli {
     #[arg(long)]
     doctor: bool,
 
+    /// List PDFs among the inputs that contain JavaScript, launch actions, embedded files,
+    /// actions on open, form submission or rich media; then exit. A static look at the
+    /// dictionaries only: nothing is executed, and a clean result is not a guarantee.
+    #[arg(long)]
+    scan_active: bool,
+
     /// Print time per stage (load, orientation, clean-up, OCR) and peak memory at the end.
     #[arg(long)]
     timings: bool,
@@ -750,6 +756,30 @@ fn real_main() -> Result<()> {
             x.ref_chars,
             x.ref_words
         );
+        return Ok(());
+    }
+    if cli.scan_active {
+        for f in &cli.inputs {
+            let Ok(data) = std::fs::read(f) else {
+                println!("{}: cannot read", f.display());
+                continue;
+            };
+            if !data.starts_with(b"%PDF") {
+                continue;
+            }
+            match legatorocr_engine::search::pdf_active_content(data) {
+                Ok(hits) => {
+                    if hits.is_empty() {
+                        println!("{}: nothing active found", f.display());
+                    } else {
+                        let list: Vec<String> =
+                            hits.iter().map(|(k, n)| format!("{k} x{n}")).collect();
+                        println!("{}: {}", f.display(), list.join(", "));
+                    }
+                }
+                Err(e) => println!("{}: could not be read ({e})", f.display()),
+            }
+        }
         return Ok(());
     }
     if cli.doctor {

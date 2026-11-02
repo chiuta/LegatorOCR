@@ -1132,6 +1132,59 @@ impl PdfDoc {
         }
     }
 
+    /// Features that can run code or fetch things when the file is opened in a viewer:
+    /// `(name, how many objects use it)`, sorted by name. Reads the dictionaries of every
+    /// object, including those inside object streams; it does not execute or decode scripts.
+    /// Absence here does not prove a file is harmless.
+    pub fn active_content(&self) -> Vec<(&'static str, usize)> {
+        const KEYS: [(&str, &str); 9] = [
+            ("JS", "JavaScript"),
+            ("JavaScript", "JavaScript"),
+            ("Launch", "launch action"),
+            ("EmbeddedFile", "embedded file"),
+            ("EmbeddedFiles", "embedded file"),
+            ("OpenAction", "action on open"),
+            ("SubmitForm", "form submission"),
+            ("ImportData", "form data import"),
+            ("RichMedia", "rich media (Flash/3D)"),
+        ];
+        fn walk(v: &Val, hits: &mut HashMap<&'static str, usize>, depth: u32) {
+            if depth > 8 {
+                return;
+            }
+            match v {
+                Val::Dict(d) | Val::Stream(d, _, _) => {
+                    for (k, x) in d {
+                        if let Some((_, label)) = KEYS.iter().find(|(key, _)| key == k) {
+                            *hits.entry(label).or_insert(0) += 1;
+                        }
+                        if matches!(x, Val::Dict(_) | Val::Arr(_)) {
+                            walk(x, hits, depth + 1);
+                        }
+                    }
+                }
+                Val::Arr(a) => {
+                    for x in a {
+                        walk(x, hits, depth + 1);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut nums: Vec<u32> = self.offs.keys().chain(self.comp.keys()).copied().collect();
+        nums.sort_unstable();
+        nums.dedup();
+        let mut hits: HashMap<&'static str, usize> = HashMap::new();
+        for n in nums {
+            if let Some(v) = self.get(n) {
+                walk(&v, &mut hits, 0);
+            }
+        }
+        let mut out: Vec<_> = hits.into_iter().collect();
+        out.sort();
+        out
+    }
+
     /// Follow references (bounded).
     fn resolve(&self, v: &Val) -> Val {
         let mut cur = v.clone();
@@ -3687,5 +3740,14 @@ mod tests {
             b.extend((0..n).map(|_| rnd() as u8));
             let _ = PdfDoc::open(b);
         }
+    }
+
+    #[test]
+    fn active_content_is_reported() {
+        let pdf = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R /OpenAction 3 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [4 0 R] /Count 1 >>\nendobj\n4 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >>\nendobj\n3 0 obj\n<< /S /JavaScript /JS (app.alert(1)) >>\nendobj\ntrailer\n<< /Root 1 0 R /Size 4 >>\n%%EOF\n".to_vec();
+        let d = PdfDoc::open(pdf).expect("opens");
+        let hits = d.active_content();
+        assert!(hits.iter().any(|(k, _)| *k == "JavaScript"), "{hits:?}");
+        assert!(hits.iter().any(|(k, _)| *k == "action on open"), "{hits:?}");
     }
 }
