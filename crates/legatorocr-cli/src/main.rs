@@ -452,6 +452,13 @@ struct Cli {
     #[arg(long, value_name = "FILE")]
     djvu: Option<PathBuf>,
 
+    /// Process only part of the input list so several machines (or runs) can share a big batch:
+    /// `I/N` takes the I-th of N consecutive slices (I from 1), e.g. `--shard 2/4`. Give each
+    /// shard its own --pdf / output folder, then join the results with --merge-pdf. Pages keep
+    /// the order of the full list; the slices differ in size by at most one page.
+    #[arg(long, value_name = "I/N")]
+    shard: Option<String>,
+
     /// Read the machine-readable zone (ICAO 9303 passport / ID card lines) from the OCR text and
     /// check every check digit; prints the fields, or which check failed. Needs --ocr. Reads the
     /// printed zone only; does not prove the document is genuine.
@@ -1854,6 +1861,18 @@ fn real_main() -> Result<()> {
                 return Ok(());
             }
         }
+    }
+    if let Some(spec) = &cli.shard {
+        let (i, n) = spec
+            .split_once('/')
+            .and_then(|(a, b)| Some((a.trim().parse::<usize>().ok()?, b.trim().parse::<usize>().ok()?)))
+            .filter(|&(i, n)| n >= 1 && (1..=n).contains(&i))
+            .context("--shard needs I/N with 1 <= I <= N, e.g. 2/4")?;
+        let total = inputs.len();
+        let (from, to) = ((i - 1) * total / n, i * total / n);
+        eprintln!("shard {i}/{n}: pages {}..{} of {total}", from + 1, to);
+        inputs = inputs[from..to].to_vec();
+        adjusts = adjusts[from..to].to_vec();
     }
     if inputs.is_empty() {
         bail!("the project lists no pages");
