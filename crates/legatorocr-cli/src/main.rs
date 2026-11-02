@@ -43,7 +43,7 @@ enum Fmt {
 #[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "verify_sums", "search_preset", "search_help"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_sums", "search_preset", "search_help"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -257,6 +257,20 @@ struct Cli {
     /// With --burst: frames closer than this many seconds count as one burst.
     #[arg(long, default_value_t = 3, value_name = "SECONDS")]
     burst_gap: i64,
+
+    /// Hot folder: keep running and process every scan that appears in DIR (PNG, JPEG, TIFF,
+    /// BMP, PDF) once it has stopped growing, with all the other options. `--pdf` must name the
+    /// output with `{name}` (or `{title}`) so each file gets its own. Stop with Ctrl+C.
+    #[arg(long, value_name = "DIR")]
+    watch: Option<PathBuf>,
+
+    /// With --watch: seconds between looks at the folder.
+    #[arg(long, default_value_t = 2, value_name = "SECONDS")]
+    watch_interval: u64,
+
+    /// With --watch: ignore the files already in the folder when it starts.
+    #[arg(long)]
+    watch_skip_existing: bool,
 
     /// Print time per stage (load, orientation, clean-up, OCR) and peak memory at the end.
     #[arg(long)]
@@ -715,8 +729,48 @@ fn resolve_title(p: &mut Option<PathBuf>, title: &str) -> Result<()> {
     Ok(())
 }
 
+/// `--watch`: run this program once per new file with the same options.
+fn watch_loop(cli: &Cli, dir: &std::path::Path) -> Result<()> {
+    let pdf = cli.pdf.as_ref().map(|p| p.to_string_lossy().into_owned());
+    if !pdf.as_deref().is_some_and(|t| t.contains("{name}") || t.contains("{title}")) {
+        bail!("--watch needs --pdf with {{name}} (or {{title}}) in it, e.g. --pdf \"out/{{name}}.pdf\", so every file gets its own output");
+    }
+    if !dir.is_dir() {
+        bail!("--watch: {} is not a folder", dir.display());
+    }
+    // the same command line minus the watch options
+    let mut args: Vec<std::ffi::OsString> = Vec::new();
+    let mut it = std::env::args_os().skip(1);
+    while let Some(a) = it.next() {
+        let t = a.to_string_lossy().into_owned();
+        if t == "--watch" || t == "--watch-interval" {
+            it.next();
+        } else if t.starts_with("--watch=") || t.starts_with("--watch-interval=") || t == "--watch-skip-existing" {
+        } else {
+            args.push(a);
+        }
+    }
+    let exe = std::env::current_exe().context("cannot find this program to run it again")?;
+    let mut w = legatorocr_engine::watch::Watcher::new(dir, cli.watch_skip_existing);
+    eprintln!("watching {} (Ctrl+C to stop)", dir.display());
+    loop {
+        for f in w.poll() {
+            eprintln!("new file: {}", f.display());
+            match std::process::Command::new(&exe).args(&args).arg(&f).status() {
+                Ok(s) if s.success() => eprintln!("done: {}", f.display()),
+                Ok(s) => eprintln!("failed ({s}): {}", f.display()),
+                Err(e) => eprintln!("cannot run for {}: {e}", f.display()),
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_secs(cli.watch_interval.max(1)));
+    }
+}
+
 fn real_main() -> Result<()> {
     let mut cli = Cli::parse();
+    if let Some(dir) = cli.watch.clone() {
+        return watch_loop(&cli, &dir);
+    }
     if let Some(pw) = cli
         .pdf_password
         .clone()

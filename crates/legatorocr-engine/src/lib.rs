@@ -36,6 +36,7 @@ pub mod textcheck;
 pub mod report;
 pub mod ropost;
 pub mod search;
+pub mod watch;
 pub mod zipcrypt;
 pub mod zipmini;
 pub use legatorocr_ocr as ocr;

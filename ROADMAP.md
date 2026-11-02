@@ -27,10 +27,13 @@ Working rule for every item: record a number *before*, build, record a number *a
 | 1.15 | done | `--scan-active` (static; no online hash lookup) |
 | 1.16, 1.18 | done | `--catalog` (HTML / CSV with SHA-256) and `--dublin-core` sidecars; need `--pdf` |
 | 1.17 | done | `--verify-text` |
+| 2.3 | done | `--watch DIR` (needs `--pdf` with `{name}`; runs the program once per new file; polls, no OS file events) |
 | 1.4 | deferred | no reference set to prove a gain, and the exact definitions of Fox / LCaM / EdgeDiv could not be checked here |
-| 0.1, 0.2, 0.5, 0.6, 1.11 | not started | 0.1 needs hand-verified text from a person |
+| 0.5 | done | CI step runs the whole chain in an empty network namespace (Linux) |
+| 0.1, 0.2, 0.6 | not started | 0.1 needs hand-verified text from a person |
+| 1.11 | blocked | a real PortableApps package needs the Windows PortableApps.com Launcher / Installer; not testable here |
 
-Everything from Phase 2 on is not started.
+Phase 2 other than 2.3, and everything from Phase 3 on, is not started.
 
 ## Phase 0 - Measure first (D1-3)
 
