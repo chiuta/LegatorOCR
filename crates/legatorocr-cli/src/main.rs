@@ -298,6 +298,12 @@ struct Cli {
     #[arg(long, value_name = "DIR")]
     verify_bag: Option<PathBuf>,
 
+    /// After export, read the PDF back and check every page against the page that was meant to
+    /// be written: page count, pixel size, a thumbnail comparison. Exit 1 on a problem.
+    /// (Layered pages are checked for count and size only.) Needs --pdf.
+    #[arg(long)]
+    certify: bool,
+
     /// Print time per stage (load, orientation, clean-up, OCR) and peak memory at the end.
     #[arg(long)]
     timings: bool,
@@ -1557,6 +1563,7 @@ fn real_main() -> Result<()> {
     }
     legatorocr_engine::qa::enable(cli.quality_report);
     legatorocr_engine::explain::enable(cli.explain);
+    legatorocr_engine::certify::enable(cli.certify);
     let res = run_export(
         &job,
         &AtomicBool::new(false),
@@ -1632,6 +1639,20 @@ fn real_main() -> Result<()> {
     if cli.explain {
         for l in legatorocr_engine::explain::report() {
             eprintln!("{l}");
+        }
+    }
+    if cli.certify {
+        match &res.pdf {
+            Some(pdf) => {
+                let (ok, lines) = legatorocr_engine::certify::check(pdf);
+                for l in &lines {
+                    eprintln!("{l}");
+                }
+                if !ok {
+                    std::process::exit(1);
+                }
+            }
+            None => eprintln!("--certify needs a single --pdf output (not --split-on-blank / --split-on-barcode)"),
         }
     }
     if cli.verify_text {

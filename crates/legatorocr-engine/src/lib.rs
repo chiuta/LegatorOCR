@@ -16,6 +16,7 @@ pub mod audit;
 pub mod bagit;
 pub mod burst;
 pub mod catalog;
+pub mod certify;
 pub mod checksums;
 pub mod doctor;
 pub mod explain;
@@ -880,6 +881,7 @@ pub fn run_export(
                             last_src = Some(key);
                         }
                     }
+                    certify::record(&pg);
                     w.add_page(&pg, &words);
                 }
                 if pagenum::enabled() {
