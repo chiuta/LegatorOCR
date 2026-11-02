@@ -43,7 +43,7 @@ enum Fmt {
 #[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_bag", "merkle_root", "merkle_verify", "verify_sums", "search_preset", "search_help"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_bag", "efactura", "merkle_root", "merkle_verify", "verify_sums", "search_preset", "search_help"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -362,6 +362,11 @@ struct Cli {
     /// Write PDF/A-2b structure (embedded text font, XMP metadata, sRGB output intent).
     #[arg(long)]
     pdfa: bool,
+
+    /// Read an e-Factura (RO_CIUS UBL) invoice, .xml or ANAF's .zip: print the key fields and
+    /// check that amounts add up and CUI check digits pass (exit 1 on a problem).
+    #[arg(long, value_name = "FILE")]
+    efactura: Option<PathBuf>,
 
     /// PDF toolbox: join all input PDFs into one file (name from --pdf, else merged.pdf in -o).
     #[arg(long)]
@@ -1059,6 +1064,16 @@ fn real_main() -> Result<()> {
         let written = legatorocr_engine::pdftools::run(&cli.inputs, &cli.out_dir, cli.pdf.as_deref(), &plan)?;
         for w in &written {
             println!("wrote {}", w.display());
+        }
+        return Ok(());
+    }
+    if let Some(f) = &cli.efactura {
+        let xml = legatorocr_engine::efactura::read_xml(f)?;
+        let inv = legatorocr_engine::efactura::parse(&xml)?;
+        let problems = legatorocr_engine::efactura::check(&inv);
+        print!("{}", legatorocr_engine::efactura::render(&inv, &problems));
+        if !problems.is_empty() {
+            std::process::exit(1);
         }
         return Ok(());
     }

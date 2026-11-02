@@ -35,6 +35,7 @@ pub mod headings;
 pub mod merkle;
 pub mod ocrcache;
 pub mod pagelang;
+pub mod efactura;
 pub mod memcap;
 pub mod pdftools;
 pub mod pagenum;
