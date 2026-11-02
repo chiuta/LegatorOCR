@@ -157,6 +157,21 @@ What the guide recommends and where we stand:
 The guide does not cover naming conventions, PDF/A, e-Factura, 3-2-1 backup, GDPR or retention periods. Items 6.10, 7.12 and 5.8
 come from the wider HUB DIGITAL course topics, not from these pages, and should be checked with the author before being treated as his recommendations.
 
+### Further sources found on 2 Nov 2026
+
+Read in full (page content, not just titles):
+
+- eIDAS 2 (certyneo.com summary, secondary source): Regulation (EU) 2024/1183 in force since 20 May 2024; each Member State must offer an EU Digital Identity Wallet **no later than November 2026**; implementing acts still being published, so details may change. A qualified signature carries a presumption of reliability (Art. 26) and can be given remotely (Art. 29a/29b). Affects 5.7: plan for remote qualified signing through a provider, not only a local PKCS#12 certificate.
+- FADGI Technical Guidelines for Digitizing Cultural Heritage Materials, Third Edition (2023, page updated 2024-02-27): the page links to the free evaluation tools **OpenDICE** and **AutoSFR**. Affects 5.9: read them and the guideline PDF first, then decide whether to wrap, import or reimplement their measurements.
+- PDF Association (March 2024): LibreOffice 24.2 exports PDF that is both PDF/A and PDF/UA-1; veraPDF 1.26 release candidate had draft PDF/UA-2 checks. The page says nothing about scanned or OCR documents. Affects 6.1: PDF/UA for scans is our own work, with no reference implementation found.
+
+Found as titles only (not read; do not rely on them): Quarto/Posit note on PDF accessibility (Mar 2026), Europeana content-tier pages, an
+IIIF Content Search API 1.0 page, Australian National Archives preservation digitisation standards (page refuses robots), assorted OCR
+benchmark roundups for 2026 (docsumo, codesota, gigagpu, others), and book-scanner software lists (spreads, YASW, BookScanWizard). A 2026 search for a pure-Rust OCR
+engine found nothing relevant.
+
+No Romanian-specific OCR benchmark, Romanian national digitisation norm or new ScanTailor-class tool turned up in these searches.
+
 ### Sources we could not read (2 Nov 2026)
 
 - The blog competentedigitalizare.blogspot.com, its RSS feed and the Internet Archive copy: blocked by this environment's allowlist; search engines do not index the blog.
