@@ -288,6 +288,14 @@ struct Cli {
     #[arg(long, value_name = "NAME", requires = "rights_death_year")]
     rights_author: Option<String>,
 
+    /// Assignment deed number for the rights notice (needs --rights-deed-date).
+    #[arg(long, value_name = "NO", requires = "rights_deed_date", requires = "rights_death_year")]
+    rights_deed_number: Option<String>,
+
+    /// Assignment deed date for the rights notice, printed as written.
+    #[arg(long, value_name = "DATE", requires = "rights_deed_number")]
+    rights_deed_date: Option<String>,
+
     /// Also copy everything this run wrote into a BagIt 1.0 bag in DIR (a new folder): files
     /// under data/, SHA-256 manifest and tag manifest. Needs --pdf.
     #[arg(long, value_name = "DIR")]
@@ -898,7 +906,7 @@ fn real_main() -> Result<()> {
             bail!("--rights-death-year and --rights-notice both write the rights notice; use one");
         }
         let today = 1970 + (legatorocr_engine::now_unix() / 31_556_952) as i32;
-        cli.rights_notice = Some(legatorocr_engine::rights::notice(y, today, cli.rights_author.as_deref())?);
+        cli.rights_notice = Some(legatorocr_engine::rights::notice(y, today, cli.rights_author.as_deref(), cli.rights_deed_number.as_deref().zip(cli.rights_deed_date.as_deref()))?);
     }
     if let Some(pw) = cli
         .pdf_password

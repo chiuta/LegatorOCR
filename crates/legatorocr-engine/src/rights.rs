@@ -12,7 +12,8 @@ pub fn public_domain_year(death_year: i32) -> i32 {
 }
 
 /// Notice text for `death_year`, judged at `today_year`.
-pub fn notice(death_year: i32, today_year: i32, author: Option<&str>) -> Result<String> {
+/// `deed`: assignment deed number and date, printed as written.
+pub fn notice(death_year: i32, today_year: i32, author: Option<&str>, deed: Option<(&str, &str)>) -> Result<String> {
     if !(1000..=today_year).contains(&death_year) {
         bail!("--rights-death-year {death_year}: expected a year between 1000 and {today_year}");
     }
@@ -26,8 +27,12 @@ pub fn notice(death_year: i32, today_year: i32, author: Option<&str>) -> Result<
             pd - 1
         )
     };
+    let deed = match deed {
+        Some((n, d)) => format!(" Rights assigned by deed no. {n} of {d}."),
+        None => String::new(),
+    };
     Ok(format!(
-        "{status} (author {who}died {death_year}; life + 70 years, Law 8/1996). Information only: check anonymous, collective, translated or posthumous works and other countries separately."
+        "{status} (author {who}died {death_year}; life + 70 years, Law 8/1996).{deed} Information only: check anonymous, collective, translated or posthumous works and other countries separately."
     ))
 }
 
@@ -38,10 +43,11 @@ mod tests {
     #[test]
     fn term_runs_from_the_year_after_death() {
         assert_eq!(public_domain_year(1955), 2026);
-        assert!(notice(1955, 2026, None).unwrap().contains("public domain in Romania since 1 January 2026"));
-        let n = notice(1956, 2026, Some("I. Autor")).unwrap();
+        assert!(notice(1955, 2026, None, None).unwrap().contains("public domain in Romania since 1 January 2026"));
+        let n = notice(1956, 2026, Some("I. Autor"), Some(("12/B", "3 March 2026"))).unwrap();
         assert!(n.contains("until 31 December 2026") && n.contains("I. Autor"), "{n}");
-        assert!(notice(2030, 2026, None).is_err());
-        assert!(notice(12, 2026, None).is_err());
+        assert!(n.contains("deed no. 12/B of 3 March 2026"));
+        assert!(notice(2030, 2026, None, None).is_err());
+        assert!(notice(12, 2026, None, None).is_err());
     }
 }
