@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 pub mod altbin;
-pub mod archive;
 pub mod audit;
+pub mod reprocess;
 pub mod bagit;
 pub mod burst;
 pub mod catalog;
@@ -37,6 +37,7 @@ pub mod headings;
 pub mod merkle;
 pub mod ocrcache;
 pub mod pagelang;
+pub mod archive;
 pub mod backup;
 pub mod efactura;
 pub mod mcp;

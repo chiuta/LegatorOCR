@@ -428,6 +428,13 @@ struct Cli {
     #[arg(long, value_name = "PEM")]
     tsa_ca: Option<PathBuf>,
 
+    /// Reprocessable archive package: a NEW folder with the original inputs, project.lgr (settings
+    /// and per-page adjustments, relative paths), derived/ (outputs and ocr.json with every word,
+    /// box and confidence), RUN.txt (how to run again) and SHA256SUMS.txt. Needs --ocr. Re-run it
+    /// later with a better engine and compare. Never overwrites.
+    #[arg(long, value_name = "DIR")]
+    archive_package: Option<PathBuf>,
+
     /// Tagged PDF: each OCR line becomes a paragraph element of a structure tree, the scan image
     /// is an artifact, and /Lang is set to CODE (BCP 47, e.g. ro, en-GB; omit for none). A base
     /// for PDF/UA and screen readers, not a conformance claim: no headings, lists, tables or
@@ -1592,6 +1599,15 @@ fn real_main() -> Result<()> {
         };
         check_ocr(&o).context("--auto-rotate needs Tesseract with the 'osd' language data")?;
     }
+    if let Some(d) = &cli.archive_package {
+        if !cli.ocr {
+            bail!("--archive-package needs --ocr (it keeps the recognised words)");
+        }
+        legatorocr_engine::reprocess::prepare(d)?;
+        if cli.json.is_none() {
+            cli.json = Some(d.join("derived").join("ocr.json"));
+        }
+    }
     if (cli.txt.is_some()
         || cli.hocr.is_some()
         || cli.alto.is_some()
@@ -1719,7 +1735,8 @@ fn real_main() -> Result<()> {
     if inputs.is_empty() {
         bail!("the project lists no pages");
     }
-    if let Some(path) = &cli.save_project {
+    let mut archive_project: Option<Project> = None;
+    if let Some(path) = cli.save_project.as_ref().or(cli.archive_package.as_ref()) {
         let mut pr = Project {
             settings: settings.clone(),
             extra: Vec::new(),
@@ -1737,8 +1754,13 @@ fn real_main() -> Result<()> {
                 a.clone(),
             ));
         }
-        pr.save(path)?;
-        eprintln!("project saved: {}", path.display());
+        if cli.save_project.is_some() {
+            pr.save(path)?;
+            eprintln!("project saved: {}", path.display());
+        }
+        if cli.archive_package.is_some() {
+            archive_project = Some(pr);
+        }
     }
     let stems = output_stems(&inputs);
     let from_project = project.is_some();
@@ -2254,6 +2276,16 @@ fn real_main() -> Result<()> {
         write_atomic(p, legatorocr_engine::tei::render(b, title, lang, &[]).as_bytes())?;
         eprintln!("wrote {}", p.display());
         written.push(p.clone());
+    }
+    if let (Some(dir), Some(pr)) = (&cli.archive_package, archive_project.take()) {
+        let mut cmd = String::from("legatorocr --project project.lgr --ocr");
+        cmd.push_str(&format!(" --lang {}", cli.lang));
+        if cli.pdf.is_some() {
+            cmd.push_str(&format!(" --pdf new.pdf --pdf-quality {}", cli.pdf_quality));
+        }
+        cmd.push_str(" --json new_ocr.json");
+        let b = legatorocr_engine::reprocess::finish(dir, pr, &written, legatorocr_engine::now_unix(), &cmd)?;
+        eprintln!("archive package: {} ({} files, {} originals)", dir.display(), b.files, b.originals);
     }
     if let Some(dest) = &cli.package {
         let password: Option<String> = match &cli.package_password_file {
