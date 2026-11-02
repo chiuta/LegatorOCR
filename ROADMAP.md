@@ -22,11 +22,12 @@ Working rule for every item: record a number *before*, build, record a number *a
 | 1.8 | done | `--page-labels`; needs OCR to see the printed number |
 | 1.9 | done | `{title}` naming token (needs `--ocr`), plus `{date}` `{year}` `{month}` `{day}` `{name}` |
 | 1.10, 1.19 | done | `--search-query` (boolean, fuzzy, diacritic-insensitive) with CUI and invoice-series finders; words match whole tokens |
-| 1.12 | partial | lone page numbers in the head/foot margin recovered (CER on 12 real pages unchanged at 15.2 %); gutter, "." vs ",", I/l, word spacing not fixed |
+| 1.12 | partial | a lone number (one digit included) that Tesseract leaves out is read again when it sits between words of a row or in the foot margin (CER on 12 real pages unchanged: 5579 errors in 36711 characters; three earlier variants added 2 errors from a photo, a speck and a stain and were tightened); gutter, "." vs ",", I/l, word spacing not fixed |
 | 1.14 | done | `--burst`; thresholds untuned on real phone photos |
 | 1.15 | done | `--scan-active` (static; no online hash lookup) |
 | 1.16, 1.18 | done | `--catalog` (HTML / CSV with SHA-256) and `--dublin-core` sidecars; need `--pdf` |
 | 1.17 | done | `--verify-text` |
+| 6.3 | partial | `--tables-xlsx` and `--tables-html` (tables from the Word-export detector; XLSX opened with openpyxl and LibreOffice; plain numbers as numbers, the rest text as printed); tables are only found when 3+ rows share a cell count, so a column with a missed cell breaks the table |
 | 5.4 | partial | `--merkle-root SUMS` (RFC 6962 style tree over SHA256SUMS.txt; tested for every leaf of trees up to 17 leaves), `--merkle-proof NAME`, `--merkle-verify`, `--merkle-expect`; the RFC 3161 timestamp is NOT done (needs a timestamp service the user chooses) |
 | 5.3 | partial | `--provenance` stores program version, time, input SHA-256 and options (passwords removed) in the PDF Info key `/LegatorOCRProvenance`; not in PDF/A files, not an XMP schema, not signed; output bytes are not reproducible (the time is in the file) |
 | 5.2 | partial | `--certify` reads the PDF back and checks page count, pixel size and a 96x128 thumbnail per page (exit 1 on a fault); layered pages: count and size only; no check of the text layer image beyond `--verify-text` |

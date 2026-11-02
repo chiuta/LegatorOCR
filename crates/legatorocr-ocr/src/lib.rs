@@ -564,10 +564,12 @@ pub fn recognize(page: &PageImage, dpi: u32, o: &OcrOptions) -> Result<Vec<Word>
     Ok(words)
 }
 
-/// Tesseract's page layout analysis often leaves out a lone page number in the head or foot
-/// margin (a single digit especially). Ink in the top and bottom eighth of the page that no
-/// recognised word covers is read again as one line of digits; only a clean 1–4 digit result
-/// with confidence ≥ 50 is added. Coordinates are those of `img`.
+/// Tesseract's page layout analysis sometimes leaves out a lone number: a page number in the
+/// head or foot margin, or a one-digit cell in a table column. Dark ink that no recognised word
+/// covers is grouped into blobs; blobs between words of one row, or in the foot margin, of a plausible size (a text line tall, at most four
+/// digits wide) is read again as one line of digits. Only a clean 1-4 digit result with
+/// confidence >= 50 is added, so dust and drawings are not turned into numbers. Coordinates are
+/// those of `img`; at most 12 blobs per page are tried.
 fn rescue_page_numbers(
     img: &image::DynamicImage,
     dpi: u32,
@@ -579,42 +581,98 @@ fn rescue_page_numbers(
     if w < 64 || h < 64 {
         return;
     }
-    let band = h / 8;
-    let pad = (w / 80).max(4);
+    // typical text height on this page (median word height); without words, a fixed fraction
+    let mut hs: Vec<u32> = words.iter().map(|k| k.h).collect();
+    hs.sort_unstable();
+    let med = hs.get(hs.len() / 2).copied().unwrap_or(h / 40).max(8);
+    let pad = (med / 3).max(4);
     let covered = |x: u32, y: u32| {
         words
             .iter()
             .any(|k| x + pad >= k.x && x <= k.x + k.w + pad && y + pad >= k.y && y <= k.y + k.h + pad)
     };
-    let mut found: Vec<(bool, Word)> = Vec::new();
-    for top in [true, false] {
-        let (y0, y1) = if top { (0, band) } else { (h - band, h) };
-        // uncovered dark pixels in the band, away from the very edge (scanner shadow)
-        let edge = (w / 50).max(3);
-        let (mut x_min, mut x_max, mut y_min, mut y_max, mut n) = (w, 0, h, 0, 0u32);
-        for y in y0.max(edge)..y1.min(h - edge) {
-            for x in edge..w - edge {
-                if g.get_pixel(x, y).0[0] < 110 && !covered(x, y) {
-                    x_min = x_min.min(x);
-                    x_max = x_max.max(x);
-                    y_min = y_min.min(y);
-                    y_max = y_max.max(y);
-                    n += 1;
+    // grid of cells of `pad` px that hold uncovered dark ink, grouped by 8-neighbour contact
+    let edge = (w / 50).max(3);
+    let (gw, gh) = (w.div_ceil(pad) as usize, h.div_ceil(pad) as usize);
+    let mut cell = vec![false; gw * gh];
+    for y in edge..h - edge {
+        for x in edge..w - edge {
+            if g.get_pixel(x, y).0[0] < 110 && !covered(x, y) {
+                cell[(y / pad) as usize * gw + (x / pad) as usize] = true;
+            }
+        }
+    }
+    let mut blobs: Vec<(u32, u32, u32, u32, u32)> = Vec::new(); // x0, y0, x1, y1, cells
+    let mut seen = vec![false; gw * gh];
+    for start in 0..gw * gh {
+        if !cell[start] || seen[start] {
+            continue;
+        }
+        let (mut x0, mut y0, mut x1, mut y1, mut n) = (u32::MAX, u32::MAX, 0, 0, 0);
+        let mut stack = vec![start];
+        seen[start] = true;
+        while let Some(c) = stack.pop() {
+            let (cx, cy) = ((c % gw) as u32, (c / gw) as u32);
+            x0 = x0.min(cx);
+            y0 = y0.min(cy);
+            x1 = x1.max(cx);
+            y1 = y1.max(cy);
+            n += 1;
+            for dy in -1i32..=1 {
+                for dx in -1i32..=1 {
+                    let (nx, ny) = (cx as i32 + dx, cy as i32 + dy);
+                    if nx < 0 || ny < 0 || nx as usize >= gw || ny as usize >= gh {
+                        continue;
+                    }
+                    let ni = ny as usize * gw + nx as usize;
+                    if cell[ni] && !seen[ni] {
+                        seen[ni] = true;
+                        stack.push(ni);
+                    }
                 }
             }
         }
-        if n < 20 || x_max < x_min {
+        blobs.push((x0 * pad, y0 * pad, (x1 + 1) * pad, (y1 + 1) * pad, n));
+    }
+    blobs.sort_by_key(|b| (b.1, b.0));
+    let mut found: Vec<Word> = Vec::new();
+    for (x0, y0, x1, y1, _n) in blobs.into_iter().filter(|b| b.4 >= 2).take(12) {
+        let (bw, bh) = (x1 - x0, y1 - y0);
+        // line-sized: from about half to twice a text line, at most about four digits wide
+        if bh < med / 2 || bh > med * 2 + 2 * pad || bw > bh * 6 + 2 * pad {
             continue;
         }
-        let (bw, bh) = (x_max - x_min + 1, y_max - y_min + 1);
-        // a digit string: wider than nothing, at most a fifth of the page wide, line-sized tall
-        if bw > w / 5 || bh < h / 200 || bh > h / 16 {
+        // where a lone number is believable: between words of the same row (a table cell), or in
+        // the foot margin (a page number); anywhere else it is more often a stain or a speck
+        let cy_blob = (y0 + y1) / 2;
+        let same_row = |k: &&Word| (k.y + k.h / 2).abs_diff(cy_blob) <= med / 2 + pad;
+        let in_row = words.iter().filter(same_row).any(|k| k.x + k.w <= x0)
+            && words.iter().filter(same_row).any(|k| k.x >= x1);
+        if !in_row && y0 < h - h / 8 {
+            continue;
+        }
+        // real strokes, not a stain: a digit line this tall has at least ~8 % of bh² dark pixels
+        let mut dark = 0u64;
+        for y in y0..y1.min(h) {
+            for x in x0..x1.min(w) {
+                if g.get_pixel(x, y).0[0] < 110 {
+                    dark += 1;
+                }
+            }
+        }
+        if dark * 100 < (bh as u64) * (bh as u64) * 8 {
             continue;
         }
         let m = (bh / 2).max(8);
-        let (cx0, cy0) = (x_min.saturating_sub(m), y_min.saturating_sub(m));
-        let (cx1, cy1) = ((x_max + m).min(w - 1), (y_max + m).min(h - 1));
+        let (cx0, cy0) = (x0.saturating_sub(m), y0.saturating_sub(m));
+        let (cx1, cy1) = ((x1 + m).min(w - 1), (y1 + m).min(h - 1));
         let crop = image::imageops::crop_imm(&g, cx0, cy0, cx1 - cx0 + 1, cy1 - cy0 + 1).to_image();
+        // ink on clean paper only: a photograph or a dark panel next to the blob would make
+        // Tesseract read digits into texture
+        let bright = crop.pixels().filter(|p| p.0[0] > 140).count();
+        if bright * 100 < crop.pixels().len() * 88 {
+            continue;
+        }
         let Ok(png) = png_bytes(&image::DynamicImage::ImageLuma8(crop)) else {
             continue;
         };
@@ -629,24 +687,40 @@ fn rescue_page_numbers(
             continue;
         }
         for mut c in parse_tsv(&String::from_utf8_lossy(&out.stdout), 50.0) {
-            if (1..=4).contains(&c.text.len()) && c.text.chars().all(|d| d.is_ascii_digit()) {
+            // the digits Tesseract placed must themselves be line-sized, not a speck
+            let sized = c.h * 2 >= med && c.h <= med * 2 + 2 * pad;
+            if sized && (1..=4).contains(&c.text.len()) && c.text.chars().all(|d| d.is_ascii_digit()) {
                 c.x += cx0;
                 c.y += cy0;
-                found.push((top, c));
+                found.push(c);
             }
         }
     }
-    for (top, mut c) in found {
-        if top {
-            for k in words.iter_mut() {
-                k.line += 1;
+    // reading order: put each found number on the line of the word row it sits in, or on a new
+    // line when none is near
+    for mut c in found {
+        let cy = c.y + c.h / 2;
+        let near = words
+            .iter()
+            .filter(|k| cy >= k.y && cy <= k.y + k.h)
+            .min_by_key(|k| k.x.abs_diff(c.x));
+        match near {
+            Some(k) => c.line = k.line,
+            None if c.y < h / 2 => {
+                for k in words.iter_mut() {
+                    k.line += 1;
+                }
+                c.line = 0;
             }
-            c.line = 0;
-            words.insert(0, c);
-        } else {
-            c.line = words.iter().map(|k| k.line + 1).max().unwrap_or(0);
-            words.push(c);
+            None => c.line = words.iter().map(|k| k.line + 1).max().unwrap_or(0),
         }
+        let at = match words.iter().position(|k| k.line == c.line && k.x > c.x) {
+            Some(i) => i,
+            // a new first line goes first, a new last line last
+            None if c.line == 0 && words.first().is_some_and(|k| k.line == 1) => 0,
+            None => words.len(),
+        };
+        words.insert(at, c);
     }
 }
 

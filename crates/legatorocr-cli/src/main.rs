@@ -330,6 +330,16 @@ struct Cli {
     #[arg(long, value_name = "LINE", requires = "merkle_expect")]
     merkle_verify: Option<String>,
 
+    /// Also write the tables found on the pages as an Excel workbook (one sheet per table, named
+    /// p<page>-t<n>); plain numbers become numbers, everything else stays text as printed.
+    /// Needs --ocr.
+    #[arg(long, value_name = "FILE")]
+    tables_xlsx: Option<PathBuf>,
+
+    /// Also write the tables found on the pages as one HTML file. Needs --ocr.
+    #[arg(long, value_name = "FILE")]
+    tables_html: Option<PathBuf>,
+
     /// Print time per stage (load, orientation, clean-up, OCR) and peak memory at the end.
     #[arg(long)]
     timings: bool,
@@ -918,6 +928,9 @@ fn real_main() -> Result<()> {
             .any(|p| p.as_deref().is_some_and(done_has_mark))
     {
         bail!("{{title}} in an output name is taken from the recognised text; add --ocr");
+    }
+    if (cli.tables_xlsx.is_some() || cli.tables_html.is_some()) && !cli.ocr {
+        bail!("--tables-xlsx and --tables-html read the recognised text; add --ocr");
     }
     if cli.txt_each && !cli.ocr {
         bail!("--txt-each needs --ocr");
@@ -1702,6 +1715,18 @@ fn real_main() -> Result<()> {
             &mut cli.package,
         ] {
             resolve_title(p, &title)?;
+        }
+    }
+    if cli.tables_xlsx.is_some() || cli.tables_html.is_some() {
+        let found = res.docx_blocks.as_deref().map(legatorocr_engine::tables::find).unwrap_or_default();
+        if let Some(p) = &cli.tables_xlsx {
+            write_atomic(p, &legatorocr_engine::tables::xlsx(&found))?;
+            eprintln!("wrote {} ({} table(s))", p.display(), found.len());
+        }
+        if let Some(p) = &cli.tables_html {
+            let title = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            write_atomic(p, legatorocr_engine::tables::html(&found, &title).as_bytes())?;
+            eprintln!("wrote {} ({} table(s))", p.display(), found.len());
         }
     }
     if cli.ocr_cache.is_some() {

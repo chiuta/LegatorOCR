@@ -42,6 +42,7 @@ pub mod report;
 pub mod ropost;
 pub mod rights;
 pub mod search;
+pub mod tables;
 pub mod watch;
 pub mod zipcrypt;
 pub mod zipmini;
