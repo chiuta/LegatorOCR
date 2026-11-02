@@ -24,6 +24,7 @@ pub mod package;
 pub mod profiles;
 pub mod project;
 pub mod report;
+pub mod ropost;
 pub mod search;
 pub mod zipcrypt;
 pub mod zipmini;
