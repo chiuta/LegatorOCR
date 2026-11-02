@@ -18,6 +18,7 @@ pub mod perspective;
 pub mod pictures;
 pub mod pipeline;
 pub mod quality;
+pub mod sfr;
 pub mod split;
 pub mod text;
 pub mod transform;

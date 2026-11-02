@@ -43,7 +43,7 @@ enum Fmt {
 #[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_bag", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "search_preset", "search_help"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_bag", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "search_preset", "search_help"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -386,6 +386,16 @@ struct Cli {
     /// check that amounts add up and CUI check digits pass (exit 1 on a problem).
     #[arg(long, value_name = "FILE")]
     efactura: Option<PathBuf>,
+
+    /// Sharpness: measure the spatial frequency response (MTF50, MTF10) on a slanted black /
+    /// white edge in this image (ISO 12233 style, near-vertical edge, a few degrees of tilt).
+    /// Use --edge-roi to select the edge; --dpi converts to line pairs per mm.
+    #[arg(long, value_name = "IMAGE")]
+    measure_edge: Option<PathBuf>,
+
+    /// Box around the edge for --measure-edge: x,y,width,height in pixels (default: whole image).
+    #[arg(long, value_name = "X,Y,W,H")]
+    edge_roi: Option<String>,
 
     /// Backup helper: copy this folder to every --backup-to folder, read each copy back and
     /// compare SHA-256 (exit 1 on a mismatch); writes SHA256SUMS.txt in each destination.
@@ -1097,6 +1107,29 @@ fn real_main() -> Result<()> {
         let written = legatorocr_engine::pdftools::run(&cli.inputs, &cli.out_dir, cli.pdf.as_deref(), &plan)?;
         for w in &written {
             println!("wrote {}", w.display());
+        }
+        return Ok(());
+    }
+    if let Some(f) = &cli.measure_edge {
+        let img = image::open(f).with_context(|| format!("reading {}", f.display()))?.to_luma8();
+        let roi = match &cli.edge_roi {
+            Some(r) => {
+                let v: Vec<u32> = r.split(',').map(|t| t.trim().parse()).collect::<Result<_, _>>().context("--edge-roi: expected X,Y,W,H")?;
+                if v.len() != 4 {
+                    bail!("--edge-roi: expected X,Y,W,H");
+                }
+                (v[0], v[1], v[2], v[3])
+            }
+            None => (0, 0, img.width(), img.height()),
+        };
+        let Some(r) = legatorocr_core::sfr::measure(&img, roi) else {
+            bail!("no clear straight edge in that region (needs a near-vertical edge with strong contrast)");
+        };
+        println!("edge angle {:.2} deg", r.angle_deg);
+        println!("MTF50 {:.3} cycles/pixel", r.mtf50);
+        println!("MTF10 {:.3} cycles/pixel", r.mtf10);
+        if let Some(d) = cli.dpi {
+            println!("MTF50 {:.1} lp/mm at {d} dpi", r.mtf50 * d as f64 / 25.4);
         }
         return Ok(());
     }
