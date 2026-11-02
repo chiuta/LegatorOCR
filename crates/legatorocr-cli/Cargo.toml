@@ -22,3 +22,6 @@ rayon.workspace = true
 [features]
 default = ["lexicon"]
 lexicon = ["legatorocr-engine/lexicon"]
+
+[dev-dependencies]
+wat = "1"

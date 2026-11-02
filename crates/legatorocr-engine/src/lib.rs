@@ -16,6 +16,7 @@ pub mod audit;
 pub mod djvu;
 pub mod isolate;
 pub mod mrz;
+pub mod plugin;
 pub mod reprocess;
 pub mod bagit;
 pub mod burst;
@@ -589,10 +590,16 @@ fn load_pdf_page_builtin(path: &Path, index: u32) -> Result<DynamicImage> {
 /// Open an image the way a person sees it: EXIF orientation applied (phone and
 /// camera JPEGs), transparency flattened onto white.
 pub fn load_image(path: &Path) -> Result<DynamicImage> {
-    if isolate::enabled() {
-        return isolate::decode(path, &pdf_password());
+    let img = if isolate::enabled() {
+        isolate::decode(path, &pdf_password())?
+    } else {
+        load_image_direct(path)?
+    };
+    match plugin::current() {
+        Some(p) => plugin::run(&p, &img)
+            .with_context(|| format!("plugin on {}", path.display())),
+        None => Ok(img),
     }
-    load_image_direct(path)
 }
 
 /// [`load_image`] in this process (what the isolated worker runs).

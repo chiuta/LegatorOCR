@@ -479,6 +479,11 @@ struct Cli {
     #[arg(long, value_name = "SECONDS", default_value_t = 120)]
     decoder_timeout: u64,
 
+    /// Run every loaded page through a WebAssembly image filter (exports `memory`,
+    /// `lgr_alloc(len)->ptr`, `lgr_filter(ptr,w,h)->status` on packed RGB8; no imports, fuel-limited).
+    #[arg(long, value_name = "FILE.wasm")]
+    plugin: Option<PathBuf>,
+
     /// Internal: decode INPUT to a BMP at OUTPUT (used by --isolate-decoders).
     #[arg(long, num_args = 2, value_names = ["INPUT", "OUTPUT"], hide = true)]
     decode_worker: Vec<PathBuf>,
@@ -1296,6 +1301,9 @@ fn real_main() -> Result<()> {
             std::process::exit(2);
         }
         return Ok(());
+    }
+    if let Some(p) = &cli.plugin {
+        legatorocr_engine::plugin::set(Some(p));
     }
     if cli.isolate_decoders {
         legatorocr_engine::isolate::enable(legatorocr_engine::isolate::Config {
