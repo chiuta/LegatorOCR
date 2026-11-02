@@ -363,6 +363,11 @@ struct Cli {
     #[arg(long)]
     pdfa: bool,
 
+    /// Memory budget in MB: process fewer pages at once so the working set stays near it
+    /// (estimate from the largest page; at least one page always runs). 0 = no limit.
+    #[arg(long, default_value_t = 0)]
+    max_memory: u64,
+
     /// PDF/A part to declare with --pdfa: 1 (PDF 1.4), 2 (default) or 3. Level is always B.
     #[arg(long, default_value_t = 2, value_parser = clap::value_parser!(u8).range(1..=3))]
     pdfa_part: u8,
@@ -1638,6 +1643,7 @@ fn real_main() -> Result<()> {
     legatorocr_engine::profile::enable(cli.timings);
     legatorocr_engine::ropost::set_enabled(cli.clean_text);
     legatorocr_engine::pagenum::set_enabled(cli.page_labels);
+    legatorocr_engine::memcap::set(cli.max_memory);
     if cli.bookmarks_headings && !cli.ocr {
         bail!("--bookmarks-headings reads the recognised text; add --ocr");
     }

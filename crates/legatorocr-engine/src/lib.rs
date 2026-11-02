@@ -35,6 +35,7 @@ pub mod headings;
 pub mod merkle;
 pub mod ocrcache;
 pub mod pagelang;
+pub mod memcap;
 pub mod pagenum;
 pub mod provenance;
 pub mod qa;
@@ -702,7 +703,10 @@ pub fn run_export(
         None
     };
     let done = AtomicUsize::new(0);
-    let batch = rayon::current_num_threads().max(2);
+    let batch = memcap::batch_size(
+        rayon::current_num_threads().max(2),
+        memcap::largest(&job.sheets.iter().map(|s| s.path.clone()).collect::<Vec<_>>()),
+    );
     let mut res = ExportResult::default();
     // with keep_going a page whose OCR fails is kept (without text layer) and reported, instead of
     // the whole sheet and its other pages being thrown away
