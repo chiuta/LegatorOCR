@@ -1382,6 +1382,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "legatorocr-wasm"
+version = "0.2.0-pre.9"
+dependencies = [
+ "image",
+ "legatorocr-core",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"

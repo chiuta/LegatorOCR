@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="ro">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LegatorOCR – captură</title>
+<style>
+  :root { color-scheme: light dark; --bg:#fafafa; --fg:#1b1b1b; --ok:#0a7d3b; --bad:#b3261e; --line:#c9c9c9; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#161616; --fg:#eee; --ok:#4cc27f; --bad:#ff8a80; --line:#444; } }
+  body { margin:0; font:16px/1.4 system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+  main { max-width:760px; margin:0 auto; padding:16px; }
+  video, canvas, img { width:100%; max-height:60vh; object-fit:contain; border:1px solid var(--line); background:#000; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0; align-items:center; }
+  button, select { font:inherit; padding:10px 14px; }
+  #verdict { font-weight:600; } .ok { color:var(--ok); } .bad { color:var(--bad); }
+  #shots img { width:96px; height:128px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>LegatorOCR – captură de pagini</h1>
+  <p>Totul rulează în browser, pe telefon: imaginea nu pleacă nicăieri. Verdictul de claritate se actualizează în timp real.</p>
+  <video id="cam" autoplay playsinline muted></video>
+  <div class="row"><span id="verdict">Camera nu e pornită.</span></div>
+  <div class="row">
+    <button id="start">Pornește camera</button>
+    <button id="shoot" disabled>Fotografiază</button>
+    <label>Mod <select id="mode"><option value="2">Alb-negru</option><option value="1">Tonuri de gri</option><option value="0">Color</option><option value="3">Mixt</option></select></label>
+  </div>
+  <h2>Pagini curățate</h2>
+  <div class="row" id="shots"></div>
+  <div class="row"><button id="save" disabled>Descarcă ultima pagină (PNG)</button></div>
+  <p id="status" role="status"></p>
+</main>
+<script>
+"use strict";
+let wasm, last = null;
+const $ = (id) => document.getElementById(id);
+const status = (t) => { $("status").textContent = t; };
+
+async function loadModule() {
+  const r = await fetch("legatorocr_wasm.wasm");
+  wasm = (await WebAssembly.instantiate(await r.arrayBuffer(), {})).instance.exports;
+}
+function put(bytes) {
+  const p = wasm.lgr_alloc(bytes.length);
+  new Uint8Array(wasm.memory.buffer, p, bytes.length).set(bytes);
+  return p;
+}
+async function frameBytes(video, type, q) {
+  const c = document.createElement("canvas");
+  c.width = video.videoWidth; c.height = video.videoHeight;
+  c.getContext("2d").drawImage(video, 0, 0);
+  const blob = await new Promise((res) => c.toBlob(res, type, q));
+  return new Uint8Array(await blob.arrayBuffer());
+}
+// sharpness is measured on a downscaled frame so the verdict stays instant
+const SHARP_OK = 1500; // x1000 units; a starting value, not tuned on real phones
+async function updateVerdict() {
+  const v = $("cam");
+  if (!wasm || !v.videoWidth) return;
+  const c = document.createElement("canvas");
+  const s = Math.min(1, 640 / v.videoWidth);
+  c.width = Math.round(v.videoWidth * s); c.height = Math.round(v.videoHeight * s);
+  c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
+  const blob = await new Promise((r) => c.toBlob(r, "image/jpeg", 0.8));
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const p = put(bytes);
+  const val = wasm.lgr_sharpness(p, bytes.length);
+  wasm.lgr_free(p, bytes.length);
+  const ok = val >= SHARP_OK;
+  $("verdict").textContent = ok ? `Clar (${val})` : `Neclar – ține telefonul nemișcat (${val})`;
+  $("verdict").className = ok ? "ok" : "bad";
+}
+$("start").onclick = async () => {
+  try {
+    await loadModule();
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 2560 } }, audio: false });
+    $("cam").srcObject = stream;
+    $("shoot").disabled = false;
+    setInterval(updateVerdict, 500);
+    status("Camera pornită.");
+  } catch (e) { status("Nu pot porni camera: " + e.message); }
+};
+$("shoot").onclick = async () => {
+  const bytes = await frameBytes($("cam"), "image/png");
+  const p = put(bytes);
+  const n = wasm.lgr_process(p, bytes.length, Number($("mode").value), 300);
+  wasm.lgr_free(p, bytes.length);
+  if (n < 0) { status("Pagina nu a putut fi procesată (" + n + ")."); return; }
+  last = new Uint8Array(wasm.memory.buffer, wasm.lgr_out_ptr(), wasm.lgr_out_len()).slice();
+  const img = new Image();
+  img.src = URL.createObjectURL(new Blob([last], { type: "image/png" }));
+  $("shots").prepend(img);
+  $("save").disabled = false;
+  status(`Gata: ${n} pagină(i), ${last.length} octeți.`);
+};
+$("save").onclick = () => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([last], { type: "image/png" }));
+  a.download = "pagina.png"; a.click();
+};
+</script>
+</body>
+</html>

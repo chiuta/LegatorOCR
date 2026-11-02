@@ -93,7 +93,7 @@ jobs:
         run: cargo check --locked --workspace
 
   wasm:
-    # roadmap 7.7: the core (pipeline, binarisers, fusion, barcode) must build for the browser
+    # roadmap 7.7 / 7.11: the core builds for the browser and the module really works (run in Node)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -102,7 +102,13 @@ jobs:
           toolchain: stable
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-      - name: Build the core for wasm32
-        run: cargo build --locked --release --target wasm32-unknown-unknown -p legatorocr-core
+      - name: Build the module
+        run: cargo build --locked --release --target wasm32-unknown-unknown -p legatorocr-wasm
+      - name: Run it in Node
+        run: node web/test-wasm.mjs target/wasm32-unknown-unknown/release/legatorocr_wasm.wasm
       - name: Size
-        run: ls -l target/wasm32-unknown-unknown/release/*.rlib | awk '{print $5, $9}'
+        run: ls -l target/wasm32-unknown-unknown/release/legatorocr_wasm.wasm | awk '{print $5, $9}'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: legatorocr-wasm
+          path: target/wasm32-unknown-unknown/release/legatorocr_wasm.wasm
