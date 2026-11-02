@@ -16,6 +16,7 @@ pub mod audit;
 pub mod catalog;
 pub mod checksums;
 pub mod doctor;
+pub mod explain;
 pub mod docx;
 pub mod eval;
 pub mod extpdf;
@@ -707,6 +708,7 @@ pub fn run_export(
                 let img = profile::time("load", || load_image(&sheet.path))
                     .with_context(|| format!("reading {}", sheet.path.display()))?;
                 qa::record(base + i, &sheet.path, &img);
+                let quarters_before = sheet.settings.rotate_quarters;
                 let (img, mut settings) = profile::time("orientation", || {
                     orient_with_osd(img, &sheet.settings, job.osd.as_ref())
                 });
@@ -727,9 +729,14 @@ pub fn run_export(
                 }
                 let mut kept = Vec::new();
                 let mut skipped = 0;
-                for pg in profile::time("clean-up", || process_page(&img, &settings)) {
+                for (seq, pg) in profile::time("clean-up", || process_page(&img, &settings))
+                    .into_iter()
+                    .enumerate()
+                {
+                    let dropped = job.skip_blank && pg.blank && !job.split_on_blank;
+                    explain::record(base + i, seq, &sheet.path, &pg, &settings, quarters_before, !dropped);
                     // with split_on_blank a blank sheet is a separator: it must reach the splitter
-                    if job.skip_blank && pg.blank && !job.split_on_blank {
+                    if dropped {
                         skipped += 1;
                         continue;
                     }

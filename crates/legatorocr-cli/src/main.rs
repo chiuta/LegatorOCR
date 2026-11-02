@@ -239,6 +239,11 @@ struct Cli {
     #[arg(long)]
     page_labels: bool,
 
+    /// After the run, print for every page what was decided and why: rotation, split, skew
+    /// angle, blank or not, where the content was found, resolution.
+    #[arg(long)]
+    explain: bool,
+
     /// Print time per stage (load, orientation, clean-up, OCR) and peak memory at the end.
     #[arg(long)]
     timings: bool,
@@ -1359,6 +1364,7 @@ fn real_main() -> Result<()> {
     legatorocr_engine::ropost::set_enabled(cli.clean_text);
     legatorocr_engine::pagenum::set_enabled(cli.page_labels);
     legatorocr_engine::qa::enable(cli.quality_report);
+    legatorocr_engine::explain::enable(cli.explain);
     let res = run_export(
         &job,
         &AtomicBool::new(false),
@@ -1408,6 +1414,11 @@ fn real_main() -> Result<()> {
         },
         &|_, _| {},
     )?;
+    if cli.explain {
+        for l in legatorocr_engine::explain::report() {
+            eprintln!("{l}");
+        }
+    }
     if cli.verify_text {
         match (&res.pdf, &res.text) {
             (Some(pdf), Some(t)) => match legatorocr_engine::textcheck::check(pdf, t) {
