@@ -946,7 +946,18 @@ fn main() -> Result<()> {
         }
     }
     let _scratch = Scratch;
-    real_main()
+    // The command is one large function with many early-return modes; its stack frame outgrew the
+    // 1 MB main-thread stack of Windows (found by CI: "main has overflowed its stack"). Run it on a
+    // thread with a generous stack (address space is only reserved, not used).
+    let worker = std::thread::Builder::new()
+        .name("legatorocr-main".into())
+        .stack_size(256 << 20)
+        .spawn(real_main)
+        .context("cannot start the main thread")?;
+    match worker.join() {
+        Ok(r) => r,
+        Err(p) => std::panic::resume_unwind(p),
+    }
 }
 
 /// Expand `{date}`, `{year}`, `{month}`, `{day}`, `{name}` in an output path and create the
