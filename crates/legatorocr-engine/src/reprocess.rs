@@ -73,7 +73,12 @@ pub fn finish(dir: &Path, mut project: Project, derived: &[PathBuf], when: u64, 
         let name = f.file_name().map(|s| s.to_os_string()).unwrap_or_default();
         std::fs::copy(&f, dir.join("derived").join(name)).with_context(|| format!("copying {}", f.display()))?;
     }
-    std::fs::write(dir.join("project.lgr"), project.to_text(Some(&dir)))?;
+    let mut text = project.to_text(Some(&dir));
+    if cfg!(windows) {
+        // forward slashes work on every system, so a package made on Windows opens elsewhere
+        text = text.lines().map(|l| if l.starts_with("path = ") { l.replace('\\', "/") } else { l.to_string() }).collect::<Vec<_>>().join("\n") + "\n";
+    }
+    std::fs::write(dir.join("project.lgr"), text)?;
     let run = format!(
         "LegatorOCR archive package\nCreated: {}\nProgram: LegatorOCR {}\n\nRun again with the same or a newer program (paths are relative to this folder):\n\n    cd <this folder>\n    {}\n\nCompare the new ocr.json / PDF with derived/ to see what the newer engine changed.\nCheck that nothing was altered since packaging: legatorocr --verify-sums SHA256SUMS.txt\n",
         crate::package::iso_utc(when),
