@@ -428,6 +428,13 @@ struct Cli {
     #[arg(long, value_name = "PEM")]
     tsa_ca: Option<PathBuf>,
 
+    /// Tagged PDF: each OCR line becomes a paragraph element of a structure tree, the scan image
+    /// is an artifact, and /Lang is set to CODE (BCP 47, e.g. ro, en-GB; omit for none). A base
+    /// for PDF/UA and screen readers, not a conformance claim: no headings, lists, tables or
+    /// alt text. Works with --ocr; without OCR there is nothing to tag.
+    #[arg(long, value_name = "CODE", num_args = 0..=1, default_missing_value = "")]
+    tagged: Option<String>,
+
     /// Sign FILE with your PKCS#12 certificate (--sign-p12): CAdES detached, SHA-256, added as an
     /// incremental update (the earlier bytes stay unchanged). Output: --pdf NAME or FILE.signed.pdf.
     /// Needs openssl and a PDF whose last xref is a classic table. The legal level (simple,
@@ -995,6 +1002,9 @@ fn watch_loop(cli: &Cli, dir: &std::path::Path) -> Result<()> {
 
 fn real_main() -> Result<()> {
     let mut cli = Cli::parse();
+    if let Ok(mut g) = legatorocr_engine::DEFAULT_TAGGED.lock() {
+        *g = cli.tagged.clone();
+    }
     legatorocr_engine::DEFAULT_PDFA_PART.store(cli.pdfa_part, std::sync::atomic::Ordering::Relaxed);
     if let Some(dir) = cli.watch.clone() {
         return watch_loop(&cli, &dir);

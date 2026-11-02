@@ -14,6 +14,8 @@ pub mod jpx;
 pub mod pdfa;
 
 /// Part used by writers created afterwards (set once from the command line).
+/// Tagged-PDF default for new writers: `None` = off, `Some("")` = on without a language.
+pub static DEFAULT_TAGGED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 pub static DEFAULT_PDFA_PART: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
 pub mod reader;
 
@@ -47,6 +49,12 @@ pub struct PdfWriter {
     next_fields: Vec<(bool, [f32; 4])>,
     /// Widget object ids of all fields written so far (for /AcroForm).
     field_ids: Vec<u32>,
+    /// Tagged PDF: marked content per OCR line plus a structure tree (`set_tagged`).
+    tagged: Option<String>,
+    /// Marked-content ids used on the page being written.
+    page_mc: u32,
+    /// Per page: (page object, structure element ids by MCID), for the tree.
+    struct_pages: Vec<(u32, Vec<u32>)>,
 }
 
 /// Numbering style of a page-label range.
@@ -124,6 +132,9 @@ impl PdfWriter {
             pdfa: false,
             pdfa_part: DEFAULT_PDFA_PART.load(std::sync::atomic::Ordering::Relaxed),
             next_fields: Vec::new(),
+            tagged: DEFAULT_TAGGED.lock().ok().and_then(|g| g.clone()),
+            page_mc: 0,
+            struct_pages: Vec::new(),
             field_ids: Vec::new(),
         };
         w.buf.extend_from_slice(b"%PDF-1.5\n%\xE2\xE3\xCF\xD3\n");
@@ -191,6 +202,14 @@ impl PdfWriter {
     /// `(is_checkbox, [x0, y0, x1, y1])` in points from the bottom-left. Not with PDF/A.
     pub fn set_form_fields(&mut self, fields: Vec<(bool, [f32; 4])>) {
         self.next_fields = fields;
+    }
+
+    /// Write a tagged PDF: every OCR line becomes a /P structure element in reading order, the
+    /// page image is marked as an artifact, and the catalog gets /MarkInfo, /Lang (BCP 47 code)
+    /// and DisplayDocTitle. This is the base of PDF/UA, not a full conformance claim (no
+    /// headings, lists, tables or alternative text; the scan itself is an artifact).
+    pub fn set_tagged(&mut self, lang: Option<&str>) {
+        self.tagged = lang.map(str::to_string).or(Some(String::new()));
     }
 
     pub fn set_meta(&mut self, m: Meta) {
@@ -311,6 +330,10 @@ impl PdfWriter {
 
     /// Invisible-text operators for OCR words.
     fn text_ops(&mut self, cs: &mut String, words: &[Word], dpi: f32, wpt: f32, hpt: f32) {
+        self.page_mc = 0;
+        if self.tagged.is_some() {
+            *cs = format!("/Artifact BMC\n{cs}EMC\n");
+        }
         if words.is_empty() {
             return;
         }
@@ -403,7 +426,12 @@ impl PdfWriter {
                 body.push_str(&format!("{tz:.1} Tz 1 0 0 1 {x:.2} {y:.2} Tm <{hex}> Tj\n"));
             }
             if !body.is_empty() {
-                cs.push_str(&format!("BT 3 Tr /F1 {size:.2} Tf\n{body}ET\n"));
+                if self.tagged.is_some() {
+                    cs.push_str(&format!("/P <</MCID {}>> BDC\nBT 3 Tr /F1 {size:.2} Tf\n{body}ET\nEMC\n", self.page_mc));
+                    self.page_mc += 1;
+                } else {
+                    cs.push_str(&format!("BT 3 Tr /F1 {size:.2} Tf\n{body}ET\n"));
+                }
             }
         }
     }
@@ -457,12 +485,22 @@ impl PdfWriter {
         } else {
             format!(" /Annots [{widget_refs} ]")
         };
+        let mut tag_attrs = String::new();
+        if self.tagged.is_some() {
+            // structure elements are written in finish(), once the tree root has an id
+            let mut ids = Vec::new();
+            for _ in 0..self.page_mc {
+                ids.push(self.alloc());
+            }
+            tag_attrs = format!(" /StructParents {} /Tabs /S", self.struct_pages.len());
+            self.struct_pages.push((page_id, ids));
+        }
         self.plain_obj(
             page_id,
             &format!(
                 "<< /Type /Page /Parent {PAGES} 0 R /MediaBox [0 0 {wpt:.3} {hpt:.3}] \
                  /Resources << /XObject << {xobjects} >> /Font << /F1 {FONT} 0 R >> >> \
-                 /Contents {cs_id} 0 R{annots} >>"
+                 /Contents {cs_id} 0 R{annots}{tag_attrs} >>"
             ),
         );
         self.page_ids.push(page_id);
@@ -699,6 +737,31 @@ impl PdfWriter {
                  /RegistryName (http://www.color.org) /DestOutputProfile {iid} 0 R >>]"
             ));
         }
+        if let Some(lang) = self.tagged.clone() {
+            let root = self.alloc();
+            let doc = self.alloc();
+            let mut kids = String::new();
+            let mut parent_nums = String::new();
+            let pages = std::mem::take(&mut self.struct_pages);
+            for (k, (pg, ids)) in pages.iter().enumerate() {
+                let mut arr = String::new();
+                for (mc, id) in ids.iter().enumerate() {
+                    self.plain_obj(*id, &format!("<< /Type /StructElem /S /P /P {doc} 0 R /Pg {pg} 0 R /K {mc} >>"));
+                    kids.push_str(&format!("{id} 0 R "));
+                    arr.push_str(&format!("{id} 0 R "));
+                }
+                parent_nums.push_str(&format!("{k} [{arr}] "));
+            }
+            self.plain_obj(doc, &format!("<< /Type /StructElem /S /Document /P {root} 0 R /K [{kids}] >>"));
+            self.plain_obj(
+                root,
+                &format!("<< /Type /StructTreeRoot /K {doc} 0 R /ParentTree << /Nums [{parent_nums}] >> /ParentTreeNextKey {} >>", pages.len()),
+            );
+            cat_extra.push_str(&format!(" /StructTreeRoot {root} 0 R /MarkInfo << /Marked true >> /ViewerPreferences << /DisplayDocTitle true >>"));
+            if !lang.is_empty() {
+                cat_extra.push_str(&format!(" /Lang {}", pdf_text_string(&lang)));
+            }
+        }
         if !self.field_ids.is_empty() {
             let helv = self.alloc();
             self.plain_obj(helv, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>");
@@ -884,6 +947,26 @@ mod tests {
             content_box: None,
             layers: None,
         }
+    }
+
+    #[test]
+    fn tagged_pdf_has_structure_tree_marked_content_and_language() {
+        let w = |t: &str, y: u32, line: u32| Word { text: t.into(), x: 100, y, w: 200, h: 40, conf: 90.0, line };
+        let mut pw = PdfWriter::new(Compress::Flate);
+        pw.set_tagged(Some("ro"));
+        let mut b = BitImage::new(600, 400);
+        b.set(1, 1, true);
+        pw.add_page(&page(PageImage::Bw(b.clone())), &[w("Bună", 50, 0), w("ziua", 50, 0), w("A doua", 120, 1)]);
+        pw.add_page(&page(PageImage::Bw(b)), &[w("Pagina", 50, 0)]);
+        let pdf = pw.finish();
+        let text = String::from_utf8_lossy(&pdf);
+        assert!(text.contains("/StructTreeRoot") && text.contains("/MarkInfo << /Marked true >>"));
+        assert!(text.contains("/Lang (ro)"));
+        assert_eq!(text.matches("/Type /StructElem /S /P ").count(), 3);
+        assert!(text.contains("/StructParents 1"));
+        // content streams are compressed; check through the reader instead
+        let doc = reader::PdfDoc::open(pdf.clone()).unwrap();
+        assert_eq!(doc.page_count(), 2);
     }
 
     #[test]

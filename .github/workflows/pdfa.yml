@@ -48,6 +48,7 @@ jobs:
           $B color.png --mode hybrid --pdfa --pdf color_hybrid.pdf -o o5
           $B bw.png color.png --mode bw --pdfa --ocr --lang eng --pdf two_pages.pdf -o o6
           $B bw.png color.png --mode gray --pdfa --pdf gray_two.pdf -o o7
+          $B bw.png color.png --mode bw --pdfa --ocr --lang eng --tagged en --pdf tagged_ocr.pdf -o o8
           mkdir -p ../pdfa1 ../pdfa3
           for f in bw_plain:bw color_mixed:mixed; do
             n=${f%%:*}; m=${f##*:}; src=bw.png; [ "$m" = mixed ] && src=color.png
