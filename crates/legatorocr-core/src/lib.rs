@@ -39,3 +39,20 @@ pub struct Rect {
     pub w: u32,
     pub h: u32,
 }
+
+/// Optional per-stage timing hook (set by the engine for `--timings`).
+pub static STAGE_HOOK: std::sync::OnceLock<fn(&'static str, std::time::Duration)> = std::sync::OnceLock::new();
+
+/// Run `f`, reporting its wall time to the hook when one is installed.
+#[inline]
+pub fn stage<T>(name: &'static str, f: impl FnOnce() -> T) -> T {
+    match STAGE_HOOK.get() {
+        None => f(),
+        Some(h) => {
+            let t = std::time::Instant::now();
+            let r = f();
+            h(name, t.elapsed());
+            r
+        }
+    }
+}

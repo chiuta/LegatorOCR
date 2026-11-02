@@ -350,3 +350,34 @@ mod tests {
         assert!(t < a - 100, "text {t} vs paper {a}");
     }
 }
+
+/// Same result as `imageops::grayscale` on an RGB image (Rec. 709 weights 2126/7152/722 over
+/// 10000, integer arithmetic), written so the compiler can vectorise it.
+pub fn gray_of(img: &image::RgbImage) -> image::GrayImage {
+    let mut out = vec![0u8; (img.width() as usize) * (img.height() as usize)];
+    for (o, p) in out.iter_mut().zip(img.as_raw().chunks_exact(3)) {
+        *o = ((2126 * p[0] as u32 + 7152 * p[1] as u32 + 722 * p[2] as u32) / 10000) as u8;
+    }
+    image::GrayImage::from_raw(img.width(), img.height(), out).expect("size matches")
+}
+
+#[cfg(test)]
+mod gray_tests {
+    use super::*;
+
+    #[test]
+    fn gray_of_equals_the_library_conversion() {
+        let mut im = image::RgbImage::new(97, 61);
+        let mut v = 12345u32;
+        for p in im.pixels_mut() {
+            v = v.wrapping_mul(1664525).wrapping_add(1013904223);
+            *p = image::Rgb([(v >> 8) as u8, (v >> 16) as u8, (v >> 24) as u8]);
+        }
+        assert_eq!(gray_of(&im).as_raw(), image::imageops::grayscale(&im).as_raw());
+        // every grey level and the extremes
+        for g in [0u8, 1, 127, 128, 254, 255] {
+            let one = image::RgbImage::from_pixel(1, 1, image::Rgb([g, g, g]));
+            assert_eq!(gray_of(&one).as_raw(), image::imageops::grayscale(&one).as_raw());
+        }
+    }
+}

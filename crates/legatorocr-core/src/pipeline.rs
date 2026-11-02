@@ -194,7 +194,7 @@ impl PageImage {
     }
     pub fn to_gray(&self) -> GrayImage {
         match self {
-            PageImage::Rgb(i) => imageops::grayscale(i),
+            PageImage::Rgb(i) => transform::gray_of(i),
             PageImage::Gray(i) => i.clone(),
             PageImage::Bw(b) => b.to_gray(),
         }
@@ -484,7 +484,7 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
     }
 
     if s.auto_orient {
-        let a = analyse(&imageops::grayscale(&rgb), s.dpi);
+        let a = analyse(&transform::gray_of(&rgb), s.dpi);
         if orient::needs_quarter_turn(&a.ink, a.dpi) {
             rot90_rects(&mut zones, rgb.width(), rgb.height(), 1);
             rot90_points(&mut guides, rgb.width(), rgb.height(), 1);
@@ -499,7 +499,7 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
                 (rgb.width() as f32 >= 1.15 * rgb.height() as f32).then_some(rgb.width() / 2)
             }
             _ => {
-                let a = analyse(&imageops::grayscale(&rgb), s.dpi);
+                let a = analyse(&transform::gray_of(&rgb), s.dpi);
                 // a spread scanned crooked has a leaning gutter: look for it on the levelled ink
                 let ink = match crate::deskew::detect_skew(&a.ink, s.max_skew_deg) {
                     Some(ang) if ang.abs() > 0.1f32.to_radians() => split::level(&a.ink, ang),
@@ -607,7 +607,7 @@ fn prepare(
         cleanup::invert_if_negative(&mut img);
     }
     if s.auto_levels {
-        cleanup::auto_levels(&mut img);
+        crate::stage("clean-up/auto-levels", || cleanup::auto_levels(&mut img));
     }
     if s.dropout != Dropout::Off {
         let paper = transform::estimate_background(&img);
@@ -631,20 +631,20 @@ fn prepare(
         let paper = transform::estimate_background(&img);
         cleanup::remove_fingers(&mut img, s.dpi, paper);
     }
-    let bg = transform::estimate_background(&img);
+    let bg = crate::stage("clean-up/background", || transform::estimate_background(&img));
     let mut skew_deg = 0.0;
 
     // --- deskew ---------------------------------------------------------
     let angle = match s.manual_skew_deg {
         Some(deg) => Some(deg.to_radians()),
         None if s.deskew => {
-            let gray = imageops::grayscale(&img);
-            let mut a = analyse(&gray, s.dpi);
+            let gray = crate::stage("deskew/grayscale", || transform::gray_of(&img));
+            let mut a = crate::stage("deskew/analyse", || analyse(&gray, s.dpi));
             // Photographs have no text lines: their edges and tones would steer the estimate
             // (a mounted photo on a straight page came out rotated by 4°). Judge the skew
             // from what is left outside the picture zones.
             let f = a.factor.max(1);
-            for z in pictures::detect(&gray, s.dpi, s.picture_sensitivity) {
+            for z in crate::stage("deskew/pictures", || pictures::detect(&gray, s.dpi, s.picture_sensitivity)) {
                 let pad = (z.rect.w.min(z.rect.h) / 25).max(f);
                 let x0 = z.rect.x.saturating_sub(pad) / f;
                 let y0 = z.rect.y.saturating_sub(pad) / f;
@@ -656,7 +656,7 @@ fn prepare(
                     }
                 }
             }
-            deskew::detect_skew(&a.ink, s.max_skew_deg)
+            crate::stage("deskew/detect", || deskew::detect_skew(&a.ink, s.max_skew_deg))
         }
         None => None,
     };
@@ -665,7 +665,7 @@ fn prepare(
         if a.abs() > 0.05f32.to_radians() && transform::rotation_fits(img.width(), img.height(), a)
         {
             let (w, h) = img.dimensions();
-            img = transform::rotate_cw(&img, a, bg);
+            img = crate::stage("deskew/rotate", || transform::rotate_cw(&img, a, bg));
             skew_deg = a.to_degrees();
             // follow the zones through the rotation (bounding box of the rotated corners)
             let (sn, cs) = (a.sin(), a.cos());
@@ -719,9 +719,9 @@ fn prepare(
     }
 
     // --- content ----------------------------------------------------------
-    let gray_full = imageops::grayscale(&img);
-    let mut a = analyse(&gray_full, s.dpi);
-    let mut found = content::detect_content(&a.ink, a.dpi);
+    let gray_full = crate::stage("content/grayscale", || transform::gray_of(&img));
+    let mut a = crate::stage("content/analyse", || analyse(&gray_full, s.dpi));
+    let mut found = crate::stage("content/detect", || content::detect_content(&a.ink, a.dpi));
     if found.is_none() {
         // a page that looks blank may carry very faint writing: look again with a gentler test
         let small = transform::downscale_gray(&gray_full, a.factor);
@@ -911,8 +911,8 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
         OutputMode::BlackWhite | OutputMode::Mixed | OutputMode::Hybrid
     );
     let mask: Option<BitImage> = wants_mask.then(|| {
-        let g = imageops::grayscale(&img);
-        let mut bw = binarize::threshold(&g, s.threshold, (s.dpi / 3) | 1, s.sauvola_k);
+        let g = transform::gray_of(&img);
+        let mut bw = crate::stage("output/binarize", || binarize::threshold(&g, s.threshold, (s.dpi / 3) | 1, s.sauvola_k));
         if s.despeckle {
             let min_px =
                 ((s.dpi as f32 / 300.0).powi(2) * 6.0 * s.despeckle_strength).round() as u32;
@@ -970,7 +970,7 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
         OutputMode::BlackWhite => (PageImage::Bw(mask.expect("mask")), None),
         OutputMode::Color => (PageImage::Rgb(canvas_rgb.expect("rgb")), None),
         OutputMode::Gray => (
-            PageImage::Gray(imageops::grayscale(&canvas_rgb.expect("rgb"))),
+            PageImage::Gray(transform::gray_of(&canvas_rgb.expect("rgb"))),
             None,
         ),
         OutputMode::Mixed | OutputMode::Hybrid => {
@@ -978,7 +978,7 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
             if blank {
                 (PageImage::Bw(mask), None)
             } else {
-                let gray = imageops::grayscale(&rgb);
+                let gray = transform::gray_of(&rgb);
                 let mut zones = pictures::detect(&gray, out_dpi, s.picture_sensitivity);
                 // Hand-marked pictures: pixels of the deskewed page -> canvas pixels.
                 for z in &pictures {
@@ -1254,7 +1254,7 @@ mod tests {
         let g = text_page(1200, 900, 100, 1100);
         for deg in [-3.0f32, -0.8, 1.7, 4.2] {
             let rot = transform::rotate_cw(&to_rgb(&g), deg.to_radians(), Rgb([235; 3]));
-            let ink = binarize::sauvola(&imageops::grayscale(&rot), 41, 0.3);
+            let ink = binarize::sauvola(&transform::gray_of(&rot), 41, 0.3);
             let found = deskew::detect_skew(&ink, 7.0).unwrap().to_degrees();
             // we rotated clockwise by `deg`; correction must be the opposite
             assert!((found + deg).abs() < 0.15, "deg {deg}: found {found}");
