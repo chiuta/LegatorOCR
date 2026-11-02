@@ -13,6 +13,7 @@ pub mod content;
 pub mod deskew;
 pub mod dewarp;
 pub mod forms;
+pub mod fusion;
 pub mod layers;
 pub mod orient;
 pub mod perspective;

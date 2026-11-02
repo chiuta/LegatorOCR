@@ -43,7 +43,7 @@ enum Fmt {
 #[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_bag", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "decode_worker", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "search_preset", "search_help"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_bag", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "decode_worker", "fuse_frames", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "search_preset", "search_help"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -427,6 +427,17 @@ struct Cli {
     /// CA / TSA certificate file (PEM) for --timestamp-verify.
     #[arg(long, value_name = "PEM")]
     tsa_ca: Option<PathBuf>,
+
+    /// Combine the input photos of ONE page (several shots, the first is the reference) into a
+    /// single cleaner image written to FILE (.png/.jpg): frames are aligned by translation and
+    /// merged by a per-pixel median. Frames that do not match are left out and listed. Then
+    /// process FILE as usual.
+    #[arg(long, value_name = "FILE")]
+    fuse_frames: Option<PathBuf>,
+
+    /// Largest shift between frames, in pixels (--fuse-frames).
+    #[arg(long, value_name = "PX", default_value_t = 40)]
+    fuse_max_shift: u32,
 
     /// Read the machine-readable zone (ICAO 9303 passport / ID card lines) from the OCR text and
     /// check every check digit; prints the fields, or which check failed. Needs --ocr. Reads the
@@ -1272,6 +1283,26 @@ fn real_main() -> Result<()> {
             memory_mb: cli.decoder_memory,
             timeout_s: cli.decoder_timeout,
         });
+    }
+    if let Some(out) = &cli.fuse_frames {
+        if cli.inputs.len() < 2 {
+            bail!("--fuse-frames needs two or more photos of the same page");
+        }
+        let frames: Vec<image::RgbImage> = cli
+            .inputs
+            .iter()
+            .map(|p| legatorocr_engine::load_image(p).map(|i| i.to_rgb8()))
+            .collect::<Result<_>>()?;
+        let r = legatorocr_core::fusion::fuse(&frames, cli.fuse_max_shift, 2500.0).context("no frames")?;
+        for (p, s) in cli.inputs.iter().zip(&r.shifts) {
+            match s {
+                Some((x, y)) => eprintln!("{}: aligned (shift {x},{y})", p.display()),
+                None => eprintln!("{}: left out (did not match the first frame)", p.display()),
+            }
+        }
+        r.image.save(out).with_context(|| format!("writing {}", out.display()))?;
+        println!("wrote {} from {} of {} frames", out.display(), r.shifts.iter().flatten().count(), r.shifts.len());
+        return Ok(());
     }
     if let Some(f) = &cli.sign_pdf {
         let out = match &cli.pdf {
