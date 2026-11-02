@@ -188,6 +188,10 @@ struct Cli {
     #[arg(long)]
     doctor: bool,
 
+    /// Print time per stage (load, orientation, clean-up, OCR) and peak memory at the end.
+    #[arg(long)]
+    timings: bool,
+
     /// Add one PDF outline entry (bookmark) per source file.
     #[arg(long)]
     bookmarks: bool,
@@ -1227,6 +1231,7 @@ fn real_main() -> Result<()> {
         split_on_blank: cli.split_on_blank,
         split_on_barcode: cli.split_on_barcode,
     };
+    legatorocr_engine::profile::enable(cli.timings);
     let res = run_export(
         &job,
         &AtomicBool::new(false),
@@ -1276,6 +1281,9 @@ fn real_main() -> Result<()> {
         },
         &|_, _| {},
     )?;
+    if cli.timings {
+        eprint!("{}", legatorocr_engine::profile::report());
+    }
     let save_error = first_err.into_inner().unwrap();
     for (p, e) in &res.failed {
         eprintln!("SKIPPED {}: {e}", p.display());

@@ -22,6 +22,7 @@ pub mod files;
 pub mod iso;
 pub mod naming;
 pub mod package;
+pub mod profile;
 pub mod profiles;
 pub mod project;
 pub mod report;
@@ -690,9 +691,11 @@ pub fn run_export(
                 if cancel.load(Ordering::Relaxed) {
                     bail!("cancelled");
                 }
-                let img = load_image(&sheet.path)
+                let img = profile::time("load", || load_image(&sheet.path))
                     .with_context(|| format!("reading {}", sheet.path.display()))?;
-                let (img, mut settings) = orient_with_osd(img, &sheet.settings, job.osd.as_ref());
+                let (img, mut settings) = profile::time("orientation", || {
+                    orient_with_osd(img, &sheet.settings, job.osd.as_ref())
+                });
                 if settings.page_size_mm.is_none() {
                     settings.page_size_mm = uniform;
                 }
@@ -710,7 +713,7 @@ pub fn run_export(
                 }
                 let mut kept = Vec::new();
                 let mut skipped = 0;
-                for pg in process_page(&img, &settings) {
+                for pg in profile::time("clean-up", || process_page(&img, &settings)) {
                     // with split_on_blank a blank sheet is a separator: it must reach the splitter
                     if job.skip_blank && pg.blank && !job.split_on_blank {
                         skipped += 1;
@@ -722,7 +725,9 @@ pub fn run_export(
                             if cancel.load(Ordering::Relaxed) {
                                 bail!("cancelled");
                             }
-                            match legatorocr_ocr::recognize(&pg.image, pg.dpi, o) {
+                            match profile::time("ocr", || {
+                                legatorocr_ocr::recognize(&pg.image, pg.dpi, o)
+                            }) {
                                 Ok(w) => w,
                                 Err(e) if job.keep_going => {
                                     ocr_warnings.lock().unwrap().push((
