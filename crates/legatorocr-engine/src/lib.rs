@@ -28,6 +28,7 @@ pub mod package;
 pub mod profile;
 pub mod profiles;
 pub mod project;
+pub mod pagelang;
 pub mod pagenum;
 pub mod qa;
 pub mod textcheck;
@@ -746,6 +747,14 @@ pub fn run_export(
                             if cancel.load(Ordering::Relaxed) {
                                 bail!("cancelled");
                             }
+                            let per_page;
+                            let o = match pagelang::for_page(base + i + 1) {
+                                Some(lang) => {
+                                    per_page = OcrOptions { lang, ..o.clone() };
+                                    &per_page
+                                }
+                                None => o,
+                            };
                             match profile::time("ocr", || {
                                 legatorocr_ocr::recognize(&pg.image, pg.dpi, o)
                             }) {

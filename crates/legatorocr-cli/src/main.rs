@@ -244,6 +244,11 @@ struct Cli {
     #[arg(long)]
     explain: bool,
 
+    /// OCR language per input page, e.g. `1-40=ron,41-44=eng+fra,45-=ron` (pages counted from 1
+    /// in input order; the last matching rule wins; other pages use --lang). Needs --ocr.
+    #[arg(long, value_name = "RULES")]
+    page_lang: Option<String>,
+
     /// Print time per stage (load, orientation, clean-up, OCR) and peak memory at the end.
     #[arg(long)]
     timings: bool,
@@ -1396,6 +1401,17 @@ fn real_main() -> Result<()> {
     legatorocr_engine::profile::enable(cli.timings);
     legatorocr_engine::ropost::set_enabled(cli.clean_text);
     legatorocr_engine::pagenum::set_enabled(cli.page_labels);
+    if let Some(spec) = &cli.page_lang {
+        if !cli.ocr {
+            bail!("--page-lang needs --ocr");
+        }
+        let rules = legatorocr_engine::pagelang::parse(spec)?;
+        for l in rules.iter().flat_map(|r| r.lang.split('+')).collect::<std::collections::BTreeSet<_>>() {
+            check_ocr(&OcrOptions { lang: l.into(), ..ocr_opts.clone() })
+                .with_context(|| format!("--page-lang: language {l}"))?;
+        }
+        legatorocr_engine::pagelang::set(rules);
+    }
     legatorocr_engine::qa::enable(cli.quality_report);
     legatorocr_engine::explain::enable(cli.explain);
     let res = run_export(
