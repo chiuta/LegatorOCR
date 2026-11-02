@@ -30,7 +30,8 @@ Working rule for every item: record a number *before*, build, record a number *a
 | 2.3 | done | `--watch DIR` (needs `--pdf` with `{name}`; runs the program once per new file; polls, no OS file events) |
 | 1.4 | deferred | no reference set to prove a gain, and the exact definitions of Fox / LCaM / EdgeDiv could not be checked here |
 | 0.5 | done | CI step runs the whole chain in an empty network namespace (Linux) |
-| 0.1, 0.2, 0.6 | not started | 0.1 needs hand-verified text from a person |
+| 0.2 | partial | CI job `ocr-regression` runs `scripts/ocr-bench.py --max-cer 0.3` on 24 synthetic pages (8 languages x 3 scan conditions, exact ground truth; mean CER 0.007 %); a regression guard only, no size or time gate yet |
+| 0.1, 0.6 | not started | 0.1 (real pages) needs hand-verified text from a person; the synthetic set above is the stand-in |
 | 1.11 | blocked | a real PortableApps package needs the Windows PortableApps.com Launcher / Installer; not testable here |
 
 Phase 2 other than 2.3, and everything from Phase 3 on, is not started.

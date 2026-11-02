@@ -107,3 +107,19 @@ print("|---|---|---|---|")
 for r in rows:
     print("| %s | %s | %s | %s |" % r)
 print("\nfiles:", OUT, file=sys.stderr)
+
+# Regression gate: --max-cer PCT fails (exit 1) when the mean LegatorOCR CER over all rows,
+# or the worst single row, exceeds the limit. The pages are synthetic, so this guards against
+# regressions; it is not an accuracy claim for real scans.
+import re
+vals = [float(m.group(1)) for r in rows for m in [re.search(r"CER ([0-9.]+)%", r[3])] if m]
+if vals:
+    mean, worst = sum(vals) / len(vals), max(vals)
+    print("\nLegatorOCR CER over %d pages: mean %.3f%%, worst %.2f%%" % (len(vals), mean, worst))
+    if "--max-cer" in sys.argv:
+        lim = float(sys.argv[sys.argv.index("--max-cer") + 1])
+        if mean > lim or worst > 10 * lim:
+            print("FAIL: mean %.3f%% / worst %.2f%% above the limit %.3f%% (worst may be up to 10x)" % (mean, worst, lim))
+            sys.exit(1)
+if len(vals) < len(rows) or not rows:
+    sys.exit(1)
