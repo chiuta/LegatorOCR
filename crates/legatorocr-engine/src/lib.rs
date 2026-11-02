@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 pub mod altbin;
 pub mod audit;
 pub mod isolate;
+pub mod mrz;
 pub mod reprocess;
 pub mod bagit;
 pub mod burst;

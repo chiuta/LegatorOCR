@@ -428,6 +428,12 @@ struct Cli {
     #[arg(long, value_name = "PEM")]
     tsa_ca: Option<PathBuf>,
 
+    /// Read the machine-readable zone (ICAO 9303 passport / ID card lines) from the OCR text and
+    /// check every check digit; prints the fields, or which check failed. Needs --ocr. Reads the
+    /// printed zone only; does not prove the document is genuine.
+    #[arg(long)]
+    mrz: bool,
+
     /// Decode every input in a separate worker process with a memory limit, a CPU-time limit
     /// (Unix) and a timeout, so a hostile or corrupt file can crash only the worker, not the
     /// run. Process isolation, not a security sandbox (no seccomp or namespaces).
@@ -2318,6 +2324,24 @@ fn real_main() -> Result<()> {
         cmd.push_str(" --json new_ocr.json");
         let b = legatorocr_engine::reprocess::finish(dir, pr, &written, legatorocr_engine::now_unix(), &cmd)?;
         eprintln!("archive package: {} ({} files, {} originals)", dir.display(), b.files, b.originals);
+    }
+    if cli.mrz {
+        match res.text.as_deref() {
+            None => eprintln!("--mrz: no OCR text was produced"),
+            Some(t) => {
+                let found = legatorocr_engine::mrz::find(t);
+                if found.is_empty() {
+                    println!("mrz: none found");
+                }
+                for m in &found {
+                    println!(
+                        "mrz {}: {} {} {} | number {} | nationality {} | born {} | sex {} | expires {} | {}",
+                        m.format, m.doc_type, m.country, m.surname, m.number, m.nationality, m.birth, m.sex, m.expiry,
+                        if m.failed.is_empty() { "all check digits agree".to_string() } else { format!("CHECK FAILED: {}", m.failed.join(", ")) }
+                    );
+                }
+            }
+        }
     }
     if let Some(dest) = &cli.package {
         let password: Option<String> = match &cli.package_password_file {
