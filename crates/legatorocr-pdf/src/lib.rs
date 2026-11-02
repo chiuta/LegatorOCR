@@ -12,6 +12,9 @@ pub mod jbig2;
 pub mod jbig2huff;
 pub mod jpx;
 pub mod pdfa;
+
+/// Part used by writers created afterwards (set once from the command line).
+pub static DEFAULT_PDFA_PART: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
 pub mod reader;
 
 use flate2::{write::ZlibEncoder, Compression};
@@ -39,6 +42,7 @@ pub struct PdfWriter {
     bookmarks: Vec<(String, usize)>,
     labels: Vec<(usize, LabelStyle, String, u32)>,
     pdfa: bool,
+    pdfa_part: u8,
 }
 
 /// Numbering style of a page-label range.
@@ -114,6 +118,7 @@ impl PdfWriter {
             bookmarks: Vec::new(),
             labels: Vec::new(),
             pdfa: false,
+            pdfa_part: DEFAULT_PDFA_PART.load(std::sync::atomic::Ordering::Relaxed),
         };
         w.buf.extend_from_slice(b"%PDF-1.5\n%\xE2\xE3\xCF\xD3\n");
         w
@@ -148,6 +153,20 @@ impl PdfWriter {
     /// by hand and with open tools; no PDF/A validator was available to certify it.)
     pub fn set_pdfa(&mut self, on: bool) {
         self.pdfa = on;
+        self.apply_part();
+    }
+
+    /// PDF/A part to declare with `set_pdfa`: 1 (PDF 1.4 header), 2 (default) or 3.
+    /// The writer uses nothing outside PDF 1.4 (classic xref, no object streams, no
+    /// transparency, uncompressed XMP), so the same body is valid for all three parts.
+    pub fn set_pdfa_part(&mut self, part: u8) {
+        self.pdfa_part = part.clamp(1, 3);
+        self.apply_part();
+    }
+
+    fn apply_part(&mut self) {
+        // byte 7 of the header is the minor version digit
+        self.buf[7] = if self.pdfa && self.pdfa_part == 1 { b'4' } else { b'5' };
     }
 
     fn gray_cs(&self) -> &'static str {
@@ -609,6 +628,7 @@ impl PdfWriter {
         let producer = format!("LegatorOCR {}", env!("CARGO_PKG_VERSION"));
         if self.pdfa {
             let xmp = pdfa::Xmp {
+                part: self.pdfa_part,
                 title: self.title.as_deref(),
                 author: self.meta.author.as_deref().filter(|v| !v.trim().is_empty()),
                 subject: self
@@ -1054,6 +1074,34 @@ mod unicode_file {
         );
         let big = w.finish();
         assert!(big.windows(10).any(|x| x == b"/FontFile2"));
+    }
+
+    #[test]
+    fn pdfa_parts_change_header_and_xmp() {
+        let mk = |part: u8| {
+            let mut w = PdfWriter::new(Compress::Flate);
+            w.set_pdfa(true);
+            w.set_pdfa_part(part);
+            w.add_page(
+                &Page {
+                    image: PageImage::Bw(BitImage::new(8, 8)),
+                    dpi: 150,
+                    skew_deg: 0.0,
+                    blank: false,
+                    split_index: None,
+                    content_box: None,
+                    layers: None,
+                },
+                &[],
+            );
+            String::from_utf8_lossy(&w.finish()).into_owned()
+        };
+        let (a1, a2, a3) = (mk(1), mk(2), mk(3));
+        assert!(a1.starts_with("%PDF-1.4\n") && a2.starts_with("%PDF-1.5\n"));
+        assert!(a1.contains("<pdfaid:part>1</pdfaid:part>"));
+        assert!(a2.contains("<pdfaid:part>2</pdfaid:part>"));
+        assert!(a3.contains("<pdfaid:part>3</pdfaid:part>"));
+        assert!(!a1.contains("/ObjStm") && !a1.contains("/SMask"));
     }
 
     #[test]

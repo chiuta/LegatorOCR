@@ -363,6 +363,10 @@ struct Cli {
     #[arg(long)]
     pdfa: bool,
 
+    /// PDF/A part to declare with --pdfa: 1 (PDF 1.4), 2 (default) or 3. Level is always B.
+    #[arg(long, default_value_t = 2, value_parser = clap::value_parser!(u8).range(1..=3))]
+    pdfa_part: u8,
+
     /// Label the first N pages i, ii, iii … in PDF viewers; numbering restarts at 1 after them.
     #[arg(long, value_name = "N", default_value_t = 0)]
     front_matter: u32,
@@ -842,6 +846,7 @@ fn watch_loop(cli: &Cli, dir: &std::path::Path) -> Result<()> {
 
 fn real_main() -> Result<()> {
     let mut cli = Cli::parse();
+    legatorocr_engine::DEFAULT_PDFA_PART.store(cli.pdfa_part, std::sync::atomic::Ordering::Relaxed);
     if let Some(dir) = cli.watch.clone() {
         return watch_loop(&cli, &dir);
     }

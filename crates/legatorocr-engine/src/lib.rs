@@ -51,6 +51,7 @@ pub use legatorocr_ocr as ocr;
 
 pub use legatorocr_pdf::g4;
 pub use legatorocr_pdf::LabelStyle;
+pub use legatorocr_pdf::DEFAULT_PDFA_PART;
 pub use legatorocr_pdf::Meta as PdfMeta;
 
 #[derive(Debug, Clone)]
