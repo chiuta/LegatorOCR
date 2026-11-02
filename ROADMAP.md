@@ -41,6 +41,7 @@ Everything later is unverifiable without these.
 | 1.16 | Integrity catalogue: titles + SHA-256 as HTML / CSV ready to publish, built on `--checksums` | 1 | - |
 | 1.17 | Text-layer self-test: pick rare words from the OCR text and confirm they are found in the PDF (the guide's Ctrl+F check, automated) | 2 | 1.10 |
 | 1.18 | Library metadata: Dublin Core / MODS sidecar and CSV catalogue from PDF metadata | 2 | - |
+| 1.19 | Search operators in `grep` as in DocFetcher (AND / OR / NOT, wildcards, regex) with ready patterns for Romanian CUI / fiscal code and invoice series | 2 | 1.10 |
 
 ## Phase 2 - Throughput (D2-4)
 
@@ -97,6 +98,7 @@ No gate promises near-zero CER. Report CER with a confidence interval; zero erro
 | 5.7 | PAdES signing with the user's own certificate (PKCS#12) and RFC 3161 timestamp, plus signature verification on input files (eIDAS levels are the user's certificate, not ours) | 4 | 5.3 |
 | 5.8 | BagIt / OCFL packaging and a 3-2-1 backup helper: copies to several destinations, hash-verified, with a read-only / cold-storage checklist | 3 | 1.16 |
 | 5.9 | Target-based quality report in the spirit of FADGI / Metamorfoze: detect a standard test target in a scan and measure sharpness (SFR), colour error (delta E), noise and illumination uniformity, then state the level reached. Needs the official standard documents before any threshold is coded (see note below) | 5 | - |
+| 5.10 | Hand-over package for licensed electronic-archiving providers (e.g. TRANSFOND e-Arhiv@, Law 135/2007); accepted formats must be checked with the provider first | 3 | 5.8 |
 
 ## Phase 6 - Outputs (D3-5)
 
@@ -154,8 +156,11 @@ What the guide recommends and where we stand:
 | Three document profiles (office / sketches / registers) | covered (profiles `doc-birou`, `schite-desene`, `registre-manuscrise`) |
 | 300 / 400 / 300-600 dpi advice | profiles cover it; advisor planned: 1.13 |
 
-The guide does not cover naming conventions, PDF/A, e-Factura, 3-2-1 backup, GDPR or retention periods. Items 6.10, 7.12 and 5.8
-come from the wider HUB DIGITAL course topics, not from these pages, and should be checked with the author before being treated as his recommendations.
+The portfolio guide does not cover naming conventions, PDF/A, e-Factura, 3-2-1 backup, GDPR or retention periods. Items 6.10, 7.12 and 5.8
+come from the wider HUB DIGITAL course package, whose topics (eIDAS signature levels, retention under the archival nomenclature, RO e-Factura
+structure, the 3-2-1 rule, DocFetcher query syntax, ransomware hygiene, an electronic-archiving provider such as TRANSFOND e-Arhiv@) are recorded in an
+earlier conversation of the author of this repository. That record is a summary of an AI-assisted review, so treat the topics as
+the course's, but confirm details with the author before attributing a recommendation to him.
 
 ### Further sources found on 2 Nov 2026
 
