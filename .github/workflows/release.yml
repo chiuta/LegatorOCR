@@ -122,6 +122,13 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: SBOM and checksums
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag || github.ref_name }}"
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) python3 scripts/sbom.py > "dist/LegatorOCR-${tag#v}-sbom.cdx.json"
+          python3 -c "import json,sys; b=json.load(open(sys.argv[1])); assert b['bomFormat']=='CycloneDX' and len(b['components'])>10" "dist/LegatorOCR-${tag#v}-sbom.cdx.json"
+          (cd dist && sha256sum LegatorOCR-* > SHA256SUMS.txt && cat SHA256SUMS.txt)
       - name: Create (or refresh) the draft release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -145,5 +152,5 @@ jobs:
           # a version with a hyphen (0.2.0-pre.5) is always a pre-release
           if [ "$PRE" = true ] || [[ "$TAG" == *-* ]]; then args+=(--prerelease); fi
           args+=(--notes-file "$NOTES")
-          gh release create "$TAG" "${args[@]}" dist/LegatorOCR-*
+          gh release create "$TAG" "${args[@]}" dist/LegatorOCR-* dist/SHA256SUMS.txt
           gh release view "$TAG" --json assets --jq '.assets|length' || true
