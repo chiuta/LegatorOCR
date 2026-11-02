@@ -108,6 +108,12 @@ jobs:
         run: node web/test-wasm.mjs target/wasm32-unknown-unknown/release/legatorocr_wasm.wasm
       - name: Size
         run: ls -l target/wasm32-unknown-unknown/release/legatorocr_wasm.wasm | awk '{print $5, $9}'
+      - name: Phone capture page in Chromium with a fake camera
+        run: |
+          ffmpeg -loglevel error -y -loop 1 -i web/sample.png -t 2 -r 10 -vf scale=640:-2 -pix_fmt yuv420p "$RUNNER_TEMP/cam.y4m"
+          mkdir "$RUNNER_TEMP/pw" && cd "$RUNNER_TEMP/pw" && npm init -y >/dev/null && npm i playwright@1.49.1 >/dev/null && npx playwright install --with-deps chromium >/dev/null
+          cd "$GITHUB_WORKSPACE"
+          cd "$RUNNER_TEMP/pw" && node "$GITHUB_WORKSPACE/web/test-capture.mjs" "$GITHUB_WORKSPACE/target/wasm32-unknown-unknown/release/legatorocr_wasm.wasm" "$RUNNER_TEMP/cam.y4m"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: legatorocr-wasm
