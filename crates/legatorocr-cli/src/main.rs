@@ -340,6 +340,12 @@ struct Cli {
     #[arg(long, value_name = "FILE")]
     tables_html: Option<PathBuf>,
 
+    /// Add a PDF bookmark for every page whose upper part carries a heading (a short line
+    /// of clearly taller words), titled with its text. A heuristic; pages without a clear
+    /// heading get none. Needs --ocr and --pdf.
+    #[arg(long)]
+    bookmarks_headings: bool,
+
     /// Print time per stage (load, orientation, clean-up, OCR) and peak memory at the end.
     #[arg(long)]
     timings: bool,
@@ -1627,6 +1633,10 @@ fn real_main() -> Result<()> {
     legatorocr_engine::profile::enable(cli.timings);
     legatorocr_engine::ropost::set_enabled(cli.clean_text);
     legatorocr_engine::pagenum::set_enabled(cli.page_labels);
+    if cli.bookmarks_headings && !cli.ocr {
+        bail!("--bookmarks-headings reads the recognised text; add --ocr");
+    }
+    legatorocr_engine::headings::set_enabled(cli.bookmarks_headings);
     if let Some(dir) = &cli.ocr_cache {
         if !cli.ocr {
             bail!("--ocr-cache needs --ocr");

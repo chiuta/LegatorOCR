@@ -27,6 +27,8 @@ Working rule for every item: record a number *before*, build, record a number *a
 | 1.15 | done | `--scan-active` (static; no online hash lookup) |
 | 1.16, 1.18 | done | `--catalog` (HTML / CSV with SHA-256) and `--dublin-core` sidecars; need `--pdf` |
 | 1.17 | done | `--verify-text` |
+| 6.2 | partial | `--bookmarks-headings`: a bookmark per page whose upper 40 % has a short line of words >= 1.4x the median height; page numbers excluded; no reference set to measure it, so a heuristic; headings are not nested into levels |
+| 4.3 | tested, rejected | gate experiment on the 12 real pages with a 43k-word Romanian frequency list (wordfreq), replacing a word not in the list by its unique, clearly most frequent neighbour at edit distance 1: errors went UP from 5579 to 5675 (min. Zipf 3.5) and 5712 (lower thresholds). Not implemented. A flag-only variant (mark suspicious words without changing them) is still open |
 | 6.3 | partial | `--tables-xlsx` and `--tables-html` (tables from the Word-export detector; XLSX opened with openpyxl and LibreOffice; plain numbers as numbers, the rest text as printed); tables are only found when 3+ rows share a cell count, so a column with a missed cell breaks the table |
 | 5.4 | partial | `--merkle-root SUMS` (RFC 6962 style tree over SHA256SUMS.txt; tested for every leaf of trees up to 17 leaves), `--merkle-proof NAME`, `--merkle-verify`, `--merkle-expect`; the RFC 3161 timestamp is NOT done (needs a timestamp service the user chooses) |
 | 5.3 | partial | `--provenance` stores program version, time, input SHA-256 and options (passwords removed) in the PDF Info key `/LegatorOCRProvenance`; not in PDF/A files, not an XMP schema, not signed; output bytes are not reproducible (the time is in the file) |

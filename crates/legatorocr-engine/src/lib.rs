@@ -31,6 +31,7 @@ pub mod package;
 pub mod profile;
 pub mod profiles;
 pub mod project;
+pub mod headings;
 pub mod merkle;
 pub mod ocrcache;
 pub mod pagelang;
@@ -875,6 +876,11 @@ pub fn run_export(
                             w.set_page_labels(legatorocr_pdf::LabelStyle::RomanLower, "", 1);
                         } else if w.page_count() == p.front_matter as usize {
                             w.set_page_labels(legatorocr_pdf::LabelStyle::Decimal, "", 1);
+                        }
+                    }
+                    if headings::enabled() {
+                        if let Some(t) = headings::detect(&words, pg.image.height()) {
+                            w.add_bookmark(&t);
                         }
                     }
                     if p.bookmarks {
