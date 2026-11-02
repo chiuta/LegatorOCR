@@ -35,6 +35,12 @@ Everything later is unverifiable without these.
 | 1.10 | Fuzzy, diacritic-insensitive `grep` over processed PDFs (reuses the search engine) | 2 | - |
 | 1.11 | Portable package (PortableApps) built in CI | 1 | - |
 | 1.12 | Fix observed OCR defects: narrow gutter (p13), "." read as ",", I/l, word spacing | 3 | 0.1 |
+| 1.13 | Effective-dpi advisor: from pixel size and page size, warn below ~200 dpi (OCR misreads) and note that above ~400 dpi plain text gains nothing but time (guide's figures) | 1 | - |
+| 1.14 | Burst ingest for phone capture: order by EXIF time, honour EXIF orientation, drop near-duplicate and blurred frames, keep the sharpest of a burst | 2 | - |
+| 1.15 | Static scan of input PDFs for active content (JavaScript, launch actions, embedded files) and an offline hash report; any online hash lookup (e.g. VirusTotal) only as opt-in, hashes never files | 2 | - |
+| 1.16 | Integrity catalogue: titles + SHA-256 as HTML / CSV ready to publish, built on `--checksums` | 1 | - |
+| 1.17 | Text-layer self-test: pick rare words from the OCR text and confirm they are found in the PDF (the guide's Ctrl+F check, automated) | 2 | 1.10 |
+| 1.18 | Library metadata: Dublin Core / MODS sidecar and CSV catalogue from PDF metadata | 2 | - |
 
 ## Phase 2 - Throughput (D2-4)
 
@@ -60,6 +66,9 @@ Everything later is unverifiable without these.
 | 3.7 | Tuning by comparison (3-4 variants side by side) | 3 | 2.1 |
 | 3.8 | Scanning-station mode (live verdict per new page) | 4 | 1.5, 2.1 |
 | 3.9 | Usability test with 5 new users; fix what they trip on | 2 | 3.1-3.3 |
+| 3.10 | Pre-scan checklist inside the app (opening bindings, staples, flattening folds) and capture tips per document type | 1 | - |
+| 3.11 | Scan from a device: network scanners over eSCL (AirScan) first, SANE on Linux; WIA / TWAIN later (replaces the NAPS2 step of the guide's workflow) | 4 | - |
+| 3.12 | PDF toolbox actions: merge / split, watermark, page numbering, web-optimised compression (the PDF24 Toolbox step) | 3 | - |
 
 ## Phase 4 - OCR accuracy (D3-5, research risk)
 
@@ -85,6 +94,8 @@ No gate promises near-zero CER. Report CER with a confidence interval; zero erro
 | 5.4 | Signed timestamp (RFC 3161) and a Merkle-tree integrity register for collections | 4 | 5.3 |
 | 5.5 | Sandboxed decoders for untrusted files | 4 | 0.6 |
 | 5.6 | Reprocessable archive package (original pixels + transform graph + text with per-word provenance; re-run when engines improve) | 5 | 2.1, 5.3 |
+| 5.7 | PAdES signing with the user's own certificate (PKCS#12) and RFC 3161 timestamp, plus signature verification on input files (eIDAS levels are the user's certificate, not ours) | 4 | 5.3 |
+| 5.8 | BagIt / OCFL packaging and a 3-2-1 backup helper: copies to several destinations, hash-verified, with a read-only / cold-storage checklist | 3 | 1.16 |
 
 ## Phase 6 - Outputs (D3-5)
 
@@ -97,6 +108,9 @@ No gate promises near-zero CER. Report CER with a confidence interval; zero erro
 | 6.5 | Accessibility pipeline: tagged PDF, braille, audiobook in reading order | 4 | 6.1 |
 | 6.6 | DjVu foreground / background layers | 3 | - |
 | 6.7 | Vector font reconstruction from glyph clusters (note: Adobe's ClearScan did something similar; our difference would be verified fidelity) | 5 | 4.4, 5.2 |
+| 6.8 | Scan a paper form, detect lines and boxes, produce a fillable PDF (AcroForm fields); replaces the OnlyOffice step and goes further | 5 | 6.1 |
+| 6.9 | Rights wizard: public-domain date from the author's death year (life + 70 years under Law 8/1996), fields for assignment deed number and date, printed in the page-2 notice (we already have `--rights-notice`); informational, not legal advice | 2 | - |
+| 6.10 | e-Factura (RO) invoice XML / PDF recognition and extraction of key fields | 4 | - |
 
 ## Phase 7 - Ecosystem and moonshots (D3-5)
 
@@ -112,6 +126,35 @@ No gate promises near-zero CER. Report CER with a confidence interval; zero erro
 | 7.8 | WASM plugin interface for engines and formats | 4 | 7.1 |
 | 7.9 | Peer-to-peer proofreading between libraries | 5 | 3.6, 4.4 |
 | 7.10 | Open compression format with a reference WASM decoder | 5 | 5.2; needs standardisation effort, adoption not guaranteed |
+| 7.11 | Phone capture app (PWA / WASM): burst, remote trigger, live page verdict, same core as the desktop | 4 | 7.7, 3.8 |
+| 7.12 | PII finder and redaction (true removal of pixels and text) for GDPR hand-over | 4 | 6.1 |
+
+## Source of these additions
+
+Added on 2 November 2026 after reading Alexandru Dumbravă's portfolio and digitisation guide
+(<https://dumbravaalex.github.io/Portofoliu/>, 12 pages). His blog (competentedigitalizare.blogspot.com) could not be fetched from this
+environment, so nothing here is taken from it. Only the *workflow ideas* are used, never code of the tools he names.
+
+What the guide recommends and where we stand:
+
+| Guide step | Status in LegatorOCR |
+|---|---|
+| Capture with a phone, burst and Bluetooth remote | not covered: 1.14, 7.11 |
+| ScanTailor clean-up, dewarp, crop | covered |
+| NAPS2: frames to PDF, direct scanning | frames to PDF covered; scanner acquisition not: 3.11 |
+| PDF24: OCR (Romanian + English), compression, watermark, page numbers | OCR and compression covered; watermark / numbering not: 3.12 |
+| DocFetcher: full-text search | covered (`--txt-each`, search engine); fuzzy search planned: 1.10 |
+| Folder2Iso | covered (`--package` .iso) |
+| OnlyOffice fillable forms | not covered: 6.8 |
+| Electronic signature with a valid certificate (eIDAS) | not covered: 5.7 |
+| VirusTotal and published SHA-256 table | hashes covered; catalogue and active-content scan not: 1.15, 1.16 |
+| Cold-storage backups | not covered: 5.8 |
+| Assignment notice on page 2 | covered (`--rights-notice`); wizard planned: 6.9 |
+| Three document profiles (office / sketches / registers) | covered (profiles `doc-birou`, `schite-desene`, `registre-manuscrise`) |
+| 300 / 400 / 300-600 dpi advice | profiles cover it; advisor planned: 1.13 |
+
+The guide does not cover naming conventions, PDF/A, e-Factura, 3-2-1 backup, GDPR or retention periods. Items 6.10, 7.12 and 5.8
+come from the wider HUB DIGITAL course topics, not from these pages, and should be checked with the author before being treated as his recommendations.
 
 ## Not promised
 
