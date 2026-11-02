@@ -43,7 +43,7 @@ enum Fmt {
 #[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_bag", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "search_preset", "search_help"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_bag", "timestamp", "timestamp_verify", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "search_preset", "search_help"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -409,6 +409,24 @@ struct Cli {
     /// Like --redact, with your own regular expression (repeatable), matched line by line.
     #[arg(long, value_name = "REGEX")]
     redact_regex: Vec<String>,
+
+    /// RFC 3161 time stamp: send the SHA-256 of FILE to --tsa-url (needs curl) and save the
+    /// authority's reply as FILE.tsr. Good for a SHA256SUMS.txt or a Merkle root file.
+    #[arg(long, value_name = "FILE", requires = "tsa_url")]
+    timestamp: Option<PathBuf>,
+
+    /// Address of the time-stamp authority for --timestamp (https://...). Choose one you trust.
+    #[arg(long, value_name = "URL")]
+    tsa_url: Option<String>,
+
+    /// Check FILE against FILE.tsr (hash and structure; with --tsa-ca also the signature, through
+    /// openssl ts -verify). Exit 1 when the file changed.
+    #[arg(long, value_name = "FILE")]
+    timestamp_verify: Option<PathBuf>,
+
+    /// CA / TSA certificate file (PEM) for --timestamp-verify.
+    #[arg(long, value_name = "PEM")]
+    tsa_ca: Option<PathBuf>,
 
     /// Run as a Model Context Protocol server on stdin/stdout (JSON-RPC, one message per line)
     /// so an AI assistant can call a few narrow tools: scan_to_pdf, pdf_toolbox, efactura,
@@ -1136,6 +1154,26 @@ fn real_main() -> Result<()> {
         let written = legatorocr_engine::pdftools::run(&cli.inputs, &cli.out_dir, cli.pdf.as_deref(), &plan)?;
         for w in &written {
             println!("wrote {}", w.display());
+        }
+        return Ok(());
+    }
+    if let Some(f) = &cli.timestamp {
+        let r = legatorocr_engine::tsa::stamp(f, cli.tsa_url.as_deref().unwrap_or(""))?;
+        println!("{}: stamped {} UTC, reply saved as {}", f.display(), r.gen_time, legatorocr_engine::tsa::tsr_path(f).display());
+        return Ok(());
+    }
+    if let Some(f) = &cli.timestamp_verify {
+        match legatorocr_engine::tsa::verify(f, cli.tsa_ca.as_deref()) {
+            Ok(r) => println!(
+                "{}: matches its time stamp of {}{}",
+                f.display(),
+                r.gen_time,
+                if cli.tsa_ca.is_some() { " (signature verified by openssl)" } else { " (signature NOT checked: give --tsa-ca)" }
+            ),
+            Err(e) => {
+                println!("{}: {e}", f.display());
+                std::process::exit(1);
+            }
         }
         return Ok(());
     }

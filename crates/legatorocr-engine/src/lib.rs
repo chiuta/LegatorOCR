@@ -53,6 +53,7 @@ pub mod rights;
 pub mod search;
 pub mod tables;
 pub mod tei;
+pub mod tsa;
 pub mod watch;
 pub mod zipcrypt;
 pub mod zipmini;
