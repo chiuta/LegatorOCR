@@ -126,6 +126,16 @@ struct Cli {
     #[arg(long)]
     clean_text: bool,
 
+    /// Write a table of the PDFs this run produced (title, file, size, SHA-256) to this file; the
+    /// extension picks the format: `.csv`, else HTML (needs --pdf).
+    #[arg(long)]
+    catalog: Option<PathBuf>,
+
+    /// Write a Dublin Core record `<pdf>.dc.xml` beside every PDF (title, author, subject,
+    /// keywords, rights, language) for library catalogues (needs --pdf).
+    #[arg(long)]
+    dublin_core: bool,
+
     /// Also write ALTO v4 XML (word boxes and confidences, the library standard) (needs --ocr).
     #[arg(long)]
     alto: Option<PathBuf>,
@@ -707,10 +717,15 @@ fn real_main() -> Result<()> {
     if let Some(d) = &cli.retain_until {
         legatorocr_engine::audit::check_date(d)?;
     }
-    if (cli.checksums || cli.txt_each || cli.rights_notice.is_some() || cli.package.is_some())
+    if (cli.checksums
+        || cli.txt_each
+        || cli.rights_notice.is_some()
+        || cli.package.is_some()
+        || cli.catalog.is_some()
+        || cli.dublin_core)
         && cli.pdf.is_none()
     {
-        bail!("--checksums, --txt-each, --rights-notice and --package need --pdf");
+        bail!("--checksums, --txt-each, --rights-notice, --package, --catalog and --dublin-core need --pdf");
     }
     if cli.txt_each && !cli.ocr {
         bail!("--txt-each needs --ocr");
@@ -1534,6 +1549,46 @@ fn real_main() -> Result<()> {
             );
             // the sums file is itself a file this run wrote
             written.push(sp.clone());
+        }
+    }
+    if cli.catalog.is_some() || cli.dublin_core {
+        let pdfs: Vec<PathBuf> = written
+            .iter()
+            .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")))
+            .cloned()
+            .collect();
+        let rows = legatorocr_engine::catalog::rows(&pdfs, None)?;
+        if let Some(c) = &cli.catalog {
+            let is_csv = c.extension().is_some_and(|e| e.eq_ignore_ascii_case("csv"));
+            let text = if is_csv {
+                legatorocr_engine::catalog::csv(&rows)
+            } else {
+                legatorocr_engine::catalog::html(&rows, "Catalog")
+            };
+            write_atomic(c, text.as_bytes())?;
+            eprintln!("wrote {} ({} file(s))", c.display(), rows.len());
+            written.push(c.clone());
+        }
+        if cli.dublin_core {
+            let first = legatorocr_engine::ocr::canonical_lang(&cli.lang);
+            let first = first.split('+').next().unwrap_or("").to_string();
+            let language = legatorocr_engine::ocr::UI_LANGUAGES
+                .iter()
+                .find(|(_, t, _)| *t == first)
+                .map(|(iso, _, _)| iso.to_string())
+                .or_else(|| (!first.is_empty()).then_some(first));
+            let m = legatorocr_engine::catalog::Meta {
+                author: cli.author.clone(),
+                subject: cli.subject.clone(),
+                keywords: cli.keywords.clone(),
+                rights: cli.rights_notice.clone(),
+                language,
+            };
+            for (r, p) in rows.iter().zip(&pdfs) {
+                let f = legatorocr_engine::catalog::write_dublin_core(p, r, &m)?;
+                eprintln!("wrote {}", f.display());
+                written.push(f);
+            }
         }
     }
     if let Some(log) = &cli.audit_log {

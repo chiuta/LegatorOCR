@@ -62,7 +62,7 @@ pub fn report() -> String {
     let total: Duration = m.values().map(|v| v.0).sum();
     let mut out = String::from("stage            calls     time (s)   share   per call (ms)\n");
     let mut rows: Vec<_> = m.into_iter().collect();
-    rows.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+    rows.sort_by_key(|b| std::cmp::Reverse(b.1 .0));
     for (name, (d, n)) in rows {
         let share = if total.is_zero() {
             0.0
