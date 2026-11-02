@@ -1,0 +1,20 @@
+# winget singleton manifest. Not submitted to microsoft/winget-pkgs yet. Fill InstallerUrl and
+# InstallerSha256 from the published release (the release assets are .zip files of the portable app).
+PackageIdentifier: ChiutaAlexio.LegatorOCR
+PackageVersion: 0.2.0
+PackageLocale: en-US
+Publisher: Alexandru-Ionuț Chiuță
+PackageName: LegatorOCR
+License: MIT
+ShortDescription: Clean-room scan post-processing, PDF export and OCR
+Installers:
+  - Architecture: x64
+    InstallerType: zip
+    NestedInstallerType: portable
+    NestedInstallerFiles:
+      - RelativeFilePath: legatorocr.exe
+        PortableCommandAlias: legatorocr
+    InstallerUrl: https://github.com/chiuta/LegatorOCR/releases/download/v0.2.0/LegatorOCR-0.2.0-x86_64-pc-windows-msvc.zip
+    InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
+ManifestType: singleton
+ManifestVersion: 1.6.0

@@ -1,0 +1,31 @@
+# Maintainer: Alexandru-Ionuț Chiuță <alexio@trom.tf>
+# Source build from the tagged release. Not submitted to the AUR yet; syntax-checked only.
+pkgname=legatorocr
+pkgver=0.2.0
+pkgrel=1
+pkgdesc='Clean-room scan post-processing (ScanTailor-like), PDF export and OCR'
+arch=('x86_64' 'aarch64')
+url='https://github.com/chiuta/LegatorOCR'
+license=('MIT')
+depends=('gcc-libs')
+optdepends=('tesseract: OCR engine' 'tesseract-data-ron: Romanian OCR data' 'openssl: signatures and time stamps' 'curl: time-stamp requests')
+makedepends=('cargo')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP') # replace with the real checksum when the tag is published
+
+build() {
+  cd "LegatorOCR-$pkgver"
+  cargo build --release --locked -p legatorocr-cli
+}
+
+check() {
+  cd "LegatorOCR-$pkgver"
+  cargo test --release --locked -p legatorocr-core
+}
+
+package() {
+  cd "LegatorOCR-$pkgver"
+  install -Dm755 target/release/legatorocr "$pkgdir/usr/bin/legatorocr"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 THIRD_PARTY_LICENSES.md "$pkgdir/usr/share/licenses/$pkgname/THIRD_PARTY_LICENSES.md"
+}

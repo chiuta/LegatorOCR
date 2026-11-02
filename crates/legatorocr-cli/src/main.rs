@@ -43,7 +43,7 @@ enum Fmt {
 #[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_bag", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "decode_worker", "fuse_frames", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "search_preset", "search_help"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_bag", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "decode_worker", "fuse_frames", "verify_document", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "search_preset", "search_help"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -438,6 +438,13 @@ struct Cli {
     /// Largest shift between frames, in pixels (--fuse-frames).
     #[arg(long, value_name = "PX", default_value_t = 40)]
     fuse_max_shift: u32,
+
+    /// Look at each input picture for things a person should check: QR code contents, regions
+    /// copied inside the picture (copy-move), and for JPEGs regions with a different
+    /// re-compression error level (ELA). Hints only, with known false alarms; not proof of
+    /// forgery or of authenticity.
+    #[arg(long)]
+    verify_document: bool,
 
     /// Read the machine-readable zone (ICAO 9303 passport / ID card lines) from the OCR text and
     /// check every check digit; prints the fields, or which check failed. Needs --ocr. Reads the
@@ -1283,6 +1290,35 @@ fn real_main() -> Result<()> {
             memory_mb: cli.decoder_memory,
             timeout_s: cli.decoder_timeout,
         });
+    }
+    if cli.verify_document {
+        for p in &cli.inputs {
+            let img = legatorocr_engine::load_image(p)?;
+            let g = img.to_luma8();
+            println!("{}:", p.display());
+            let qr = legatorocr_engine::verifier::qr_read(&g);
+            if qr.is_empty() {
+                println!("  QR: none read");
+            }
+            for (q, _) in &qr {
+                println!("  QR: {q}");
+            }
+            // a QR code repeats its three finder squares by design: not a finding
+            let cm: Vec<_> = legatorocr_engine::verifier::copy_move(&g, 40, 48)
+                .into_iter()
+                .filter(|c| {
+                    let (cx, cy) = ((c.bbox.0 + c.bbox.2) as i32 / 2, (c.bbox.1 + c.bbox.3) as i32 / 2);
+                    !qr.iter().any(|(_, b)| cx >= b.0 - 8 && cx <= b.2 + 8 && cy >= b.1 - 8 && cy <= b.3 + 8)
+                })
+                .collect();
+            if cm.is_empty() {
+                println!("  copy-move: nothing found");
+            }
+            for c in &cm {
+                println!("  copy-move: {} blocks repeat at offset ({}, {}), source area {:?}  [check by eye: repeated letters or stamps are common]", c.blocks, c.dx, c.dy, c.bbox);
+            }
+        }
+        return Ok(());
     }
     if let Some(out) = &cli.fuse_frames {
         if cli.inputs.len() < 2 {

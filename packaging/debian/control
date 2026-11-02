@@ -1,0 +1,17 @@
+Source: legatorocr
+Section: graphics
+Priority: optional
+Maintainer: Alexandru-Ionuț Chiuță <alexio@trom.tf>
+Build-Depends: debhelper-compat (= 13), cargo, rustc (>= 1.95)
+Standards-Version: 4.7.0
+Homepage: https://github.com/chiuta/LegatorOCR
+
+Package: legatorocr
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Recommends: tesseract-ocr
+Suggests: openssl, curl
+Description: scan post-processing, PDF export and OCR
+ Clean-room command-line tool: deskew, page split, content selection,
+ binarisation, PDF/A export and OCR. Skeleton only: not built as a package
+ and not submitted to Debian.

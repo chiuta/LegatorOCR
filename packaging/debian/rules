@@ -1,0 +1,12 @@
+#!/usr/bin/make -f
+%:
+	dh $@
+
+override_dh_auto_build:
+	cargo build --release --locked -p legatorocr-cli
+
+override_dh_auto_install:
+	install -Dm755 target/release/legatorocr debian/legatorocr/usr/bin/legatorocr
+
+override_dh_auto_test:
+	cargo test --release --locked -p legatorocr-core

@@ -1,0 +1,26 @@
+# Flatpak skeleton for the command-line tool. Not built or submitted: Flathub needs the Cargo
+# dependencies vendored with flatpak-cargo-generator (generated-sources.json) and a tagged source.
+app-id: tf.trom.LegatorOCR
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: legatorocr
+finish-args:
+  - --filesystem=home
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/legatorocr/cargo
+modules:
+  - name: legatorocr
+    buildsystem: simple
+    build-commands:
+      - cargo --offline build --release --locked -p legatorocr-cli
+      - install -Dm755 target/release/legatorocr /app/bin/legatorocr
+    sources:
+      - type: git
+        url: https://github.com/chiuta/LegatorOCR.git
+        tag: v0.2.0
+      - generated-sources.json

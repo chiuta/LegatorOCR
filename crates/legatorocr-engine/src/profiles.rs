@@ -74,6 +74,26 @@ const BUILTIN: &[(&str, &str, &str)] = &[
         "mode = hybrid\nhybrid_dpi = 80\nthreshold = auto\npdf_quality = 50\n",
     ),
     (
+        "diploma",
+        "Diplomas and certificates (scan at 300-400 dpi): colour seals, stamps and signatures kept, text sharp; not tuned on real samples",
+        "mode = mixed\nthreshold = auto\nauto_levels = true\nremove_lines = false\nsharpen = 0.2\npdf_quality = 90\n",
+    ),
+    (
+        "registru-stare-civila",
+        "Civil-register pages with handwriting and stamps (scan at 400 dpi): colour kept, background evened, no speck removal that could eat strokes; not tuned on real samples",
+        "mode = color\nnormalize = true\nauto_levels = true\nsharpen = 0.1\npdf_quality = 92\n",
+    ),
+    (
+        "harta",
+        "Maps (scan at 400 dpi or more): colour kept faithfully, no thresholding, no deskew-driven cropping surprises; not tuned on real samples",
+        "mode = color\nauto_levels = false\nsharpen = 0.2\npdf_quality = 95\n",
+    ),
+    (
+        "partitura",
+        "Music scores (scan at 600 dpi): fine 1-bit with a local threshold so thin staff lines survive; not tuned on real samples",
+        "mode = bw\nthreshold = sauvola\nsensitivity = 0.2\nremove_lines = false\ndespeckle = false\n",
+    ),
+    (
         "phone-photos",
         "Pages photographed by phone: level lighting, wider skew range, fingers removed",
         "mode = color\nnormalize = true\nauto_levels = true\nmax_skew = 15\nfingers = true\nsharpen = 0.5\n",

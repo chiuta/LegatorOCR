@@ -58,6 +58,7 @@ pub mod tables;
 pub mod tei;
 pub mod sign;
 pub mod tsa;
+pub mod verifier;
 pub mod watch;
 pub mod zipcrypt;
 pub mod zipmini;
