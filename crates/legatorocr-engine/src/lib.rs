@@ -11,6 +11,7 @@ use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+pub mod altbin;
 pub mod archive;
 pub mod audit;
 pub mod bagit;
@@ -799,6 +800,12 @@ pub fn run_export(
                             }
                         }
                         None => Vec::new(),
+                    };
+                    let (pg, words) = match ocr_opts {
+                        Some(o) if altbin::enabled() => altbin::choose(pg, words, &img, &settings, seq, |p| {
+                            profile::time("ocr", || ocrcache::recognize(&p.image, p.dpi, o))
+                        }),
+                        _ => (pg, words),
                     };
                     kept.push((pg, words));
                 }

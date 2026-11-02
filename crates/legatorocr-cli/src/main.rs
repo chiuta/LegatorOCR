@@ -387,6 +387,12 @@ struct Cli {
     #[arg(long, value_name = "FILE")]
     efactura: Option<PathBuf>,
 
+    /// Black-and-white pages (needs --ocr, --mode bw/mixed/hybrid): read each page with the chosen
+    /// threshold and with a global Otsu threshold, keep the one Tesseract is more sure of. About
+    /// twice the clean-up and OCR time for pages under 93 % mean confidence.
+    #[arg(long)]
+    binarize_by_ocr: bool,
+
     /// Make a scanned paper form fillable: ruled boxes, check boxes and underlines become PDF
     /// form fields over the scan. Needs --pdf; not with --pdfa. Scans with broken or faint
     /// lines lose fields: look at the result in a PDF viewer.
@@ -1806,6 +1812,12 @@ fn real_main() -> Result<()> {
     legatorocr_engine::ropost::set_enabled(cli.clean_text);
     legatorocr_engine::pagenum::set_enabled(cli.page_labels);
     legatorocr_engine::memcap::set(cli.max_memory);
+    if cli.binarize_by_ocr {
+        if !cli.ocr {
+            bail!("--binarize-by-ocr needs --ocr");
+        }
+        legatorocr_engine::altbin::set_enabled(true);
+    }
     if cli.form_fields {
         if cli.pdf.is_none() {
             bail!("--form-fields needs --pdf");
