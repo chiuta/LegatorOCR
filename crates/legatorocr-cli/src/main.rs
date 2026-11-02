@@ -131,6 +131,12 @@ struct Cli {
     #[arg(long)]
     skip_text: bool,
 
+    /// What to do with PDF inputs that already have text: `skip` (same as --skip-text), `redo`
+    /// or `force` (default: the page is rebuilt from its image and read again; the old text
+    /// layer is never kept, so these two behave the same).
+    #[arg(long, value_parser = ["skip", "redo", "force"], value_name = "MODE")]
+    ocr_mode: Option<String>,
+
     /// Write a table of the PDFs this run produced (title, file, size, SHA-256) to this file; the
     /// extension picks the format: `.csv`, else HTML (needs --pdf).
     #[arg(long)]
@@ -1497,7 +1503,7 @@ fn real_main() -> Result<()> {
         }
     }
     adjusts.resize(inputs.len(), SheetAdj::default());
-    if cli.skip_text {
+    if cli.skip_text || cli.ocr_mode.as_deref() == Some("skip") {
         // inputs are PDF pages as `file.pdf#N`; decide once per file
         let mut seen: std::collections::HashMap<PathBuf, bool> = std::collections::HashMap::new();
         let mut keep = Vec::with_capacity(inputs.len());
