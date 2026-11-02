@@ -43,7 +43,7 @@ enum Fmt {
 #[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_bag", "timestamp", "timestamp_verify", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "search_preset", "search_help"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_bag", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "search_preset", "search_help"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -427,6 +427,36 @@ struct Cli {
     /// CA / TSA certificate file (PEM) for --timestamp-verify.
     #[arg(long, value_name = "PEM")]
     tsa_ca: Option<PathBuf>,
+
+    /// Sign FILE with your PKCS#12 certificate (--sign-p12): CAdES detached, SHA-256, added as an
+    /// incremental update (the earlier bytes stay unchanged). Output: --pdf NAME or FILE.signed.pdf.
+    /// Needs openssl and a PDF whose last xref is a classic table. The legal level (simple,
+    /// advanced, qualified) is that of your certificate.
+    #[arg(long, value_name = "FILE", requires = "sign_p12")]
+    sign_pdf: Option<PathBuf>,
+
+    /// PKCS#12 (.p12/.pfx) file for --sign-pdf.
+    #[arg(long, value_name = "P12")]
+    sign_p12: Option<PathBuf>,
+
+    /// Environment variable holding the PKCS#12 password (never on the command line).
+    #[arg(long, value_name = "VAR", default_value = "LEGATOROCR_P12_PASS")]
+    sign_pass_env: String,
+
+    /// Signer name and reason written into the signature (--sign-pdf).
+    #[arg(long, value_name = "TEXT")]
+    sign_name: Option<String>,
+    #[arg(long, value_name = "TEXT")]
+    sign_reason: Option<String>,
+
+    /// Check every signature in FILE (data matches the signature; with --sign-ca also the
+    /// certificate chain). Exit 1 when one fails or the file has no signature.
+    #[arg(long, value_name = "FILE")]
+    verify_pdf_signatures: Option<PathBuf>,
+
+    /// CA / signer certificate (PEM) for --verify-pdf-signatures.
+    #[arg(long, value_name = "PEM")]
+    sign_ca: Option<PathBuf>,
 
     /// Run as a Model Context Protocol server on stdin/stdout (JSON-RPC, one message per line)
     /// so an AI assistant can call a few narrow tools: scan_to_pdf, pdf_toolbox, efactura,
@@ -1174,6 +1204,37 @@ fn real_main() -> Result<()> {
                 println!("{}: {e}", f.display());
                 std::process::exit(1);
             }
+        }
+        return Ok(());
+    }
+    if let Some(f) = &cli.sign_pdf {
+        let out = match &cli.pdf {
+            Some(n) => n.clone(),
+            None => f.with_extension("signed.pdf"),
+        };
+        legatorocr_engine::sign::sign_pdf(f, &out, cli.sign_p12.as_deref().unwrap(), &cli.sign_pass_env, cli.sign_name.as_deref(), cli.sign_reason.as_deref())?;
+        println!("wrote {}", out.display());
+        return Ok(());
+    }
+    if let Some(f) = &cli.verify_pdf_signatures {
+        let rs = legatorocr_engine::sign::verify_pdf(f, cli.sign_ca.as_deref())?;
+        if rs.is_empty() {
+            println!("{}: no signature", f.display());
+            std::process::exit(1);
+        }
+        let mut bad = false;
+        for r in &rs {
+            let note = if r.covers_whole_file { "" } else { " (content was added after this signature)" };
+            match &r.result {
+                Ok(()) => println!("signature {} [{}]: data matches{}{}", r.index, r.sub_filter, if cli.sign_ca.is_some() { ", chain verified" } else { ", chain NOT checked: give --sign-ca" }, note),
+                Err(e) => {
+                    bad = true;
+                    println!("signature {} [{}]: FAILED: {e}", r.index, r.sub_filter);
+                }
+            }
+        }
+        if bad {
+            std::process::exit(1);
         }
         return Ok(());
     }
