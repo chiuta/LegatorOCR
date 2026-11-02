@@ -132,6 +132,13 @@ impl PdfWriter {
             .push((at, style, prefix.to_string(), start.max(1)));
     }
 
+    /// Label pages from page index `at` on (0-based, any page already added or still to come).
+    pub fn set_page_labels_at(&mut self, at: usize, style: LabelStyle, prefix: &str, start: u32) {
+        self.labels.retain(|l| l.0 != at);
+        self.labels
+            .push((at, style, prefix.to_string(), start.max(1)));
+    }
+
     /// Write PDF/A-2b structure: embedded glyph-less font, XMP metadata, sRGB output intent,
     /// CIE-based grey, trailer ID. (Structure verified against the standard's requirements
     /// by hand and with open tools; no PDF/A validator was available to certify it.)

@@ -363,10 +363,128 @@ pub fn page_number_gaps(nums: &[Option<u32>]) -> Vec<(usize, u32, u32)> {
     out
 }
 
+/// The printed page number on a page: a lone 1–4 digit token (optionally wrapped in dashes
+/// or dots) on the last line near the foot, else on the first line near the head.
+pub fn detect_page_number(words: &[crate::text::Word], page_h: u32) -> Option<u32> {
+    if words.is_empty() || page_h == 0 {
+        return None;
+    }
+    let clean = |t: &str| -> Option<u32> {
+        let d: String = t.trim_matches(|c: char| "-–—.·•|[]() ".contains(c)).to_string();
+        if (1..=4).contains(&d.len()) && d.chars().all(|c| c.is_ascii_digit()) {
+            d.parse().ok().filter(|n| *n > 0)
+        } else {
+            None
+        }
+    };
+    let line_of = |idx: u32| -> Vec<&crate::text::Word> { words.iter().filter(|w| w.line == idx).collect() };
+    let (first, last) = (
+        words.iter().map(|w| w.line).min()?,
+        words.iter().map(|w| w.line).max()?,
+    );
+    let band = page_h / 8;
+    for (idx, foot) in [(last, true), (first, false)] {
+        let ws = line_of(idx);
+        let y = ws.iter().map(|w| w.y + w.h / 2).sum::<u32>() / ws.len() as u32;
+        let near = if foot { y >= page_h - band } else { y <= band };
+        if !near {
+            continue;
+        }
+        // Only the number itself (plus decoration such as dashes) may stand on the line.
+        let nums: Vec<u32> = ws.iter().filter_map(|w| clean(&w.text)).collect();
+        let others = ws
+            .iter()
+            .filter(|w| clean(&w.text).is_none() && !w.text.trim_matches(|c: char| "-–—.·•|".contains(c)).is_empty())
+            .count();
+        if nums.len() == 1 && others == 0 {
+            return Some(nums[0]);
+        }
+    }
+    None
+}
+
+/// Where the printed numbering starts a new run: `(page_index, number)` pairs. A run needs at
+/// least 3 detected pages that agree on the offset `number - index`; undetected pages inside or
+/// next to a run take the run's offset. Stray misreads therefore never start a run.
+pub fn label_runs(nums: &[Option<u32>]) -> Vec<(usize, u32)> {
+    let offs: Vec<Option<i64>> = nums
+        .iter()
+        .enumerate()
+        .map(|(i, n)| n.map(|n| n as i64 - i as i64))
+        .collect();
+    let det: Vec<(usize, i64)> = offs.iter().enumerate().filter_map(|(i, o)| o.map(|o| (i, o))).collect();
+    let mut runs: Vec<(usize, usize, i64)> = Vec::new(); // (first detected idx, last detected idx, offset)
+    let mut k = 0;
+    while k < det.len() {
+        let mut j = k;
+        while j + 1 < det.len() && det[j + 1].1 == det[k].1 {
+            j += 1;
+        }
+        // tolerate single stray misreads between two agreeing stretches
+        if j - k + 1 >= 3 {
+            match runs.last_mut() {
+                Some(r) if r.2 == det[k].1 => r.1 = det[j].0,
+                _ => runs.push((det[k].0, det[j].0, det[k].1)),
+            }
+        }
+        k = j + 1;
+    }
+    let mut out = Vec::new();
+    for (n, r) in runs.iter().enumerate() {
+        let start = if n == 0 {
+            r.0.max((1 - r.2).max(0) as usize)
+        } else {
+            runs[n - 1].1 + 1
+        };
+        let number = r.2 + start as i64;
+        if number >= 1 {
+            out.push((start, number as u32));
+        }
+    }
+    // numbering that already is 1.. from page 0 needs no label
+    if out.len() == 1 && out[0] == (0, 1) {
+        out.clear();
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use image::Luma;
+
+    fn w(text: &str, y: u32, line: u32) -> crate::text::Word {
+        crate::text::Word { text: text.into(), x: 100, y, w: 30, h: 20, conf: 90.0, line }
+    }
+
+    #[test]
+    fn page_number_found_at_foot_or_head_only_when_alone() {
+        let body = vec![w("Hello", 100, 0), w("world", 100, 0), w("17", 1180, 1)];
+        assert_eq!(detect_page_number(&body, 1200), Some(17));
+        let wrapped = vec![w("text", 100, 0), w("-", 1180, 1), w("42", 1180, 1), w("-", 1180, 1)];
+        assert_eq!(detect_page_number(&wrapped, 1200), Some(42));
+        let head = vec![w("5", 20, 0), w("text", 600, 1), w("more", 700, 2), w("end", 800, 3)];
+        assert_eq!(detect_page_number(&head, 1200), Some(5));
+        let year = vec![w("in", 100, 0), w("1999", 1180, 1), w("war", 1180, 1)];
+        assert_eq!(detect_page_number(&year, 1200), None);
+        let mid = vec![w("a", 100, 0), w("12", 600, 1), w("b", 1100, 2)];
+        assert_eq!(detect_page_number(&mid, 1200), None);
+    }
+
+    #[test]
+    fn label_runs_follow_consistent_numbering() {
+        // pages 0..3 unnumbered cover, then 1,2,3,4 from index 3 on
+        let n = [None, None, None, Some(1), Some(2), None, Some(4), Some(5)];
+        assert_eq!(label_runs(&n), vec![(3, 1)]);
+        // a lone misread does not start a run
+        assert!(label_runs(&[Some(1), Some(2), Some(3), Some(40), Some(5)]).is_empty());
+        // numbering 1.. from the first page needs no labels
+        assert!(label_runs(&[Some(1), Some(2), Some(3), Some(4)]).is_empty());
+        // numbers offset by 8 across the whole book
+        assert_eq!(label_runs(&[Some(9), Some(10), Some(11), Some(12)]), vec![(0, 9)]);
+        // unnumbered cover keeps the default label, numbering starts at the first printed page
+        assert_eq!(label_runs(&[None, Some(17), Some(18), Some(19)]), vec![(1, 17)]);
+    }
 
     /// Text-like page: dark horizontal strokes on paper, 3 px thick, irregular.
     fn stripes(w: u32, h: u32) -> GrayImage {

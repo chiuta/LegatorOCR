@@ -229,6 +229,16 @@ struct Cli {
     #[arg(long)]
     scan_active: bool,
 
+    /// After export, read the PDF's text layer back and compare it with the OCR text
+    /// (needs --ocr and --pdf); warns when copy/search would fail.
+    #[arg(long)]
+    verify_text: bool,
+
+    /// Use printed page numbers found by OCR as the PDF's page labels (a viewer then shows
+    /// "17" for the page that carries 17, even after an unnumbered cover). Needs --ocr.
+    #[arg(long)]
+    page_labels: bool,
+
     /// Print time per stage (load, orientation, clean-up, OCR) and peak memory at the end.
     #[arg(long)]
     timings: bool,
@@ -1347,6 +1357,7 @@ fn real_main() -> Result<()> {
     };
     legatorocr_engine::profile::enable(cli.timings);
     legatorocr_engine::ropost::set_enabled(cli.clean_text);
+    legatorocr_engine::pagenum::set_enabled(cli.page_labels);
     legatorocr_engine::qa::enable(cli.quality_report);
     let res = run_export(
         &job,
@@ -1397,6 +1408,15 @@ fn real_main() -> Result<()> {
         },
         &|_, _| {},
     )?;
+    if cli.verify_text {
+        match (&res.pdf, &res.text) {
+            (Some(pdf), Some(t)) => match legatorocr_engine::textcheck::check(pdf, t) {
+                Ok(r) => eprintln!("{}", r.summary().1),
+                Err(e) => eprintln!("text layer check: could not read the PDF back ({e})"),
+            },
+            _ => eprintln!("--verify-text needs --ocr and a single --pdf output"),
+        }
+    }
     if cli.timings {
         eprint!("{}", legatorocr_engine::profile::report());
     }

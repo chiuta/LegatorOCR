@@ -27,7 +27,9 @@ pub mod package;
 pub mod profile;
 pub mod profiles;
 pub mod project;
+pub mod pagenum;
 pub mod qa;
+pub mod textcheck;
 pub mod report;
 pub mod ropost;
 pub mod search;
@@ -667,6 +669,7 @@ pub fn run_export(
     let mut last_thumb: Option<Vec<u8>> = None;
     let mut cur_name: Option<String> = None;
     let mut last_src: Option<String> = None;
+    let mut printed_nums: Vec<Option<u32>> = Vec::new();
     let ocr_opts = job
         .pdf
         .as_ref()
@@ -858,6 +861,12 @@ pub fn run_export(
                     }
                     w.add_page(&pg, &words);
                 }
+                if pagenum::enabled() {
+                    printed_nums.push(legatorocr_core::quality::detect_page_number(
+                        &words,
+                        pg.image.height(),
+                    ));
+                }
             }
         }
     }
@@ -890,7 +899,14 @@ pub fn run_export(
             res.doc_names.push(cur_name.take());
         }
     } else {
-        res.pdf = writer.map(PdfWriter::finish);
+        res.pdf = writer.map(|mut w| {
+            if pagenum::enabled() && printed_nums.len() == w.page_count() {
+                for (at, n) in legatorocr_core::quality::label_runs(&printed_nums) {
+                    w.set_page_labels_at(at, legatorocr_pdf::LabelStyle::Decimal, "", n);
+                }
+            }
+            w.finish()
+        });
     }
     res.failed
         .extend(ocr_warnings.into_inner().unwrap_or_default());
