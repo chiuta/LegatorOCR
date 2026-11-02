@@ -2,7 +2,8 @@
 //! `--pdf "archive/{year}/{month}/{date}_{name}.pdf"`.
 //!
 //! Tokens: `{date}` (2026-11-01), `{year}`, `{month}`, `{day}` (UTC), `{name}` (the first
-//! input's name without extension, or its folder's name). Anything else in braces is an error,
+//! input's name without extension, or its folder's name), `{title}` (the first line of OCR text
+//! that looks like a heading; needs `--ocr`). Anything else in braces is an error,
 //! so a typo does not end up in a file name.
 
 use anyhow::{bail, Result};
@@ -41,6 +42,28 @@ fn safe(s: &str) -> String {
     }
 }
 
+/// Stands in for `{title}` until OCR has produced the text it is taken from.
+pub const TITLE_MARK: &str = "\u{1}TITLE\u{1}";
+
+/// A file-name title from OCR text: the first line (within the first 15) that has at least 3
+/// letters, is under 90 characters and is not just a number or a date. Words are capped at 8
+/// and the result is made safe for any file system. `None` when no line qualifies.
+pub fn title_from_text(text: &str) -> Option<String> {
+    for line in text.lines().take(15) {
+        let l = line.trim();
+        let letters = l.chars().filter(|c| c.is_alphabetic()).count();
+        if letters < 3 || l.chars().count() > 90 || letters * 2 < l.chars().count() {
+            continue;
+        }
+        let words: Vec<&str> = l.split_whitespace().take(8).collect();
+        let t = safe(&words.join(" "));
+        if t != "scan" {
+            return Some(t.chars().take(80).collect::<String>().trim().to_string());
+        }
+    }
+    None
+}
+
 /// Expand the tokens of `template`. A template without braces is returned unchanged.
 pub fn expand(template: &str, name: &str, when: u64) -> Result<String> {
     if !template.contains(['{', '}']) {
@@ -64,8 +87,9 @@ pub fn expand(template: &str, name: &str, when: u64) -> Result<String> {
             "month" => out.push_str(&format!("{m:02}")),
             "day" => out.push_str(&format!("{d:02}")),
             "name" => out.push_str(&safe(name)),
+            "title" => out.push_str(TITLE_MARK),
             _ => bail!(
-                "name template {template:?}: unknown {{{tok}}} (use date, year, month, day, name)"
+                "name template {template:?}: unknown {{{tok}}} (use date, year, month, day, name, title)"
             ),
         }
         rest = &rest[i + j + 1..];
@@ -111,6 +135,16 @@ pub fn is_generic(stem: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn title_comes_from_first_heading_like_line() {
+        assert_eq!(
+            title_from_text("\n  12 \nContract de prestări servicii nr. 5\ncorp").as_deref(),
+            Some("Contract de prestări servicii nr. 5")
+        );
+        assert_eq!(title_from_text("1 2 3\n- - -"), None);
+        assert_eq!(title_from_text("a/b:c? Titlu").as_deref(), Some("a_b_c_ Titlu"));
+    }
 
     #[test]
     fn tokens_expand_and_typos_are_errors() {

@@ -668,6 +668,31 @@ fn expand_path(p: &mut Option<PathBuf>, name: &str) -> Result<()> {
     }
     let done = legatorocr_engine::naming::expand(&text, name, legatorocr_engine::now_unix())?;
     let path = PathBuf::from(done);
+    if done_has_mark(&path) {
+        *p = Some(path);
+        return Ok(());
+    }
+    if let Some(parent) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("{}: cannot create the folder", parent.display()))?;
+    }
+    *p = Some(path);
+    Ok(())
+}
+
+fn done_has_mark(p: &std::path::Path) -> bool {
+    p.to_string_lossy().contains(legatorocr_engine::naming::TITLE_MARK)
+}
+
+/// Replace the `{title}` stand-in once OCR text exists, and create the folders.
+fn resolve_title(p: &mut Option<PathBuf>, title: &str) -> Result<()> {
+    let Some(path) = p.as_ref().filter(|x| done_has_mark(x)) else {
+        return Ok(());
+    };
+    let path = PathBuf::from(
+        path.to_string_lossy()
+            .replace(legatorocr_engine::naming::TITLE_MARK, title),
+    );
     if let Some(parent) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("{}: cannot create the folder", parent.display()))?;
@@ -752,6 +777,13 @@ fn real_main() -> Result<()> {
         && cli.pdf.is_none()
     {
         bail!("--checksums, --txt-each, --rights-notice, --package, --catalog and --dublin-core need --pdf");
+    }
+    if !cli.ocr
+        && [&cli.pdf, &cli.txt, &cli.hocr, &cli.alto, &cli.page_xml, &cli.json, &cli.docx, &cli.package]
+            .iter()
+            .any(|p| p.as_deref().is_some_and(done_has_mark))
+    {
+        bail!("{{title}} in an output name is taken from the recognised text; add --ocr");
     }
     if cli.txt_each && !cli.ocr {
         bail!("--txt-each needs --ocr");
@@ -1113,7 +1145,7 @@ fn real_main() -> Result<()> {
 
     // --- run: process → (save images) → OCR → PDF ---------------------------
     // Fail now, not after an hour of OCR: make sure the outputs can be written.
-    if let Some(pdf) = &cli.pdf {
+    if let Some(pdf) = cli.pdf.as_ref().filter(|p| !done_has_mark(p)) {
         legatorocr_engine::check_writable(pdf)?;
     }
     let mut inputs: Vec<PathBuf> = Vec::new();
@@ -1339,6 +1371,7 @@ fn real_main() -> Result<()> {
             title: pdf_path
                 .file_stem()
                 .and_then(|s| s.to_str())
+                .filter(|s| !s.contains(legatorocr_engine::naming::TITLE_MARK))
                 .map(str::to_string),
             meta: legatorocr_engine::PdfMeta {
                 author: cli.author.clone(),
@@ -1414,6 +1447,25 @@ fn real_main() -> Result<()> {
         },
         &|_, _| {},
     )?;
+    {
+        let title = res
+            .text
+            .as_deref()
+            .and_then(legatorocr_engine::naming::title_from_text)
+            .unwrap_or_else(|| "untitled".into());
+        for p in [
+            &mut cli.pdf,
+            &mut cli.txt,
+            &mut cli.hocr,
+            &mut cli.alto,
+            &mut cli.page_xml,
+            &mut cli.json,
+            &mut cli.docx,
+            &mut cli.package,
+        ] {
+            resolve_title(p, &title)?;
+        }
+    }
     if cli.explain {
         for l in legatorocr_engine::explain::report() {
             eprintln!("{l}");
