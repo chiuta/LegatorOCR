@@ -758,8 +758,25 @@ struct Placement {
     fill: [u8; 3],
 }
 
+/// The file's bytes: read into memory, or mapped from disk (large files stay in the page cache
+/// instead of being copied into the process; the file must not change while it is open).
+enum Data {
+    Owned(Vec<u8>),
+    Mapped(memmap2::Mmap),
+}
+
+impl std::ops::Deref for Data {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        match self {
+            Data::Owned(v) => v,
+            Data::Mapped(m) => m,
+        }
+    }
+}
+
 pub struct PdfDoc {
-    data: Vec<u8>,
+    data: Data,
     offs: HashMap<u32, usize>,
     /// Objects stored in object streams: number → (stream index, byte offset in that stream's data).
     comp: HashMap<u32, (usize, usize)>,
@@ -798,6 +815,27 @@ impl PdfDoc {
 
     /// Open a file that may need a user or owner password (the empty one is always tried too).
     pub fn open_with_password(data: Vec<u8>, password: &[u8]) -> R<PdfDoc> {
+        Self::open_data(Data::Owned(data), password)
+    }
+
+    /// Open a file by mapping it into memory instead of reading it (multi-gigabyte scans: only
+    /// the pages that are decoded are paged in). The file must not be changed or truncated while
+    /// the document is in use.
+    pub fn open_file_with_password(path: &std::path::Path, password: &[u8]) -> R<PdfDoc> {
+        let f = match std::fs::File::open(path) {
+            Ok(f) => f,
+            Err(e) => return fail(format!("{}: {e}", path.display())),
+        };
+        // SAFETY: a read-only private mapping; the documented requirement is that the file is not
+        // modified while open (a violation can fault the process, as with any mapped file).
+        let m = match unsafe { memmap2::Mmap::map(&f) } {
+            Ok(m) => m,
+            Err(e) => return fail(format!("{}: cannot map the file: {e}", path.display())),
+        };
+        Self::open_data(Data::Mapped(m), password)
+    }
+
+    fn open_data(data: Data, password: &[u8]) -> R<PdfDoc> {
         budget_reset();
         if find(&data[..data.len().min(1024)], b"%PDF-", 0).is_none() {
             return fail("not a PDF file (no %PDF- header)");

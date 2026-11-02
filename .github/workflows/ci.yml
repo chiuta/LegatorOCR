@@ -26,6 +26,9 @@ jobs:
         run: cargo build --locked --workspace --all-targets
       - name: Test
         run: cargo test --locked --workspace
+      - name: Every option used in docs/tasks exists
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 scripts/check-docs.py target/debug/legatorocr
       - name: Whole chain with the network cut off
         if: matrix.os == 'ubuntu-latest'
         shell: bash

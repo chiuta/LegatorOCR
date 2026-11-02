@@ -351,6 +351,17 @@ mod tests {
     }
 
     #[test]
+    fn a_mapped_file_opens_like_a_read_one() {
+        let path = std::env::temp_dir().join(format!("lgr_map_{}.pdf", std::process::id()));
+        std::fs::write(&path, sample()).unwrap();
+        let mapped = PdfDoc::open_file_with_password(&path, b"").unwrap();
+        let read = PdfDoc::open(std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(mapped.page_count(), read.page_count());
+        assert!(PdfDoc::open_file_with_password(&path.with_extension("missing"), b"").is_err());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn a_file_without_classic_xref_or_encrypted_is_refused() {
         assert!(prepare(b"not a pdf", 0, None, None).is_err());
     }

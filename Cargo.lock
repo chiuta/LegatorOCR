@@ -1377,6 +1377,7 @@ dependencies = [
  "flate2",
  "image",
  "legatorocr-core",
+ "memmap2",
  "rayon",
 ]
 

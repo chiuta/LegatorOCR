@@ -541,9 +541,8 @@ pub fn pdf_doc(path: &Path) -> Result<std::sync::Arc<legatorocr_pdf::reader::Pdf
     {
         return Ok(d.clone());
     }
-    let data = std::fs::read(path).with_context(|| path.display().to_string())?;
     let doc = std::sync::Arc::new(
-        legatorocr_pdf::reader::PdfDoc::open_with_password(data, &pdf_password())
+        legatorocr_pdf::reader::PdfDoc::open_file_with_password(path, &pdf_password())
             .map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?,
     );
     let mut c = PDF_CACHE.lock().unwrap();
