@@ -1376,7 +1376,7 @@ fn real_main() -> Result<()> {
         return Ok(());
     }
     if let Some(f) = &cli.verify_pdf_signatures {
-        let rs = legatorocr_engine::sign::verify_pdf(f, cli.sign_ca.as_deref())?;
+        let rs = legatorocr_engine::sign::verify_pdf(f, cli.sign_ca.as_deref(), cli.tsa_ca.as_deref())?;
         if rs.is_empty() {
             println!("{}: no signature", f.display());
             std::process::exit(1);
@@ -1389,6 +1389,14 @@ fn real_main() -> Result<()> {
                 Err(e) => {
                     bad = true;
                     println!("signature {} [{}]: FAILED: {e}", r.index, r.sub_filter);
+                }
+            }
+            match &r.timestamp {
+                None => println!("  time stamp inside: none"),
+                Some(Ok(t)) => println!("  time stamp inside: {t} UTC, for this signature{}", if cli.tsa_ca.is_some() { " (authority verified)" } else { " (authority NOT checked: give --tsa-ca)" }),
+                Some(Err(e)) => {
+                    bad = true;
+                    println!("  time stamp inside: FAILED: {e}");
                 }
             }
         }

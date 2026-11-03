@@ -202,11 +202,62 @@ pub struct SigReport {
     pub covers_whole_file: bool,
     /// `Ok(())` when openssl accepted the signature.
     pub result: std::result::Result<(), String>,
+    /// Time stamp inside the signature: `None` when there is none, else the time
+    /// (`Ok`) or why it is not good (`Err`).
+    pub timestamp: Option<std::result::Result<String, String>>,
+}
+
+/// The time-stamp token inside the first signer's unsigned attributes, if any.
+fn embedded_token(cms: &[u8]) -> Option<Vec<u8>> {
+    let items = signer_info_children(cms)?;
+    let (_, unsigned) = items.iter().find(|(t, _)| *t == 0xA1)?;
+    for (_, attr) in children(body_of(unsigned)?)? {
+        let parts = children(body_of(&attr)?)?;
+        if body_of(&parts.first()?.1)? == [0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09, 0x10, 0x02, 0x0E] {
+            let vals = children(body_of(&parts.get(1)?.1)?)?;
+            return Some(vals.first()?.1.clone());
+        }
+    }
+    None
+}
+
+/// Check the time stamp inside `cms` (None when there is none): it must be for exactly the
+/// signature value; with `tsa_ca` OpenSSL also checks the authority's signature.
+fn check_embedded_timestamp(cms: &[u8], tsa_ca: Option<&Path>, tmp: &Path, i: usize) -> Option<std::result::Result<String, String>> {
+    let token = embedded_token(cms)?;
+    Some((|| {
+        let sig = signature_value(cms).ok_or("no signature value")?;
+        // wrap as a TimeStampResp with status 0 so the existing parser can read it
+        let resp = der_tlv(0x30, &[der_tlv(0x30, &[0x02, 0x01, 0x00]), token.clone()].concat());
+        let r = crate::tsa::parse_reply(&resp).map_err(|e| e.to_string())?;
+        if r.digest != legatorocr_pdf::crypt::sha256(&sig) {
+            return Err("the time stamp is for a different signature value".to_string());
+        }
+        if let Some(ca) = tsa_ca {
+            let t = tmp.join(format!("tok{i}.der"));
+            let v = tmp.join(format!("val{i}.bin"));
+            std::fs::write(&t, &token).map_err(|e| e.to_string())?;
+            std::fs::write(&v, &sig).map_err(|e| e.to_string())?;
+            let o = openssl()
+                .args(["ts", "-verify", "-token_in", "-in"])
+                .arg(&t)
+                .arg("-data")
+                .arg(&v)
+                .arg("-CAfile")
+                .arg(ca)
+                .output()
+                .map_err(|e| format!("cannot run openssl: {e}"))?;
+            if !o.status.success() {
+                return Err(format!("the authority's signature was not accepted: {}", String::from_utf8_lossy(&o.stderr).trim()));
+            }
+        }
+        Ok(r.gen_time)
+    })())
 }
 
 /// Check every signature in `file`. Without `ca` the certificate chain is not checked
 /// (`-noverify`): only that the data matches the signature.
-pub fn verify_pdf(file: &Path, ca: Option<&Path>) -> Result<Vec<SigReport>> {
+pub fn verify_pdf(file: &Path, ca: Option<&Path>, tsa_ca: Option<&Path>) -> Result<Vec<SigReport>> {
     let data = std::fs::read(file).with_context(|| format!("reading {}", file.display()))?;
     let sigs = sign::signatures(&data).map_err(|e| anyhow::anyhow!("{e}"))?;
     let tmp = TempDir::new()?;
@@ -237,7 +288,8 @@ pub fn verify_pdf(file: &Path, ca: Option<&Path>) -> Result<Vec<SigReport>> {
                 Err(String::from_utf8_lossy(&o.stderr).trim().to_string())
             }
         })();
-        out.push(SigReport { index: i + 1, name: s.name.clone(), sub_filter: s.sub_filter.clone(), covers_whole_file: s.covers_whole_file(&data), result });
+        let timestamp = der_trim(&s.contents).and_then(|d| check_embedded_timestamp(d, tsa_ca, &tmp.0, i));
+        out.push(SigReport { index: i + 1, name: s.name.clone(), sub_filter: s.sub_filter.clone(), covers_whole_file: s.covers_whole_file(&data), result, timestamp });
     }
     Ok(out)
 }
@@ -286,7 +338,7 @@ mod tests {
         std::fs::write(d.join("in.pdf"), w.finish()).unwrap();
         std::env::set_var("LGR_TEST_P12", "pw");
         sign_pdf(&d.join("in.pdf"), &d.join("out.pdf"), &d.join("t.p12"), "LGR_TEST_P12", Some("Test"), Some("Approved"), None).unwrap();
-        let r = verify_pdf(&d.join("out.pdf"), Some(&d.join("c.pem"))).unwrap();
+        let r = verify_pdf(&d.join("out.pdf"), Some(&d.join("c.pem")), None).unwrap();
         assert_eq!(r.len(), 1);
         assert!(r[0].result.is_ok(), "{:?}", r[0].result);
         assert!(r[0].covers_whole_file);
@@ -294,7 +346,7 @@ mod tests {
         let mut b = std::fs::read(d.join("out.pdf")).unwrap();
         b[20] ^= 0x01;
         std::fs::write(d.join("bad.pdf"), &b).unwrap();
-        let r = verify_pdf(&d.join("bad.pdf"), None).unwrap();
+        let r = verify_pdf(&d.join("bad.pdf"), None, None).unwrap();
         assert!(r[0].result.is_err());
         // wrong password
         std::env::set_var("LGR_TEST_P12", "nope");
@@ -344,6 +396,13 @@ mod tests {
         // and the signature value read back from the stamped CMS is unchanged
         assert_eq!(signature_value(&stamped).unwrap(), sigval);
         assert!(add_timestamp(&stamped, &resp).is_err(), "no second time stamp");
+        // the checker reads it back: time, right signature, and the authority when its certificate is given
+        let tmp = d.clone();
+        let t = check_embedded_timestamp(&stamped, None, &tmp, 0).expect("has a stamp").expect("good stamp");
+        assert!(t.ends_with('Z'), "{t}");
+        check_embedded_timestamp(&stamped, Some(&d.join("tsa.pem")), &tmp, 1).unwrap().unwrap();
+        assert!(check_embedded_timestamp(&stamped, Some(&d.join("c.pem")), &tmp, 2).unwrap().is_err(), "wrong authority");
+        assert!(check_embedded_timestamp(&cms, None, &tmp, 3).is_none(), "unstamped signature");
         let _ = std::fs::remove_dir_all(&d);
     }
 
