@@ -187,3 +187,181 @@ mod tests {
         assert!(qr_codes(&texture(120, 120, 3)).is_empty());
     }
 }
+
+/// A round mark (the outline of a circular stamp or seal) found by [`round_marks`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoundMark {
+    /// Centre and radius in pixels of the picture given.
+    pub cx: u32,
+    pub cy: u32,
+    pub radius: u32,
+    /// Share of the circle that is ink (0..1).
+    pub coverage: f32,
+}
+
+/// Find outlines of round stamps and seals (radius 6..18 mm) by testing circles against the
+/// ink of the picture, working on a reduced copy (about 75 dpi). A circle counts when at least
+/// `min_coverage` of its outline is ink and no gap is longer than a quarter of it. Shape,
+/// not colour: a coloured page does not matter. A hint only: a large letter "O", a round logo
+/// or a coin photo can match.
+pub fn round_marks(g: &GrayImage, dpi: u32, min_coverage: f32) -> Vec<RoundMark> {
+    let f = (dpi.max(75) / 75).max(1);
+    let (w, h) = (g.width() / f, g.height() / f);
+    if w < 64 || h < 64 {
+        return Vec::new();
+    }
+    // background level: the 95th percentile of the grey values; ink is clearly darker
+    let mut hist = [0u32; 256];
+    for p in g.pixels() {
+        hist[p[0] as usize] += 1;
+    }
+    let total = g.pixels().len() as u32;
+    let (mut acc, mut bg) = (0u32, 255u8);
+    for (v, c) in hist.iter().enumerate() {
+        acc += c;
+        if acc >= total / 100 * 95 {
+            bg = v as u8;
+            break;
+        }
+    }
+    let thr = (bg as f32 * 0.78) as u8;
+    let mut ink = vec![false; (w * h) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            'blk: for dy in 0..f {
+                for dx in 0..f {
+                    if g.get_pixel(x * f + dx, y * f + dy)[0] < thr {
+                        ink[(y * w + x) as usize] = true;
+                        break 'blk;
+                    }
+                }
+            }
+        }
+    }
+    let at = |x: i32, y: i32| x >= 0 && y >= 0 && (x as u32) < w && (y as u32) < h && ink[(y as u32 * w + x as u32) as usize];
+    // 75 dpi: 1 mm = 2.95 px
+    let (r_min, r_max) = (18i32, 54i32);
+    let mut found: Vec<RoundMark> = Vec::new();
+    let mut r = r_min;
+    while r <= r_max {
+        let n = ((2.0 * std::f32::consts::PI * r as f32) as usize).clamp(48, 360);
+        let dirs: Vec<(f32, f32)> = (0..n).map(|k| {
+            let a = k as f32 / n as f32 * std::f32::consts::TAU;
+            (a.cos(), a.sin())
+        }).collect();
+        let mut cy = r;
+        while cy < h as i32 - r {
+            let mut cx = r;
+            while cx < w as i32 - r {
+                // quick reject: the four compass points must be near ink
+                let near = |x: i32, y: i32| (-1..=1).any(|d| at(x + d, y) || at(x, y + d));
+                if near(cx + r, cy) && near(cx - r, cy) && near(cx, cy + r) && near(cx, cy - r) {
+                    let mut hit = vec![false; n];
+                    let mut cnt = 0usize;
+                    for (k, (c, s)) in dirs.iter().enumerate() {
+                        let (x, y) = (cx as f32 + c * r as f32, cy as f32 + s * r as f32);
+                        let (xi, yi) = (x.round() as i32, y.round() as i32);
+                        // ink on the circle itself or one pixel to either side along the radius
+                        let on = at(xi, yi) || at((x + c).round() as i32, (y + s).round() as i32) || at((x - c).round() as i32, (y - s).round() as i32);
+                        hit[k] = on;
+                        cnt += on as usize;
+                    }
+                    let cov = cnt as f32 / n as f32;
+                    // a ring has little ink just inside and just outside it; a filled blob, a
+                    // dark band or dense text has ink on both sides
+                    let side = |off: f32| {
+                        let k = dirs.iter().filter(|(c, s)| {
+                            let (x, y) = (cx as f32 + c * (r as f32 + off), cy as f32 + s * (r as f32 + off));
+                            at(x.round() as i32, y.round() as i32)
+                        });
+                        k.count() as f32 / n as f32
+                    };
+                    let (inside, outside) = if cov >= min_coverage { (side(-3.0), side(3.0)) } else { (1.0, 1.0) };
+                    if cov >= min_coverage && inside.min(outside) <= 0.3 && inside.max(outside) <= 0.5 {
+                        // longest gap (circular)
+                        let (mut best, mut run) = (0usize, 0usize);
+                        for k in 0..2 * n {
+                            if hit[k % n] {
+                                run = 0;
+                            } else {
+                                run += 1;
+                                best = best.max(run.min(n));
+                            }
+                        }
+                        if best * 4 <= n {
+                            found.push(RoundMark { cx: cx as u32 * f, cy: cy as u32 * f, radius: r as u32 * f, coverage: cov });
+                        }
+                    }
+                }
+                cx += 2;
+            }
+            cy += 2;
+        }
+        r += 2;
+    }
+    // keep the best circle of each cluster
+    found.sort_by(|a, b| b.coverage.total_cmp(&a.coverage));
+    let mut kept: Vec<RoundMark> = Vec::new();
+    for m in found {
+        let d = |k: &RoundMark| (((k.cx as f32 - m.cx as f32).powi(2) + (k.cy as f32 - m.cy as f32).powi(2)).sqrt(), (k.radius as f32 - m.radius as f32).abs());
+        if !kept.iter().any(|k| {
+            let (dc, dr) = d(k);
+            dc < (k.radius.max(m.radius) as f32) * 0.6 && dr < k.radius.max(m.radius) as f32 * 0.5
+        }) {
+            kept.push(m);
+        }
+    }
+    kept
+}
+
+#[cfg(test)]
+mod round_tests {
+    use super::*;
+
+    fn text_page() -> GrayImage {
+        // lines of dark "words" on white, 300 dpi A5-ish
+        let mut s = 99u32;
+        let mut g = GrayImage::from_pixel(1240, 1750, image::Luma([250]));
+        for line in 0..18 {
+            let y = 120 + line * 84;
+            let mut x = 100;
+            while x < 1100 {
+                s = s.wrapping_mul(1664525).wrapping_add(1013904223);
+                let wlen = 30 + (s >> 24) % 120;
+                for xx in x..(x + wlen).min(1140) {
+                    for yy in y..y + 24 {
+                        if ((xx / 7 + yy / 5) % 3) != 0 {
+                            g.put_pixel(xx, yy, image::Luma([40]));
+                        }
+                    }
+                }
+                x += wlen + 22;
+            }
+        }
+        g
+    }
+
+    fn ring(g: &mut GrayImage, cx: f32, cy: f32, r: f32, t: f32, ink: u8) {
+        for y in 0..g.height() {
+            for x in 0..g.width() {
+                let d = (((x as f32 - cx).powi(2) + (y as f32 - cy).powi(2)).sqrt() - r).abs();
+                if d < t {
+                    let p = g.get_pixel_mut(x, y);
+                    p[0] = p[0].min(ink);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_ring_stamp_over_text_is_found_and_plain_text_gives_none() {
+        let plain = text_page();
+        let none = round_marks(&plain, 300, 0.85);
+        assert!(none.is_empty(), "false alarms on plain text: {none:?}");
+        let mut st = plain.clone();
+        ring(&mut st, 700.0, 900.0, 170.0, 4.0, 110); // faded ink: lighter than text
+        ring(&mut st, 700.0, 900.0, 140.0, 2.5, 110);
+        let marks = round_marks(&st, 300, 0.85);
+        assert!(marks.iter().any(|m| m.cx.abs_diff(700) < 20 && m.cy.abs_diff(900) < 20 && m.radius.abs_diff(170) < 20), "{marks:?}");
+    }
+}

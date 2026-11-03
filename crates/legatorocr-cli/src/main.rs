@@ -1340,6 +1340,13 @@ fn real_main() -> Result<()> {
             if cm.is_empty() {
                 println!("  copy-move: nothing found");
             }
+            let marks = legatorocr_engine::verifier::round_marks(&g, cli.dpi.unwrap_or(300), 0.85);
+            if marks.is_empty() {
+                println!("  round marks (stamps, seals): none found");
+            }
+            for m in &marks {
+                println!("  round mark: centre ({}, {}), radius {} px, {:.0} % of the outline is ink  [a round stamp or seal, or a large letter O or logo: look at it]", m.cx, m.cy, m.radius, m.coverage * 100.0);
+            }
             for c in &cm {
                 println!("  copy-move: {} blocks repeat at offset ({}, {}), source area {:?}  [check by eye: repeated letters or stamps are common]", c.blocks, c.dx, c.dy, c.bbox);
             }
