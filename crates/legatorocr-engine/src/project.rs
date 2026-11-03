@@ -441,6 +441,9 @@ impl Project {
     pub fn load(path: &Path) -> Result<Project> {
         let text =
             std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        if crate::scantailor::looks_like_scantailor(&text) {
+            return crate::scantailor::parse(&text, path.parent()).with_context(|| path.display().to_string());
+        }
         Project::parse(&text, path.parent()).with_context(|| path.display().to_string())
     }
 

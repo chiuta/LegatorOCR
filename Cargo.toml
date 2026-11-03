@@ -7,6 +7,10 @@ members = ["crates/legatorocr-nocr", "crates/legatorocr-core", "crates/legatoroc
 [profile.release]
 overflow-checks = true
 
+[profile.release.package.legatorocr-nocr]
+codegen-units = 1
+opt-level = 3
+
 [workspace.package]
 version = "0.2.0-pre.13"
 edition = "2021"

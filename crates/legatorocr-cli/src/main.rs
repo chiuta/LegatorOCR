@@ -48,7 +48,8 @@ struct Cli {
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
-    /// saved by the GUI or `--save-project`. Its processing settings replace the
+    /// saved by the GUI or `--save-project`, or a ScanTailor project (`.ScanTailor`: scan list and
+    /// rotation only; skew, split and content are found again). Its processing settings replace the
     /// command-line ones; output options (`--pdf`, `--ocr`, …) still apply.
     #[arg(long)]
     project: Option<PathBuf>,
@@ -114,7 +115,7 @@ struct Cli {
     keywords: Option<String>,
 
     /// Also write the recognised text of all pages to this file (needs --ocr).
-    #[arg(long)]
+    #[arg(long, alias = "sidecar")]
     txt: Option<PathBuf>,
 
     /// Also write an hOCR file with word boxes and confidences (needs --ocr).
@@ -625,6 +626,30 @@ struct Cli {
     #[arg(long, default_value_t = 2, value_parser = clap::value_parser!(u8).range(1..=3))]
     pdfa_part: u8,
 
+    /// OCRmyPDF compatibility: same as `--ocr-mode force`.
+    #[arg(long, hide = true)]
+    force_ocr: bool,
+
+    /// OCRmyPDF compatibility: same as `--ocr-mode redo`.
+    #[arg(long, hide = true)]
+    redo_ocr: bool,
+
+    /// OCRmyPDF compatibility: skew correction is on by default; accepted and ignored.
+    #[arg(long, hide = true)]
+    deskew: bool,
+
+    /// OCRmyPDF compatibility: same as `--auto-rotate`.
+    #[arg(long, hide = true)]
+    rotate_pages: bool,
+
+    /// OCRmyPDF compatibility: `pdfa` (or `pdfa-1`, `pdfa-2`, `pdfa-3`) = `--pdfa [--pdfa-part N]`, `pdf` = plain PDF.
+    #[arg(long, hide = true, value_parser = ["pdf", "pdfa", "pdfa-1", "pdfa-2", "pdfa-3"], value_name = "TYPE")]
+    output_type: Option<String>,
+
+    /// Number of worker threads (default: all cores). Same as OCRmyPDF's --jobs.
+    #[arg(short = 'j', long, value_name = "N")]
+    jobs: Option<usize>,
+
     /// Label the first N pages i, ii, iii … in PDF viewers; numbering restarts at 1 after them.
     #[arg(long, value_name = "N", default_value_t = 0)]
     front_matter: u32,
@@ -643,7 +668,7 @@ struct Cli {
     ocr: bool,
 
     /// Tesseract language(s), e.g. `ron+eng`.
-    #[arg(long, default_value = "eng")]
+    #[arg(short = 'l', long, alias = "language", default_value = "eng")]
     lang: String,
 
     /// Tesseract page-segmentation mode.
@@ -669,7 +694,7 @@ struct Cli {
 
     /// Scan resolution of the inputs. Default: read from each PNG/JPEG header
     /// when it is 150–1200 dpi, otherwise 300.
-    #[arg(long)]
+    #[arg(long, alias = "image-dpi")]
     dpi: Option<u32>,
 
     #[arg(long, value_enum, default_value = "color")]
@@ -1115,6 +1140,29 @@ fn watch_loop(cli: &Cli, dir: &std::path::Path) -> Result<()> {
 
 fn real_main() -> Result<()> {
     let mut cli = Cli::parse();
+    if cli.force_ocr {
+        cli.ocr_mode = Some("force".into());
+        cli.ocr = true;
+    }
+    if cli.redo_ocr {
+        cli.ocr_mode = Some("redo".into());
+        cli.ocr = true;
+    }
+    if cli.rotate_pages {
+        cli.auto_rotate = true;
+    }
+    if let Some(t) = cli.output_type.as_deref() {
+        if t != "pdf" {
+            cli.pdfa = true;
+            if let Some(n) = t.strip_prefix("pdfa-").and_then(|n| n.parse::<u8>().ok()) {
+                cli.pdfa_part = n;
+            }
+        }
+    }
+    if let Some(n) = cli.jobs.filter(|&n| n > 0) {
+        // the global pool is built once, before any parallel work
+        let _ = rayon::ThreadPoolBuilder::new().num_threads(n).build_global();
+    }
     if let Ok(mut g) = legatorocr_engine::DEFAULT_TAGGED.lock() {
         *g = cli.tagged.clone();
     }

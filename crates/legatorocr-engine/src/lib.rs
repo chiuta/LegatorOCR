@@ -19,6 +19,7 @@ pub mod isolate;
 pub mod mrz;
 pub mod plugin;
 pub mod reprocess;
+pub mod scantailor;
 pub mod bagit;
 pub mod burst;
 pub mod catalog;

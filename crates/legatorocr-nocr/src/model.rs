@@ -224,6 +224,26 @@ impl Model {
     /// Per-column log-probabilities of a line image (`LINE_H` rows, ink = 1.0, paper = 0.0, row
     /// major). Returns `(columns, nc)`; column `t` covers pixels `4t..4t+4`.
     pub fn forward(&self, img: &[f32], w: usize) -> (usize, Vec<f32>) {
+        #[cfg(target_arch = "x86_64")]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                // SAFETY: the CPU was just checked for AVX2; the function only runs the safe code of
+                // `forward_impl` compiled with wider vector registers. AVX2 without FMA keeps every
+                // float operation and its order, so the result is bit-identical to the plain build.
+                return unsafe { self.forward_avx2(img, w) };
+            }
+        }
+        self.forward_impl(img, w)
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx2")]
+    unsafe fn forward_avx2(&self, img: &[f32], w: usize) -> (usize, Vec<f32>) {
+        self.forward_impl(img, w)
+    }
+
+    #[inline(always)]
+    fn forward_impl(&self, img: &[f32], w: usize) -> (usize, Vec<f32>) {
         assert_eq!(img.len(), LINE_H * w);
         let w0 = w;
         let w = w.max(4).div_ceil(4) * 4;
@@ -288,6 +308,7 @@ impl Model {
     }
 }
 
+#[inline(always)]
 fn log_softmax(r: &mut [f32]) {
     let m = r.iter().cloned().fold(f32::MIN, f32::max);
     let s: f32 = r.iter().map(|&v| (v - m).exp()).sum();
@@ -298,6 +319,7 @@ fn log_softmax(r: &mut [f32]) {
 }
 
 /// 3×3 convolution, padding 1, ReLU; activations `[h][w][c]`.
+#[inline(always)]
 fn conv3x3_relu(x: &[f32], h: usize, w: usize, cv: &Conv) -> Vec<f32> {
     let (cin, cout) = (cv.cin, cv.cout);
     let mut out = vec![0.0f32; h * w * cout];
@@ -338,6 +360,7 @@ fn conv3x3_relu(x: &[f32], h: usize, w: usize, cv: &Conv) -> Vec<f32> {
     out
 }
 
+#[inline(always)]
 fn maxpool(x: &[f32], h: usize, w: usize, c: usize, ph: usize, pw: usize) -> Vec<f32> {
     let (oh, ow) = (h / ph, w / pw);
     let mut out = vec![f32::MIN; oh * ow * c];
@@ -362,6 +385,7 @@ fn sigmoid(v: f32) -> f32 {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline(always)]
 fn gru_dir(
     x: &[f32],
     t: usize,
@@ -411,6 +435,7 @@ fn gru_dir(
     }
 }
 
+#[inline(always)]
 fn bigru(x: &[f32], t: usize, g: &Bigru, hid: usize) -> Vec<f32> {
     let mut out = vec![0.0f32; t * 2 * hid];
     gru_dir(x, t, g.nin, &g.f, hid, false, &mut out, 2 * hid, 0);

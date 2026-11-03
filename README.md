@@ -39,6 +39,19 @@ read from the PNG/JPEG header when it says 150–1200 dpi (otherwise 300; overri
 EXIF rotation is applied and transparency is flattened onto white. Out-of-range numbers are rejected
 with a clear message rather than producing absurd page sizes.
 
+## Less common options
+
+`-o, --out-dir DIR` folder for the processed page images · `--no-deskew`, `--max-skew DEG`, `--no-auto-orient`
+(sideways pages), `--no-despeckle` (keep specks) · `--sauvola-k K` (black-and-white sensitivity),
+`--picture-sensitivity 0-1` (mixed/hybrid) · `--jpeg-quality N` (with `--format jpeg`) · PDF metadata
+`--subject`, `--keywords` · `--tesseract PATH` (external engine) · `--burst-gap SECONDS` (with `--burst`),
+`--fuse-max-shift PX` (with `--fuse-frames`) · `--watch-interval SECONDS`, `--watch-skip-existing` (with
+`--watch`) · `--version`. `--project FILE.ScanTailor` opens a ScanTailor project: the scan list and the rotation per image are taken over; skew, split and content boxes are found again (the reader was written from the format's description and tested on a hand-made project, not on files from every ScanTailor version).
+Another OCR engine can be plugged in: `--engine tesseract --tesseract PROGRAM` accepts any program that speaks Tesseract's command line and returns its TSV (template and contract: `docs/examples/external-ocr-engine.py`; a generative model there can invent words, so keep a person in the loop). OCR speed and accuracy on your own pages: `scripts/bench-real.py DIR` (images with a `NAME.txt` reference each; `--partial` for references that cover part of a page).
+OCRmyPDF names are accepted: `-l/--language`, `--force-ocr`, `--redo-ocr`, `--skip-text`, `--deskew` (no-op, on by
+default), `--rotate-pages`, `--output-type pdf|pdfa|pdfa-1|2|3`, `-j/--jobs N`, `--sidecar FILE`, `--image-dpi`
+(output is named with `--pdf FILE`; there is no positional output). `scripts/check-options.py` lists every option that lacks documentation or a test.
+
 ## Install
 
 Download the archive for your platform from the Releases page, or build from source:
