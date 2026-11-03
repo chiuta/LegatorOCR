@@ -75,6 +75,13 @@ jobs:
                 if grep -aqi 'VCRUNTIME140' "target/${{ matrix.target }}/release/$b.exe"; then echo "$b.exe depends on the VC++ runtime DLL"; exit 1; fi
               done;;
           esac
+      - name: PortableApps-layout zip (Windows only)
+        if: contains(matrix.target, 'windows')
+        shell: bash
+        run: |
+          set -e
+          python3 packaging/portableapps/build.py "target/${{ matrix.target }}/release" dist "${TAG#v}"
+          test -f "dist/LegatorOCRPortable-${TAG#v}.zip"
       - name: Smoke test the packaged binary (runs it, not just links it)
         shell: bash
         run: |

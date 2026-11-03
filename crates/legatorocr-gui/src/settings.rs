@@ -420,7 +420,23 @@ impl UiSettings {
 }
 
 /// Where the user's settings live: `…/legatorocr/settings.lgr` in the platform config dir.
+/// Portable mode (PortableApps layout and plain USB-stick folders): when a file named
+/// `portable.txt` sits next to the program, settings live in `Data` instead of the user's
+/// profile - `../../Data` for the PortableApps layout `App/LegatorOCR/legatorocr-gui.exe`,
+/// otherwise `Data` next to the program. Nothing is written outside that folder.
+pub fn portable_data_dir(exe: &std::path::Path) -> Option<PathBuf> {
+    let dir = exe.parent()?;
+    if !dir.join("portable.txt").is_file() {
+        return None;
+    }
+    let pa = dir.parent().and_then(|p| p.parent()).filter(|_| dir.parent().and_then(|p| p.file_name()).is_some_and(|n| n == "App"));
+    Some(pa.map(|r| r.join("Data")).unwrap_or_else(|| dir.join("Data")))
+}
+
 pub fn config_path() -> Option<PathBuf> {
+    if let Some(d) = std::env::current_exe().ok().and_then(|e| portable_data_dir(&e)) {
+        return Some(d.join("settings.lgr"));
+    }
     let base = if cfg!(windows) {
         std::env::var_os("APPDATA").map(PathBuf::from)
     } else if cfg!(target_os = "macos") {
@@ -432,6 +448,28 @@ pub fn config_path() -> Option<PathBuf> {
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
     }?;
     Some(base.join("legatorocr").join("settings.lgr"))
+}
+
+#[cfg(test)]
+mod portable_tests {
+    use super::*;
+
+    #[test]
+    fn portable_mode_needs_the_marker_and_follows_the_layout() {
+        let base = std::env::temp_dir().join(format!("lgr_portable_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let app = base.join("LegatorOCRPortable/App/LegatorOCR");
+        std::fs::create_dir_all(&app).unwrap();
+        let exe = app.join("legatorocr-gui.exe");
+        assert_eq!(portable_data_dir(&exe), None, "no marker: normal profile");
+        std::fs::write(app.join("portable.txt"), "").unwrap();
+        assert_eq!(portable_data_dir(&exe), Some(base.join("LegatorOCRPortable/Data")));
+        let plain = base.join("stick/legatorocr");
+        std::fs::create_dir_all(&plain).unwrap();
+        std::fs::write(plain.join("portable.txt"), "").unwrap();
+        assert_eq!(portable_data_dir(&plain.join("legatorocr-gui")), Some(plain.join("Data")));
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
 
 #[cfg(test)]

@@ -11,3 +11,12 @@ a human to open the submission under their own account.
 | `winget/ChiutaAlexio.LegatorOCR.yaml` | winget | parsed as YAML only |
 | `flatpak/tf.trom.LegatorOCR.yml` | Flathub | parsed as YAML only; needs vendored crates |
 | `debian/control`, `debian/rules` | Debian | not built |
+
+## Portable folder (roadmap 1.11)
+
+`portableapps/build.py BIN_DIR OUT_DIR VERSION` builds a PortableApps-layout folder and zip
+(`App/AppInfo/appinfo.ini`, `App/LegatorOCR/`, `Data/`, `Other/Source/`). A `portable.txt` next
+to the programs puts the GUI settings in `Data` instead of the user's profile (unit-tested in
+`legatorocr-gui`; layout built by the Windows release job). Not done: the PortableApps.com
+Launcher `.exe`, icons and the installer (Windows tools), and no run of the result on a
+Windows PC; the folder starts the GUI through `Start-LegatorOCR.cmd`.

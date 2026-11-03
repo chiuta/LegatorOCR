@@ -74,7 +74,7 @@ Working rule for every item: record a number *before*, build, record a number *a
 | 0.5 | done | CI step runs the whole chain in an empty network namespace (Linux) |
 | 0.2 | partial | CI job `ocr-regression` runs `scripts/ocr-bench.py --max-cer 0.3` on 24 synthetic pages (8 languages x 3 scan conditions, exact ground truth; mean CER 0.007 %); a regression guard only, no size or time gate yet |
 | 0.1, 0.6 | not started | 0.1 (real pages) needs hand-verified text from a person; the synthetic set above is the stand-in |
-| 1.11 | blocked | a real PortableApps package needs the Windows PortableApps.com Launcher / Installer; not testable here |
+| 1.11 | partial | alternative route without the PortableApps.com Launcher: `packaging/portableapps/build.py` builds the PortableApps folder layout + zip (appinfo.ini, App/, Data/, Other/Source) and the Windows release job runs it; a `portable.txt` beside the programs makes the GUI keep its settings in `Data` (unit test on the layout rules; script run here on the Linux binary: 7 expected files). Not done: Launcher `.exe`, icons, `.paf.exe` installer, PortableApps.com acceptance, any run on a Windows PC |
 
 Phase 2 other than 2.3, and everything from Phase 3 on, is not started.
 
