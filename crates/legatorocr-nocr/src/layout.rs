@@ -633,7 +633,7 @@ fn weakest_row(rows: &[u32], med: u32) -> Option<usize> {
     let hi = n.saturating_sub(lo).max(lo + 1);
     let (i, &v) = rows[lo..hi].iter().enumerate().min_by_key(|&(_, v)| *v)?;
     let mean = rows.iter().sum::<u32>() as f32 / n as f32;
-    if (v as f32) < mean * 0.35 {
+    if (v as f32) < mean * 0.15 {
         Some(lo + i)
     } else {
         None
