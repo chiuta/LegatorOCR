@@ -37,6 +37,32 @@ def work(img, dpi):
     except Exception:
         return rows
     cs = set(CHARSET)
+    # the CLI works on a cropped/deskewed copy, so word coordinates are in another frame: group the
+    # words by Tesseract's own line index and match lines by text instead of by position
+    tl = {}
+    for w in words:
+        tl.setdefault(w.get("line", 0), []).append(w)
+    tlines = [" ".join("".join(MAP.get(c, c) for c in w["text"]) for w in sorted(ws, key=lambda w: w["x"]))
+              for _, ws in sorted(tl.items())]
+    used = set()
+    for ln in map(json.loads, open(f"{d}/{stem}.jsonl", encoding="utf8")):
+        mo = ln["model"].replace(" ", "")
+        if len(mo) < 8:
+            continue
+        best = None
+        for k, t in enumerate(tlines):
+            tn = t.replace(" ", "")
+            if k in used or abs(len(tn) - len(mo)) > 0.15 * len(mo) + 1:
+                continue
+            dd = L.distance(tn, mo) / max(len(tn), 1)
+            if best is None or dd < best[0]:
+                best = (dd, k, t)
+        if best is None or best[0] > MAXDIFF or any(c not in cs for c in best[2]):
+            continue
+        used.add(best[1])
+        rows.append(f"{d}/{stem}_{ln['i']}.png\t{best[2]}")
+    return rows
+    cs = set(CHARSET)
     for ln in map(json.loads, open(f"{d}/{stem}.jsonl", encoding="utf8")):
         xc = ln["x"] + ln["w"] / 2
         on = []
