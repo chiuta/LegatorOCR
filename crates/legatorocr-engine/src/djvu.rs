@@ -15,6 +15,35 @@ use djvu_rs::{Bitmap, Pixmap};
 use legatorocr_core::{Page, PageImage, Word};
 use std::sync::Mutex;
 
+static THUMBS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Add a small page preview (`TH44`, long side 128 px) to every page recorded from now on.
+/// Viewers use it for the page strip; it makes the file larger (see ROADMAP 6.6).
+pub fn set_thumbnails(on: bool) {
+    THUMBS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Append `TH44` chunks to a single-page `AT&TFORM....DJVU` file and fix the form length.
+fn add_thumbnail(mut page: Vec<u8>, payloads: &[Vec<u8>]) -> Result<Vec<u8>> {
+    if page.len() < 16 || &page[..4] != b"AT&T" || &page[4..8] != b"FORM" || &page[12..16] != b"DJVU" {
+        return Err(anyhow!("unexpected DjVu page structure"));
+    }
+    if page.len() % 2 == 1 {
+        page.push(0);
+    }
+    for p in payloads {
+        page.extend_from_slice(b"TH44");
+        page.extend_from_slice(&(p.len() as u32).to_be_bytes());
+        page.extend_from_slice(p);
+        if p.len() % 2 == 1 {
+            page.push(0);
+        }
+    }
+    let body = (page.len() - 12) as u32;
+    page[8..12].copy_from_slice(&body.to_be_bytes());
+    Ok(page)
+}
+
 static PAGES: Mutex<Option<Vec<Vec<u8>>>> = Mutex::new(None);
 
 /// Start collecting pages (also clears an earlier run).
@@ -78,7 +107,13 @@ pub fn record(page: &Page, words: &[Word]) -> Result<()> {
             if let Some(l) = layer {
                 enc = enc.with_text_layer(l);
             }
-            enc.encode()
+            enc.encode().map_err(|e| anyhow!("DjVu encoding failed: {e}")).and_then(|b| {
+                if THUMBS.load(std::sync::atomic::Ordering::Relaxed) {
+                    add_thumbnail(b, &djvu_rs::thumbnail::encode_th44_gray_from_bitmap(&bm))
+                } else {
+                    Ok(b)
+                }
+            })
         }
         other => {
             let rgb = match other {
@@ -94,10 +129,15 @@ pub fn record(page: &Page, words: &[Word]) -> Result<()> {
             if let Some(l) = layer {
                 enc = enc.with_text_layer(l);
             }
-            enc.encode()
+            enc.encode().map_err(|e| anyhow!("DjVu encoding failed: {e}")).and_then(|b| {
+                if THUMBS.load(std::sync::atomic::Ordering::Relaxed) {
+                    add_thumbnail(b, &djvu_rs::thumbnail::encode_th44_color(&pm))
+                } else {
+                    Ok(b)
+                }
+            })
         }
-    }
-    .map_err(|e| anyhow!("DjVu encoding failed: {e}"))?;
+    }?;
     if let Some(v) = PAGES.lock().unwrap().as_mut() {
         v.push(bytes);
     }

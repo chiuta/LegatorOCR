@@ -467,6 +467,11 @@ struct Cli {
     #[arg(long, value_name = "FILE")]
     djvu: Option<PathBuf>,
 
+    /// Add a page preview (TH44, 128 px) to each page of the --djvu file, for the page strip of
+    /// DjVu viewers. Makes the file larger (about 6 KB per page; +12 % on 12 black & white pages).
+    #[arg(long, requires = "djvu")]
+    djvu_thumbnails: bool,
+
     /// Process only part of the input list so several machines (or runs) can share a big batch:
     /// `I/N` takes the I-th of N consecutive slices (I from 1), e.g. `--shard 2/4`. Give each
     /// shard its own --pdf / output folder, then join the results with --merge-pdf. Pages keep
@@ -2190,6 +2195,7 @@ fn real_main() -> Result<()> {
     legatorocr_engine::explain::enable(cli.explain);
     legatorocr_engine::certify::enable(cli.certify);
     if cli.djvu.is_some() {
+        legatorocr_engine::djvu::set_thumbnails(cli.djvu_thumbnails);
         legatorocr_engine::djvu::begin();
     }
     let res = run_export(

@@ -110,3 +110,45 @@ fn shards_cover_the_list_in_order_and_join_into_the_full_document() {
     assert!(!bad.status.success());
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn djvu_thumbnails_are_added_and_accepted_by_djvulibre() {
+    let d = std::env::temp_dir().join(format!("lgr_djvu_th_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    let mut img = image::GrayImage::from_pixel(400, 300, image::Luma([255]));
+    for y in 60..70 {
+        for x in 40..300 {
+            img.put_pixel(x, y, image::Luma([0]));
+        }
+    }
+    img.save(d.join("a.png")).unwrap();
+    let run = |name: &str, extra: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_legatorocr"))
+            .current_dir(&d)
+            .args(["a.png", "a.png", "--dpi", "300", "--mode", "bw", "--djvu", name, "-o", "pages"])
+            .args(extra)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        std::fs::read(d.join(name)).unwrap()
+    };
+    let plain = run("plain.djvu", &[]);
+    let with = run("th.djvu", &["--djvu-thumbnails"]);
+    assert!(with.len() > plain.len());
+    assert!(with.windows(4).any(|w| w == b"TH44"));
+    assert!(!plain.windows(4).any(|w| w == b"TH44"));
+    if Command::new("djvudump").arg("--help").output().is_ok() {
+        let dump = Command::new("djvudump").arg(d.join("th.djvu")).output().unwrap();
+        assert!(dump.status.success(), "{}", String::from_utf8_lossy(&dump.stderr));
+        let text = String::from_utf8_lossy(&dump.stdout);
+        assert!(text.contains("TH44") && text.contains("2 pages"), "{text}");
+        // pages still decode to the same pixels
+        let ok = Command::new("ddjvu").args(["-format=pbm", "-page=1"]).arg(d.join("th.djvu")).arg(d.join("t1.pbm")).status().unwrap();
+        assert!(ok.success());
+        let ok = Command::new("ddjvu").args(["-format=pbm", "-page=1"]).arg(d.join("plain.djvu")).arg(d.join("p1.pbm")).status().unwrap();
+        assert!(ok.success());
+        assert_eq!(std::fs::read(d.join("t1.pbm")).unwrap(), std::fs::read(d.join("p1.pbm")).unwrap());
+    }
+    let _ = std::fs::remove_dir_all(&d);
+}
