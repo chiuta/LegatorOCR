@@ -1355,6 +1355,13 @@ fn real_main() -> Result<()> {
             if cm.is_empty() {
                 println!("  copy-move: nothing found");
             }
+            if let Some(dq) = std::fs::read(p).ok().and_then(|b| legatorocr_engine::verifier::jpeg_double_quant(&b)) {
+                if dq.likely_double {
+                    println!("  double-JPEG: the coefficient histograms show a comb pattern (score {:.1}); this JPEG was probably saved twice  [hint: re-saving is common and harmless; a pasted-in part from another file would need more evidence]", dq.score);
+                } else {
+                    println!("  double-JPEG: no sign of a second save (score {:.1}; a small or smooth picture, or a second save at a similar or higher quality, hides it)", dq.score);
+                }
+            }
             let marks = legatorocr_engine::verifier::round_marks(&g, cli.dpi.unwrap_or(300), 0.85);
             if marks.is_empty() {
                 println!("  round marks (stamps, seals): none found");

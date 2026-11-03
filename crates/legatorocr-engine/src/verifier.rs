@@ -365,3 +365,220 @@ mod round_tests {
         assert!(marks.iter().any(|m| m.cx.abs_diff(700) < 20 && m.cy.abs_diff(900) < 20 && m.radius.abs_diff(170) < 20), "{marks:?}");
     }
 }
+
+/// Double-quantisation test on the DCT coefficients of a JPEG's luma (Popescu & Farid style).
+/// A picture saved at quality A and later again at quality B leaves a comb pattern in the
+/// histogram of its low-frequency coefficients; one saved once has a smooth histogram.
+#[derive(Debug, Clone)]
+pub struct DoubleQuant {
+    /// Mean of `spikiness` over the five coefficients.
+    pub score: f64,
+    /// True when `score` is above [`DOUBLE_QUANT_THRESHOLD`].
+    pub likely_double: bool,
+    /// "Spikiness" of the histogram for the coefficients (0,1) (1,0) (1,1) (0,2) (2,0):
+    /// mean absolute second difference over the mean count; higher = more comb-like.
+    pub spikiness: [f64; 5],
+    /// Quantisation step of those coefficients in the file's own table.
+    pub steps: [u16; 5],
+}
+
+const ZIGZAG: [usize; 64] = [
+    0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
+];
+
+/// Luma quantisation table (natural order) of a JPEG file.
+fn jpeg_luma_table(b: &[u8]) -> Option<[u16; 64]> {
+    let mut i = 2;
+    while i + 4 <= b.len() {
+        if b[i] != 0xFF {
+            return None;
+        }
+        let m = b[i + 1];
+        if m == 0xD8 || (0xD0..=0xD7).contains(&m) || m == 0x01 {
+            i += 2;
+            continue;
+        }
+        let len = ((b[i + 2] as usize) << 8) | b[i + 3] as usize;
+        if m == 0xDB {
+            let mut p = i + 4;
+            let end = (i + 2 + len).min(b.len());
+            while p < end {
+                let (prec, id) = (b[p] >> 4, b[p] & 15);
+                p += 1;
+                let sz = if prec == 0 { 64 } else { 128 };
+                if p + sz > end {
+                    return None;
+                }
+                if id == 0 {
+                    let mut t = [0u16; 64];
+                    for k in 0..64 {
+                        t[ZIGZAG[k]] = if prec == 0 { b[p + k] as u16 } else { ((b[p + 2 * k] as u16) << 8) | b[p + 2 * k + 1] as u16 };
+                    }
+                    return Some(t);
+                }
+                p += sz;
+            }
+        }
+        if m == 0xDA {
+            return None;
+        }
+        i += 2 + len;
+    }
+    None
+}
+
+/// Chosen on 42 files as the lowest score with no false alarm on single saves, then checked
+/// on 78 other files (ROADMAP 7.5b).
+pub const DOUBLE_QUANT_THRESHOLD: f64 = 5.0;
+
+pub fn jpeg_double_quant(bytes: &[u8]) -> Option<DoubleQuant> {
+    if bytes.len() < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8 {
+        return None;
+    }
+    let q = jpeg_luma_table(bytes)?;
+    let g = image::load_from_memory_with_format(bytes, image::ImageFormat::Jpeg).ok()?.to_luma8();
+    let (bw, bh) = (g.width() / 8, g.height() / 8);
+    if bw < 8 || bh < 8 {
+        return None;
+    }
+    let modes: [(usize, usize); 5] = [(0, 1), (1, 0), (1, 1), (0, 2), (2, 0)]; // (u = column freq, v = row freq)
+    let mut cos = [[0f32; 8]; 8];
+    for (k, row) in cos.iter_mut().enumerate() {
+        for (n, c) in row.iter_mut().enumerate() {
+            *c = ((2 * n + 1) as f32 * k as f32 * std::f32::consts::PI / 16.0).cos();
+        }
+    }
+    let scale = |k: usize| if k == 0 { (1.0f32 / 8.0).sqrt() } else { 0.5 };
+    const K: i32 = 16;
+    let mut hist = vec![[0u32; (2 * K + 1) as usize]; 5];
+    let raw = g.as_raw();
+    let w = g.width() as usize;
+    for by in 0..bh as usize {
+        for bx in 0..bw as usize {
+            let mut blk = [0f32; 64];
+            for y in 0..8 {
+                for x in 0..8 {
+                    blk[y * 8 + x] = raw[(by * 8 + y) * w + bx * 8 + x] as f32 - 128.0;
+                }
+            }
+            for (mi, &(u, v)) in modes.iter().enumerate() {
+                let mut s = 0f32;
+                for y in 0..8 {
+                    for x in 0..8 {
+                        s += blk[y * 8 + x] * cos[u][x] * cos[v][y];
+                    }
+                }
+                let c = s * scale(u) * scale(v) / q[v * 8 + u] as f32;
+                let k = c.round() as i32;
+                if (-K..=K).contains(&k) {
+                    hist[mi][(k + K) as usize] += 1;
+                }
+            }
+        }
+    }
+    let mut spikiness = [0f64; 5];
+    for (mi, h) in hist.iter().enumerate() {
+        // Take log counts on bins 2..=14 of each side (bins with at least 30 blocks), remove a
+        // smooth quadratic trend, and look for a periodic ripple: the largest spectral line over
+        // the mean spectral power. A comb from double quantisation is periodic; the curvature of
+        // an ordinary histogram is not.
+        let mut score = 0f64;
+        for side in [1i32, -1] {
+            let ks: Vec<i32> = (2..=14).filter(|k| h[(side * k + K) as usize] >= 30).collect();
+            if ks.len() < 8 {
+                continue;
+            }
+            let ys: Vec<f64> = ks.iter().map(|k| (h[(side * k + K) as usize] as f64).ln()).collect();
+            // least-squares quadratic
+            let n = ks.len();
+            let (mut sx, mut sx2, mut sx3, mut sx4, mut sy, mut sxy, mut sx2y) = (0f64, 0f64, 0f64, 0f64, 0f64, 0f64, 0f64);
+            for (k, y) in ks.iter().zip(&ys) {
+                let x = *k as f64 / 14.0;
+                sx += x;
+                sx2 += x * x;
+                sx3 += x * x * x;
+                sx4 += x * x * x * x;
+                sy += y;
+                sxy += x * y;
+                sx2y += x * x * y;
+            }
+            // normal equations for y = c0 + c1 x + c2 x^2
+            let m = [[n as f64, sx, sx2], [sx, sx2, sx3], [sx2, sx3, sx4]];
+            let rhs = [sy, sxy, sx2y];
+            let det = |m: &[[f64; 3]; 3]| m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+            let d = det(&m);
+            if d.abs() < 1e-12 {
+                continue;
+            }
+            let mut c = [0f64; 3];
+            for j in 0..3 {
+                let mut mj = m;
+                for i in 0..3 {
+                    mj[i][j] = rhs[i];
+                }
+                c[j] = det(&mj) / d;
+            }
+            let res: Vec<f64> = ks.iter().zip(&ys).map(|(k, y)| {
+                let x = *k as f64 / 14.0;
+                y - (c[0] + c[1] * x + c[2] * x * x)
+            }).collect();
+            let mut powers = Vec::new();
+            for step in 1..=40 {
+                let f = step as f64 / 40.0 * 0.5; // cycles per bin, up to 0.5
+                let (mut re, mut im) = (0f64, 0f64);
+                for (k, r) in ks.iter().zip(&res) {
+                    let ph = std::f64::consts::TAU * f * *k as f64;
+                    re += r * ph.cos();
+                    im += r * ph.sin();
+                }
+                powers.push(re * re + im * im);
+            }
+            let mean = powers.iter().sum::<f64>() / powers.len() as f64;
+            let peak = powers.iter().cloned().fold(0.0, f64::max);
+            // amplitude of the ripple matters as much as its sharpness
+            let rms = (res.iter().map(|r| r * r).sum::<f64>() / res.len() as f64).sqrt();
+            if mean > 0.0 {
+                score = score.max(peak / mean * rms);
+            }
+        }
+        spikiness[mi] = score;
+    }
+    let score = spikiness.iter().sum::<f64>() / 5.0;
+    Some(DoubleQuant { score, likely_double: score > DOUBLE_QUANT_THRESHOLD, spikiness, steps: modes.map(|(u, v)| q[v * 8 + u]) })
+}
+
+#[cfg(test)]
+mod double_quant_tests {
+    use super::*;
+    use image::codecs::jpeg::JpegEncoder;
+
+    fn photo_like() -> image::GrayImage {
+        // blocks of different brightness, waves and noise, so that low-frequency coefficients
+        // spread over many quantisation bins as in a photographed page
+        let mut s = 7u32;
+        image::GrayImage::from_fn(1024, 1024, |x, y| {
+            s = s.wrapping_mul(1664525).wrapping_add(1013904223);
+            let n = ((s >> 24) as f32 - 128.0) * 0.25;
+            let base = if (x / 13 + y / 11) % 2 == 0 { 70.0 } else { 175.0 };
+            let v = base + 30.0 * ((x as f32 * 0.21).sin() + (y as f32 * 0.13).cos()) + n;
+            image::Luma([v.clamp(0.0, 255.0) as u8])
+        })
+    }
+    fn save(g: &image::GrayImage, q: u8) -> Vec<u8> {
+        let mut b = Vec::new();
+        JpegEncoder::new_with_quality(&mut b, q).encode(g.as_raw(), g.width(), g.height(), image::ExtendedColorType::L8).unwrap();
+        b
+    }
+
+    #[test]
+    fn a_double_saved_jpeg_scores_higher_than_a_single_save() {
+        let g = photo_like();
+        let single = save(&g, 90);
+        let first = image::load_from_memory(&save(&g, 55)).unwrap().to_luma8();
+        let double = save(&first, 90);
+        let (s, d) = (jpeg_double_quant(&single).unwrap(), jpeg_double_quant(&double).unwrap());
+        eprintln!("single {:.2} double {:.2}", s.score, d.score);
+        assert!(d.score > s.score * 2.0, "single {} double {}", s.score, d.score);
+        assert!(jpeg_double_quant(b"not a jpeg").is_none());
+    }
+}
