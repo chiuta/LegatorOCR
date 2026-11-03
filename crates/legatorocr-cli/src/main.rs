@@ -1,3 +1,4 @@
+mod fff;
 use anyhow::{bail, Context, Result};
 use clap::{Parser, ValueEnum};
 use legatorocr_core::{HAlign, OutputMode, Settings, SplitMode, Threshold, VAlign};
@@ -159,6 +160,20 @@ struct Cli {
     /// the text, box (pixels of the processed page), confidence and line (needs --ocr).
     #[arg(long)]
     json: Option<PathBuf>,
+
+    /// Write the recognised text as an FFF envelope (`document/ocr`, `.fff.json`) for the next app in the
+    /// source chain: LegatorOCR -> TEZAUR (`tezaur ingest --fff-in`) -> VERIGA -> AcademiSearch. Carries the text
+    /// per page and the SHA-256 of the scan; works offline (needs --ocr). Spec: docs/FFF-ENVELOPE.md in the hub.
+    #[arg(long, value_name = "FILE")]
+    fff_out: Option<PathBuf>,
+
+    /// Title for --fff-out (default: first heading of the recognised text).
+    #[arg(long, value_name = "TEXT")]
+    fff_title: Option<String>,
+
+    /// Publication year for --fff-out (makes the reference citable as Author (Year)).
+    #[arg(long, value_name = "YYYY")]
+    fff_year: Option<String>,
 
     /// Also write the recognised text as an editable Word document, one page break per
     /// scanned page (needs --ocr).
@@ -1771,10 +1786,11 @@ fn real_main() -> Result<()> {
         || cli.page_xml.is_some()
         || cli.docx.is_some()
         || cli.tei.is_some()
-        || cli.json.is_some())
+        || cli.json.is_some()
+        || cli.fff_out.is_some())
         && !cli.ocr
     {
-        bail!("--txt, --hocr, --alto, --page-xml, --json, --docx and --tei need --ocr");
+        bail!("--txt, --hocr, --alto, --page-xml, --json, --docx, --tei and --fff-out need --ocr");
     }
     for p in cli
         .txt
@@ -2001,6 +2017,7 @@ fn real_main() -> Result<()> {
             &cli.hocr,
             &cli.alto,
             &cli.json,
+            &cli.fff_out,
             &cli.docx,
             &cli.multitiff,
             &cli.package,
@@ -2235,6 +2252,35 @@ fn real_main() -> Result<()> {
         ] {
             resolve_title(p, &title)?;
         }
+    }
+    if let Some(p) = &cli.fff_out {
+        let text = res.text.as_deref().unwrap_or("");
+        let first = inputs.first().cloned().unwrap_or_default();
+        let sha = if inputs.len() == 1 {
+            std::fs::read(&first).map(|b| legatorocr_engine::checksums::sha256_hex(&b)).unwrap_or_default()
+        } else {
+            let all: Vec<String> = inputs.iter().filter_map(|i| std::fs::read(i).ok()).map(|b| legatorocr_engine::checksums::sha256_hex(&b)).collect();
+            legatorocr_engine::checksums::sha256_hex(all.join("\n").as_bytes())
+        };
+        let title = cli.fff_title.clone().or_else(|| legatorocr_engine::naming::title_from_text(text)).unwrap_or_else(|| "untitled".into());
+        let file = if inputs.len() == 1 { first.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default() } else { format!("{} files", inputs.len()) };
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let json = fff::document_ocr(
+            &fff::DocMeta {
+                title: &title,
+                author: cli.author.as_deref().unwrap_or(""),
+                year: cli.fff_year.as_deref().unwrap_or(""),
+                lang: &cli.lang,
+                file: &file,
+                sha256: &sha,
+                text,
+                engine: "LegatorOCR",
+                version: env!("CARGO_PKG_VERSION"),
+            },
+            now,
+        );
+        write_atomic(p, json.as_bytes())?;
+        eprintln!("wrote {} (FFF envelope document/ocr, {} page(s))", p.display(), text.split('\x0c').count());
     }
     if cli.tables_xlsx.is_some() || cli.tables_html.is_some() {
         let found = res.docx_blocks.as_deref().map(legatorocr_engine::tables::find).unwrap_or_default();
