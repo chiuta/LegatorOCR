@@ -1334,6 +1334,7 @@ dependencies = [
  "getrandom 0.3.4",
  "image",
  "legatorocr-core",
+ "legatorocr-nocr",
  "legatorocr-ocr",
  "legatorocr-pdf",
  "rayon",

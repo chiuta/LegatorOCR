@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 pub mod altbin;
 pub mod audit;
 pub mod djvu;
+pub mod doubtful;
 pub mod isolate;
 pub mod mrz;
 pub mod plugin;
@@ -949,6 +950,12 @@ pub fn run_export(
                 }
                 if djvu::enabled() {
                     djvu::record(&pg, &words)?;
+                }
+                if doubtful::enabled() {
+                    if let Some(o) = ocr_opts {
+                        let lang = pagelang::for_page(base + i + 1).unwrap_or_else(|| o.lang.clone());
+                        doubtful::record(base + i + 1, &lang, &words);
+                    }
                 }
                 if pagenum::enabled() {
                     printed_nums.push(legatorocr_core::quality::detect_page_number(

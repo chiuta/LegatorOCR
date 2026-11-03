@@ -472,6 +472,16 @@ struct Cli {
     #[arg(long, requires = "djvu")]
     djvu_thumbnails: bool,
 
+    /// With --ocr: write a tab-separated list of words that are not in the language's word list
+    /// and were read with confidence below --doubtful-conf, for a person to check first.
+    /// Text is not changed. Needs a built-in word list (ron, eng, fra, ita, spa, por, deu, hun).
+    #[arg(long, value_name = "FILE.tsv")]
+    doubtful_words: Option<PathBuf>,
+
+    /// Confidence limit for --doubtful-words (0-100).
+    #[arg(long, value_name = "CONF", default_value_t = 85.0)]
+    doubtful_conf: f32,
+
     /// Process only part of the input list so several machines (or runs) can share a big batch:
     /// `I/N` takes the I-th of N consecutive slices (I from 1), e.g. `--shard 2/4`. Give each
     /// shard its own --pdf / output folder, then join the results with --merge-pdf. Pages keep
@@ -2194,6 +2204,9 @@ fn real_main() -> Result<()> {
     legatorocr_engine::qa::enable(cli.quality_report);
     legatorocr_engine::explain::enable(cli.explain);
     legatorocr_engine::certify::enable(cli.certify);
+    if cli.doubtful_words.is_some() {
+        legatorocr_engine::doubtful::begin(cli.doubtful_conf);
+    }
     if cli.djvu.is_some() {
         legatorocr_engine::djvu::set_thumbnails(cli.djvu_thumbnails);
         legatorocr_engine::djvu::begin();
@@ -2493,6 +2506,13 @@ fn real_main() -> Result<()> {
         write_atomic(p, &bytes)?;
         eprintln!("wrote {}", p.display());
         written.push(p.clone());
+    }
+    if let Some(p) = &cli.doubtful_words {
+        if let Some((tsv, n, total)) = legatorocr_engine::doubtful::finish() {
+            write_atomic(p, tsv.as_bytes())?;
+            eprintln!("wrote {} ({n} doubtful words of {total} judged)", p.display());
+            written.push(p.clone());
+        }
     }
     if let (Some(p), Some(d)) = (&cli.djvu, &res.djvu) {
         write_atomic(p, d)?;

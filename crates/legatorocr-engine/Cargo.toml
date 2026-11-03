@@ -11,6 +11,7 @@ authors.workspace = true
 legatorocr-core = { path = "../legatorocr-core" }
 legatorocr-pdf = { path = "../legatorocr-pdf" }
 legatorocr-ocr = { path = "../legatorocr-ocr", default-features = false }
+legatorocr-nocr = { path = "../legatorocr-nocr", default-features = false }
 anyhow.workspace = true
 image.workspace = true
 rayon.workspace = true
@@ -24,7 +25,7 @@ wasmi = "2.0.0"
 
 [features]
 default = ["lexicon"]
-lexicon = ["legatorocr-ocr/lexicon"]
+lexicon = ["legatorocr-ocr/lexicon", "legatorocr-nocr/lexicon"]
 
 [dev-dependencies]
 wat = "1"
