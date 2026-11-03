@@ -199,6 +199,9 @@ pub struct Ghost {
     pub earlier_quality: Option<u8>,
 }
 
+/// Steps (of 3 quality points) kept clear of the last save.
+const GHOST_GAP: usize = 5;
+
 /// Look for traces of an earlier, lower-quality JPEG save. `None` if `bytes` is not a JPEG.
 /// A hint only: resizing, cropping off the 8x8 grid or heavy noise hide the dip.
 pub fn jpeg_ghost(bytes: &[u8]) -> Option<Ghost> {
@@ -233,15 +236,16 @@ pub fn jpeg_ghost(bytes: &[u8]) -> Option<Ghost> {
         curve.push((q, d));
         q += 3;
     }
-    // a dip: lower than both neighbours two steps away by a clear relative margin,
-    // followed later by a rise, while a single save falls steadily with quality
-    // the last save always makes the deepest dip (difference near zero); look below it
+    // a dip: clearly lower than both neighbours two steps away, and at least halfway down
+    // towards the deepest point (which is the last save); the last few steps before that
+    // point are skipped because the curve falls steeply there in every JPEG
     let last = curve.iter().enumerate().min_by(|a, b| a.1 .1.total_cmp(&b.1 .1)).map(|(i, _)| i)?;
+    let floor = curve[last].1;
     let mut earlier = None;
-    for i in 2..curve.len().saturating_sub(2).min(last.saturating_sub(1)) {
+    for i in 2..curve.len().saturating_sub(2).min((last + 1).saturating_sub(GHOST_GAP)) {
         let (q, d) = curve[i];
         let (l, r) = (curve[i - 2].1, curve[i + 2].1);
-        if d < l * 0.97 && d < r * 0.97 && d > 0.0 {
+        if d > 0.0 && d < l * 0.9 && d < r * 0.9 && d - floor <= 0.5 * (l.min(r) - floor) {
             earlier = Some(q);
             break;
         }
