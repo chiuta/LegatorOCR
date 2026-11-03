@@ -246,6 +246,9 @@ pub fn jpeg_ghost(bytes: &[u8]) -> Option<Ghost> {
             break;
         }
     }
+    if std::env::var_os("LEGATOROCR_GHOST_DEBUG").is_some() {
+        eprintln!("GHOSTCURVE {:?}", curve);
+    }
     Some(Ghost { curve, earlier_quality: earlier })
 }
 
