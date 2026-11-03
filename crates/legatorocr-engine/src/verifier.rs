@@ -187,3 +187,107 @@ mod tests {
         assert!(qr_codes(&texture(120, 120, 3)).is_empty());
     }
 }
+
+/// Result of the JPEG-ghost test (Farid 2009): the picture is re-saved at many
+/// qualities; a picture that was saved at a lower quality earlier shows a dip in the
+/// difference curve at that earlier quality.
+#[derive(Debug, Clone)]
+pub struct Ghost {
+    /// (quality, mean squared difference of the luma) for each quality tried.
+    pub curve: Vec<(u8, f64)>,
+    /// Earlier quality the dip points to, if a clear dip exists.
+    pub earlier_quality: Option<u8>,
+}
+
+/// Look for traces of an earlier, lower-quality JPEG save. `None` if `bytes` is not a JPEG.
+/// A hint only: resizing, cropping off the 8x8 grid or heavy noise hide the dip.
+pub fn jpeg_ghost(bytes: &[u8]) -> Option<Ghost> {
+    use image::codecs::jpeg::JpegEncoder;
+    if bytes.len() < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8 {
+        return None;
+    }
+    let g = image::load_from_memory_with_format(bytes, image::ImageFormat::Jpeg).ok()?.to_luma8();
+    let (w, h) = (g.width() / 8 * 8, g.height() / 8 * 8);
+    if w < 64 || h < 64 {
+        return None;
+    }
+    let g = image::imageops::crop_imm(&g, 0, 0, w, h).to_image();
+    let mut curve = Vec::new();
+    let mut q = 30u8;
+    while q <= 96 {
+        let mut buf = Vec::new();
+        JpegEncoder::new_with_quality(&mut buf, q)
+            .encode(g.as_raw(), w, h, image::ExtendedColorType::L8)
+            .ok()?;
+        let r = image::load_from_memory_with_format(&buf, image::ImageFormat::Jpeg).ok()?.to_luma8();
+        let d: f64 = g
+            .as_raw()
+            .iter()
+            .zip(r.as_raw())
+            .map(|(a, b)| {
+                let e = *a as f64 - *b as f64;
+                e * e
+            })
+            .sum::<f64>()
+            / g.as_raw().len() as f64;
+        curve.push((q, d));
+        q += 3;
+    }
+    // a dip: lower than both neighbours two steps away by a clear relative margin,
+    // followed later by a rise, while a single save falls steadily with quality
+    // the last save always makes the deepest dip (difference near zero); look below it
+    let last = curve.iter().enumerate().min_by(|a, b| a.1 .1.total_cmp(&b.1 .1)).map(|(i, _)| i)?;
+    let mut earlier = None;
+    for i in 2..curve.len().saturating_sub(2).min(last.saturating_sub(1)) {
+        let (q, d) = curve[i];
+        let (l, r) = (curve[i - 2].1, curve[i + 2].1);
+        if d < l * 0.97 && d < r * 0.97 && d > 0.0 {
+            earlier = Some(q);
+            break;
+        }
+    }
+    Some(Ghost { curve, earlier_quality: earlier })
+}
+
+#[cfg(test)]
+mod ghost_tests {
+    use super::*;
+    use image::codecs::jpeg::JpegEncoder;
+
+    fn texture() -> image::GrayImage {
+        // pseudo-random smooth-ish texture with edges, as a scanned page would have
+        let mut s = 12345u32;
+        image::GrayImage::from_fn(320, 320, |x, y| {
+            s = s.wrapping_mul(1664525).wrapping_add(1013904223);
+            let n = (s >> 24) as i32 % 40;
+            let base = if (x / 16 + y / 16) % 2 == 0 { 80 } else { 170 };
+            let wave = ((x as f32 * 0.21).sin() * 30.0 + (y as f32 * 0.13).cos() * 25.0) as i32;
+            image::Luma([(base + wave + n).clamp(0, 255) as u8])
+        })
+    }
+    fn save(g: &image::GrayImage, q: u8) -> Vec<u8> {
+        let mut b = Vec::new();
+        JpegEncoder::new_with_quality(&mut b, q).encode(g.as_raw(), g.width(), g.height(), image::ExtendedColorType::L8).unwrap();
+        b
+    }
+    fn report(label: &str, bytes: &[u8]) -> Option<u8> {
+        let gh = jpeg_ghost(bytes).unwrap();
+        eprintln!("{label}: {:?} -> {:?}", gh.curve.iter().map(|(q, d)| (*q, (d * 100.0).round() / 100.0)).collect::<Vec<_>>(), gh.earlier_quality);
+        gh.earlier_quality
+    }
+
+    #[test]
+    fn a_jpeg_saved_twice_shows_the_earlier_quality_and_a_single_save_does_not() {
+        let t = texture();
+        let single = save(&t, 90);
+        let first = save(&t, 60);
+        let dec = image::load_from_memory(&first).unwrap().to_luma8();
+        let double = save(&dec, 90);
+        let s = report("single q90", &single);
+        let d = report("60 then 90", &double);
+        assert!(s.is_none(), "false alarm on a single save: {s:?}");
+        let q = d.expect("double save not found");
+        assert!((54..=66).contains(&q), "dip at {q}");
+        assert!(jpeg_ghost(b"not a jpeg").is_none());
+    }
+}

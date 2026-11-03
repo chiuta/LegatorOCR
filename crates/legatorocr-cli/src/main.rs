@@ -1335,6 +1335,13 @@ fn real_main() -> Result<()> {
             if cm.is_empty() {
                 println!("  copy-move: nothing found");
             }
+            match std::fs::read(p).ok().and_then(|b| legatorocr_engine::verifier::jpeg_ghost(&b)) {
+                None => {}
+                Some(g) => match g.earlier_quality {
+                    Some(q) => println!("  double-JPEG: traces of an earlier save near quality {q}  [hint: resaving, cropping or resizing also leave traces]"),
+                    None => println!("  double-JPEG: no earlier save found"),
+                },
+            }
             for c in &cm {
                 println!("  copy-move: {} blocks repeat at offset ({}, {}), source area {:?}  [check by eye: repeated letters or stamps are common]", c.blocks, c.dx, c.dy, c.bbox);
             }
