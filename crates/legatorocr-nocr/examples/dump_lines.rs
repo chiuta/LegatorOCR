@@ -31,8 +31,8 @@ fn main() {
                 .unwrap();
             writeln!(
                 rows,
-                "{{\"i\":{n},\"x\":{},\"y\":{},\"w\":{},\"h\":{},\"model\":{:?}}}",
-                piece.x, piece.y, piece.w, piece.h, text
+                "{{\"i\":{n},\"x\":{},\"y\":{},\"w\":{},\"h\":{},\"slope\":{},\"curve\":{},\"model\":{:?}}}",
+                piece.x, piece.y, piece.w, piece.h, piece.slope, piece.curve, text
             )
             .unwrap();
             n += 1;

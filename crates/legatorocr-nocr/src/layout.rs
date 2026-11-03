@@ -828,29 +828,49 @@ fn chain_cut(p: &Prof, r: Region, med: u32, out: &mut Vec<Line>) -> bool {
                 t1 += u * y;
                 t2 += u * u * y;
             }
-            // normal equations of the 3x3 system, Cramer's rule
-            let det = n * (s2 * s4 - s3 * s3) - s1 * (s1 * s4 - s2 * s3) + s2 * (s1 * s3 - s2 * s2);
+            // normal equations of the 3x3 system, solved with Cramer's rule
+            let det3 = |m: [[f64; 3]; 3]| {
+                m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+                    - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+                    + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+            };
+            let m = [[n, s1, s2], [s1, s2, s3], [s2, s3, s4]];
+            let det = det3(m);
             if det.abs() < 1e-6 {
                 return None;
             }
-            let a = (t0 * (s2 * s4 - s3 * s3) - s1 * (t1 * s4 - s2 * t2) + s2 * (t1 * s3 - s2 * t2)) / det;
-            let b = (n * (t1 * s4 - s2 * t2) - t0 * (s1 * s4 - s2 * s3) + s2 * (s1 * t2 - t1 * s2)) / det;
-            let cc = (n * (s2 * t2 - t1 * s3) - s1 * (s1 * t2 - t1 * s2) + t0 * (s1 * s3 - s2 * s2)) / det;
+            let col = |k: usize| {
+                let mut q = m;
+                for (row, t) in q.iter_mut().zip([t0, t1, t2]) {
+                    row[k] = t;
+                }
+                det3(q) / det
+            };
+            let (a, b, cc) = (col(0), col(1), col(2));
             Some((a as f32, b as f32, cc as f32))
         };
         let Some(mut f) = fit(c) else { continue };
-        // one robust pass: drop letters far from the curve (ascenders, descenders, specks)
-        let kept: Vec<(f32, f32)> = c
-            .iter()
-            .copied()
-            .filter(|&(x, y)| {
+        // robust fit: drop letters far from the curve (ascenders, descenders, letters of a
+        // neighbouring line that slipped in) and fit again, a few times
+        let mut kept: Vec<(f32, f32)> = c.to_vec();
+        for _ in 0..4 {
+            let res = |&(x, y): &(f32, f32)| {
                 let u = x - xc;
-                (y - (f.0 + f.1 * u + f.2 * u * u)).abs() < medf * 0.6
-            })
-            .collect();
-        if kept.len() >= 6 {
-            if let Some(g) = fit(&kept) {
-                f = g;
+                (y - (f.0 + f.1 * u + f.2 * u * u)).abs()
+            };
+            let mut r: Vec<f32> = kept.iter().map(res).collect();
+            r.sort_by(|a, b| a.total_cmp(b));
+            let limit = (r[r.len() / 2] * 2.5).clamp(medf * 0.35, medf * 0.7);
+            let next: Vec<(f32, f32)> = c.iter().copied().filter(|p| res(p) <= limit).collect();
+            if next.len() < 6 {
+                break;
+            }
+            match fit(&next) {
+                Some(g) => {
+                    f = g;
+                    kept = next;
+                }
+                None => break,
             }
         }
         // a chain that does not follow a smooth curve mixed letters of neighbouring lines
