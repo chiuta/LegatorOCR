@@ -38,7 +38,7 @@ fn openssl() -> Command {
 
 /// Sign `input` into `output`. The PKCS#12 password is read from the environment variable
 /// `pass_env` (never from the command line).
-pub fn sign_pdf(input: &Path, output: &Path, p12: &Path, pass_env: &str, name: Option<&str>, reason: Option<&str>) -> Result<()> {
+pub fn sign_pdf(input: &Path, output: &Path, p12: &Path, pass_env: &str, name: Option<&str>, reason: Option<&str>, tsa_url: Option<&str>) -> Result<()> {
     let data = std::fs::read(input).with_context(|| format!("reading {}", input.display()))?;
     if std::env::var_os(pass_env).is_none() {
         bail!("set the PKCS#12 password in the environment variable {pass_env} (use an empty value for none)");
@@ -89,9 +89,110 @@ pub fn sign_pdf(input: &Path, output: &Path, p12: &Path, pass_env: &str, name: O
     if !st.status.success() {
         bail!("openssl cms -sign failed: {}", String::from_utf8_lossy(&st.stderr).trim());
     }
-    let signed = prepared.embed(&std::fs::read(&der)?).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let mut cms = std::fs::read(&der)?;
+    if let Some(url) = tsa_url {
+        // PAdES-B-T: a time stamp over the signature value, as an unsigned attribute
+        let sig = signature_value(&cms).context("cannot find the signature value in the CMS")?;
+        let mut d = [0u8; 32];
+        d.copy_from_slice(&legatorocr_pdf::crypt::sha256(&sig));
+        let (resp, _) = crate::tsa::request(url, &d)?;
+        cms = add_timestamp(&cms, &resp)?;
+    }
+    let signed = prepared.embed(&cms).map_err(|e| anyhow::anyhow!("{e}"))?;
     std::fs::write(output, signed)?;
     Ok(())
+}
+
+// ---- minimal DER helpers for PAdES-B-T ----
+
+fn der_len(n: usize) -> Vec<u8> {
+    if n < 128 {
+        vec![n as u8]
+    } else if n < 256 {
+        vec![0x81, n as u8]
+    } else if n < 65536 {
+        vec![0x82, (n >> 8) as u8, n as u8]
+    } else {
+        vec![0x83, (n >> 16) as u8, (n >> 8) as u8, n as u8]
+    }
+}
+
+fn der_tlv(tag: u8, body: &[u8]) -> Vec<u8> {
+    let mut v = vec![tag];
+    v.extend(der_len(body.len()));
+    v.extend_from_slice(body);
+    v
+}
+
+/// Split the body of a constructed element into its (tag, whole element) children.
+fn children(body: &[u8]) -> Option<Vec<(u8, Vec<u8>)>> {
+    let mut out = Vec::new();
+    let mut rest = body;
+    while !rest.is_empty() {
+        let (tag, b, r) = crate::tsa::read(rest)?;
+        let whole = &rest[..rest.len() - r.len()];
+        let _ = b;
+        out.push((tag, whole.to_vec()));
+        rest = r;
+    }
+    Some(out)
+}
+
+fn body_of(el: &[u8]) -> Option<&[u8]> {
+    crate::tsa::read(el).map(|(_, b, _)| b)
+}
+
+/// The path ContentInfo -> [0] -> SignedData -> signerInfos SET -> first SignerInfo, as the
+/// children of the SignerInfo, plus the rebuilt-parent chain needed to put it back.
+fn signer_info_children(cms: &[u8]) -> Option<Vec<(u8, Vec<u8>)>> {
+    let ci = children(body_of(cms)?)?; // oid, [0]
+    let sd = children(body_of(&ci.get(1)?.1)?)?; // SignedData
+    let sd_items = children(body_of(&sd.first()?.1)?)?;
+    let signer_infos = sd_items.last()?;
+    let si = children(body_of(&signer_infos.1)?)?;
+    children(body_of(&si.first()?.1)?)
+}
+
+/// The signature value (OCTET STRING) of the first signer.
+pub fn signature_value(cms: &[u8]) -> Option<Vec<u8>> {
+    let items = signer_info_children(cms)?;
+    // version, sid, digestAlgorithm, [0] signedAttrs, signatureAlgorithm, signature
+    let (_, el) = items.iter().find(|(t, _)| *t == 0x04)?;
+    Some(body_of(el)?.to_vec())
+}
+
+/// Add the time-stamp token of the `TimeStampResp` `resp` to the first signer as the
+/// unsigned attribute id-aa-signatureTimeStampToken.
+pub fn add_timestamp(cms: &[u8], resp: &[u8]) -> Result<Vec<u8>> {
+    let bad = || anyhow::anyhow!("unexpected CMS structure");
+    let token = children(body_of(resp).ok_or_else(bad)?).ok_or_else(bad)?.get(1).ok_or_else(bad)?.1.clone();
+    // Attribute ::= SEQUENCE { attrType OID, attrValues SET { token } }
+    let oid = [0x06, 0x0B, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09, 0x10, 0x02, 0x0E];
+    let attr = der_tlv(0x30, &[oid.to_vec(), der_tlv(0x31, &token)].concat());
+    let unsigned = der_tlv(0xA1, &attr);
+
+    let ci = children(body_of(cms).ok_or_else(bad)?).ok_or_else(bad)?;
+    let ctx0 = &ci.get(1).ok_or_else(bad)?.1;
+    let sd = children(body_of(ctx0).ok_or_else(bad)?).ok_or_else(bad)?;
+    let sd_items = children(body_of(&sd.first().ok_or_else(bad)?.1).ok_or_else(bad)?).ok_or_else(bad)?;
+    let (set_tag, set) = sd_items.last().ok_or_else(bad)?.clone();
+    let sis = children(body_of(&set).ok_or_else(bad)?).ok_or_else(bad)?;
+    let (si_tag, si) = sis.first().ok_or_else(bad)?.clone();
+    if sis.len() != 1 {
+        bail!("only a single signer is supported");
+    }
+    let si_items = children(body_of(&si).ok_or_else(bad)?).ok_or_else(bad)?;
+    if si_items.iter().any(|(t, _)| *t == 0xA1) {
+        bail!("the signature already has unsigned attributes");
+    }
+    let new_si = der_tlv(si_tag, &[body_of(&si).ok_or_else(bad)?, &unsigned].concat());
+    let new_set = der_tlv(set_tag, &new_si);
+    let mut items: Vec<u8> = sd_items[..sd_items.len() - 1].iter().flat_map(|(_, e)| e.clone()).collect();
+    items.extend(new_set);
+    let new_sd = der_tlv(sd[0].0, &items);
+    let new_ctx0 = der_tlv(0xA0, &new_sd);
+    let new_ci = der_tlv(0x30, &[ci[0].1.clone(), new_ctx0].concat());
+    Ok(new_ci)
 }
 
 pub struct SigReport {
@@ -184,7 +285,7 @@ mod tests {
         );
         std::fs::write(d.join("in.pdf"), w.finish()).unwrap();
         std::env::set_var("LGR_TEST_P12", "pw");
-        sign_pdf(&d.join("in.pdf"), &d.join("out.pdf"), &d.join("t.p12"), "LGR_TEST_P12", Some("Test"), Some("Approved")).unwrap();
+        sign_pdf(&d.join("in.pdf"), &d.join("out.pdf"), &d.join("t.p12"), "LGR_TEST_P12", Some("Test"), Some("Approved"), None).unwrap();
         let r = verify_pdf(&d.join("out.pdf"), Some(&d.join("c.pem"))).unwrap();
         assert_eq!(r.len(), 1);
         assert!(r[0].result.is_ok(), "{:?}", r[0].result);
@@ -197,6 +298,53 @@ mod tests {
         assert!(r[0].result.is_err());
         // wrong password
         std::env::set_var("LGR_TEST_P12", "nope");
-        assert!(sign_pdf(&d.join("in.pdf"), &d.join("x.pdf"), &d.join("t.p12"), "LGR_TEST_P12", None, None).is_err());
+        assert!(sign_pdf(&d.join("in.pdf"), &d.join("x.pdf"), &d.join("t.p12"), "LGR_TEST_P12", None, None, None).is_err());
     }
+
+    /// PAdES-B-T: a time stamp from a local OpenSSL authority is put inside a CMS signature;
+    /// OpenSSL must still verify the signature, show the attribute, and accept the token
+    /// for exactly the signature value.
+    #[test]
+    fn a_time_stamp_token_is_added_as_an_unsigned_attribute() {
+        if !have_openssl() {
+            return;
+        }
+        let d = std::env::temp_dir().join(format!("lgr_bt_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let run = |args: &[&str]| {
+            let o = Command::new("openssl").args(args).current_dir(&d).output().unwrap();
+            assert!(o.status.success(), "openssl {args:?}: {}", String::from_utf8_lossy(&o.stderr));
+            o
+        };
+        std::fs::write(d.join("tsa.cnf"), "[req]\ndistinguished_name=dn\nprompt=no\nx509_extensions=ext\n[dn]\nCN=Test TSA\n[ext]\nbasicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=critical,timeStamping\n[tsa]\ndefault_tsa=t\n[t]\ndir=.\nserial=./serial\nsigner_cert=./tsa.pem\nsigner_key=./tsakey.pem\ncerts=./tsa.pem\ndefault_policy=1.2.3.4.5\ndigests=sha256\nsigner_digest=sha256\naccuracy=secs:1\nordering=yes\ntsa_name=yes\n").unwrap();
+        std::fs::write(d.join("serial"), "01\n").unwrap();
+        run(&["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "tsakey.pem", "-out", "tsa.pem", "-days", "2", "-config", "tsa.cnf"]);
+        run(&["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", "/CN=Signer", "-keyout", "k.pem", "-out", "c.pem"]);
+        std::fs::write(d.join("data.bin"), b"signed bytes").unwrap();
+        run(&["cms", "-sign", "-binary", "-md", "sha256", "-cades", "-outform", "DER", "-in", "data.bin", "-signer", "c.pem", "-inkey", "k.pem", "-out", "sig.der"]);
+        let cms = std::fs::read(d.join("sig.der")).unwrap();
+        let sigval = signature_value(&cms).expect("signature value");
+        assert_eq!(sigval.len(), 256, "RSA-2048 signature");
+        let mut dg = [0u8; 32];
+        dg.copy_from_slice(&legatorocr_pdf::crypt::sha256(&sigval));
+        std::fs::write(d.join("req.tsq"), crate::tsa::build_request(&dg, 77)).unwrap();
+        run(&["ts", "-reply", "-queryfile", "req.tsq", "-config", "tsa.cnf", "-out", "resp.tsr"]);
+        let resp = std::fs::read(d.join("resp.tsr")).unwrap();
+        let stamped = add_timestamp(&cms, &resp).unwrap();
+        assert!(stamped.len() > cms.len() + 500);
+        std::fs::write(d.join("stamped.der"), &stamped).unwrap();
+        // the signature is still good, and the attribute is there
+        run(&["cms", "-verify", "-binary", "-inform", "DER", "-in", "stamped.der", "-content", "data.bin", "-noverify", "-out", "out.bin"]);
+        let dump = String::from_utf8_lossy(&run(&["asn1parse", "-inform", "DER", "-in", "stamped.der"]).stdout).into_owned();
+        assert!(dump.contains("id-smime-aa-timeStampToken"), "{dump}");
+        // the token stamps exactly the signature value
+        std::fs::write(d.join("sigval.bin"), &sigval).unwrap();
+        run(&["ts", "-verify", "-in", "resp.tsr", "-data", "sigval.bin", "-CAfile", "tsa.pem"]);
+        // and the signature value read back from the stamped CMS is unchanged
+        assert_eq!(signature_value(&stamped).unwrap(), sigval);
+        assert!(add_timestamp(&stamped, &resp).is_err(), "no second time stamp");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
 }

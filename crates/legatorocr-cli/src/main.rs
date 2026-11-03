@@ -523,6 +523,11 @@ struct Cli {
     #[arg(long, value_name = "TEXT")]
     sign_reason: Option<String>,
 
+    /// Put an RFC 3161 time stamp from --tsa-url inside the signature (--sign-pdf): PAdES-B-T.
+    /// The authority sees only the hash of the signature.
+    #[arg(long, requires = "tsa_url")]
+    sign_timestamp: bool,
+
     /// Check every signature in FILE (data matches the signature; with --sign-ca also the
     /// certificate chain). Exit 1 when one fails or the file has no signature.
     #[arg(long, value_name = "FILE")]
@@ -1366,7 +1371,7 @@ fn real_main() -> Result<()> {
             Some(n) => n.clone(),
             None => f.with_extension("signed.pdf"),
         };
-        legatorocr_engine::sign::sign_pdf(f, &out, cli.sign_p12.as_deref().unwrap(), &cli.sign_pass_env, cli.sign_name.as_deref(), cli.sign_reason.as_deref())?;
+        legatorocr_engine::sign::sign_pdf(f, &out, cli.sign_p12.as_deref().unwrap(), &cli.sign_pass_env, cli.sign_name.as_deref(), cli.sign_reason.as_deref(), cli.tsa_url.as_deref().filter(|_| cli.sign_timestamp))?;
         println!("wrote {}", out.display());
         return Ok(());
     }

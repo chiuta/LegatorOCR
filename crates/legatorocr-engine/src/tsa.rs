@@ -50,7 +50,7 @@ pub fn build_request(digest: &[u8; 32], nonce: u64) -> Vec<u8> {
 }
 
 /// Read one DER element: (tag, body, rest).
-fn read(d: &[u8]) -> Option<(u8, &[u8], &[u8])> {
+pub(crate) fn read(d: &[u8]) -> Option<(u8, &[u8], &[u8])> {
     let tag = *d.first()?;
     let l0 = *d.get(1)? as usize;
     let (len, off) = if l0 < 128 {
@@ -125,14 +125,14 @@ pub fn parse_reply(der: &[u8]) -> Result<Reply> {
     Ok(Reply { status, digest: digest.to_vec(), nonce, gen_time: String::from_utf8_lossy(gen).into_owned() })
 }
 
-fn digest_of(data: &[u8]) -> [u8; 32] {
+pub(crate) fn digest_of(data: &[u8]) -> [u8; 32] {
     let v = legatorocr_pdf::crypt::sha256(data);
     let mut d = [0u8; 32];
     d.copy_from_slice(&v);
     d
 }
 
-fn nonce() -> u64 {
+pub(crate) fn nonce() -> u64 {
     let mut b = [0u8; 8];
     let _ = getrandom::fill(&mut b);
     u64::from_be_bytes(b) >> 1
@@ -144,16 +144,15 @@ pub fn tsr_path(file: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
-/// Time-stamp `file` through `url` (HTTP POST with curl); writes `FILE.tsr` and returns the time.
-pub fn stamp(file: &Path, url: &str) -> Result<Reply> {
+/// Ask the authority at `url` to time-stamp `digest` (HTTP POST with curl); returns the raw
+/// `TimeStampResp` after checking status, hash and nonce.
+pub fn request(url: &str, digest: &[u8; 32]) -> Result<(Vec<u8>, Reply)> {
     if !(url.starts_with("http://") || url.starts_with("https://")) {
-        bail!("--tsa-url must be an http:// or https:// address");
+        bail!("the time-stamp authority address must start with http:// or https://");
     }
-    let data = std::fs::read(file).with_context(|| format!("reading {}", file.display()))?;
-    let digest = digest_of(&data);
     let n = nonce();
-    let req = build_request(&digest, n);
-    let tmp = std::env::temp_dir().join(format!("lgr_tsq_{}.tsq", std::process::id()));
+    let req = build_request(digest, n);
+    let tmp = std::env::temp_dir().join(format!("lgr_tsq_{}_{n}.tsq", std::process::id()));
     std::fs::write(&tmp, &req)?;
     let out = Command::new("curl")
         .args(["-sS", "--fail", "--max-time", "60", "-H", "Content-Type: application/timestamp-query", "--data-binary"])
@@ -167,13 +166,20 @@ pub fn stamp(file: &Path, url: &str) -> Result<Reply> {
         bail!("the request to {url} failed: {}", String::from_utf8_lossy(&out.stderr).trim());
     }
     let reply = parse_reply(&out.stdout)?;
-    if reply.digest != digest {
-        bail!("the reply is for a different hash than the file's");
+    if reply.digest != digest.as_slice() {
+        bail!("the reply is for a different hash than the one sent");
     }
     if reply.nonce != Some(n) {
         bail!("the reply does not carry our nonce (possible replay)");
     }
-    std::fs::write(tsr_path(file), &out.stdout)?;
+    Ok((out.stdout, reply))
+}
+
+/// Time-stamp `file` through `url`; writes `FILE.tsr` and returns the time.
+pub fn stamp(file: &Path, url: &str) -> Result<Reply> {
+    let data = std::fs::read(file).with_context(|| format!("reading {}", file.display()))?;
+    let (resp, reply) = request(url, &digest_of(&data))?;
+    std::fs::write(tsr_path(file), &resp)?;
     Ok(reply)
 }
 

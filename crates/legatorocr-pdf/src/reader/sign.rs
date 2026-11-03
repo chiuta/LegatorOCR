@@ -10,7 +10,7 @@ use super::{fail, Dict, PdfDoc, Val, P, R};
 use std::fmt::Write as _;
 
 /// Space reserved for the signature, in bytes (twice that in hex digits).
-pub const RESERVED: usize = 9000;
+pub const RESERVED: usize = 20000;
 
 pub struct Prepared {
     /// The file with the update appended and a zero-filled `/Contents`.
