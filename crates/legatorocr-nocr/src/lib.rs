@@ -55,6 +55,7 @@ pub fn embedded_model() -> Option<&'static Model> {
 const MAX_PAGE_PIXELS: u64 = 64_000_000;
 /// Mean glyph probability below which a line is treated as picture/dust rather than text.
 const MIN_LINE_P: f32 = 0.75;
+const MIN_TRACED_P: f32 = 0.9;
 
 /// Recognise a page. `dpi` only sizes the binarisation window.
 pub fn recognize(page: &PageImage, dpi: u32, model: &Model, o: &NativeOptions) -> Vec<Word> {
@@ -191,7 +192,9 @@ fn recognise_line(
         return Vec::new();
     }
     let mean_p = letters.iter().map(|g| g.p).sum::<f32>() / letters.len() as f32;
-    if mean_p < MIN_LINE_P {
+    // a line traced through a messy block (ornament, picture) must be read with more certainty
+    let traced = ln.slope != 0.0 || ln.curve != 0.0;
+    if mean_p < if traced { MIN_TRACED_P } else { MIN_LINE_P } {
         return Vec::new();
     }
     // a scanner-edge strip, a ruling or a speck read as one or two marks is not text; a page
@@ -235,7 +238,12 @@ fn recognise_line(
                 }
             }
         }
-        let (bx, by, bw, bh) = if xa == u32::MAX {
+        let (bx, by, bw, bh) = if ln.slope != 0.0 || ln.curve != 0.0 {
+            // a tilted line: the box follows the line, not the ink of its neighbours
+            let cx = (x0 + x1) as f32 / 2.0;
+            let top = ln.y as f32 + ln.drift(cx);
+            (x0, top.max(0.0) as u32, x1.saturating_sub(x0).max(1), ln.h)
+        } else if xa == u32::MAX {
             (x0, ln.y, x1.saturating_sub(x0).max(1), ln.h)
         } else {
             (xa, ya, xb - xa, yb - ya)

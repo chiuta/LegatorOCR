@@ -206,6 +206,27 @@ fn tall_block_of_lines_bridged_by_noise_is_not_dropped() {
 }
 
 #[test]
+fn tilted_lines_with_overlapping_rows_are_traced() {
+    // a tilt of 0.06 over 600 px drifts 36 rows, more than the 26-row line pitch, so no blank row
+    // exists; the letters are chained into lines instead
+    let mut b = BitImage::new(700, 400);
+    for line in 0..4u32 {
+        for k in 0..60u32 {
+            let x = 40 + k * 10;
+            let y = 60 + line * 26 + (x as f32 * 0.06) as u32;
+            for yy in y..y + 10 {
+                for xx in x..x + 7 {
+                    b.set(xx, yy, true);
+                }
+            }
+        }
+    }
+    let lines = layout::find_lines(&b, 10);
+    let tilted: Vec<_> = lines.iter().filter(|l| l.slope > 0.03 && l.slope < 0.09).collect();
+    assert!(tilted.len() >= 3, "{lines:?}");
+}
+
+#[test]
 fn speckle_and_blank_pages_give_no_lines() {
     let mut b = BitImage::new(300, 300);
     assert!(layout::find_lines(&b, 12).is_empty());
@@ -354,6 +375,8 @@ fn long_lines_are_split_at_gaps_and_cover_the_line() {
         y: 10,
         w: 5900,
         h: 30,
+        slope: 0.0,
+        curve: 0.0,
     };
     let parts = layout::split_long(&b, &line, 600);
     assert!(parts.len() > 1);

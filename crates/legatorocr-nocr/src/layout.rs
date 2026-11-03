@@ -7,13 +7,25 @@
 use image::GrayImage;
 use legatorocr_core::{binarize, BitImage, PageImage};
 
-/// A text line: its box on the page (pixels).
-#[derive(Debug, Clone)]
+/// A text line: its box on the page (pixels). A line cut out of a locally tilted block carries a
+/// `slope` (rows of drift per column): `y` is then the top of the line at its horizontal centre.
+#[derive(Debug, Clone, Default)]
 pub struct Line {
     pub x: u32,
     pub y: u32,
     pub w: u32,
     pub h: u32,
+    pub slope: f32,
+    /// Second-order drift (rows per column squared), measured from the line's horizontal centre.
+    pub curve: f32,
+}
+
+impl Line {
+    /// Rows the line's centre has drifted from its middle at page column `x`.
+    pub fn drift(&self, x: f32) -> f32 {
+        let u = x - (self.x as f32 + self.w as f32 / 2.0);
+        self.slope * u + self.curve * u * u
+    }
 }
 
 /// The page as the engine sees it: grey image (dark text on light paper), ink mask, letter height.
@@ -475,6 +487,7 @@ pub fn find_lines(ink: &BitImage, med_h: u32) -> Vec<Line> {
     let mut out = Vec::new();
     cut(&p, (0, 0, ink.w, ink.h), med, 0, &mut out);
     attach_floating_marks(&mut out, med);
+    drop_duplicates(&mut out);
     // speckle: boxes that hold almost no ink are scanner dust, not text
     out.retain(|l| {
         let n: u64 = p
@@ -485,6 +498,41 @@ pub fn find_lines(ink: &BitImage, med_h: u32) -> Vec<Line> {
         n * 12 > med as u64 * med as u64
     });
     out
+}
+
+/// Two lines that cover mostly the same area are one line read twice (a curved block cut by two
+/// routes): keep the first.
+fn drop_duplicates(lines: &mut Vec<Line>) {
+    let n = lines.len();
+    let mut gone = vec![false; n];
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by_key(|&i| lines[i].y);
+    for a in 0..n {
+        let i = order[a];
+        if gone[i] {
+            continue;
+        }
+        for &j in &order[a + 1..] {
+            if lines[j].y > lines[i].y + lines[i].h {
+                break;
+            }
+            if gone[j] {
+                continue;
+            }
+            let (li, lj) = (&lines[i], &lines[j]);
+            let ox = (li.x + li.w).min(lj.x + lj.w).saturating_sub(li.x.max(lj.x)) as u64;
+            let oy = (li.y + li.h).min(lj.y + lj.h).saturating_sub(li.y.max(lj.y)) as u64;
+            let small = (li.w as u64 * li.h as u64).min(lj.w as u64 * lj.h as u64).max(1);
+            if ox * oy * 10 > small * 6 {
+                gone[j] = true;
+            }
+        }
+    }
+    let mut k = 0;
+    lines.retain(|_| {
+        k += 1;
+        !gone[k - 1]
+    });
 }
 
 /// Accents over capitals, dots and the like float above the line body with a blank row between
@@ -538,6 +586,8 @@ fn attach_floating_marks(lines: &mut Vec<Line>, med: u32) {
                     y: y0,
                     w: x1 - x0,
                     h: y1 - y0,
+                    slope: 0.0,
+                    curve: 0.0,
                 };
                 gone[i] = true;
             }
@@ -566,12 +616,12 @@ fn cut(p: &Prof, r: Region, med: u32, depth: u32, out: &mut Vec<Line>) {
         return;
     }
     if h <= med * 2 + med / 2 {
-        out.push(Line { x: x0, y: y0, w, h }); // one text line (thin pieces are attached later)
+        out.push(Line { x: x0, y: y0, w, h, slope: 0.0, curve: 0.0 }); // one text line (thin pieces are attached later)
         return;
     }
     if depth > 60 {
         if h <= med * 4 {
-            out.push(Line { x: x0, y: y0, w, h });
+            out.push(Line { x: x0, y: y0, w, h, slope: 0.0, curve: 0.0 });
         }
         return;
     }
@@ -652,10 +702,192 @@ fn cut(p: &Prof, r: Region, med: u32, depth: u32, out: &mut Vec<Line>) {
             let ys = y0 + c as u32;
             cut(p, (x0, y0, x1, ys), med, depth + 1, out);
             cut(p, (x0, ys, x1, y1), med, depth + 1, out);
-        } else if h <= med * 4 {
-            out.push(Line { x: x0, y: y0, w, h });
+            return;
         }
     }
+    // curved or tilted lines whose rows overlap: follow the letters instead
+    if h > med * 2 + med / 2 && h <= med * 24 && chain_cut(p, r, med, out) {
+        return;
+    }
+    if h <= med * 4 {
+        out.push(Line { x: x0, y: y0, w, h, slope: 0.0, curve: 0.0 });
+    }
+}
+
+/// Letters of a block that cannot be cut by blank rows (curved or tilted lines whose rows overlap,
+/// as near the spine of a bound book) are chained left to right into lines: each letter joins the
+/// chain whose recent trend predicts its height. A chain becomes a line with a slope and a
+/// curvature (a parabola fitted to the letter centres) that the recogniser input follows.
+fn chain_cut(p: &Prof, r: Region, med: u32, out: &mut Vec<Line>) -> bool {
+    let (x0, y0, x1, y1) = r;
+    let (w, h) = (x1 - x0, y1 - y0);
+    if w < med * 8 || h < med * 2 || (w as u64) * (h as u64) > 4_000_000 {
+        return false;
+    }
+    // connected components (8-neighbourhood) of the block
+    let ink = p.ink;
+    let mut lab = vec![0u32; (w * h) as usize];
+    let mut boxes: Vec<(u32, u32, u32, u32)> = Vec::new(); // x0,y0,x1,y1 (inclusive)
+    let mut stack: Vec<(u32, u32)> = Vec::new();
+    for sy in 0..h {
+        for sx in 0..w {
+            if lab[(sy * w + sx) as usize] != 0 || !ink.get(x0 + sx, y0 + sy) {
+                continue;
+            }
+            let id = boxes.len() as u32 + 1;
+            let mut b = (sx, sy, sx, sy);
+            lab[(sy * w + sx) as usize] = id;
+            stack.push((sx, sy));
+            while let Some((cx, cy)) = stack.pop() {
+                b = (b.0.min(cx), b.1.min(cy), b.2.max(cx), b.3.max(cy));
+                for dy in -1i32..=1 {
+                    for dx in -1i32..=1 {
+                        let (nx, ny) = (cx as i32 + dx, cy as i32 + dy);
+                        if nx < 0 || ny < 0 || nx >= w as i32 || ny >= h as i32 {
+                            continue;
+                        }
+                        let (nx, ny) = (nx as u32, ny as u32);
+                        if lab[(ny * w + nx) as usize] == 0 && ink.get(x0 + nx, y0 + ny) {
+                            lab[(ny * w + nx) as usize] = id;
+                            stack.push((nx, ny));
+                        }
+                    }
+                }
+            }
+            boxes.push(b);
+        }
+    }
+    // letter-like components, left to right
+    let mut cs: Vec<(f32, f32, f32)> = boxes // centre x, centre y, width
+        .iter()
+        .filter(|b| {
+            let (bw, bh) = (b.2 - b.0 + 1, b.3 - b.1 + 1);
+            bh * 4 >= med && bh <= med * 3 && bw <= med * 6
+        })
+        .map(|b| {
+            (
+                (b.0 + b.2) as f32 / 2.0,
+                (b.1 + b.3) as f32 / 2.0,
+                (b.2 - b.0 + 1) as f32,
+            )
+        })
+        .collect();
+    cs.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let medf = med as f32;
+    let mut chains: Vec<Vec<(f32, f32)>> = Vec::new();
+    for &(cx, cy, _) in &cs {
+        let mut best: Option<(usize, f32)> = None;
+        for (k, ch) in chains.iter().enumerate() {
+            let last = ch[ch.len() - 1];
+            if cx - last.0 > medf * 8.0 {
+                continue;
+            }
+            // height predicted by the trend of the last few letters
+            let n = ch.len().min(8);
+            let tail = &ch[ch.len() - n..];
+            let pred = if n >= 4 {
+                let (mx, my) = (
+                    tail.iter().map(|t| t.0).sum::<f32>() / n as f32,
+                    tail.iter().map(|t| t.1).sum::<f32>() / n as f32,
+                );
+                let (sxy, sxx) = tail.iter().fold((0.0, 0.0), |a, t| {
+                    (a.0 + (t.0 - mx) * (t.1 - my), a.1 + (t.0 - mx) * (t.0 - mx))
+                });
+                let slope = if sxx > 1.0 { (sxy / sxx).clamp(-0.12, 0.12) } else { 0.0 };
+                my + slope * (cx - mx)
+            } else {
+                last.1
+            };
+            let d = (cy - pred).abs();
+            if d < medf * 0.75 && best.is_none_or(|(_, bd)| d < bd) {
+                best = Some((k, d));
+            }
+        }
+        match best {
+            Some((k, _)) => chains[k].push((cx, cy)),
+            None => chains.push(vec![(cx, cy)]),
+        }
+    }
+    let mut made = 0;
+    let lh = (medf * 2.0).round() as u32;
+    let xc_page = |c: &[(f32, f32)]| (c[0].0 + c[c.len() - 1].0) / 2.0;
+    let mut found: Vec<Line> = Vec::new();
+    for c in chains.iter().filter(|c| c.len() >= 6 && c[c.len() - 1].0 - c[0].0 >= medf * 6.0) {
+        // parabola through the centres, relative to the middle: y = a + b u + c u²
+        let xc = xc_page(c);
+        let fit = |pts: &[(f32, f32)]| -> Option<(f32, f32, f32)> {
+            let n = pts.len() as f64;
+            let (mut s1, mut s2, mut s3, mut s4, mut t0, mut t1, mut t2) = (0f64, 0f64, 0f64, 0f64, 0f64, 0f64, 0f64);
+            for &(x, y) in pts {
+                let (u, y) = ((x - xc) as f64, y as f64);
+                s1 += u;
+                s2 += u * u;
+                s3 += u * u * u;
+                s4 += u * u * u * u;
+                t0 += y;
+                t1 += u * y;
+                t2 += u * u * y;
+            }
+            // normal equations of the 3x3 system, Cramer's rule
+            let det = n * (s2 * s4 - s3 * s3) - s1 * (s1 * s4 - s2 * s3) + s2 * (s1 * s3 - s2 * s2);
+            if det.abs() < 1e-6 {
+                return None;
+            }
+            let a = (t0 * (s2 * s4 - s3 * s3) - s1 * (t1 * s4 - s2 * t2) + s2 * (t1 * s3 - s2 * t2)) / det;
+            let b = (n * (t1 * s4 - s2 * t2) - t0 * (s1 * s4 - s2 * s3) + s2 * (s1 * t2 - t1 * s2)) / det;
+            let cc = (n * (s2 * t2 - t1 * s3) - s1 * (s1 * t2 - t1 * s2) + t0 * (s1 * s3 - s2 * s2)) / det;
+            Some((a as f32, b as f32, cc as f32))
+        };
+        let Some(mut f) = fit(c) else { continue };
+        // one robust pass: drop letters far from the curve (ascenders, descenders, specks)
+        let kept: Vec<(f32, f32)> = c
+            .iter()
+            .copied()
+            .filter(|&(x, y)| {
+                let u = x - xc;
+                (y - (f.0 + f.1 * u + f.2 * u * u)).abs() < medf * 0.6
+            })
+            .collect();
+        if kept.len() >= 6 {
+            if let Some(g) = fit(&kept) {
+                f = g;
+            }
+        }
+        // a chain that does not follow a smooth curve mixed letters of neighbouring lines
+        let resid = kept
+            .iter()
+            .map(|&(x, y)| {
+                let u = x - xc;
+                (y - (f.0 + f.1 * u + f.2 * u * u)).abs()
+            })
+            .sum::<f32>()
+            / kept.len().max(1) as f32;
+        if kept.len() * 10 < c.len() * 7 || resid > medf * 0.45 || f.1.abs() > 0.12 {
+            continue;
+        }
+        let first = c[0].0;
+        let last = c[c.len() - 1].0;
+        let top = y0 as f32 + f.0 - lh as f32 / 2.0;
+        // the box stays inside the page
+        let lx = (x0 as f32 + first - medf).max(0.0) as u32;
+        let lw = ((last - first + 2.0 * medf) as u32).min(ink.w.saturating_sub(lx));
+        let ly = (top.max(0.0) as u32).min(ink.h.saturating_sub(lh));
+        if lw < 2 {
+            continue;
+        }
+        found.push(Line {
+            x: lx,
+            y: ly,
+            w: lw,
+            h: lh.min(ink.h),
+            slope: f.1,
+            curve: f.2,
+        });
+        made += 1;
+    }
+    found.sort_by_key(|l| l.y);
+    out.extend(found);
+    made >= 2
 }
 
 /// Row with the least ink within the middle band of a tall block, if it is a real valley.
@@ -665,10 +897,24 @@ fn weakest_row(rows: &[u32], med: u32) -> Option<usize> {
     let hi = n.saturating_sub(lo).max(lo + 1);
     let (i, &v) = rows[lo..hi].iter().enumerate().min_by_key(|&(_, v)| *v)?;
     let mean = rows.iter().sum::<u32>() as f32 / n as f32;
-    if (v as f32) < mean * 0.15 {
+    if (v as f32) < mean * 0.25 {
         Some(lo + i)
     } else {
         None
+    }
+}
+
+/// The part of `line` that starts `start` pixels in and is `w` wide; a tilted line keeps its slope
+/// and its `y` is moved to the part's own centre.
+fn piece(line: &Line, start: u32, w: u32) -> Line {
+    let shift = line.drift(line.x as f32 + start as f32 + w as f32 / 2.0);
+    Line {
+        x: line.x + start,
+        y: (line.y as f32 + shift).round().max(0.0) as u32,
+        w,
+        h: line.h,
+        slope: line.slope + 2.0 * line.curve * (start as f32 + w as f32 / 2.0 - line.w as f32 / 2.0),
+        curve: line.curve,
     }
 }
 
@@ -703,20 +949,10 @@ pub fn split_long(ink: &BitImage, line: &Line, max_w: u32) -> Vec<Line> {
                 run = 0;
             }
         }
-        out.push(Line {
-            x: line.x + start as u32,
-            y: line.y,
-            w: (best - start) as u32,
-            h: line.h,
-        });
+        out.push(piece(line, start as u32, (best - start) as u32));
         start = best;
     }
-    out.push(Line {
-        x: line.x + start as u32,
-        y: line.y,
-        w: line.w - start as u32,
-        h: line.h,
-    });
+    out.push(piece(line, start as u32, line.w - start as u32));
     out
 }
 
@@ -746,7 +982,15 @@ pub fn extract(gray: &GrayImage, line: &Line, line_h: usize, invert: bool) -> Op
         return None;
     }
     let (cw, ch) = ((x1 - x0) as usize, (y1 - y0) as usize);
+    // a tilted line is read straight: the rows are taken along its slope
+    let (gw, gh) = (gray.width() as i64, gray.height() as i64);
     let pix = |x: u32, y: u32| -> f32 {
+        let y = if line.slope == 0.0 && line.curve == 0.0 {
+            y
+        } else {
+            (y as i64 + line.drift(x as f32).round() as i64).clamp(0, gh - 1) as u32
+        };
+        let x = (x as i64).min(gw - 1) as u32;
         let v = gray.get_pixel(x, y).0[0];
         (if invert { 255 - v } else { v }) as f32
     };
