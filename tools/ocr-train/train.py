@@ -1,6 +1,6 @@
 """Train the LegatorOCR line recogniser (CNN + 2x BiGRU + CTC) on synthetic text lines and export
 it to the LNM1 binary read by crates/legatorocr-nocr. Usage: python train.py OUT_DIR [steps]"""
-import sys, os, time, random, struct
+import sys, os, re, time, random, struct
 import numpy as np
 import torch, torch.nn as nn, torch.nn.functional as F
 from charset import CHARSET
@@ -54,7 +54,8 @@ def load_real(path=None, held=False):
         return out
     for ln in open(path, encoding="utf8"):
         png, lab = ln.rstrip("\n").split("\t", 1)
-        pg = int(os.path.basename(png).split("-")[0][1:])
+        mt = re.match(r"p(\d+)-", os.path.basename(png))  # only the OCR_rev_06 pages (pN-...) have a validation split
+        pg = int(mt.group(1)) if mt else -1
         if (pg in REAL_HELD) != held:
             continue
         out.append((np.asarray(Image.open(png).convert("L")), lab))
