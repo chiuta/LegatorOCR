@@ -126,8 +126,8 @@ pub fn prepare(page: &PageImage, dpi: u32) -> Prepared {
             acc * 2 >= total
         })
         .unwrap_or(255);
-    // dark paper (median grey below ~40 %) or more "ink" than paper: light text on a dark page
-    if median < 100 || ink.count_ink() * 100 / total > 50 {
+    // dark paper (median grey below 50 %) or more "ink" than paper: light text on a dark page
+    if median < 128 || ink.count_ink() * 100 / total > 50 {
         // more "ink" than paper: the page is light-on-dark
         for p in gray.pixels_mut() {
             p.0[0] = 255 - p.0[0];
