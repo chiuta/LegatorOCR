@@ -584,6 +584,20 @@ fn cut(p: &Prof, r: Region, med: u32, depth: u32, out: &mut Vec<Line>) {
         }
     }
     if !hgaps.is_empty() {
+        // Split first only at the big blank bands (a picture, a heading, a paragraph break): the
+        // blocks between them may hold two columns whose lines happen to sit at the same height,
+        // and cutting those into full-width lines would glue the columns together. A block with no
+        // big band left falls through to the cut at every band.
+        let big: Vec<(usize, usize)> = hgaps
+            .iter()
+            .copied()
+            .filter(|&(_, l)| l as u32 * 10 >= med * 15)
+            .collect();
+        let hgaps = if big.is_empty() || big.len() == hgaps.len() || h <= med * 3 {
+            hgaps
+        } else {
+            big
+        };
         // split at every blank band at once, so the depth does not grow with the line count
         let mut start = y0;
         for &(s, l) in &hgaps {

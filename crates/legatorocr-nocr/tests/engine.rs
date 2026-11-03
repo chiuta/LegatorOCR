@@ -155,6 +155,34 @@ fn two_columns_are_read_column_by_column() {
 }
 
 #[test]
+fn two_columns_above_a_picture_are_not_glued_into_full_width_lines() {
+    // real page p13: text lines of both columns sit at the same heights, and a photo under them
+    // spans the gutter, so no blank column runs the full page height
+    let mut b = BitImage::new(500, 500);
+    for col in [(20u32, 220u32), (280, 480)] {
+        for y in [20u32, 60, 100, 140] {
+            for yy in y..y + 20 {
+                for x in col.0..col.1 {
+                    if (x / 5) % 3 != 0 {
+                        b.set(x, yy, true);
+                    }
+                }
+            }
+        }
+    }
+    for y in 260..480 {
+        for x in 100..400 {
+            b.set(x, y, true);
+        }
+    }
+    let lines = layout::find_lines(&b, 20);
+    let text: Vec<_> = lines.iter().filter(|l| l.y < 200).collect();
+    assert_eq!(text.len(), 8, "{lines:?}");
+    assert!(text.iter().all(|l| l.w <= 220));
+    assert!(text[..4].iter().all(|l| l.x < 100) && text[4..].iter().all(|l| l.x > 200));
+}
+
+#[test]
 fn speckle_and_blank_pages_give_no_lines() {
     let mut b = BitImage::new(300, 300);
     assert!(layout::find_lines(&b, 12).is_empty());
