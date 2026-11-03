@@ -54,7 +54,7 @@ pub fn embedded_model() -> Option<&'static Model> {
 /// Pages above this many pixels are analysed at reduced size (memory and time stay bounded).
 const MAX_PAGE_PIXELS: u64 = 64_000_000;
 /// Mean glyph probability below which a line is treated as picture/dust rather than text.
-const MIN_LINE_P: f32 = 0.55;
+const MIN_LINE_P: f32 = 0.75;
 
 /// Recognise a page. `dpi` only sizes the binarisation window.
 pub fn recognize(page: &PageImage, dpi: u32, model: &Model, o: &NativeOptions) -> Vec<Word> {

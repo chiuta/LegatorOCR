@@ -183,6 +183,29 @@ fn two_columns_above_a_picture_are_not_glued_into_full_width_lines() {
 }
 
 #[test]
+fn tall_block_of_lines_bridged_by_noise_is_not_dropped() {
+    // real page p38: a paragraph whose line gaps all hold a few specks, so no row is blank
+    let mut b = BitImage::new(800, 400);
+    for i in 0..8u32 {
+        let y = 10 + i * 40;
+        for yy in y..y + 22 {
+            for x in 20..780 {
+                if (x / 6) % 3 != 0 {
+                    b.set(x, yy, true);
+                }
+            }
+        }
+        for yy in y + 22..y + 40 {
+            for k in 0..6u32 {
+                b.set(100 + 90 * k + yy % 3, yy, true); // 6 specks in every gap row
+            }
+        }
+    }
+    let lines = layout::find_lines(&b, 20);
+    assert!(lines.len() >= 7, "{} lines: {lines:?}", lines.len());
+}
+
+#[test]
 fn speckle_and_blank_pages_give_no_lines() {
     let mut b = BitImage::new(300, 300);
     assert!(layout::find_lines(&b, 12).is_empty());

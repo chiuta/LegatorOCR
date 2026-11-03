@@ -442,6 +442,26 @@ fn gaps(v: &[u32], noise: u32) -> Vec<(usize, usize)> {
     out
 }
 
+/// Do the bands between these gaps have the height of text lines (not slices of display letters)?
+fn looks_like_text_lines(g: &[(usize, usize)], len: usize, med: u32) -> bool {
+    if g.is_empty() {
+        return false;
+    }
+    let mut start = 0usize;
+    let (mut ok, mut all) = (0u32, 0u32);
+    for &(s, l) in g.iter().chain(std::iter::once(&(len, 0))) {
+        let h = (s - start) as u32;
+        if h * 2 >= med {
+            all += 1;
+            if h * 10 >= med * 6 && h * 10 <= med * 26 {
+                ok += 1;
+            }
+        }
+        start = s + l;
+    }
+    all >= 2 && ok * 10 >= all * 7
+}
+
 fn widest(g: &[(usize, usize)]) -> Option<(usize, usize)> {
     g.iter()
         .copied()
@@ -560,7 +580,19 @@ fn cut(p: &Prof, r: Region, med: u32, depth: u32, out: &mut Vec<Line>) {
     // a little scanner noise must not bridge a gap
     // (scan dust in a gutter is ink too: allow about one speck per 60 rows of the region)
     let (noise_r, noise_c) = (w / 400, (h / 60).max(1));
-    let hgaps = gaps(&rows, noise_r);
+    let mut hgaps = gaps(&rows, noise_r);
+    // a tall block without a single blank row is usually text lines whose ascenders and descenders
+    // are bridged by a slight skew or scanner noise: accept a little more ink in a gap before
+    // giving up (a block that stays one piece is cut at its weakest row or dropped as a picture)
+    if hgaps.is_empty() && h > med * 3 {
+        for k in [3u32, 6, 12] {
+            let g = gaps(&rows, noise_r * k + k);
+            if looks_like_text_lines(&g, rows.len(), med) {
+                hgaps = g;
+                break;
+            }
+        }
+    }
     // a gutter is at least 1.8 line heights wide; a narrower one (tightly set columns, 0.9 to
     // 1.8) counts only in a tall block with real text on both sides, where a river of white
     // between the words of a justified paragraph is unlikely to run all the way down
