@@ -1811,6 +1811,7 @@ fn real_main() -> Result<()> {
         && cli.alto.is_none()
         && cli.page_xml.is_none()
         && cli.json.is_none()
+        && cli.fff_out.is_none()
         && cli.docx.is_none()
         && cli.tei.is_none()
         && cli.report.is_none()
