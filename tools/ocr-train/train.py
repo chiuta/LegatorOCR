@@ -86,6 +86,13 @@ def edit(a, b):
     return d[-1]
 
 
+def to_train(net):
+    net.train()
+    if os.environ.get("FREEZE_BN"):  # fine-tuning a model whose BN was folded: keep BN as a fixed affine map
+        for bn in net.bn:
+            bn.eval()
+
+
 def validate(net, val):
     net.eval()
     e = n = 0
@@ -94,7 +101,7 @@ def validate(net, val):
             for o, t in zip(greedy(net(x)), txt):
                 e += edit(o, t)
                 n += len(t)
-    net.train()
+    to_train(net)
     return e / max(n, 1)
 
 
@@ -130,7 +137,43 @@ def export(net, path):
             for d in t.shape:
                 f.write(struct.pack("<I", d))
             f.write(t.numpy().astype("<f4").tobytes())
-    net.train()
+    to_train(net)
+
+
+def load_lnm(net, path):
+    """Rebuild torch weights from an exported LNM1 file (batch norm was folded into the convs:
+    the BN layers are set to identity in eval mode so the network computes the same function).
+    Classes are matched by character, so a model with an older charset can be used."""
+    b = open(path, "rb").read()
+    assert b[:4] == b"LNM1"
+    h, hid, nc, ncs = struct.unpack_from("<IIII", b, 4)
+    o = 20
+    old = b[o:o + ncs].decode(); o += ncs
+    (nt,) = struct.unpack_from("<I", b, o); o += 4
+    T = {}
+    for _ in range(nt):
+        (nl,) = struct.unpack_from("<I", b, o); o += 4
+        name = b[o:o + nl].decode(); o += nl
+        (d,) = struct.unpack_from("<I", b, o); o += 4
+        shape = struct.unpack_from("<" + "I" * d, b, o); o += 4 * d
+        n = int(np.prod(shape))
+        T[name] = torch.from_numpy(np.frombuffer(b, "<f4", n, o).copy().reshape(shape)); o += 4 * n
+    assert hid == HID and nc == len(C), (hid, nc)
+    with torch.no_grad():
+        for i, (conv, bn) in enumerate(zip(net.conv, net.bn)):
+            conv.weight.copy_(T[f"conv{i}.w"]); conv.bias.copy_(T[f"conv{i}.b"])
+            bn.running_mean.zero_(); bn.running_var.fill_(1.0 - bn.eps); bn.weight.fill_(1.0); bn.bias.zero_()
+        for k, g in (("gru1", net.gru1), ("gru2", net.gru2)):
+            for suf, name in (("", "f"), ("_reverse", "r")):
+                for p in ("weight_ih", "weight_hh", "bias_ih", "bias_hh"):
+                    getattr(g, f"{p}_l0{suf}").copy_(T[f"{k}.{name}.{p}"])
+        net.fc.bias.fill_(-3.0)
+        net.fc.bias[0] = T["fc.b"][0]; net.fc.weight[0] = T["fc.w"][0]
+        for i, ch in enumerate(old):
+            if ch in CHARSET:
+                j = CHARSET.index(ch) + 1
+                net.fc.weight[j] = T["fc.w"][i + 1]; net.fc.bias[j] = T["fc.b"][i + 1]
+    return old == CHARSET
 
 
 if __name__ == "__main__":
@@ -140,6 +183,14 @@ if __name__ == "__main__":
     torch.set_num_threads(int(os.environ.get("TT", "3")))
     net = Net()
     init = os.environ.get("INIT")
+    init_lnm = os.environ.get("INIT_LNM")
+    resume = os.environ.get("RESUME")  # a ckpt.pt of this script: continue from it
+    if init_lnm:
+        same = load_lnm(net, init_lnm)
+        print("warm start from", init_lnm, "(same charset)" if same else "(charset differs: matched by character)", flush=True)
+    if resume:
+        net.load_state_dict(torch.load(resume))
+        print("resumed from", resume, flush=True)
     if init:  # warm start from a model trained on the previous charset: copy matching classes
         import charset_v1
         sd = torch.load(init)
@@ -154,8 +205,9 @@ if __name__ == "__main__":
                 net.fc.weight[j] = w_old[i + 1]; net.fc.bias[j] = b_old[i + 1]
         print("warm start from", init, flush=True)
     print("params", sum(p.numel() for p in net.parameters()), flush=True)
+    to_train(net)
     opt = torch.optim.AdamW(net.parameters(), 2e-3, weight_decay=1e-4)
-    sched = torch.optim.lr_scheduler.OneCycleLR(opt, float(os.environ.get('LR', '3e-3')), total_steps=steps, pct_start=0.05)
+    sched = torch.optim.lr_scheduler.OneCycleLR(opt, float(os.environ.get('LR', '3e-3')), total_steps=steps, pct_start=float(os.environ.get('WARM', '0.05')))
     ctc = nn.CTCLoss(zero_infinity=True)
     vg = batches(424242)
     val = [next(vg) for _ in range(12)]

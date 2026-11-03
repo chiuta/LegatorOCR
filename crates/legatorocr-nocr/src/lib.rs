@@ -39,6 +39,12 @@ pub fn embedded_model() -> Option<&'static Model> {
     use std::sync::OnceLock;
     static M: OnceLock<Option<Model>> = OnceLock::new();
     M.get_or_init(|| {
+        // developer override for trying a newly trained model without rebuilding
+        if let Some(p) = std::env::var_os("LEGATOROCR_NATIVE_MODEL") {
+            if let Some(m) = std::fs::read(p).ok().and_then(|b| Model::from_bytes(&b).ok()) {
+                return Some(m);
+            }
+        }
         const BYTES: &[u8] = include_bytes!("../models/multi.lnm");
         Model::from_bytes(BYTES).ok()
     })

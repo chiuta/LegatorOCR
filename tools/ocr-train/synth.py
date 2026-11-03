@@ -15,6 +15,18 @@ FONT_GLOBS = [
     "/usr/share/fonts/truetype/freefont/*.ttf",
     "/usr/share/fonts/truetype/crosextra/*.ttf",
     "/usr/share/fonts/opentype/inter/Inter-*.otf",
+    # book faces (Palatino, Times, Century, Bookman, Baskerville, Computer Modern ...) with
+    # their italics: the real pages to read are mostly books
+    "/usr/share/fonts/opentype/urw-base35/C059-*.otf",
+    "/usr/share/fonts/opentype/urw-base35/NimbusRoman-*.otf",
+    "/usr/share/fonts/opentype/urw-base35/P052-*.otf",
+    "/usr/share/fonts/opentype/urw-base35/URWBookman-*.otf",
+    "/usr/share/fonts/opentype/urw-base35/NimbusSans-*.otf",
+    "/usr/share/texmf/fonts/opentype/public/tex-gyre/texgyre*.otf",
+    "/usr/share/texmf/fonts/opentype/public/lm/lmroman1[02]-*.otf",
+    "/usr/share/texmf/fonts/opentype/public/lm/lmroman9-*.otf",
+    "/usr/share/fonts/truetype/baskerville/*.otf",
+    "/usr/share/fonts/truetype/google-fonts/Lora-*.ttf",
 ]
 _CS = set(CHARSET)
 
@@ -22,7 +34,7 @@ def load_fonts():
     fonts = []
     for g in FONT_GLOBS:
         for p in sorted(glob.glob(g)):
-            if "Mono" in p or "Thin" in p or "ExtraLight" in p or "Black" in p:
+            if "Mono" in p or "Thin" in p or "ExtraLight" in p or "Black" in p or "cursor" in p.lower() or "chorus" in p.lower():
                 continue
             try:
                 cmap = set(TTFont(p, lazy=True).getBestCmap().keys())
@@ -97,10 +109,27 @@ def render(text, font_path, size, rng, cmap=None):
         if all(ord(c) in cmap for c in alt):
             text = alt   # draw the legacy cedilla form; the label keeps the correct comma-below letter
     f = ImageFont.truetype(font_path, size)
-    w = int(f.getlength(text)) + 4 * size
+    # word by word with a random gap: justified lines have wide gaps, tight scans narrow ones,
+    # and the recogniser must tell word boundaries from letter gaps in both
+    words_ = text.split(" ")
+    space = f.getlength(" ")
+    mode = rng.random()
+    if mode < 0.45:
+        k0, k1 = 0.85, 1.15      # as the font sets it
+    elif mode < 0.75:
+        k0, k1 = 0.35, 0.9       # tight
+    else:
+        k0, k1 = 0.9, 1.9        # justified / loose
+    widths = [f.getlength(t) for t in words_]
+    gaps = [space * rng.uniform(k0, k1) for _ in words_[:-1]]
+    w = int(sum(widths) + sum(gaps)) + 4 * size
     h = int(size * 2.2)
     im = Image.new("L", (w, h), 255)
-    ImageDraw.Draw(im).text((2 * size, int(size * 0.5)), text, font=f, fill=0)
+    d = ImageDraw.Draw(im)
+    x = 2.0 * size
+    for t, wd, g in zip(words_, widths, gaps + [0]):
+        d.text((x, int(size * 0.5)), t, font=f, fill=0)
+        x += wd + g
     if size >= 30:  # ink spread / starvation only where strokes are several pixels wide
         r = rng.random()
         if r < 0.12:
