@@ -42,11 +42,49 @@ def encode(t):
     return [CHARSET.index(c) + 1 for c in t]
 
 
+REAL_HELD = (11, 25)  # pages of the real set kept out of training, for a validation on real lines
+
+
+def load_real(path=None, held=False):
+    """(array, label) of real scanned lines from real_labels.py; held = only the validation pages."""
+    from PIL import Image
+    path = path or os.environ.get("REAL")
+    out = []
+    if not path:
+        return out
+    for ln in open(path, encoding="utf8"):
+        png, lab = ln.rstrip("\n").split("\t", 1)
+        pg = int(os.path.basename(png).split("-")[0][1:])
+        if (pg in REAL_HELD) != held:
+            continue
+        out.append((np.asarray(Image.open(png).convert("L")), lab))
+    return out
+
+
+def augment_real(a, rng):
+    """Mild variation of a real line: horizontal scale, contrast, noise."""
+    from PIL import Image
+    w = max(8, int(a.shape[1] * rng.uniform(0.9, 1.1)))
+    a = np.asarray(Image.fromarray(a).resize((w, a.shape[0]), Image.BILINEAR)).astype(np.float32)
+    ink = (255 - a) / 255.0
+    ink = np.clip(ink ** rng.uniform(0.8, 1.3) * rng.uniform(0.8, 1.1), 0, 1)
+    ink = np.clip(ink + rng.uniform(0, 0.04) * np.random.default_rng(rng.randrange(1 << 30)).standard_normal(ink.shape), 0, 1)
+    return (255 - ink * 255).astype(np.uint8)
+
+
 def batches(seed, bs=32, chunk=320):
     rng = random.Random(seed)
     fonts = synth.load_fonts()
+    real = load_real()
+    realp = float(os.environ.get("REALP", "0.4"))
     while True:
-        items = [synth.sample(fonts, rng) for _ in range(chunk)]
+        items = []
+        for _ in range(chunk):
+            if real and rng.random() < realp:
+                a, t = rng.choice(real)
+                items.append((augment_real(a, rng), t))
+            else:
+                items.append(synth.sample(fonts, rng))
         items.sort(key=lambda it: it[0].shape[1])
         for i in range(0, chunk, bs):
             grp = items[i:i + bs]
@@ -209,8 +247,22 @@ if __name__ == "__main__":
     opt = torch.optim.AdamW(net.parameters(), 2e-3, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, float(os.environ.get('LR', '3e-3')), total_steps=steps, pct_start=float(os.environ.get('WARM', '0.05')))
     ctc = nn.CTCLoss(zero_infinity=True)
+    _real = os.environ.pop("REAL", None)
     vg = batches(424242)
     val = [next(vg) for _ in range(12)]
+    if _real:
+        os.environ["REAL"] = _real
+        held = load_real(_real, held=True)
+        held.sort(key=lambda it: it[0].shape[1])
+        rval = []
+        for i in range(0, len(held), 16):
+            grp = held[i:i + 16]
+            W = (max(a.shape[1] for a, _ in grp) + 3) // 4 * 4
+            x = np.zeros((len(grp), 1, synth.H, W), np.float32)
+            for j, (a, _) in enumerate(grp):
+                x[j, 0, :, :a.shape[1]] = (255 - a) / 255.0
+            rval.append((torch.from_numpy(x), None, None, [t for _, t in grp]))
+        print("real validation lines:", len(held), flush=True)
     dl = iter(torch.utils.data.DataLoader(DS(), batch_size=None,
                                           num_workers=int(os.environ.get("NW", "2")), prefetch_factor=6))
     t0 = time.time()
@@ -231,6 +283,6 @@ if __name__ == "__main__":
         if step % 100 == 0:
             print(f"step {step} loss {ema:.3f} {time.time()-t0:.0f}s", flush=True)
         if step % 1000 == 0 or step == steps:
-            print(f"== step {step} val CER {validate(net, val):.4f}", flush=True)
+            print(f"== step {step} val CER {validate(net, val):.4f}" + (f" real-val CER {validate(net, rval):.4f}" if _real else ""), flush=True)
             export(net, os.path.join(out, "model.lnm"))
             torch.save(net.state_dict(), os.path.join(out, "ckpt.pt"))
