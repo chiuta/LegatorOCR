@@ -15,11 +15,17 @@ fn make(dir: &std::path::Path, extra: &[&str]) -> Vec<u8> {
     let out = Command::new(env!("CARGO_BIN_EXE_legatorocr"))
         .current_dir(dir)
         .env("SOURCE_DATE_EPOCH", "1700000000")
-        .args(["a.png", "a.png", "--dpi", "300", "--mode", "bw", "--pdf", "o.pdf", "-o", "pages"])
+        .args([
+            "a.png", "a.png", "--dpi", "300", "--mode", "bw", "--pdf", "o.pdf", "-o", "pages",
+        ])
         .args(extra)
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     std::fs::read(dir.join("o.pdf")).unwrap()
 }
 
@@ -27,7 +33,11 @@ fn make(dir: &std::path::Path, extra: &[&str]) -> Vec<u8> {
 fn same_inputs_same_bytes() {
     let base = std::env::temp_dir().join(format!("lgr_repro_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
-    for extra in [&[][..], &["--pdfa-part", "2", "--tagged"][..], &["--provenance"][..]] {
+    for extra in [
+        &[][..],
+        &["--pdfa-part", "2", "--tagged"][..],
+        &["--provenance"][..],
+    ] {
         let a = make(&base.join("one"), extra);
         let b = make(&base.join("two"), extra);
         assert!(a == b, "PDF bytes differ for {extra:?}");

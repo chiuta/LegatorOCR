@@ -93,13 +93,23 @@ mod tests {
 
     #[test]
     fn empty_expectation_is_sound() {
-        let r = Report { pages: 1, pages_with_text: 0, expected: 0, found: 0 };
+        let r = Report {
+            pages: 1,
+            pages_with_text: 0,
+            expected: 0,
+            found: 0,
+        };
         assert!(r.summary().0);
     }
 
     #[test]
     fn low_overlap_is_flagged() {
-        let r = Report { pages: 2, pages_with_text: 1, expected: 100, found: 40 };
+        let r = Report {
+            pages: 2,
+            pages_with_text: 1,
+            expected: 100,
+            found: 40,
+        };
         assert!(!r.summary().0);
     }
 }

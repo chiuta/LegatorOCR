@@ -20,7 +20,9 @@ pub fn for_page(pg: &Page) -> Vec<(bool, [f32; 4])> {
     let bw = match &pg.image {
         PageImage::Bw(b) => b.clone(),
         PageImage::Gray(g) => legatorocr_core::binarize::sauvola(g, 41, 0.3),
-        PageImage::Rgb(i) => legatorocr_core::binarize::sauvola(&legatorocr_core::transform::gray_of(i), 41, 0.3),
+        PageImage::Rgb(i) => {
+            legatorocr_core::binarize::sauvola(&legatorocr_core::transform::gray_of(i), 41, 0.3)
+        }
     };
     let dpi = pg.dpi.max(1) as f32;
     let hpt = bw.h as f32 * 72.0 / dpi;

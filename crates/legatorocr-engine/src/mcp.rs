@@ -46,10 +46,25 @@ impl J {
         match self {
             J::Null => "null".into(),
             J::Bool(b) => b.to_string(),
-            J::Num(n) => if n.fract() == 0.0 && n.abs() < 1e15 { format!("{}", *n as i64) } else { n.to_string() },
+            J::Num(n) => {
+                if n.fract() == 0.0 && n.abs() < 1e15 {
+                    format!("{}", *n as i64)
+                } else {
+                    n.to_string()
+                }
+            }
             J::Str(s) => quote(s),
-            J::Arr(a) => format!("[{}]", a.iter().map(J::render).collect::<Vec<_>>().join(",")),
-            J::Obj(o) => format!("{{{}}}", o.iter().map(|(k, v)| format!("{}:{}", quote(k), v.render())).collect::<Vec<_>>().join(",")),
+            J::Arr(a) => format!(
+                "[{}]",
+                a.iter().map(J::render).collect::<Vec<_>>().join(",")
+            ),
+            J::Obj(o) => format!(
+                "{{{}}}",
+                o.iter()
+                    .map(|(k, v)| format!("{}:{}", quote(k), v.render()))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
         }
     }
 }
@@ -149,7 +164,12 @@ fn value(b: &[char], i: &mut usize, depth: u32) -> Option<J> {
             while *i < b.len() && matches!(b[*i], '0'..='9' | '-' | '+' | '.' | 'e' | 'E') {
                 *i += 1;
             }
-            b[st..*i].iter().collect::<String>().parse().ok().map(J::Num)
+            b[st..*i]
+                .iter()
+                .collect::<String>()
+                .parse()
+                .ok()
+                .map(J::Num)
         }
     }
 }
@@ -189,11 +209,15 @@ fn string(b: &[char], i: &mut usize) -> Option<String> {
                         let h: String = b.get(*i..*i + 4)?.iter().collect();
                         *i += 4;
                         let mut cp = u32::from_str_radix(&h, 16).ok()?;
-                        if (0xD800..0xDC00).contains(&cp) && b.get(*i) == Some(&'\\') && b.get(*i + 1) == Some(&'u') {
+                        if (0xD800..0xDC00).contains(&cp)
+                            && b.get(*i) == Some(&'\\')
+                            && b.get(*i + 1) == Some(&'u')
+                        {
                             let l: String = b.get(*i + 2..*i + 6)?.iter().collect();
                             let lo = u32::from_str_radix(&l, 16).ok()?;
                             *i += 6;
-                            cp = 0x10000 + ((cp - 0xD800) << 10) + (lo.wrapping_sub(0xDC00) & 0x3FF);
+                            cp =
+                                0x10000 + ((cp - 0xD800) << 10) + (lo.wrapping_sub(0xDC00) & 0x3FF);
                         }
                         o.push(char::from_u32(cp).unwrap_or('\u{FFFD}'));
                     }
@@ -215,7 +239,13 @@ fn schema(props: &[(&str, &str, &str)], required: &[&str]) -> J {
                     .iter()
                     .map(|(n, t, d)| {
                         let ty = if *t == "strings" {
-                            J::Obj(vec![("type".into(), J::Str("array".into())), ("items".into(), J::Obj(vec![("type".into(), J::Str("string".into()))]))])
+                            J::Obj(vec![
+                                ("type".into(), J::Str("array".into())),
+                                (
+                                    "items".into(),
+                                    J::Obj(vec![("type".into(), J::Str("string".into()))]),
+                                ),
+                            ])
                         } else {
                             J::Obj(vec![("type".into(), J::Str((*t).into()))])
                         };
@@ -229,12 +259,21 @@ fn schema(props: &[(&str, &str, &str)], required: &[&str]) -> J {
                     .collect(),
             ),
         ),
-        ("required".into(), J::Arr(required.iter().map(|r| J::Str((*r).into())).collect())),
+        (
+            "required".into(),
+            J::Arr(required.iter().map(|r| J::Str((*r).into())).collect()),
+        ),
     ])
 }
 
 fn tools() -> J {
-    let t = |name: &str, desc: &str, s: J| J::Obj(vec![("name".into(), J::Str(name.into())), ("description".into(), J::Str(desc.into())), ("inputSchema".into(), s)]);
+    let t = |name: &str, desc: &str, s: J| {
+        J::Obj(vec![
+            ("name".into(), J::Str(name.into())),
+            ("description".into(), J::Str(desc.into())),
+            ("inputSchema".into(), s),
+        ])
+    };
     J::Arr(vec![
         t(
             "scan_to_pdf",
@@ -287,19 +326,30 @@ fn safe_path(s: &str) -> Result<String, String> {
 pub fn build_args(name: &str, a: &J) -> Result<Vec<String>, String> {
     let s = |k: &str| a.get(k).and_then(J::str).map(str::to_string);
     let paths = |k: &str| -> Result<Vec<String>, String> {
-        a.get(k).and_then(J::strings).ok_or_else(|| format!("{k} must be a list of strings"))?.iter().map(|p| safe_path(p)).collect()
+        a.get(k)
+            .and_then(J::strings)
+            .ok_or_else(|| format!("{k} must be a list of strings"))?
+            .iter()
+            .map(|p| safe_path(p))
+            .collect()
     };
     let flag = |k: &str| matches!(a.get(k), Some(J::Bool(true)));
     let mut v: Vec<String> = Vec::new();
     match name {
         "scan_to_pdf" => {
             v.extend(paths("inputs")?);
-            v.extend(["--pdf".into(), safe_path(&s("pdf").ok_or("pdf is required")?)?]);
+            v.extend([
+                "--pdf".into(),
+                safe_path(&s("pdf").ok_or("pdf is required")?)?,
+            ]);
             if flag("ocr") {
                 v.push("--ocr".into());
             }
             if let Some(l) = s("lang") {
-                if !l.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '_') {
+                if !l
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '_')
+                {
                     return Err("lang: letters, digits, + and _ only".into());
                 }
                 v.extend(["--lang".into(), l]);
@@ -313,13 +363,20 @@ pub fn build_args(name: &str, a: &J) -> Result<Vec<String>, String> {
         }
         "pdf_toolbox" => {
             v.extend(paths("inputs")?);
-            v.extend(["-o".into(), safe_path(&s("out_dir").ok_or("out_dir is required")?)?]);
+            v.extend([
+                "-o".into(),
+                safe_path(&s("out_dir").ok_or("out_dir is required")?)?,
+            ]);
             let mut any = false;
             if flag("merge") {
                 v.push("--merge-pdf".into());
                 any = true;
             }
-            for (k, f) in [("pages", "--extract-pages"), ("watermark", "--watermark"), ("number_pages", "--number-pages")] {
+            for (k, f) in [
+                ("pages", "--extract-pages"),
+                ("watermark", "--watermark"),
+                ("number_pages", "--number-pages"),
+            ] {
                 if let Some(x) = s(k) {
                     v.push(format!("{f}={x}"));
                     any = true;
@@ -330,12 +387,21 @@ pub fn build_args(name: &str, a: &J) -> Result<Vec<String>, String> {
                 any = true;
             }
             if !any {
-                return Err("choose at least one of merge, pages, split_every, watermark, number_pages".into());
+                return Err(
+                    "choose at least one of merge, pages, split_every, watermark, number_pages"
+                        .into(),
+                );
             }
         }
-        "efactura" => v.extend([format!("--efactura={}", safe_path(&s("file").ok_or("file is required")?)?)]),
+        "efactura" => v.extend([format!(
+            "--efactura={}",
+            safe_path(&s("file").ok_or("file is required")?)?
+        )]),
         "measure_edge" => {
-            v.push(format!("--measure-edge={}", safe_path(&s("image").ok_or("image is required")?)?));
+            v.push(format!(
+                "--measure-edge={}",
+                safe_path(&s("image").ok_or("image is required")?)?
+            ));
             if let Some(r) = s("roi") {
                 v.push(format!("--edge-roi={r}"));
             }
@@ -344,7 +410,10 @@ pub fn build_args(name: &str, a: &J) -> Result<Vec<String>, String> {
             }
         }
         "search" => {
-            v.push(format!("--search={}", s("query").ok_or("query is required")?));
+            v.push(format!(
+                "--search={}",
+                s("query").ok_or("query is required")?
+            ));
             v.push("--search-query".into());
             v.extend(paths("inputs")?);
         }
@@ -354,14 +423,25 @@ pub fn build_args(name: &str, a: &J) -> Result<Vec<String>, String> {
 }
 
 fn reply(id: &J, result: J) -> String {
-    J::Obj(vec![("jsonrpc".into(), J::Str("2.0".into())), ("id".into(), id.clone()), ("result".into(), result)]).render()
+    J::Obj(vec![
+        ("jsonrpc".into(), J::Str("2.0".into())),
+        ("id".into(), id.clone()),
+        ("result".into(), result),
+    ])
+    .render()
 }
 
 fn error(id: &J, code: i64, msg: &str) -> String {
     J::Obj(vec![
         ("jsonrpc".into(), J::Str("2.0".into())),
         ("id".into(), id.clone()),
-        ("error".into(), J::Obj(vec![("code".into(), J::Num(code as f64)), ("message".into(), J::Str(msg.into()))])),
+        (
+            "error".into(),
+            J::Obj(vec![
+                ("code".into(), J::Num(code as f64)),
+                ("message".into(), J::Str(msg.into())),
+            ]),
+        ),
     ])
     .render()
 }
@@ -370,7 +450,10 @@ const MODERN_VERSION: &str = "2026-07-28";
 const META_VERSION_KEY: &str = "io.modelcontextprotocol/protocolVersion";
 
 fn server_info() -> J {
-    J::Obj(vec![("name".into(), J::Str("legatorocr".into())), ("version".into(), J::Str(env!("CARGO_PKG_VERSION").into()))])
+    J::Obj(vec![
+        ("name".into(), J::Str("legatorocr".into())),
+        ("version".into(), J::Str(env!("CARGO_PKG_VERSION").into())),
+    ])
 }
 
 fn error_with_data(id: &J, code: i64, msg: &str, data: J) -> String {
@@ -379,7 +462,11 @@ fn error_with_data(id: &J, code: i64, msg: &str, data: J) -> String {
         ("id".into(), id.clone()),
         (
             "error".into(),
-            J::Obj(vec![("code".into(), J::Num(code as f64)), ("message".into(), J::Str(msg.into())), ("data".into(), data)]),
+            J::Obj(vec![
+                ("code".into(), J::Num(code as f64)),
+                ("message".into(), J::Str(msg.into())),
+                ("data".into(), data),
+            ]),
         ),
     ])
     .render()
@@ -393,7 +480,13 @@ fn modernise(mut result: J, cache: bool) -> J {
             v.push(("ttlMs".into(), J::Num(0.0)));
             v.push(("cacheScope".into(), J::Str("public".into())));
         }
-        v.push(("_meta".into(), J::Obj(vec![("io.modelcontextprotocol/serverInfo".into(), server_info())])));
+        v.push((
+            "_meta".into(),
+            J::Obj(vec![(
+                "io.modelcontextprotocol/serverInfo".into(),
+                server_info(),
+            )]),
+        ));
     }
     result
 }
@@ -406,15 +499,27 @@ pub fn handle(line: &str, exe: &Path) -> Option<String> {
     let id = req.get("id").cloned();
     let method = req.get("method").and_then(J::str).unwrap_or("");
     let id = id?;
-    let requested = req.get("params").and_then(|p| p.get("_meta")).and_then(|m| m.get(META_VERSION_KEY)).and_then(J::str);
+    let requested = req
+        .get("params")
+        .and_then(|p| p.get("_meta"))
+        .and_then(|m| m.get(META_VERSION_KEY))
+        .and_then(J::str);
     let modern = requested.is_some();
     if let Some(v) = requested {
         if v != MODERN_VERSION {
             let data = J::Obj(vec![
-                ("supported".into(), J::Arr(vec![J::Str(MODERN_VERSION.into())])),
+                (
+                    "supported".into(),
+                    J::Arr(vec![J::Str(MODERN_VERSION.into())]),
+                ),
                 ("requested".into(), J::Str(v.into())),
             ]);
-            return Some(error_with_data(&id, -32022, "Unsupported protocol version", data));
+            return Some(error_with_data(
+                &id,
+                -32022,
+                "Unsupported protocol version",
+                data,
+            ));
         }
     }
     let wrap = |r: J, cache: bool| if modern { modernise(r, cache) } else { r };
@@ -423,23 +528,43 @@ pub fn handle(line: &str, exe: &Path) -> Option<String> {
             &id,
             modernise(
                 J::Obj(vec![
-                    ("supportedVersions".into(), J::Arr(vec![J::Str(MODERN_VERSION.into())])),
-                    ("capabilities".into(), J::Obj(vec![("tools".into(), J::Obj(vec![]))])),
+                    (
+                        "supportedVersions".into(),
+                        J::Arr(vec![J::Str(MODERN_VERSION.into())]),
+                    ),
+                    (
+                        "capabilities".into(),
+                        J::Obj(vec![("tools".into(), J::Obj(vec![]))]),
+                    ),
                     ("serverInfo".into(), server_info()),
                 ]),
                 true,
             ),
         ),
-        "initialize" if modern => error(&id, -32601, "method not found: initialize is removed in 2026-07-28"),
-        "ping" if modern => error(&id, -32601, "method not found: ping is removed in 2026-07-28"),
+        "initialize" if modern => error(
+            &id,
+            -32601,
+            "method not found: initialize is removed in 2026-07-28",
+        ),
+        "ping" if modern => error(
+            &id,
+            -32601,
+            "method not found: ping is removed in 2026-07-28",
+        ),
         "initialize" => reply(
             &id,
             J::Obj(vec![
                 ("protocolVersion".into(), J::Str("2024-11-05".into())),
-                ("capabilities".into(), J::Obj(vec![("tools".into(), J::Obj(vec![]))])),
+                (
+                    "capabilities".into(),
+                    J::Obj(vec![("tools".into(), J::Obj(vec![]))]),
+                ),
                 (
                     "serverInfo".into(),
-                    J::Obj(vec![("name".into(), J::Str("legatorocr".into())), ("version".into(), J::Str(env!("CARGO_PKG_VERSION").into()))]),
+                    J::Obj(vec![
+                        ("name".into(), J::Str("legatorocr".into())),
+                        ("version".into(), J::Str(env!("CARGO_PKG_VERSION").into())),
+                    ]),
                 ),
             ]),
         ),
@@ -451,7 +576,11 @@ pub fn handle(line: &str, exe: &Path) -> Option<String> {
             let args = p.get("arguments").cloned().unwrap_or(J::Obj(vec![]));
             let (text, is_err) = match build_args(name, &args) {
                 Err(e) => (e, true),
-                Ok(a) => match Command::new(exe).args(&a).stdin(std::process::Stdio::null()).output() {
+                Ok(a) => match Command::new(exe)
+                    .args(&a)
+                    .stdin(std::process::Stdio::null())
+                    .output()
+                {
                     Ok(o) => {
                         let mut t = String::from_utf8_lossy(&o.stdout).into_owned();
                         let e = String::from_utf8_lossy(&o.stderr);
@@ -467,7 +596,13 @@ pub fn handle(line: &str, exe: &Path) -> Option<String> {
                 &id,
                 wrap(
                     J::Obj(vec![
-                        ("content".into(), J::Arr(vec![J::Obj(vec![("type".into(), J::Str("text".into())), ("text".into(), J::Str(text))])])),
+                        (
+                            "content".into(),
+                            J::Arr(vec![J::Obj(vec![
+                                ("type".into(), J::Str("text".into())),
+                                ("text".into(), J::Str(text)),
+                            ])]),
+                        ),
                         ("isError".into(), J::Bool(is_err)),
                     ]),
                     false,
@@ -509,14 +644,30 @@ mod tests {
     #[test]
     fn protocol_flow() {
         let exe = Path::new("/nonexistent/legatorocr");
-        let r = handle(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#, exe).unwrap();
+        let r = handle(
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
+            exe,
+        )
+        .unwrap();
         assert!(r.contains("\"protocolVersion\":\"2024-11-05\"") && r.contains("\"id\":1"));
-        assert!(handle(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#, exe).is_none());
+        assert!(handle(
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+            exe
+        )
+        .is_none());
         let l = handle(r#"{"jsonrpc":"2.0","id":"a","method":"tools/list"}"#, exe).unwrap();
-        for t in ["scan_to_pdf", "pdf_toolbox", "efactura", "measure_edge", "search"] {
+        for t in [
+            "scan_to_pdf",
+            "pdf_toolbox",
+            "efactura",
+            "measure_edge",
+            "search",
+        ] {
             assert!(l.contains(t), "{t}");
         }
-        assert!(handle(r#"{"jsonrpc":"2.0","id":2,"method":"nope"}"#, exe).unwrap().contains("-32601"));
+        assert!(handle(r#"{"jsonrpc":"2.0","id":2,"method":"nope"}"#, exe)
+            .unwrap()
+            .contains("-32601"));
         assert!(handle("garbage", exe).unwrap().contains("-32700"));
         // an invalid argument is reported as a tool error, not run
         let e = handle(r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"efactura","arguments":{"file":"--watch"}}}"#, exe).unwrap();
@@ -527,27 +678,67 @@ mod tests {
     fn modern_era_2026_07_28() {
         let exe = Path::new("/nonexistent/legatorocr");
         let m = r#""_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}"#;
-        let d = handle(&format!(r#"{{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{{{m}}}}}"#), exe).unwrap();
-        for k in ["supportedVersions", "2026-07-28", "capabilities", "resultType", "complete"] {
+        let d = handle(
+            &format!(r#"{{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{{{m}}}}}"#),
+            exe,
+        )
+        .unwrap();
+        for k in [
+            "supportedVersions",
+            "2026-07-28",
+            "capabilities",
+            "resultType",
+            "complete",
+        ] {
             assert!(d.contains(k), "{k}: {d}");
         }
         // legacy clients can probe too
-        assert!(handle(r#"{"jsonrpc":"2.0","id":9,"method":"server/discover"}"#, exe).unwrap().contains("supportedVersions"));
-        let l = handle(&format!(r#"{{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{{{m}}}}}"#), exe).unwrap();
-        assert!(l.contains("\"resultType\":\"complete\"") && l.contains("ttlMs") && l.contains("cacheScope"), "{l}");
+        assert!(handle(
+            r#"{"jsonrpc":"2.0","id":9,"method":"server/discover"}"#,
+            exe
+        )
+        .unwrap()
+        .contains("supportedVersions"));
+        let l = handle(
+            &format!(r#"{{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{{{m}}}}}"#),
+            exe,
+        )
+        .unwrap();
+        assert!(
+            l.contains("\"resultType\":\"complete\"")
+                && l.contains("ttlMs")
+                && l.contains("cacheScope"),
+            "{l}"
+        );
         // the legacy answer stays untouched
         let old = handle(r#"{"jsonrpc":"2.0","id":3,"method":"tools/list"}"#, exe).unwrap();
         assert!(!old.contains("resultType") && !old.contains("ttlMs"));
         // removed methods and unknown versions
-        assert!(handle(&format!(r#"{{"jsonrpc":"2.0","id":4,"method":"ping","params":{{{m}}}}}"#), exe).unwrap().contains("-32601"));
+        assert!(handle(
+            &format!(r#"{{"jsonrpc":"2.0","id":4,"method":"ping","params":{{{m}}}}}"#),
+            exe
+        )
+        .unwrap()
+        .contains("-32601"));
         let bad = handle(r#"{"jsonrpc":"2.0","id":5,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2031-01-01"}}}"#, exe).unwrap();
-        assert!(bad.contains("-32022") && bad.contains("\"supported\":[\"2026-07-28\"]") && bad.contains("\"requested\":\"2031-01-01\""), "{bad}");
+        assert!(
+            bad.contains("-32022")
+                && bad.contains("\"supported\":[\"2026-07-28\"]")
+                && bad.contains("\"requested\":\"2031-01-01\""),
+            "{bad}"
+        );
     }
 
     #[test]
     fn arguments_are_built_without_free_flags() {
-        let a = parse(r#"{"inputs":["a.png","b.png"],"pdf":"o.pdf","ocr":true,"lang":"ron+eng","mode":"bw"}"#).unwrap();
-        assert_eq!(build_args("scan_to_pdf", &a).unwrap(), ["a.png", "b.png", "--pdf", "o.pdf", "--ocr", "--lang", "ron+eng", "--mode", "bw"]);
+        let a = parse(
+            r#"{"inputs":["a.png","b.png"],"pdf":"o.pdf","ocr":true,"lang":"ron+eng","mode":"bw"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            build_args("scan_to_pdf", &a).unwrap(),
+            ["a.png", "b.png", "--pdf", "o.pdf", "--ocr", "--lang", "ron+eng", "--mode", "bw"]
+        );
         let bad = parse(r#"{"inputs":["-o"],"pdf":"o.pdf"}"#).unwrap();
         assert!(build_args("scan_to_pdf", &bad).is_err());
         let bad = parse(r#"{"inputs":["a"],"pdf":"o.pdf","lang":"ron --x"}"#).unwrap();

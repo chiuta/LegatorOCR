@@ -21,26 +21,45 @@ fn tmp(name: &str) -> PathBuf {
 }
 
 fn run(dir: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_legatorocr")).current_dir(dir).args(args).output().unwrap()
+    Command::new(env!("CARGO_BIN_EXE_legatorocr"))
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .unwrap()
 }
 
 fn text(o: &Output) -> String {
-    format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr))
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&o.stdout),
+        String::from_utf8_lossy(&o.stderr)
+    )
 }
 
 #[test]
 fn search_flags_exact_max_and_old_orthography() {
     let d = tmp("search");
-    std::fs::write(d.join("t.txt"), "Mobila pînză sînt cînd\nAbc 123 Mobilă\nmobila\nsecond mobila line\n").unwrap();
+    std::fs::write(
+        d.join("t.txt"),
+        "Mobila pînză sînt cînd\nAbc 123 Mobilă\nmobila\nsecond mobila line\n",
+    )
+    .unwrap();
     let all = run(&d, &["--search", "mobila", "t.txt"]);
     assert!(text(&all).contains("4 hit(s)"), "{}", text(&all));
     let exact = run(&d, &["--search", "mobila", "--search-exact", "t.txt"]);
     assert!(text(&exact).contains("2 hit(s)"), "{}", text(&exact));
     let max = run(&d, &["--search", "mobila", "--search-max", "1", "t.txt"]);
-    assert!(text(&max).contains("1 hit(s)") && text(&max).contains("stopped at the limit"), "{}", text(&max));
+    assert!(
+        text(&max).contains("1 hit(s)") && text(&max).contains("stopped at the limit"),
+        "{}",
+        text(&max)
+    );
     let new = run(&d, &["--search", "sunt", "t.txt"]);
     assert!(text(&new).contains("0 hit(s)"), "{}", text(&new));
-    let old = run(&d, &["--search", "sunt", "--search-old-orthography", "t.txt"]);
+    let old = run(
+        &d,
+        &["--search", "sunt", "--search-old-orthography", "t.txt"],
+    );
     assert!(text(&old).contains("1 hit(s)"), "{}", text(&old));
     let _ = std::fs::remove_dir_all(&d);
 }
@@ -49,11 +68,24 @@ fn search_flags_exact_max_and_old_orthography() {
 fn merkle_proof_verifies_and_a_wrong_root_does_not() {
     let d = tmp("merkle");
     std::fs::write(d.join("SHA256SUMS.txt"), "1111111111111111111111111111111111111111111111111111111111111111  one\n2222222222222222222222222222222222222222222222222222222222222222  two\n").unwrap();
-    let o = run(&d, &["--merkle-root", "SHA256SUMS.txt", "--merkle-proof", "two"]);
+    let o = run(
+        &d,
+        &["--merkle-root", "SHA256SUMS.txt", "--merkle-proof", "two"],
+    );
     assert!(o.status.success(), "{}", text(&o));
     let t = text(&o);
-    let root = t.lines().find_map(|l| l.strip_prefix("merkle root of 2 file(s): ")).expect(&t).trim().to_string();
-    let line = t.lines().find_map(|l| l.strip_prefix("proof: ")).expect(&t).trim().to_string();
+    let root = t
+        .lines()
+        .find_map(|l| l.strip_prefix("merkle root of 2 file(s): "))
+        .expect(&t)
+        .trim()
+        .to_string();
+    let line = t
+        .lines()
+        .find_map(|l| l.strip_prefix("proof: "))
+        .expect(&t)
+        .trim()
+        .to_string();
     let good = run(&d, &["--merkle-verify", &line, "--merkle-expect", &root]);
     assert!(good.status.success(), "{}", text(&good));
     let wrong = "0".repeat(64);
@@ -65,12 +97,26 @@ fn merkle_proof_verifies_and_a_wrong_root_does_not() {
 #[test]
 fn verify_ocfl_accepts_an_object_and_rejects_a_changed_file() {
     let d = tmp("ocflv");
-    let o = run(&d, &["a.png", "--dpi", "300", "--format", "none", "--pdf", "h.pdf", "--ocfl", "obj"]);
+    let o = run(
+        &d,
+        &[
+            "a.png", "--dpi", "300", "--format", "none", "--pdf", "h.pdf", "--ocfl", "obj",
+        ],
+    );
     assert!(o.status.success(), "{}", text(&o));
     let ok = run(&d, &["--verify-ocfl", "obj"]);
-    assert!(ok.status.success() && text(&ok).contains("intact"), "{}", text(&ok));
+    assert!(
+        ok.status.success() && text(&ok).contains("intact"),
+        "{}",
+        text(&ok)
+    );
     let content = d.join("obj/v1/content");
-    let f = std::fs::read_dir(&content).unwrap().next().unwrap().unwrap().path();
+    let f = std::fs::read_dir(&content)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
     let mut bytes = std::fs::read(&f).unwrap();
     bytes.push(b'!');
     std::fs::write(&f, bytes).unwrap();
@@ -86,7 +132,9 @@ fn utf16_hex_strings(pdf: &[u8]) -> Vec<String> {
     for part in s.split("<FEFF").skip(1) {
         if let Some(end) = part.find('>') {
             let hex = &part[..end];
-            let units: Vec<u16> = (0..hex.len() / 4).filter_map(|i| u16::from_str_radix(&hex[i * 4..i * 4 + 4], 16).ok()).collect();
+            let units: Vec<u16> = (0..hex.len() / 4)
+                .filter_map(|i| u16::from_str_radix(&hex[i * 4..i * 4 + 4], 16).ok())
+                .collect();
             out.push(String::from_utf16_lossy(&units));
         }
     }
@@ -96,10 +144,32 @@ fn utf16_hex_strings(pdf: &[u8]) -> Vec<String> {
 #[test]
 fn rights_notice_names_the_author_the_year_and_the_deed() {
     let d = tmp("rights");
-    let o = run(&d, &["a.png", "--dpi", "300", "--format", "none", "--pdf", "r.pdf", "--rights-death-year", "1990", "--rights-author", "Ion Test", "--rights-deed-number", "12", "--rights-deed-date", "2001-05-04"]);
+    let o = run(
+        &d,
+        &[
+            "a.png",
+            "--dpi",
+            "300",
+            "--format",
+            "none",
+            "--pdf",
+            "r.pdf",
+            "--rights-death-year",
+            "1990",
+            "--rights-author",
+            "Ion Test",
+            "--rights-deed-number",
+            "12",
+            "--rights-deed-date",
+            "2001-05-04",
+        ],
+    );
     assert!(o.status.success(), "{}", text(&o));
     let strings = utf16_hex_strings(&std::fs::read(d.join("r.pdf")).unwrap());
-    let notice = strings.iter().find(|s| s.contains("Ion Test")).unwrap_or_else(|| panic!("no rights string in {strings:?}"));
+    let notice = strings
+        .iter()
+        .find(|s| s.contains("Ion Test"))
+        .unwrap_or_else(|| panic!("no rights string in {strings:?}"));
     for needle in ["1990", "2060", "2061", "deed no. 12", "2001-05-04"] {
         assert!(notice.contains(needle), "{needle} missing from: {notice}");
     }
@@ -157,7 +227,11 @@ fn save_profile_writes_a_user_profile_that_is_then_listed() {
     };
     let o = go(&["--save-profile", "myprof", "--dpi", "300"]);
     assert!(o.status.success(), "{}", text(&o));
-    assert!(cfg.join("legatorocr/profiles/myprof.lgr").exists(), "{}", text(&o));
+    assert!(
+        cfg.join("legatorocr/profiles/myprof.lgr").exists(),
+        "{}",
+        text(&o)
+    );
     let l = go(&["--list-profiles"]);
     assert!(text(&l).contains("myprof"), "{}", text(&l));
     let _ = std::fs::remove_dir_all(&d);
@@ -167,28 +241,74 @@ fn save_profile_writes_a_user_profile_that_is_then_listed() {
 #[test]
 fn pdf_signing_round_trip_with_a_throw_away_certificate() {
     let d = tmp("sign");
-    let have_openssl = Command::new("openssl").arg("version").output().map(|o| o.status.success()).unwrap_or(false);
+    let have_openssl = Command::new("openssl")
+        .arg("version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
     if !have_openssl {
         eprintln!("openssl not found: signing test skipped");
         return;
     }
     let ok = |c: &mut Command| assert!(c.current_dir(&d).output().unwrap().status.success());
-    ok(Command::new("openssl").args(["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "k.pem", "-out", "c.pem", "-subj", "/CN=Test Signer", "-days", "3"]));
-    ok(Command::new("openssl").args(["pkcs12", "-export", "-inkey", "k.pem", "-in", "c.pem", "-out", "t.p12", "-passout", "pass:pw"]));
-    let made = run(&d, &["a.png", "--dpi", "300", "--format", "none", "--pdf", "h.pdf"]);
+    ok(Command::new("openssl").args([
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-keyout",
+        "k.pem",
+        "-out",
+        "c.pem",
+        "-subj",
+        "/CN=Test Signer",
+        "-days",
+        "3",
+    ]));
+    ok(Command::new("openssl").args([
+        "pkcs12", "-export", "-inkey", "k.pem", "-in", "c.pem", "-out", "t.p12", "-passout",
+        "pass:pw",
+    ]));
+    let made = run(
+        &d,
+        &[
+            "a.png", "--dpi", "300", "--format", "none", "--pdf", "h.pdf",
+        ],
+    );
     assert!(made.status.success(), "{}", text(&made));
     let s = Command::new(env!("CARGO_BIN_EXE_legatorocr"))
         .current_dir(&d)
         .env("LGR_TEST_PW", "pw")
-        .args(["--sign-pdf", "h.pdf", "--sign-p12", "t.p12", "--sign-pass-env", "LGR_TEST_PW", "--sign-name", "Ion Test", "--sign-reason", "Verificare", "--pdf", "s.pdf"])
+        .args([
+            "--sign-pdf",
+            "h.pdf",
+            "--sign-p12",
+            "t.p12",
+            "--sign-pass-env",
+            "LGR_TEST_PW",
+            "--sign-name",
+            "Ion Test",
+            "--sign-reason",
+            "Verificare",
+            "--pdf",
+            "s.pdf",
+        ])
         .output()
         .unwrap();
     assert!(s.status.success(), "{}", text(&s));
     let signed = std::fs::read(d.join("s.pdf")).unwrap();
     let as_text = String::from_utf8_lossy(&signed);
     assert!(as_text.contains("Ion Test") && as_text.contains("Verificare"));
-    let v = run(&d, &["--verify-pdf-signatures", "s.pdf", "--sign-ca", "c.pem"]);
-    assert!(v.status.success() && text(&v).contains("chain verified"), "{}", text(&v));
+    let v = run(
+        &d,
+        &["--verify-pdf-signatures", "s.pdf", "--sign-ca", "c.pem"],
+    );
+    assert!(
+        v.status.success() && text(&v).contains("chain verified"),
+        "{}",
+        text(&v)
+    );
     let unsigned = run(&d, &["--verify-pdf-signatures", "h.pdf"]);
     assert!(!unsigned.status.success(), "{}", text(&unsigned));
     let mut bad = signed.clone();

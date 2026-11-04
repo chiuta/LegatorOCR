@@ -50,11 +50,19 @@ pub fn record(n: usize, pg: &Page, words: &[Word]) {
         .filter(|w| w.conf >= 0.0 && w.conf < 70.0 && w.text.chars().any(|c| c.is_alphanumeric()))
         .map(|w| w.text.trim().to_string())
         .collect();
-    v.push(PageRec { n, jpeg, text: legatorocr_ocr::words_to_text(words), doubtful });
+    v.push(PageRec {
+        n,
+        jpeg,
+        text: legatorocr_ocr::words_to_text(words),
+        doubtful,
+    });
 }
 
 fn esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 /// The finished page, or `None` when nothing was recorded.
@@ -79,7 +87,11 @@ fn render(pages: &[PageRec], title: &str) -> String {
         if p.jpeg.is_empty() {
             s.push_str("<p>(no picture)</p>");
         } else {
-            s.push_str(&format!("<img alt=\"page {}\" src=\"data:image/jpeg;base64,{}\">", p.n, base64(&p.jpeg)));
+            s.push_str(&format!(
+                "<img alt=\"page {}\" src=\"data:image/jpeg;base64,{}\">",
+                p.n,
+                base64(&p.jpeg)
+            ));
         }
         s.push_str("</div><div><textarea class=\"pg\" spellcheck=\"false\">");
         s.push_str(&esc(&p.text));
@@ -87,7 +99,10 @@ fn render(pages: &[PageRec], title: &str) -> String {
         if !p.doubtful.is_empty() {
             let mut d = p.doubtful.clone();
             d.truncate(60);
-            s.push_str(&format!("<p class=\"q\">Unsure: {}</p>", esc(&d.join(" · "))));
+            s.push_str(&format!(
+                "<p class=\"q\">Unsure: {}</p>",
+                esc(&d.join(" · "))
+            ));
         }
         s.push_str("</div></section>");
     }
@@ -101,9 +116,18 @@ mod tests {
 
     #[test]
     fn page_is_self_contained_and_escaped() {
-        let p = PageRec { n: 3, jpeg: vec![1, 2, 3], text: "A & <b>".into(), doubtful: vec!["x\"y".into()] };
+        let p = PageRec {
+            n: 3,
+            jpeg: vec![1, 2, 3],
+            text: "A & <b>".into(),
+            doubtful: vec!["x\"y".into()],
+        };
         let h = render(&[p], "T<1>");
-        assert!(h.contains("A &amp; &lt;b&gt;") && h.contains("Page 3") && h.contains("data:image/jpeg;base64,AQID"));
+        assert!(
+            h.contains("A &amp; &lt;b&gt;")
+                && h.contains("Page 3")
+                && h.contains("data:image/jpeg;base64,AQID")
+        );
         assert!(h.contains("x&quot;y") && h.contains("T&lt;1&gt;") && !h.contains("<b>A"));
         assert!(!h.contains("http://") && !h.contains("src=\"http"));
     }

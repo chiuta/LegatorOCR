@@ -43,7 +43,10 @@ pub fn record(
             (s.rotate_quarters as i32 - quarters_before as i32).rem_euclid(4) * 90
         ));
     } else if s.rotate_quarters != 0 {
-        parts.push(format!("rotated {}° (as requested)", s.rotate_quarters as u32 * 90));
+        parts.push(format!(
+            "rotated {}° (as requested)",
+            s.rotate_quarters as u32 * 90
+        ));
     } else if s.auto_orient {
         parts.push("orientation checked, left upright".into());
     }
@@ -97,5 +100,8 @@ pub fn append(index: usize, seq: usize, text: &str) {
 
 /// All lines, in batch order.
 pub fn report() -> Vec<String> {
-    LINES.lock().map(|l| l.values().cloned().collect()).unwrap_or_default()
+    LINES
+        .lock()
+        .map(|l| l.values().cloned().collect())
+        .unwrap_or_default()
 }

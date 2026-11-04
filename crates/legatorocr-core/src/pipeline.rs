@@ -639,7 +639,9 @@ fn prepare(
         let paper = transform::estimate_background(&img);
         cleanup::remove_fingers(&mut img, s.dpi, paper);
     }
-    let bg = crate::stage("clean-up/background", || transform::estimate_background(&img));
+    let bg = crate::stage("clean-up/background", || {
+        transform::estimate_background(&img)
+    });
     let mut skew_deg = 0.0;
 
     // --- deskew ---------------------------------------------------------
@@ -652,7 +654,9 @@ fn prepare(
             // (a mounted photo on a straight page came out rotated by 4°). Judge the skew
             // from what is left outside the picture zones.
             let f = a.factor.max(1);
-            for z in crate::stage("deskew/pictures", || pictures::detect(&gray, s.dpi, s.picture_sensitivity)) {
+            for z in crate::stage("deskew/pictures", || {
+                pictures::detect(&gray, s.dpi, s.picture_sensitivity)
+            }) {
                 let pad = (z.rect.w.min(z.rect.h) / 25).max(f);
                 let x0 = z.rect.x.saturating_sub(pad) / f;
                 let y0 = z.rect.y.saturating_sub(pad) / f;
@@ -664,7 +668,9 @@ fn prepare(
                     }
                 }
             }
-            crate::stage("deskew/detect", || deskew::detect_skew(&a.ink, s.max_skew_deg))
+            crate::stage("deskew/detect", || {
+                deskew::detect_skew(&a.ink, s.max_skew_deg)
+            })
         }
         None => None,
     };
@@ -984,7 +990,9 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
     );
     let mask: Option<BitImage> = wants_mask.then(|| {
         let g = transform::gray_of(&img);
-        let mut bw = crate::stage("output/binarize", || binarize::threshold(&g, s.threshold, (s.dpi / 3) | 1, s.sauvola_k));
+        let mut bw = crate::stage("output/binarize", || {
+            binarize::threshold(&g, s.threshold, (s.dpi / 3) | 1, s.sauvola_k)
+        });
         if s.despeckle {
             let min_px =
                 ((s.dpi as f32 / 300.0).powi(2) * 6.0 * s.despeckle_strength).round() as u32;
@@ -1286,7 +1294,12 @@ mod tests {
             img,
             bg: Rgb([255, 255, 255]),
             skew_deg: 0.0,
-            content: Some(Rect { x: 100, y: 150, w: 200, h: 100 }),
+            content: Some(Rect {
+                x: 100,
+                y: 150,
+                w: 200,
+                h: 100,
+            }),
             pictures: vec![],
         };
         let (q, s2) = fit_to_page(p, &s);
@@ -1307,8 +1320,14 @@ mod tests {
             ..Settings::default()
         };
         let upright = &process_page(&src, &base)[0];
-        assert!(upright.image.height() > upright.image.width(), "left alone it stays portrait");
-        let turned = Settings { rotate_quarters: 1, ..base };
+        assert!(
+            upright.image.height() > upright.image.width(),
+            "left alone it stays portrait"
+        );
+        let turned = Settings {
+            rotate_quarters: 1,
+            ..base
+        };
         let p = &process_page(&src, &turned)[0];
         assert!(
             p.image.width() > p.image.height(),

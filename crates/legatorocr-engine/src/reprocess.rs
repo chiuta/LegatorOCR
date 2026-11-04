@@ -39,7 +39,10 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
 /// Create `dir/originals` and `dir/derived` before the run (fails when `dir` exists).
 pub fn prepare(dir: &Path) -> Result<()> {
     if dir.exists() {
-        bail!("{} already exists; --archive-package never overwrites", dir.display());
+        bail!(
+            "{} already exists; --archive-package never overwrites",
+            dir.display()
+        );
     }
     std::fs::create_dir_all(dir.join("originals"))?;
     std::fs::create_dir_all(dir.join("derived"))?;
@@ -48,17 +51,27 @@ pub fn prepare(dir: &Path) -> Result<()> {
 
 /// Fill `dir` after the run. `project.sheets` are the inputs with their adjustments; `derived`
 /// are the output files (those already inside `dir` are left where they are).
-pub fn finish(dir: &Path, mut project: Project, derived: &[PathBuf], when: u64, command: &str) -> Result<Built> {
+pub fn finish(
+    dir: &Path,
+    mut project: Project,
+    derived: &[PathBuf],
+    when: u64,
+    command: &str,
+) -> Result<Built> {
     let dir = std::fs::canonicalize(dir)?;
     let mut seen: Vec<(PathBuf, PathBuf)> = Vec::new();
     let mut originals = 0;
     for (n, (path, _)) in project.sheets.iter_mut().enumerate() {
-        let src = std::fs::canonicalize(&*path).with_context(|| format!("{}: not found", path.display()))?;
+        let src = std::fs::canonicalize(&*path)
+            .with_context(|| format!("{}: not found", path.display()))?;
         if let Some((_, to)) = seen.iter().find(|(s, _)| *s == src) {
             *path = to.clone();
             continue;
         }
-        let name = src.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "input".into());
+        let name = src
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "input".into());
         let to = dir.join("originals").join(format!("{:03}_{name}", n + 1));
         std::fs::copy(&src, &to).with_context(|| format!("copying {}", src.display()))?;
         originals += 1;
@@ -71,12 +84,24 @@ pub fn finish(dir: &Path, mut project: Project, derived: &[PathBuf], when: u64, 
             continue;
         }
         let name = f.file_name().map(|s| s.to_os_string()).unwrap_or_default();
-        std::fs::copy(&f, dir.join("derived").join(name)).with_context(|| format!("copying {}", f.display()))?;
+        std::fs::copy(&f, dir.join("derived").join(name))
+            .with_context(|| format!("copying {}", f.display()))?;
     }
     let mut text = project.to_text(Some(&dir));
     if cfg!(windows) {
         // forward slashes work on every system, so a package made on Windows opens elsewhere
-        text = text.lines().map(|l| if l.starts_with("path = ") { l.replace('\\', "/") } else { l.to_string() }).collect::<Vec<_>>().join("\n") + "\n";
+        text = text
+            .lines()
+            .map(|l| {
+                if l.starts_with("path = ") {
+                    l.replace('\\', "/")
+                } else {
+                    l.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
     }
     std::fs::write(dir.join("project.lgr"), text)?;
     let run = format!(
@@ -91,7 +116,10 @@ pub fn finish(dir: &Path, mut project: Project, derived: &[PathBuf], when: u64, 
     files.retain(|f| f.file_name().is_some_and(|n| n != "SHA256SUMS.txt"));
     let sums = checksums::render(&dir, &files)?;
     std::fs::write(dir.join("SHA256SUMS.txt"), sums)?;
-    Ok(Built { files: files.len() + 1, originals })
+    Ok(Built {
+        files: files.len() + 1,
+        originals,
+    })
 }
 
 #[cfg(test)]
@@ -111,16 +139,35 @@ mod tests {
         assert!(prepare(&dir).is_err(), "never overwrites");
         let out = t.join("out.txt");
         std::fs::write(&out, b"derived").unwrap();
-        let project = Project { settings: Default::default(), extra: Vec::new(), sheets: vec![(src.clone(), SheetAdj::default()), (src.clone(), SheetAdj::default())] };
-        let b = finish(&dir, project, &[out], 1_782_864_000, "legatorocr --project project.lgr").unwrap();
+        let project = Project {
+            settings: Default::default(),
+            extra: Vec::new(),
+            sheets: vec![
+                (src.clone(), SheetAdj::default()),
+                (src.clone(), SheetAdj::default()),
+            ],
+        };
+        let b = finish(
+            &dir,
+            project,
+            &[out],
+            1_782_864_000,
+            "legatorocr --project project.lgr",
+        )
+        .unwrap();
         assert_eq!(b.originals, 1, "the same input is stored once");
-        assert_eq!(std::fs::read(dir.join("originals/001_scan.png")).unwrap(), b"original bytes");
+        assert_eq!(
+            std::fs::read(dir.join("originals/001_scan.png")).unwrap(),
+            b"original bytes"
+        );
         let text = std::fs::read_to_string(dir.join("project.lgr")).unwrap();
         assert!(text.contains("path = originals/001_scan.png"), "{text}");
         let v = checksums::verify(&dir.join("SHA256SUMS.txt")).unwrap();
         assert!(v.all_good());
         std::fs::write(dir.join("originals/001_scan.png"), b"changed").unwrap();
-        assert!(!checksums::verify(&dir.join("SHA256SUMS.txt")).unwrap().all_good());
+        assert!(!checksums::verify(&dir.join("SHA256SUMS.txt"))
+            .unwrap()
+            .all_good());
         let _ = std::fs::remove_dir_all(&t);
     }
 }

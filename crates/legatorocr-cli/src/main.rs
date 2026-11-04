@@ -337,7 +337,12 @@ struct Cli {
     rights_author: Option<String>,
 
     /// Assignment deed number for the rights notice (needs --rights-deed-date).
-    #[arg(long, value_name = "NO", requires = "rights_deed_date", requires = "rights_death_year")]
+    #[arg(
+        long,
+        value_name = "NO",
+        requires = "rights_deed_date",
+        requires = "rights_death_year"
+    )]
     rights_deed_number: Option<String>,
 
     /// Assignment deed date for the rights notice, printed as written.
@@ -1190,7 +1195,8 @@ fn expand_path(p: &mut Option<PathBuf>, name: &str) -> Result<()> {
 }
 
 fn done_has_mark(p: &std::path::Path) -> bool {
-    p.to_string_lossy().contains(legatorocr_engine::naming::TITLE_MARK)
+    p.to_string_lossy()
+        .contains(legatorocr_engine::naming::TITLE_MARK)
 }
 
 /// Replace the `{title}` stand-in once OCR text exists, and create the folders.
@@ -1213,7 +1219,10 @@ fn resolve_title(p: &mut Option<PathBuf>, title: &str) -> Result<()> {
 /// `--watch`: run this program once per new file with the same options.
 fn watch_loop(cli: &Cli, dir: &std::path::Path) -> Result<()> {
     let pdf = cli.pdf.as_ref().map(|p| p.to_string_lossy().into_owned());
-    if !pdf.as_deref().is_some_and(|t| t.contains("{name}") || t.contains("{title}")) {
+    if !pdf
+        .as_deref()
+        .is_some_and(|t| t.contains("{name}") || t.contains("{title}"))
+    {
         bail!("--watch needs --pdf with {{name}} (or {{title}}) in it, e.g. --pdf \"out/{{name}}.pdf\", so every file gets its own output");
     }
     if !dir.is_dir() {
@@ -1226,7 +1235,10 @@ fn watch_loop(cli: &Cli, dir: &std::path::Path) -> Result<()> {
         let t = a.to_string_lossy().into_owned();
         if t == "--watch" || t == "--watch-interval" {
             it.next();
-        } else if t.starts_with("--watch=") || t.starts_with("--watch-interval=") || t == "--watch-skip-existing" {
+        } else if t.starts_with("--watch=")
+            || t.starts_with("--watch-interval=")
+            || t == "--watch-skip-existing"
+        {
         } else {
             args.push(a);
         }
@@ -1237,7 +1249,11 @@ fn watch_loop(cli: &Cli, dir: &std::path::Path) -> Result<()> {
     loop {
         for f in w.poll() {
             eprintln!("new file: {}", f.display());
-            match std::process::Command::new(&exe).args(&args).arg(&f).status() {
+            match std::process::Command::new(&exe)
+                .args(&args)
+                .arg(&f)
+                .status()
+            {
                 Ok(s) if s.success() => eprintln!("done: {}", f.display()),
                 Ok(s) => eprintln!("failed ({s}): {}", f.display()),
                 Err(e) => eprintln!("cannot run for {}: {e}", f.display()),
@@ -1270,7 +1286,9 @@ fn real_main() -> Result<()> {
     }
     if let Some(n) = cli.jobs.filter(|&n| n > 0) {
         // the global pool is built once, before any parallel work
-        let _ = rayon::ThreadPoolBuilder::new().num_threads(n).build_global();
+        let _ = rayon::ThreadPoolBuilder::new()
+            .num_threads(n)
+            .build_global();
     }
     if cli.tagged_pdf && !cli.ocr {
         bail!("--tagged-pdf tags the recognised text; add --ocr");
@@ -1285,7 +1303,8 @@ fn real_main() -> Result<()> {
             cli.tagged.clone()
         };
     }
-    legatorocr_engine::DEFAULT_TAGGED_STRUCT.store(cli.tagged_pdf, std::sync::atomic::Ordering::Relaxed);
+    legatorocr_engine::DEFAULT_TAGGED_STRUCT
+        .store(cli.tagged_pdf, std::sync::atomic::Ordering::Relaxed);
     legatorocr_engine::DEFAULT_PDFA_PART.store(cli.pdfa_part, std::sync::atomic::Ordering::Relaxed);
     if let Some(dir) = cli.watch.clone() {
         return watch_loop(&cli, &dir);
@@ -1295,7 +1314,14 @@ fn real_main() -> Result<()> {
             bail!("--rights-death-year and --rights-notice both write the rights notice; use one");
         }
         let today = 1970 + (legatorocr_engine::now_unix() / 31_556_952) as i32;
-        cli.rights_notice = Some(legatorocr_engine::rights::notice(y, today, cli.rights_author.as_deref(), cli.rights_deed_number.as_deref().zip(cli.rights_deed_date.as_deref()))?);
+        cli.rights_notice = Some(legatorocr_engine::rights::notice(
+            y,
+            today,
+            cli.rights_author.as_deref(),
+            cli.rights_deed_number
+                .as_deref()
+                .zip(cli.rights_deed_date.as_deref()),
+        )?);
     }
     if let Some(pw) = cli
         .pdf_password
@@ -1376,9 +1402,18 @@ fn real_main() -> Result<()> {
         bail!("--checksums, --txt-each, --rights-notice, --bagit, --ocfl, --package, --catalog and --dublin-core need --pdf");
     }
     if !cli.ocr
-        && [&cli.pdf, &cli.txt, &cli.hocr, &cli.alto, &cli.page_xml, &cli.json, &cli.docx, &cli.package]
-            .iter()
-            .any(|p| p.as_deref().is_some_and(done_has_mark))
+        && [
+            &cli.pdf,
+            &cli.txt,
+            &cli.hocr,
+            &cli.alto,
+            &cli.page_xml,
+            &cli.json,
+            &cli.docx,
+            &cli.package,
+        ]
+        .iter()
+        .any(|p| p.as_deref().is_some_and(done_has_mark))
     {
         bail!("{{title}} in an output name is taken from the recognised text; add --ocr");
     }
@@ -1434,17 +1469,35 @@ fn real_main() -> Result<()> {
         let ok = f.len() >= 4
             && match (f[2].parse::<usize>(), f[3].parse::<usize>()) {
                 (Ok(m), Ok(n)) => {
-                    let path: Vec<String> = f.get(4).map(|p| p.split(',').map(str::to_string).collect()).unwrap_or_default();
-                    legatorocr_engine::merkle::check(f[0], f[1], m, n, &path, cli.merkle_expect.as_deref().unwrap_or(""))
+                    let path: Vec<String> = f
+                        .get(4)
+                        .map(|p| p.split(',').map(str::to_string).collect())
+                        .unwrap_or_default();
+                    legatorocr_engine::merkle::check(
+                        f[0],
+                        f[1],
+                        m,
+                        n,
+                        &path,
+                        cli.merkle_expect.as_deref().unwrap_or(""),
+                    )
                 }
                 _ => false,
             };
-        println!("{}", if ok { "proof is valid: the file belongs to the collection with that root" } else { "proof does NOT lead to that root" });
+        println!(
+            "{}",
+            if ok {
+                "proof is valid: the file belongs to the collection with that root"
+            } else {
+                "proof does NOT lead to that root"
+            }
+        );
         std::process::exit(if ok { 0 } else { 1 });
     }
     if let Some(sums) = &cli.merkle_root {
         use legatorocr_engine::merkle as mk;
-        let text = std::fs::read_to_string(sums).with_context(|| format!("{}: cannot read", sums.display()))?;
+        let text = std::fs::read_to_string(sums)
+            .with_context(|| format!("{}: cannot read", sums.display()))?;
         let entries = mk::parse_sums(&text)?;
         let leaves = mk::leaves_of(&entries);
         let r = mk::hex(&mk::root(&leaves));
@@ -1454,7 +1507,14 @@ fn real_main() -> Result<()> {
                 bail!("{name} is not listed in {}", sums.display());
             };
             let path: Vec<String> = mk::proof(&leaves, i).iter().map(|h| mk::hex(h)).collect();
-            println!("proof: {} {} {} {} {}", entries[i].0, entries[i].1, i, entries.len(), path.join(","));
+            println!(
+                "proof: {} {} {} {} {}",
+                entries[i].0,
+                entries[i].1,
+                i,
+                entries.len(),
+                path.join(",")
+            );
         }
         if let Some(e) = &cli.merkle_expect {
             if !e.eq_ignore_ascii_case(&r) {
@@ -1473,7 +1533,8 @@ fn real_main() -> Result<()> {
         number_format: cli.number_pages.clone(),
     };
     if plan.active() {
-        let written = legatorocr_engine::pdftools::run(&cli.inputs, &cli.out_dir, cli.pdf.as_deref(), &plan)?;
+        let written =
+            legatorocr_engine::pdftools::run(&cli.inputs, &cli.out_dir, cli.pdf.as_deref(), &plan)?;
         for w in &written {
             println!("wrote {}", w.display());
         }
@@ -1481,7 +1542,12 @@ fn real_main() -> Result<()> {
     }
     if let Some(f) = &cli.timestamp {
         let r = legatorocr_engine::tsa::stamp(f, cli.tsa_url.as_deref().unwrap_or(""))?;
-        println!("{}: stamped {} UTC, reply saved as {}", f.display(), r.gen_time, legatorocr_engine::tsa::tsr_path(f).display());
+        println!(
+            "{}: stamped {} UTC, reply saved as {}",
+            f.display(),
+            r.gen_time,
+            legatorocr_engine::tsa::tsr_path(f).display()
+        );
         return Ok(());
     }
     if let Some(f) = &cli.timestamp_verify {
@@ -1490,7 +1556,11 @@ fn real_main() -> Result<()> {
                 "{}: matches its time stamp of {}{}",
                 f.display(),
                 r.gen_time,
-                if cli.tsa_ca.is_some() { " (signature verified by openssl)" } else { " (signature NOT checked: give --tsa-ca)" }
+                if cli.tsa_ca.is_some() {
+                    " (signature verified by openssl)"
+                } else {
+                    " (signature NOT checked: give --tsa-ca)"
+                }
             ),
             Err(e) => {
                 println!("{}: {e}", f.display());
@@ -1517,7 +1587,8 @@ fn real_main() -> Result<()> {
         });
     }
     if let Some(out) = &cli.integrity_hints {
-        let signals = legatorocr_engine::integrity::parse_signals(&cli.integrity_signals).map_err(|e| anyhow::anyhow!(e))?;
+        let signals = legatorocr_engine::integrity::parse_signals(&cli.integrity_signals)
+            .map_err(|e| anyhow::anyhow!(e))?;
         let ocr_o = OcrOptions {
             engine: cli.engine,
             lang: legatorocr_engine::ocr::canonical_lang(&cli.lang),
@@ -1538,16 +1609,29 @@ fn real_main() -> Result<()> {
             let bytes = std::fs::read(p).ok();
             let words = if want_words {
                 let pg = legatorocr_core::PageImage::Gray(g.clone());
-                legatorocr_engine::ocr::recognize(&pg, cli.dpi.unwrap_or(300), &ocr_o).map_err(|e| anyhow::anyhow!("OCR failed on {}: {e}", p.display()))?
+                legatorocr_engine::ocr::recognize(&pg, cli.dpi.unwrap_or(300), &ocr_o)
+                    .map_err(|e| anyhow::anyhow!("OCR failed on {}: {e}", p.display()))?
             } else {
                 Vec::new()
             };
-            let rep = legatorocr_engine::integrity::analyse(&g, bytes.as_deref(), &words, &signals, &p.display().to_string());
+            let rep = legatorocr_engine::integrity::analyse(
+                &g,
+                bytes.as_deref(),
+                &words,
+                &signals,
+                &p.display().to_string(),
+            );
             eprintln!("{}: {} region(s) to check", p.display(), rep.hints.len());
             pages.push(rep);
         }
-        write_atomic(out, legatorocr_engine::integrity::to_json(&pages, &signals).as_bytes())?;
-        eprintln!("wrote {} (indicators for a person to check; not a verdict, high false-alarm risk)", out.display());
+        write_atomic(
+            out,
+            legatorocr_engine::integrity::to_json(&pages, &signals).as_bytes(),
+        )?;
+        eprintln!(
+            "wrote {} (indicators for a person to check; not a verdict, high false-alarm risk)",
+            out.display()
+        );
         return Ok(());
     }
     if cli.verify_document {
@@ -1566,14 +1650,22 @@ fn real_main() -> Result<()> {
             let cm: Vec<_> = legatorocr_engine::verifier::copy_move(&g, 40, 48)
                 .into_iter()
                 .filter(|c| {
-                    let (cx, cy) = ((c.bbox.0 + c.bbox.2) as i32 / 2, (c.bbox.1 + c.bbox.3) as i32 / 2);
-                    !qr.iter().any(|(_, b)| cx >= b.0 - 8 && cx <= b.2 + 8 && cy >= b.1 - 8 && cy <= b.3 + 8)
+                    let (cx, cy) = (
+                        (c.bbox.0 + c.bbox.2) as i32 / 2,
+                        (c.bbox.1 + c.bbox.3) as i32 / 2,
+                    );
+                    !qr.iter().any(|(_, b)| {
+                        cx >= b.0 - 8 && cx <= b.2 + 8 && cy >= b.1 - 8 && cy <= b.3 + 8
+                    })
                 })
                 .collect();
             if cm.is_empty() {
                 println!("  copy-move: nothing found");
             }
-            if let Some(dq) = std::fs::read(p).ok().and_then(|b| legatorocr_engine::verifier::jpeg_double_quant(&b)) {
+            if let Some(dq) = std::fs::read(p)
+                .ok()
+                .and_then(|b| legatorocr_engine::verifier::jpeg_double_quant(&b))
+            {
                 if dq.likely_double {
                     println!("  double-JPEG: the coefficient histograms show a comb pattern (score {:.1}); this JPEG was probably saved twice  [hint: re-saving is common and harmless; a pasted-in part from another file would need more evidence]", dq.score);
                 } else {
@@ -1602,15 +1694,23 @@ fn real_main() -> Result<()> {
             .iter()
             .map(|p| legatorocr_engine::load_image(p).map(|i| i.to_rgb8()))
             .collect::<Result<_>>()?;
-        let r = legatorocr_core::fusion::fuse(&frames, cli.fuse_max_shift, 2500.0).context("no frames")?;
+        let r = legatorocr_core::fusion::fuse(&frames, cli.fuse_max_shift, 2500.0)
+            .context("no frames")?;
         for (p, s) in cli.inputs.iter().zip(&r.shifts) {
             match s {
                 Some((x, y)) => eprintln!("{}: aligned (shift {x},{y})", p.display()),
                 None => eprintln!("{}: left out (did not match the first frame)", p.display()),
             }
         }
-        r.image.save(out).with_context(|| format!("writing {}", out.display()))?;
-        println!("wrote {} from {} of {} frames", out.display(), r.shifts.iter().flatten().count(), r.shifts.len());
+        r.image
+            .save(out)
+            .with_context(|| format!("writing {}", out.display()))?;
+        println!(
+            "wrote {} from {} of {} frames",
+            out.display(),
+            r.shifts.iter().flatten().count(),
+            r.shifts.len()
+        );
         return Ok(());
     }
     if let Some(f) = &cli.sign_pdf {
@@ -1618,21 +1718,44 @@ fn real_main() -> Result<()> {
             Some(n) => n.clone(),
             None => f.with_extension("signed.pdf"),
         };
-        legatorocr_engine::sign::sign_pdf(f, &out, cli.sign_p12.as_deref().unwrap(), &cli.sign_pass_env, cli.sign_name.as_deref(), cli.sign_reason.as_deref(), cli.tsa_url.as_deref().filter(|_| cli.sign_timestamp))?;
+        legatorocr_engine::sign::sign_pdf(
+            f,
+            &out,
+            cli.sign_p12.as_deref().unwrap(),
+            &cli.sign_pass_env,
+            cli.sign_name.as_deref(),
+            cli.sign_reason.as_deref(),
+            cli.tsa_url.as_deref().filter(|_| cli.sign_timestamp),
+        )?;
         println!("wrote {}", out.display());
         return Ok(());
     }
     if let Some(f) = &cli.verify_pdf_signatures {
-        let rs = legatorocr_engine::sign::verify_pdf(f, cli.sign_ca.as_deref(), cli.tsa_ca.as_deref())?;
+        let rs =
+            legatorocr_engine::sign::verify_pdf(f, cli.sign_ca.as_deref(), cli.tsa_ca.as_deref())?;
         if rs.is_empty() {
             println!("{}: no signature", f.display());
             std::process::exit(1);
         }
         let mut bad = false;
         for r in &rs {
-            let note = if r.covers_whole_file { "" } else { " (content was added after this signature)" };
+            let note = if r.covers_whole_file {
+                ""
+            } else {
+                " (content was added after this signature)"
+            };
             match &r.result {
-                Ok(()) => println!("signature {} [{}]: data matches{}{}", r.index, r.sub_filter, if cli.sign_ca.is_some() { ", chain verified" } else { ", chain NOT checked: give --sign-ca" }, note),
+                Ok(()) => println!(
+                    "signature {} [{}]: data matches{}{}",
+                    r.index,
+                    r.sub_filter,
+                    if cli.sign_ca.is_some() {
+                        ", chain verified"
+                    } else {
+                        ", chain NOT checked: give --sign-ca"
+                    },
+                    note
+                ),
                 Err(e) => {
                     bad = true;
                     println!("signature {} [{}]: FAILED: {e}", r.index, r.sub_filter);
@@ -1640,7 +1763,14 @@ fn real_main() -> Result<()> {
             }
             match &r.timestamp {
                 None => println!("  time stamp inside: none"),
-                Some(Ok(t)) => println!("  time stamp inside: {t} UTC, for this signature{}", if cli.tsa_ca.is_some() { " (authority verified)" } else { " (authority NOT checked: give --tsa-ca)" }),
+                Some(Ok(t)) => println!(
+                    "  time stamp inside: {t} UTC, for this signature{}",
+                    if cli.tsa_ca.is_some() {
+                        " (authority verified)"
+                    } else {
+                        " (authority NOT checked: give --tsa-ca)"
+                    }
+                ),
                 Some(Err(e)) => {
                     bad = true;
                     println!("  time stamp inside: FAILED: {e}");
@@ -1658,10 +1788,16 @@ fn real_main() -> Result<()> {
         return Ok(());
     }
     if let Some(f) = &cli.measure_edge {
-        let img = image::open(f).with_context(|| format!("reading {}", f.display()))?.to_luma8();
+        let img = image::open(f)
+            .with_context(|| format!("reading {}", f.display()))?
+            .to_luma8();
         let roi = match &cli.edge_roi {
             Some(r) => {
-                let v: Vec<u32> = r.split(',').map(|t| t.trim().parse()).collect::<Result<_, _>>().context("--edge-roi: expected X,Y,W,H")?;
+                let v: Vec<u32> = r
+                    .split(',')
+                    .map(|t| t.trim().parse())
+                    .collect::<Result<_, _>>()
+                    .context("--edge-roi: expected X,Y,W,H")?;
                 if v.len() != 4 {
                     bail!("--edge-roi: expected X,Y,W,H");
                 }
@@ -1684,7 +1820,12 @@ fn real_main() -> Result<()> {
         let reports = legatorocr_engine::backup::run(src, &cli.backup_to, cli.backup_read_only)?;
         let mut bad = false;
         for r in &reports {
-            println!("{}: {} files, {} bytes verified", r.dest.display(), r.files, r.bytes);
+            println!(
+                "{}: {} files, {} bytes verified",
+                r.dest.display(),
+                r.files,
+                r.bytes
+            );
             for p in &r.problems {
                 bad = true;
                 println!("  PROBLEM: {p}");
@@ -1720,7 +1861,11 @@ fn real_main() -> Result<()> {
     if !cli.extract_project.is_empty() {
         let (pdf, dir) = (&cli.extract_project[0], &cli.extract_project[1]);
         let (proj, n) = legatorocr_engine::embedproject::extract(pdf, dir)?;
-        println!("{n} files written to {}; run again with: legatorocr --project {} --pdf NEW.pdf", dir.display(), proj.display());
+        println!(
+            "{n} files written to {}; run again with: legatorocr --project {} --pdf NEW.pdf",
+            dir.display(),
+            proj.display()
+        );
         return Ok(());
     }
     if let Some(bag) = &cli.verify_bag {
@@ -2106,7 +2251,9 @@ fn real_main() -> Result<()> {
         }
         let imgs: Vec<PathBuf> = inputs
             .iter()
-            .filter(|p| !legatorocr_engine::files::is_pdf(&legatorocr_engine::files::split_frame(p).0))
+            .filter(|p| {
+                !legatorocr_engine::files::is_pdf(&legatorocr_engine::files::split_frame(p).0)
+            })
             .cloned()
             .collect();
         if imgs.len() == inputs.len() && !imgs.is_empty() {
@@ -2115,7 +2262,11 @@ fn real_main() -> Result<()> {
                 eprintln!("--burst: pages put in capture-time order (EXIF)");
             }
             for (d, k) in &r.dropped {
-                eprintln!("--burst: left out {} (weaker copy of {})", d.display(), k.display());
+                eprintln!(
+                    "--burst: left out {} (weaker copy of {})",
+                    d.display(),
+                    k.display()
+                );
             }
             if r.dropped.is_empty() {
                 eprintln!("--burst: no repeated frames found");
@@ -2158,7 +2309,12 @@ fn real_main() -> Result<()> {
     if let Some(spec) = &cli.shard {
         let (i, n) = spec
             .split_once('/')
-            .and_then(|(a, b)| Some((a.trim().parse::<usize>().ok()?, b.trim().parse::<usize>().ok()?)))
+            .and_then(|(a, b)| {
+                Some((
+                    a.trim().parse::<usize>().ok()?,
+                    b.trim().parse::<usize>().ok()?,
+                ))
+            })
             .filter(|&(i, n)| n >= 1 && (1..=n).contains(&i))
             .context("--shard needs I/N with 1 <= I <= N, e.g. 2/4")?;
         let total = inputs.len();
@@ -2341,7 +2497,11 @@ fn real_main() -> Result<()> {
         None
     } else if cli.provenance {
         let args: Vec<String> = std::env::args().skip(1).collect();
-        Some(legatorocr_engine::provenance::build(&inputs, &args, legatorocr_engine::now_unix()))
+        Some(legatorocr_engine::provenance::build(
+            &inputs,
+            &args,
+            legatorocr_engine::now_unix(),
+        ))
     } else {
         None
     };
@@ -2360,7 +2520,15 @@ fn real_main() -> Result<()> {
             .iter()
             .zip(&adjusts)
             .zip(&sheets)
-            .map(|((p, a), sh)| (p.clone(), SheetAdj { dpi: Some(sh.settings.dpi), ..a.clone() }))
+            .map(|((p, a), sh)| {
+                (
+                    p.clone(),
+                    SheetAdj {
+                        dpi: Some(sh.settings.dpi),
+                        ..a.clone()
+                    },
+                )
+            })
             .collect();
         let extra = vec![
             ("pdf_quality".to_string(), pdf_quality.to_string()),
@@ -2436,7 +2604,11 @@ fn real_main() -> Result<()> {
         if !cli.ocr {
             bail!("--redact needs --ocr (it works on the words OCR reads)");
         }
-        if !matches!(cli.format, Fmt::None) || cli.multitiff.is_some() || cli.package.is_some() || cli.ocr_cache.is_some() {
+        if !matches!(cli.format, Fmt::None)
+            || cli.multitiff.is_some()
+            || cli.package.is_some()
+            || cli.ocr_cache.is_some()
+        {
             bail!("--redact cannot be combined with image output (add --format none), --multitiff, --package or --ocr-cache: those would hold the original pixels or words");
         }
         let pats = legatorocr_engine::redact::compile(&cli.redact, &cli.redact_regex)?;
@@ -2459,9 +2631,16 @@ fn real_main() -> Result<()> {
             bail!("--page-lang needs --ocr");
         }
         let rules = legatorocr_engine::pagelang::parse(spec)?;
-        for l in rules.iter().flat_map(|r| r.lang.split('+')).collect::<std::collections::BTreeSet<_>>() {
-            check_ocr(&OcrOptions { lang: l.into(), ..ocr_opts.clone() })
-                .with_context(|| format!("--page-lang: language {l}"))?;
+        for l in rules
+            .iter()
+            .flat_map(|r| r.lang.split('+'))
+            .collect::<std::collections::BTreeSet<_>>()
+        {
+            check_ocr(&OcrOptions {
+                lang: l.into(),
+                ..ocr_opts.clone()
+            })
+            .with_context(|| format!("--page-lang: language {l}"))?;
         }
         legatorocr_engine::pagelang::set(rules);
     }
@@ -2483,7 +2662,11 @@ fn real_main() -> Result<()> {
             Fmt::None => "png",
             _ => ext,
         };
-        legatorocr_engine::passages::begin(ext_name, cli.jpeg_quality, save_images.then(|| stems.clone()));
+        legatorocr_engine::passages::begin(
+            ext_name,
+            cli.jpeg_quality,
+            save_images.then(|| stems.clone()),
+        );
     }
     let res = run_export(
         &job,
@@ -2558,14 +2741,34 @@ fn real_main() -> Result<()> {
         let text = res.text.as_deref().unwrap_or("");
         let first = inputs.first().cloned().unwrap_or_default();
         let sha = if inputs.len() == 1 {
-            std::fs::read(&first).map(|b| legatorocr_engine::checksums::sha256_hex(&b)).unwrap_or_default()
+            std::fs::read(&first)
+                .map(|b| legatorocr_engine::checksums::sha256_hex(&b))
+                .unwrap_or_default()
         } else {
-            let all: Vec<String> = inputs.iter().filter_map(|i| std::fs::read(i).ok()).map(|b| legatorocr_engine::checksums::sha256_hex(&b)).collect();
+            let all: Vec<String> = inputs
+                .iter()
+                .filter_map(|i| std::fs::read(i).ok())
+                .map(|b| legatorocr_engine::checksums::sha256_hex(&b))
+                .collect();
             legatorocr_engine::checksums::sha256_hex(all.join("\n").as_bytes())
         };
-        let title = cli.fff_title.clone().or_else(|| legatorocr_engine::naming::title_from_text(text)).unwrap_or_else(|| "untitled".into());
-        let file = if inputs.len() == 1 { first.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default() } else { format!("{} files", inputs.len()) };
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let title = cli
+            .fff_title
+            .clone()
+            .or_else(|| legatorocr_engine::naming::title_from_text(text))
+            .unwrap_or_else(|| "untitled".into());
+        let file = if inputs.len() == 1 {
+            first
+                .file_name()
+                .map(|f| f.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        } else {
+            format!("{} files", inputs.len())
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
         let json = fff::document_ocr(
             &fff::DocMeta {
                 title: &title,
@@ -2581,17 +2784,31 @@ fn real_main() -> Result<()> {
             now,
         );
         write_atomic(p, json.as_bytes())?;
-        eprintln!("wrote {} (FFF envelope document/ocr, {} page(s))", p.display(), text.split('\x0c').count());
+        eprintln!(
+            "wrote {} (FFF envelope document/ocr, {} page(s))",
+            p.display(),
+            text.split('\x0c').count()
+        );
     }
     if cli.tables_xlsx.is_some() || cli.tables_html.is_some() {
-        let found = res.docx_blocks.as_deref().map(legatorocr_engine::tables::find).unwrap_or_default();
+        let found = res
+            .docx_blocks
+            .as_deref()
+            .map(legatorocr_engine::tables::find)
+            .unwrap_or_default();
         if let Some(p) = &cli.tables_xlsx {
             write_atomic(p, &legatorocr_engine::tables::xlsx(&found))?;
             eprintln!("wrote {} ({} table(s))", p.display(), found.len());
         }
         if let Some(p) = &cli.tables_html {
-            let title = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-            write_atomic(p, legatorocr_engine::tables::html(&found, &title).as_bytes())?;
+            let title = p
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            write_atomic(
+                p,
+                legatorocr_engine::tables::html(&found, &title).as_bytes(),
+            )?;
             eprintln!("wrote {} ({} table(s))", p.display(), found.len());
         }
     }
@@ -2620,7 +2837,9 @@ fn real_main() -> Result<()> {
                     std::process::exit(1);
                 }
             }
-            None => eprintln!("--certify needs a single --pdf output (not --split-on-blank / --split-on-barcode)"),
+            None => eprintln!(
+                "--certify needs a single --pdf output (not --split-on-blank / --split-on-barcode)"
+            ),
         }
     }
     if cli.verify_text {
@@ -2787,7 +3006,10 @@ fn real_main() -> Result<()> {
         written.push(p.clone());
     }
     if let Some(p) = &cli.proof_sheet {
-        let title = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Proof sheet");
+        let title = p
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Proof sheet");
         match legatorocr_engine::proofsheet::finish(title) {
             Some(h) => {
                 write_atomic(p, h.as_bytes())?;
@@ -2800,14 +3022,20 @@ fn real_main() -> Result<()> {
     if let Some(p) = &cli.passages_jsonl {
         let ps = legatorocr_engine::passages::finish(cli.clean_text);
         let title = cli.passages_title.clone();
-        write_atomic(p, legatorocr_engine::passages::to_jsonl(&ps, title.as_deref()).as_bytes())?;
+        write_atomic(
+            p,
+            legatorocr_engine::passages::to_jsonl(&ps, title.as_deref()).as_bytes(),
+        )?;
         eprintln!("wrote {} ({} passages)", p.display(), ps.len());
         written.push(p.clone());
     }
     if let Some(p) = &cli.doubtful_words {
         if let Some((tsv, n, total)) = legatorocr_engine::doubtful::finish() {
             write_atomic(p, tsv.as_bytes())?;
-            eprintln!("wrote {} ({n} doubtful words of {total} judged)", p.display());
+            eprintln!(
+                "wrote {} ({n} doubtful words of {total} judged)",
+                p.display()
+            );
             written.push(p.clone());
         }
     }
@@ -2817,7 +3045,10 @@ fn real_main() -> Result<()> {
         written.push(p.clone());
     }
     if let (Some(p), Some(b)) = (&cli.tei, &res.docx_blocks) {
-        let title = p.file_stem().and_then(|s| s.to_str()).unwrap_or("LegatorOCR");
+        let title = p
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("LegatorOCR");
         let lang = cli.lang.split('+').next().map(|l| match l {
             "ron" => "ro",
             "eng" => "en",
@@ -2828,7 +3059,10 @@ fn real_main() -> Result<()> {
             "hun" => "hu",
             other => other,
         });
-        write_atomic(p, legatorocr_engine::tei::render(b, title, lang, &[]).as_bytes())?;
+        write_atomic(
+            p,
+            legatorocr_engine::tei::render(b, title, lang, &[]).as_bytes(),
+        )?;
         eprintln!("wrote {}", p.display());
         written.push(p.clone());
     }
@@ -2839,8 +3073,19 @@ fn real_main() -> Result<()> {
             cmd.push_str(&format!(" --pdf new.pdf --pdf-quality {}", cli.pdf_quality));
         }
         cmd.push_str(" --json new_ocr.json");
-        let b = legatorocr_engine::reprocess::finish(dir, pr, &written, legatorocr_engine::now_unix(), &cmd)?;
-        eprintln!("archive package: {} ({} files, {} originals)", dir.display(), b.files, b.originals);
+        let b = legatorocr_engine::reprocess::finish(
+            dir,
+            pr,
+            &written,
+            legatorocr_engine::now_unix(),
+            &cmd,
+        )?;
+        eprintln!(
+            "archive package: {} ({} files, {} originals)",
+            dir.display(),
+            b.files,
+            b.originals
+        );
     }
     if cli.mrz {
         match res.text.as_deref() {
@@ -2924,20 +3169,37 @@ fn real_main() -> Result<()> {
         }
     }
     if let Some(bag) = &cli.bagit {
-        let s = legatorocr_engine::bagit::write(bag, &written, legatorocr_engine::now_unix(), None)?;
-        eprintln!("bag: {} ({} files, {} bytes)", bag.display(), s.files, s.bytes);
+        let s =
+            legatorocr_engine::bagit::write(bag, &written, legatorocr_engine::now_unix(), None)?;
+        eprintln!(
+            "bag: {} ({} files, {} bytes)",
+            bag.display(),
+            s.files,
+            s.bytes
+        );
     }
     if let Some(obj) = &cli.ocfl {
         let id = cli.ocfl_id.clone().unwrap_or_else(|| {
             cli.pdf
                 .as_ref()
                 .and_then(|p| p.file_name())
-                .map_or("legatorocr".into(), |n| n.to_string_lossy().replace(' ', "_"))
+                .map_or("legatorocr".into(), |n| {
+                    n.to_string_lossy().replace(' ', "_")
+                })
         });
         // an OCFL id is a URI
-        let id = if id.contains(':') { id } else { format!("urn:legatorocr:{id}") };
+        let id = if id.contains(':') {
+            id
+        } else {
+            format!("urn:legatorocr:{id}")
+        };
         let s = legatorocr_engine::ocfl::write(obj, &written, &id, legatorocr_engine::now_unix())?;
-        eprintln!("ocfl: {} ({} files, {} bytes)", obj.display(), s.files, s.bytes);
+        eprintln!(
+            "ocfl: {} ({} files, {} bytes)",
+            obj.display(),
+            s.files,
+            s.bytes
+        );
     }
     if cli.catalog.is_some() || cli.dublin_core {
         let pdfs: Vec<PathBuf> = written

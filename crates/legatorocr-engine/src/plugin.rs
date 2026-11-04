@@ -48,7 +48,8 @@ pub fn run_with_fuel(wasm: &[u8], img: &DynamicImage, fuel: u64) -> Result<Dynam
     let mut config = Config::default();
     config.consume_fuel(true);
     let engine = Engine::new(&config);
-    let module = Module::new(&engine, wasm).map_err(|e| anyhow!("plugin is not valid WebAssembly: {e}"))?;
+    let module =
+        Module::new(&engine, wasm).map_err(|e| anyhow!("plugin is not valid WebAssembly: {e}"))?;
     if module.imports().next().is_some() {
         bail!("plugin imports functions; plugins get no host functions");
     }
@@ -70,7 +71,10 @@ pub fn run_with_fuel(wasm: &[u8], img: &DynamicImage, fuel: u64) -> Result<Dynam
     let ptr = alloc
         .call(&mut store, len as i32)
         .map_err(|e| anyhow!("lgr_alloc: {e}"))? as usize;
-    if ptr.checked_add(len).is_none_or(|e| e > mem.data_size(&store)) {
+    if ptr
+        .checked_add(len)
+        .is_none_or(|e| e > mem.data_size(&store))
+    {
         bail!("plugin allocated outside its memory");
     }
     mem.data_mut(&mut store)[ptr..ptr + len].copy_from_slice(rgb.as_raw());
@@ -113,7 +117,9 @@ mod tests {
         (i32.const 0)))"#;
 
     fn img() -> DynamicImage {
-        DynamicImage::ImageRgb8(RgbImage::from_fn(5, 4, |x, y| image::Rgb([x as u8 * 10, y as u8 * 20, 7])))
+        DynamicImage::ImageRgb8(RgbImage::from_fn(5, 4, |x, y| {
+            image::Rgb([x as u8 * 10, y as u8 * 20, 7])
+        }))
     }
 
     #[test]
@@ -137,7 +143,9 @@ mod tests {
         )
         .unwrap();
         assert!(run_with_fuel(&spin, &img(), 1_000_000).is_err());
-        let imp = wat::parse_str(r#"(module (import "env" "x" (func)) (memory (export "memory") 1))"#).unwrap();
+        let imp =
+            wat::parse_str(r#"(module (import "env" "x" (func)) (memory (export "memory") 1))"#)
+                .unwrap();
         let e = run_bytes(&imp, &img()).unwrap_err().to_string();
         assert!(e.contains("imports"), "{e}");
     }

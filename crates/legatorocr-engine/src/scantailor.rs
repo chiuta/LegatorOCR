@@ -42,7 +42,9 @@ fn tags(text: &str) -> Vec<Tag> {
             i += 1;
             continue;
         }
-        let Some(end) = text[i..].find('>') else { break };
+        let Some(end) = text[i..].find('>') else {
+            break;
+        };
         let body = &text[i + 1..i + end];
         i += end + 1;
         if body.starts_with('?') || body.starts_with('!') {
@@ -57,18 +59,29 @@ fn tags(text: &str) -> Vec<Tag> {
         while let Some(eq) = rest.find('=') {
             let key = rest[..eq].trim().to_string();
             let after = rest[eq + 1..].trim_start();
-            let Some(q) = after.chars().next().filter(|c| *c == '"' || *c == '\'') else { break };
-            let Some(close) = after[1..].find(q) else { break };
+            let Some(q) = after.chars().next().filter(|c| *c == '"' || *c == '\'') else {
+                break;
+            };
+            let Some(close) = after[1..].find(q) else {
+                break;
+            };
             attrs.push((key, unescape(&after[1..1 + close])));
             rest = &after[close + 2..];
         }
-        out.push(Tag { name, attrs, closing });
+        out.push(Tag {
+            name,
+            attrs,
+            closing,
+        });
     }
     out
 }
 
 fn attr<'a>(t: &'a Tag, k: &str) -> Option<&'a str> {
-    t.attrs.iter().find(|(a, _)| a == k).map(|(_, v)| v.as_str())
+    t.attrs
+        .iter()
+        .find(|(a, _)| a == k)
+        .map(|(_, v)| v.as_str())
 }
 
 pub fn parse(text: &str, base: Option<&Path>) -> Result<Project> {
@@ -100,7 +113,9 @@ pub fn parse(text: &str, base: Option<&Path>) -> Result<Project> {
                 }
             }
             "file" if section == "files" => {
-                if let (Some(id), Some(d), Some(n)) = (attr(&t, "id"), attr(&t, "dirId"), attr(&t, "name")) {
+                if let (Some(id), Some(d), Some(n)) =
+                    (attr(&t, "id"), attr(&t, "dirId"), attr(&t, "name"))
+                {
                     files.insert(id.into(), (d.into(), n.into()));
                 }
             }
@@ -127,15 +142,24 @@ pub fn parse(text: &str, base: Option<&Path>) -> Result<Project> {
     }
     let mut p = Project::default();
     for (id, fid) in images {
-        let Some((did, name)) = files.get(&fid) else { continue };
+        let Some((did, name)) = files.get(&fid) else {
+            continue;
+        };
         let dir = dirs.get(did).map(PathBuf::from).unwrap_or_default();
-        let mut path = if dir.as_os_str().is_empty() { PathBuf::from(name) } else { dir.join(name) };
+        let mut path = if dir.as_os_str().is_empty() {
+            PathBuf::from(name)
+        } else {
+            dir.join(name)
+        };
         if path.is_relative() {
             if let Some(b) = base {
                 path = b.join(path);
             }
         }
-        let adj = SheetAdj { rotate_quarters: (rotation.get(&id).copied().unwrap_or(0) / 90 % 4) as u8, ..Default::default() };
+        let adj = SheetAdj {
+            rotate_quarters: (rotation.get(&id).copied().unwrap_or(0) / 90 % 4) as u8,
+            ..Default::default()
+        };
         p.sheets.push((path, adj));
     }
     if p.sheets.is_empty() {

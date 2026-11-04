@@ -399,7 +399,9 @@ impl Project {
                             base.map_or(pb.clone(), |b| b.join(&pb))
                         };
                     }
-                    "dpi" => adj.dpi = Some(v.parse::<u32>().map_err(|e| at(e.into()))?.clamp(36, 2400)),
+                    "dpi" => {
+                        adj.dpi = Some(v.parse::<u32>().map_err(|e| at(e.into()))?.clamp(36, 2400))
+                    }
                     "rotate" => {
                         adj.rotate_quarters = v.parse::<u8>().map_err(|e| at(e.into()))? % 4
                     }
@@ -459,7 +461,8 @@ impl Project {
         let text =
             std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         if crate::scantailor::looks_like_scantailor(&text) {
-            return crate::scantailor::parse(&text, path.parent()).with_context(|| path.display().to_string());
+            return crate::scantailor::parse(&text, path.parent())
+                .with_context(|| path.display().to_string());
         }
         Project::parse(&text, path.parent()).with_context(|| path.display().to_string())
     }
@@ -484,7 +487,13 @@ mod tests {
     fn per_sheet_dpi_round_trips_and_overrides_the_global_one() {
         let mut p = Project::default();
         p.settings.dpi = 300;
-        p.sheets.push((PathBuf::from("a.png"), SheetAdj { dpi: Some(150), ..Default::default() }));
+        p.sheets.push((
+            PathBuf::from("a.png"),
+            SheetAdj {
+                dpi: Some(150),
+                ..Default::default()
+            },
+        ));
         p.sheets.push((PathBuf::from("b.png"), SheetAdj::default()));
         let q = Project::parse(&p.to_text(None), None).unwrap();
         assert_eq!(q.sheets[0].1.dpi, Some(150));

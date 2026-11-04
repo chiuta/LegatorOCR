@@ -29,13 +29,19 @@ pub fn parse(spec: &str) -> Result<Vec<Rule>> {
                 .parse::<usize>()
                 .ok()
                 .filter(|n| *n >= 1)
-                .ok_or_else(|| anyhow::anyhow!("page language {part:?}: {s:?} is not a page number"))
+                .ok_or_else(|| {
+                    anyhow::anyhow!("page language {part:?}: {s:?} is not a page number")
+                })
         };
         let (from, to) = match range.split_once('-') {
             None => (num(range)?, num(range)?),
             Some((a, b)) => (
                 if a.trim().is_empty() { 1 } else { num(a)? },
-                if b.trim().is_empty() { usize::MAX } else { num(b)? },
+                if b.trim().is_empty() {
+                    usize::MAX
+                } else {
+                    num(b)?
+                },
             ),
         };
         if from > to {

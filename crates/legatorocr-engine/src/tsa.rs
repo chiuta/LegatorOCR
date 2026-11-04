@@ -46,7 +46,10 @@ fn int(mut n: u64) -> Vec<u8> {
 pub fn build_request(digest: &[u8; 32], nonce: u64) -> Vec<u8> {
     let alg = tlv(0x30, &[tlv(0x06, &SHA256_OID), vec![0x05, 0x00]].concat());
     let imprint = tlv(0x30, &[alg, tlv(0x04, digest)].concat());
-    tlv(0x30, &[int(1), imprint, int(nonce), tlv(0x01, &[0xff])].concat())
+    tlv(
+        0x30,
+        &[int(1), imprint, int(nonce), tlv(0x01, &[0xff])].concat(),
+    )
 }
 
 /// Read one DER element: (tag, body, rest).
@@ -122,7 +125,12 @@ pub fn parse_reply(der: &[u8]) -> Result<Reply> {
         }
         t = rest;
     }
-    Ok(Reply { status, digest: digest.to_vec(), nonce, gen_time: String::from_utf8_lossy(gen).into_owned() })
+    Ok(Reply {
+        status,
+        digest: digest.to_vec(),
+        nonce,
+        gen_time: String::from_utf8_lossy(gen).into_owned(),
+    })
 }
 
 pub(crate) fn digest_of(data: &[u8]) -> [u8; 32] {
@@ -155,7 +163,15 @@ pub fn request(url: &str, digest: &[u8; 32]) -> Result<(Vec<u8>, Reply)> {
     let tmp = std::env::temp_dir().join(format!("lgr_tsq_{}_{n}.tsq", std::process::id()));
     std::fs::write(&tmp, &req)?;
     let out = Command::new("curl")
-        .args(["-sS", "--fail", "--max-time", "60", "-H", "Content-Type: application/timestamp-query", "--data-binary"])
+        .args([
+            "-sS",
+            "--fail",
+            "--max-time",
+            "60",
+            "-H",
+            "Content-Type: application/timestamp-query",
+            "--data-binary",
+        ])
         .arg(format!("@{}", tmp.display()))
         .arg(url)
         .output()
@@ -163,7 +179,10 @@ pub fn request(url: &str, digest: &[u8; 32]) -> Result<(Vec<u8>, Reply)> {
     let _ = std::fs::remove_file(&tmp);
     let out = out?;
     if !out.status.success() {
-        bail!("the request to {url} failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+        bail!(
+            "the request to {url} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
     }
     let reply = parse_reply(&out.stdout)?;
     if reply.digest != digest.as_slice() {
@@ -191,7 +210,10 @@ pub fn verify(file: &Path, ca_file: Option<&Path>) -> Result<Reply> {
     let der = std::fs::read(&tsr).with_context(|| format!("reading {}", tsr.display()))?;
     let r = parse_reply(&der)?;
     if r.digest != digest_of(&data) {
-        bail!("{} does not match the time stamp: the file changed after it was stamped", file.display());
+        bail!(
+            "{} does not match the time stamp: the file changed after it was stamped",
+            file.display()
+        );
     }
     if let Some(ca) = ca_file {
         let o = Command::new("openssl")
@@ -204,7 +226,10 @@ pub fn verify(file: &Path, ca_file: Option<&Path>) -> Result<Reply> {
             .output()
             .context("cannot run openssl")?;
         if !o.status.success() {
-            bail!("openssl could not verify the signature: {}", String::from_utf8_lossy(&o.stderr).trim());
+            bail!(
+                "openssl could not verify the signature: {}",
+                String::from_utf8_lossy(&o.stderr).trim()
+            );
         }
     }
     Ok(r)
@@ -236,8 +261,16 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("lgr_tsa_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let sh = |args: &[&str]| {
-            let o = Command::new("openssl").args(args).current_dir(&dir).output().unwrap();
-            assert!(o.status.success(), "openssl {args:?}: {}", String::from_utf8_lossy(&o.stderr));
+            let o = Command::new("openssl")
+                .args(args)
+                .current_dir(&dir)
+                .output()
+                .unwrap();
+            assert!(
+                o.status.success(),
+                "openssl {args:?}: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
         };
         std::fs::write(
             dir.join("tsa.cnf"),
@@ -246,16 +279,32 @@ mod tests {
         )
         .unwrap();
         std::fs::write(dir.join("serial"), "01\n").unwrap();
-        sh(&["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "key.pem", "-out", "cert.pem", "-days", "2", "-config", "tsa.cnf"]);
+        sh(&[
+            "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "key.pem", "-out",
+            "cert.pem", "-days", "2", "-config", "tsa.cnf",
+        ]);
         let doc = dir.join("doc.txt");
         std::fs::write(&doc, b"registry root").unwrap();
         let digest = digest_of(b"registry root");
         std::fs::write(dir.join("req.tsq"), build_request(&digest, 0xABCDEF)).unwrap();
-        sh(&["ts", "-reply", "-queryfile", "req.tsq", "-config", "tsa.cnf", "-out", "doc.txt.tsr"]);
+        sh(&[
+            "ts",
+            "-reply",
+            "-queryfile",
+            "req.tsq",
+            "-config",
+            "tsa.cnf",
+            "-out",
+            "doc.txt.tsr",
+        ]);
         let r = parse_reply(&std::fs::read(dir.join("doc.txt.tsr")).unwrap()).unwrap();
         assert_eq!(r.digest, digest.to_vec());
         assert_eq!(r.nonce, Some(0xABCDEF));
-        assert!(r.gen_time.ends_with('Z') && r.gen_time.len() >= 14, "{}", r.gen_time);
+        assert!(
+            r.gen_time.ends_with('Z') && r.gen_time.len() >= 14,
+            "{}",
+            r.gen_time
+        );
         // verify: structure + hash, then OpenSSL checks the signature against the TSA certificate
         verify(&doc, Some(&dir.join("cert.pem"))).unwrap();
         // a changed file is caught

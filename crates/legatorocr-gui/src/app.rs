@@ -1144,13 +1144,10 @@ impl App {
         let flagged: Vec<usize> = (0..self.sheets.len())
             .filter(|&i| {
                 let key = self.key_of(&self.sheets[i]);
-                self.sheets[i]
-                    .ready
-                    .as_ref()
-                    .is_some_and(|r| {
-                        r.key == key
-                            && attention(r, max_skew, self.sheets[i].adj.skew_deg.is_some()).is_some()
-                    })
+                self.sheets[i].ready.as_ref().is_some_and(|r| {
+                    r.key == key
+                        && attention(r, max_skew, self.sheets[i].adj.skew_deg.is_some()).is_some()
+                })
             })
             .collect();
         if !flagged.is_empty() {
@@ -1225,14 +1222,20 @@ impl App {
         ui.horizontal(|ui| {
             ui.heading(tr("set.title"));
             if ui
-                .add_enabled(!self.settings_undo.is_empty(), egui::Button::new(tr("zones.undo")))
+                .add_enabled(
+                    !self.settings_undo.is_empty(),
+                    egui::Button::new(tr("zones.undo")),
+                )
                 .on_hover_text(tr("set.undo_tip"))
                 .clicked()
             {
                 swap = Some(true);
             }
             if ui
-                .add_enabled(!self.settings_redo.is_empty(), egui::Button::new(tr("zones.redo")))
+                .add_enabled(
+                    !self.settings_redo.is_empty(),
+                    egui::Button::new(tr("zones.redo")),
+                )
                 .on_hover_text(tr("set.redo_tip"))
                 .clicked()
             {
@@ -1317,8 +1320,7 @@ impl App {
                             }))
                             .changed();
                         ui.horizontal(|ui| {
-                            ui.label(tr("set.split"))
-                                .on_hover_text(tr("set.split_tip"));
+                            ui.label(tr("set.split")).on_hover_text(tr("set.split_tip"));
                             egui::ComboBox::from_id_salt("split")
                                 .selected_text(split_name(lang, self.s.split))
                                 .show_ui(ui, |ui| {
@@ -1827,10 +1829,13 @@ impl App {
                 ch = true;
             }
         } else if ch {
-            let fresh = self.settings_edit.is_none_or(|t| t.elapsed().as_secs_f32() > 1.0);
+            let fresh = self
+                .settings_edit
+                .is_none_or(|t| t.elapsed().as_secs_f32() > 1.0);
             if fresh {
                 self.settings_undo.push(settings_before);
-                self.settings_undo.drain(..self.settings_undo.len().saturating_sub(100));
+                self.settings_undo
+                    .drain(..self.settings_undo.len().saturating_sub(100));
                 self.settings_redo.clear();
             }
             self.settings_edit = Some(std::time::Instant::now());
@@ -1856,7 +1861,9 @@ impl App {
                 }
                 ui.add_space(14.0);
                 if ui
-                    .add(egui::Button::new(RichText::new(tr("welcome.add")).size(18.0)))
+                    .add(egui::Button::new(
+                        RichText::new(tr("welcome.add")).size(18.0),
+                    ))
                     .clicked()
                 {
                     if let Some(f) = rfd::FileDialog::new()
@@ -2316,8 +2323,10 @@ impl App {
                                 };
                                 let from_scr = |p: egui::Pos2| {
                                     (
-                                        ((p.x - rect.min.x) / rect.width().max(1.0)).clamp(0.0, 1.0),
-                                        ((p.y - rect.min.y) / rect.height().max(1.0)).clamp(0.0, 1.0),
+                                        ((p.x - rect.min.x) / rect.width().max(1.0))
+                                            .clamp(0.0, 1.0),
+                                        ((p.y - rect.min.y) / rect.height().max(1.0))
+                                            .clamp(0.0, 1.0),
                                     )
                                 };
                                 // the node under the pointer (within 10 screen pixels)
@@ -2362,7 +2371,8 @@ impl App {
                                             node_remove = Some((g, k));
                                         } else {
                                             // a new node on the nearest segment
-                                            let mut best: Option<(usize, usize, f32, egui::Pos2)> = None;
+                                            let mut best: Option<(usize, usize, f32, egui::Pos2)> =
+                                                None;
                                             for (gi, g) in guide_list.iter().enumerate() {
                                                 for (ki, w) in g.windows(2).enumerate() {
                                                     let (a, b) = (to_scr(w[0]), to_scr(w[1]));
@@ -2661,7 +2671,10 @@ impl App {
         }
         if let Some((g, k)) = node_remove {
             let a = &mut self.sheets[i].adj;
-            if g < a.dewarp_guides.len() && a.dewarp_guides[g].len() > 2 && k < a.dewarp_guides[g].len() {
+            if g < a.dewarp_guides.len()
+                && a.dewarp_guides[g].len() > 2
+                && k < a.dewarp_guides[g].len()
+            {
                 let before = ZoneSnap::of(a);
                 a.dewarp_guides[g].remove(k);
                 self.sheets[i].zone_undo.push(before);
@@ -2672,7 +2685,10 @@ impl App {
         }
         if let Some((g, k, pos)) = node_insert {
             let a = &mut self.sheets[i].adj;
-            if g < a.dewarp_guides.len() && k <= a.dewarp_guides[g].len() && a.dewarp_guides[g].len() < 256 {
+            if g < a.dewarp_guides.len()
+                && k <= a.dewarp_guides[g].len()
+                && a.dewarp_guides[g].len() < 256
+            {
                 let before = ZoneSnap::of(a);
                 a.dewarp_guides[g].insert(k, pos);
                 self.sheets[i].zone_undo.push(before);

@@ -68,7 +68,11 @@ pub fn find(words: &[Word], pats: &[Regex]) -> Vec<usize> {
             }
         }
     }
-    hit.iter().enumerate().filter(|(_, h)| **h).map(|(i, _)| i).collect()
+    hit.iter()
+        .enumerate()
+        .filter(|(_, h)| **h)
+        .map(|(i, _)| i)
+        .collect()
 }
 
 fn paint(img: &mut PageImage, x: u32, y: u32, w: u32, h: u32) {
@@ -99,7 +103,13 @@ pub fn apply(page: &mut Page, words: &mut Vec<Word>) -> usize {
     let pad = 2;
     for &i in &hit {
         let w = &words[i];
-        paint(&mut page.image, w.x.saturating_sub(pad), w.y.saturating_sub(pad), w.w + 2 * pad, w.h + 2 * pad);
+        paint(
+            &mut page.image,
+            w.x.saturating_sub(pad),
+            w.y.saturating_sub(pad),
+            w.w + 2 * pad,
+            w.h + 2 * pad,
+        );
     }
     let set: std::collections::HashSet<usize> = hit.iter().copied().collect();
     let mut i = 0;
@@ -117,12 +127,26 @@ mod tests {
     use legatorocr_core::bitimage::BitImage;
 
     fn w(t: &str, x: u32, line: u32) -> Word {
-        Word { text: t.into(), x, y: 10, w: 40, h: 12, conf: 90.0, line }
+        Word {
+            text: t.into(),
+            x,
+            y: 10,
+            w: 40,
+            h: 12,
+            conf: 90.0,
+            line,
+        }
     }
 
     #[test]
     fn matches_across_words_of_a_line_only() {
-        let words = vec![w("Telefon", 0, 0), w("0722", 50, 0), w("123", 100, 0), w("456", 150, 0), w("0722", 0, 1)];
+        let words = vec![
+            w("Telefon", 0, 0),
+            w("0722", 50, 0),
+            w("123", 100, 0),
+            w("456", 150, 0),
+            w("0722", 0, 1),
+        ];
         let re = Regex::new(crate::search::preset("phone-ro").unwrap()).unwrap();
         // "0722 123 456" is one phone number over three words; the lone "0722" on line 1 is not
         assert_eq!(find(&words, &[re]), vec![1, 2, 3]);
@@ -137,14 +161,26 @@ mod tests {
                 bw.set(x, y, false);
             }
         }
-        let mut page = Page { image: PageImage::Bw(bw), dpi: 300, skew_deg: 0.0, blank: false, split_index: None, content_box: None, layers: None };
+        let mut page = Page {
+            image: PageImage::Bw(bw),
+            dpi: 300,
+            skew_deg: 0.0,
+            blank: false,
+            split_index: None,
+            content_box: None,
+            layers: None,
+        };
         let mut words = vec![w("ok", 0, 0), w("a@b.ro", 50, 0)];
-        set(vec![Regex::new(crate::search::preset("email").unwrap()).unwrap()]);
+        set(vec![
+            Regex::new(crate::search::preset("email").unwrap()).unwrap()
+        ]);
         let n = apply(&mut page, &mut words);
         set(vec![]);
         assert_eq!(n, 1);
         assert_eq!(words.len(), 1);
-        let PageImage::Bw(b) = &page.image else { panic!() };
+        let PageImage::Bw(b) = &page.image else {
+            panic!()
+        };
         assert!(b.get(70, 15) && b.get(48, 8) && !b.get(5, 15));
         // disabled: nothing happens
         assert_eq!(apply(&mut page, &mut words), 0);

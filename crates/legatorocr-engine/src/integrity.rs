@@ -18,7 +18,13 @@ use image::GrayImage;
 use legatorocr_core::Word;
 use std::collections::HashMap;
 
-pub const ALL_SIGNALS: [&str; 5] = ["jpeg_grid", "jpeg_double", "noise", "line_size", "copy_move"];
+pub const ALL_SIGNALS: [&str; 5] = [
+    "jpeg_grid",
+    "jpeg_double",
+    "noise",
+    "line_size",
+    "copy_move",
+];
 
 /// Signals that run when `--integrity-signals` is not given. A signal is left out here when its
 /// false-alarm rate on unedited synthetic pages exceeded 10 % (`jpeg_grid` 4 of 12 pages, `noise`
@@ -61,7 +67,12 @@ pub fn parse_signals(list: &str) -> Result<Vec<&'static str>, String> {
             "default" => out.extend(DEFAULT_SIGNALS),
             _ => match ALL_SIGNALS.iter().find(|s| **s == t) {
                 Some(s) => out.push(*s),
-                None => return Err(format!("unknown signal '{t}' (known: {}, all, default)", ALL_SIGNALS.join(", "))),
+                None => {
+                    return Err(format!(
+                        "unknown signal '{t}' (known: {}, all, default)",
+                        ALL_SIGNALS.join(", ")
+                    ))
+                }
             },
         }
     }
@@ -103,29 +114,53 @@ fn clampf(v: f32) -> f32 {
 /// Run the chosen signals on one page picture. `jpeg` is the file's bytes when the input is a
 /// JPEG (the two JPEG signals are skipped otherwise), `words` are OCR boxes in the same pixel
 /// grid (the `line_size` signal is skipped when empty).
-pub fn analyse(g: &GrayImage, jpeg: Option<&[u8]>, words: &[Word], signals: &[&str], source: &str) -> PageReport {
-    let mut rep = PageReport { source: source.to_string(), width: g.width(), height: g.height(), ..Default::default() };
+pub fn analyse(
+    g: &GrayImage,
+    jpeg: Option<&[u8]>,
+    words: &[Word],
+    signals: &[&str],
+    source: &str,
+) -> PageReport {
+    let mut rep = PageReport {
+        source: source.to_string(),
+        width: g.width(),
+        height: g.height(),
+        ..Default::default()
+    };
     for s in signals {
         match *s {
             "jpeg_grid" | "jpeg_double" => {
                 let Some(b) = jpeg.filter(|b| b.starts_with(&[0xFF, 0xD8])) else {
-                    rep.skipped.push((s.to_string(), "input is not a JPEG file".into()));
+                    rep.skipped
+                        .push((s.to_string(), "input is not a JPEG file".into()));
                     continue;
                 };
                 if *s == "jpeg_grid" {
                     rep.hints.extend(jpeg_grid(g));
                 } else if let Some(d) = verifier::jpeg_double_quant(b) {
                     if d.likely_double {
-                        rep.hints.push(Hint { signal: "jpeg_double", x: 0, y: 0, w: g.width(), h: g.height(), strength: clampf((d.score as f32 - 5.0) / 20.0 + 0.2), detail: format!("coefficient comb score {:.1}", d.score) });
+                        rep.hints.push(Hint {
+                            signal: "jpeg_double",
+                            x: 0,
+                            y: 0,
+                            w: g.width(),
+                            h: g.height(),
+                            strength: clampf((d.score as f32 - 5.0) / 20.0 + 0.2),
+                            detail: format!("coefficient comb score {:.1}", d.score),
+                        });
                     }
                 } else {
-                    rep.skipped.push((s.to_string(), "picture too small or table unreadable".into()));
+                    rep.skipped.push((
+                        s.to_string(),
+                        "picture too small or table unreadable".into(),
+                    ));
                 }
             }
             "noise" => rep.hints.extend(noise_regions(g)),
             "line_size" => {
                 if words.is_empty() {
-                    rep.skipped.push((s.to_string(), "needs OCR word boxes (--ocr)".into()));
+                    rep.skipped
+                        .push((s.to_string(), "needs OCR word boxes (--ocr)".into()));
                 } else {
                     rep.hints.extend(line_outliers(words));
                 }
@@ -167,7 +202,9 @@ fn sat(g: &GrayImage) -> (Vec<u64>, Vec<u64>) {
 /// the keys after re-compression. Blocks with little contrast (blank paper) give `None`.
 fn cm_keys(s: &[u64], q: &[u64], w: usize, x: usize, y: usize) -> Option<[u64; 2]> {
     let st = w + 1;
-    let rect = |t: &[u64], x0: usize, y0: usize, n: usize| t[(y0 + n) * st + x0 + n] + t[y0 * st + x0] - t[y0 * st + x0 + n] - t[(y0 + n) * st + x0];
+    let rect = |t: &[u64], x0: usize, y0: usize, n: usize| {
+        t[(y0 + n) * st + x0 + n] + t[y0 * st + x0] - t[y0 * st + x0 + n] - t[(y0 + n) * st + x0]
+    };
     let n = (CB * CB) as f64;
     let (bs, bq) = (rect(s, x, y, 16) as f64, rect(q, x, y, 16) as f64);
     if bq / n - (bs / n).powi(2) < 100.0 {
@@ -225,7 +262,9 @@ fn copy_move(g: &GrayImage) -> Vec<Hint> {
     let mut votes: Vec<((i32, i32), (u32, u32))> = Vec::new();
     for y in 0..=(h - CB) {
         for x in 0..=(w - CB) {
-            let Some(k) = cm_keys(&s, &q, w as usize, x as usize, y as usize) else { continue };
+            let Some(k) = cm_keys(&s, &q, w as usize, x as usize, y as usize) else {
+                continue;
+            };
             for (v, key) in k.into_iter().enumerate() {
                 if let Some(e) = index.get(&(key ^ ((v as u64) << 63))) {
                     for &(sx, sy) in e {
@@ -278,15 +317,37 @@ fn copy_move(g: &GrayImage) -> Vec<Hint> {
     let mut out = Vec::new();
     for ((dx, dy), n, x0, y0, x1, y1) in cands {
         let (cx, cy) = ((x0 + x1) as i32 / 2, (y0 + y1) as i32 / 2);
-        if qr.iter().any(|(_, b)| cx >= b.0 - 8 && cx <= b.2 + 8 && cy >= b.1 - 8 && cy <= b.3 + 8) {
+        if qr
+            .iter()
+            .any(|(_, b)| cx >= b.0 - 8 && cx <= b.2 + 8 && cy >= b.1 - 8 && cy <= b.3 + 8)
+        {
             continue; // a QR code repeats its finder squares by design
         }
         let strength = clampf(n as f32 / 600.0);
         let (bw, bh) = (x1 - x0, y1 - y0);
-        out.push(Hint { signal: "copy_move", x: x0, y: y0, w: bw, h: bh, strength, detail: format!("{n} matching blocks; the same patch is also at offset ({}, {})", -dx, -dy) });
+        out.push(Hint {
+            signal: "copy_move",
+            x: x0,
+            y: y0,
+            w: bw,
+            h: bh,
+            strength,
+            detail: format!(
+                "{n} matching blocks; the same patch is also at offset ({}, {})",
+                -dx, -dy
+            ),
+        });
         let (bx, by) = (x0 as i32 - dx, y0 as i32 - dy);
         if bx >= 0 && by >= 0 {
-            out.push(Hint { signal: "copy_move", x: bx as u32, y: by as u32, w: bw, h: bh, strength, detail: format!("the same patch as the one at ({x0}, {y0})") });
+            out.push(Hint {
+                signal: "copy_move",
+                x: bx as u32,
+                y: by as u32,
+                w: bw,
+                h: bh,
+                strength,
+                detail: format!("the same patch as the one at ({x0}, {y0})"),
+            });
         }
     }
     out
@@ -307,7 +368,8 @@ fn groups(flag: &[f32], tw: u32, th: u32, min_tiles: usize) -> Vec<(u32, u32, u3
         }
         let mut stack = vec![s];
         seen[s] = true;
-        let (mut x0, mut y0, mut x1, mut y1, mut n, mut best) = (u32::MAX, u32::MAX, 0, 0, 0usize, 0f32);
+        let (mut x0, mut y0, mut x1, mut y1, mut n, mut best) =
+            (u32::MAX, u32::MAX, 0, 0, 0usize, 0f32);
         while let Some(i) = stack.pop() {
             let (x, y) = (i as u32 % tw, i as u32 / tw);
             x0 = x0.min(x);
@@ -359,7 +421,11 @@ fn tile_noise(g: &GrayImage) -> (u32, u32, Vec<Option<f32>>) {
             for y in (ty * NT + 1)..(ty * NT + NT - 1) {
                 for x in (tx * NT + 1)..(tx * NT + NT - 1) {
                     let i = y as usize * ws + x as usize;
-                    let m = (raw[i - 1] as f32 + raw[i + 1] as f32 + raw[i - ws] as f32 + raw[i + ws] as f32) / 4.0;
+                    let m = (raw[i - 1] as f32
+                        + raw[i + 1] as f32
+                        + raw[i - ws] as f32
+                        + raw[i + ws] as f32)
+                        / 4.0;
                     let d = (raw[i] as f32 - m).abs();
                     if d > 30.0 {
                         strong += 1;
@@ -392,13 +458,26 @@ fn noise_regions(g: &GrayImage) -> Vec<Hint> {
     let flag: Vec<f32> = t
         .iter()
         .map(|v| match v {
-            Some(v) if *v > med * NOISE_RATIO && *v > 1.5 => clampf((v / med).ln() / 8f32.ln()).max(0.05),
+            Some(v) if *v > med * NOISE_RATIO && *v > 1.5 => {
+                clampf((v / med).ln() / 8f32.ln()).max(0.05)
+            }
             _ => 0.0,
         })
         .collect();
     groups(&flag, tw, th, 2)
         .into_iter()
-        .map(|(x0, y0, x1, y1, s)| Hint { signal: "noise", x: x0 * NT, y: y0 * NT, w: (x1 - x0) * NT, h: (y1 - y0) * NT, strength: s, detail: format!("page median noise level {med:.2}, this region up to {:.1} times higher", (s * 8f32.ln()).exp() * 1.0) })
+        .map(|(x0, y0, x1, y1, s)| Hint {
+            signal: "noise",
+            x: x0 * NT,
+            y: y0 * NT,
+            w: (x1 - x0) * NT,
+            h: (y1 - y0) * NT,
+            strength: s,
+            detail: format!(
+                "page median noise level {med:.2}, this region up to {:.1} times higher",
+                (s * 8f32.ln()).exp() * 1.0
+            ),
+        })
         .collect()
 }
 
@@ -418,7 +497,11 @@ fn grid_profile(g: &GrayImage, x0: u32, y0: u32, w: u32, h: u32, vertical: bool)
     let mut acc = [0f64; 8];
     let (len, lines) = if vertical { (h, w) } else { (w, h) };
     let at = |l: u32, i: u32| -> i32 {
-        let (x, y) = if vertical { (x0 + l, y0 + i) } else { (x0 + i, y0 + l) };
+        let (x, y) = if vertical {
+            (x0 + l, y0 + i)
+        } else {
+            (x0 + i, y0 + l)
+        };
         raw[y as usize * ws + x as usize] as i32
     };
     for l in 0..lines {
@@ -428,7 +511,11 @@ fn grid_profile(g: &GrayImage, x0: u32, y0: u32, w: u32, h: u32, vertical: bool)
             let d2 = (at(l, i) - at(l, i - 1)).abs();
             if d0 <= 4 && d2 <= 4 && d1 <= 6 {
                 // the step d1 lies between positions i-2 and i-1
-                let (px, py) = if vertical { (0, y0 + i - 1) } else { (x0 + i - 1, 0) };
+                let (px, py) = if vertical {
+                    (0, y0 + i - 1)
+                } else {
+                    (x0 + i - 1, 0)
+                };
                 let phase = (if vertical { py } else { px } % 8) as usize;
                 acc[phase] += d1 as f64 - (d0 + d2) as f64 / 2.0;
             }
@@ -446,7 +533,12 @@ fn phase(p: &[f64; 8]) -> (usize, f64) {
             bi = i;
         }
     }
-    let rest: Vec<f64> = p.iter().enumerate().filter(|(i, _)| *i != bi).map(|(_, v)| *v).collect();
+    let rest: Vec<f64> = p
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != bi)
+        .map(|(_, v)| *v)
+        .collect();
     let m = rest.iter().sum::<f64>() / 7.0;
     let sd = (rest.iter().map(|v| (v - m).powi(2)).sum::<f64>() / 7.0).sqrt();
     (bi, (bv - m) / (sd + 1e-6))
@@ -474,7 +566,13 @@ fn jpeg_grid(g: &GrayImage) -> Vec<Hint> {
             let off_x = zx >= GRID_Z && az >= GRID_Z && ax != phx;
             let off_y = zy >= GRID_Z && bz >= GRID_Z && by != phy;
             if off_x || off_y {
-                let z = if off_x && off_y { az.min(bz) } else if off_x { az } else { bz };
+                let z = if off_x && off_y {
+                    az.min(bz)
+                } else if off_x {
+                    az
+                } else {
+                    bz
+                };
                 flag[(ty * tw + tx) as usize] = clampf(((z - GRID_Z) / 6.0) as f32).max(0.05);
             }
         }
@@ -527,15 +625,38 @@ fn line_outliers(words: &[Word]) -> Vec<Hint> {
             let sb = ((w.y + w.h) as f32 - mb) / mh;
             let tall = r > LINE_HEIGHT_HI;
             let short = r < LINE_HEIGHT_LO;
-            let moved = st.signum() == sb.signum() && st.abs() > LINE_SHIFT && sb.abs() > LINE_SHIFT;
+            let moved =
+                st.signum() == sb.signum() && st.abs() > LINE_SHIFT && sb.abs() > LINE_SHIFT;
             if tall || short || moved {
                 let (dev, what) = if moved {
                     let s = st.abs().min(sb.abs());
-                    (s / 0.6, format!("sits {:.0} % of a line height {} its neighbours", s * 100.0, if st > 0.0 { "lower than" } else { "higher than" }))
+                    (
+                        s / 0.6,
+                        format!(
+                            "sits {:.0} % of a line height {} its neighbours",
+                            s * 100.0,
+                            if st > 0.0 {
+                                "lower than"
+                            } else {
+                                "higher than"
+                            }
+                        ),
+                    )
                 } else {
-                    (r.ln().abs(), format!("height is {r:.2} times the line's median"))
+                    (
+                        r.ln().abs(),
+                        format!("height is {r:.2} times the line's median"),
+                    )
                 };
-                out.push(Hint { signal: "line_size", x: w.x, y: w.y, w: w.w, h: w.h, strength: clampf(dev), detail: format!("word '{}' {what}", w.text.replace('"', "'")) });
+                out.push(Hint {
+                    signal: "line_size",
+                    x: w.x,
+                    y: w.y,
+                    w: w.w,
+                    h: w.h,
+                    strength: clampf(dev),
+                    detail: format!("word '{}' {what}", w.text.replace('"', "'")),
+                });
             }
         }
     }
@@ -562,10 +683,22 @@ fn esc(s: &str) -> String {
 pub fn to_json(pages: &[PageReport], signals: &[&str]) -> String {
     let mut s = String::from("{\n");
     s.push_str(&format!("  \"notice\": \"{}\",\n", esc(NOTICE)));
-    s.push_str(&format!("  \"signals_run\": [{}],\n", signals.iter().map(|x| format!("\"{x}\"")).collect::<Vec<_>>().join(", ")));
+    s.push_str(&format!(
+        "  \"signals_run\": [{}],\n",
+        signals
+            .iter()
+            .map(|x| format!("\"{x}\""))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
     s.push_str("  \"pages\": [\n");
     for (i, p) in pages.iter().enumerate() {
-        s.push_str(&format!("    {{\"source\": \"{}\", \"width\": {}, \"height\": {}, \"to_check\": [", esc(&p.source), p.width, p.height));
+        s.push_str(&format!(
+            "    {{\"source\": \"{}\", \"width\": {}, \"height\": {}, \"to_check\": [",
+            esc(&p.source),
+            p.width,
+            p.height
+        ));
         for (j, h) in p.hints.iter().enumerate() {
             let (what, innocent) = explain(h.signal);
             s.push_str(&format!(
@@ -574,9 +707,21 @@ pub fn to_json(pages: &[PageReport], signals: &[&str]) -> String {
                 h.signal, h.x, h.y, h.w, h.h, h.strength, esc(&h.detail), esc(what), esc(innocent)
             ));
         }
-        s.push_str(&format!("{}], \"skipped\": [", if p.hints.is_empty() { "" } else { "\n    " }));
-        s.push_str(&p.skipped.iter().map(|(a, b)| format!("{{\"signal\": \"{}\", \"reason\": \"{}\"}}", a, esc(b))).collect::<Vec<_>>().join(", "));
-        s.push_str(&format!("]}}{}\n", if i + 1 < pages.len() { "," } else { "" }));
+        s.push_str(&format!(
+            "{}], \"skipped\": [",
+            if p.hints.is_empty() { "" } else { "\n    " }
+        ));
+        s.push_str(
+            &p.skipped
+                .iter()
+                .map(|(a, b)| format!("{{\"signal\": \"{}\", \"reason\": \"{}\"}}", a, esc(b)))
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+        s.push_str(&format!(
+            "]}}{}\n",
+            if i + 1 < pages.len() { "," } else { "" }
+        ));
     }
     s.push_str("  ]\n}\n");
     s
@@ -588,7 +733,9 @@ mod tests {
     use image::Luma;
 
     fn rng(seed: &mut u64) -> u32 {
-        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (*seed >> 33) as u32
     }
 
@@ -622,7 +769,9 @@ mod tests {
 
     fn jpeg(g: &GrayImage, q: u8) -> Vec<u8> {
         let mut b = Vec::new();
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut b, q).encode_image(g).unwrap();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut b, q)
+            .encode_image(g)
+            .unwrap();
         b
     }
     fn dec(b: &[u8]) -> GrayImage {
@@ -631,7 +780,10 @@ mod tests {
 
     #[test]
     fn signals_parse_and_reject_unknown() {
-        assert_eq!(parse_signals("noise,copy_move").unwrap(), vec!["noise", "copy_move"]);
+        assert_eq!(
+            parse_signals("noise,copy_move").unwrap(),
+            vec!["noise", "copy_move"]
+        );
         assert_eq!(parse_signals("all").unwrap().len(), 5);
         assert_eq!(parse_signals("default").unwrap(), vec!["copy_move"]);
         assert!(parse_signals("verdict").is_err());
@@ -645,7 +797,9 @@ mod tests {
         image::imageops::overlay(&mut g, &patch, 383, 301); // offset (343, 261): not a multiple of 4
         let h = copy_move(&g);
         assert!(h.len() >= 2, "{h:?}");
-        assert!(h.iter().any(|x| (x.x as i32 - 383).abs() < 24 && (x.y as i32 - 301).abs() < 24));
+        assert!(h
+            .iter()
+            .any(|x| (x.x as i32 - 383).abs() < 24 && (x.y as i32 - 301).abs() < 24));
     }
 
     #[test]
@@ -662,7 +816,11 @@ mod tests {
         }
         let h = noise_regions(&g);
         assert!(!h.is_empty());
-        assert!(h.iter().any(|x| x.x < 360 && x.x + x.w > 200 && x.y < 320 && x.y + x.h > 200), "{h:?}");
+        assert!(
+            h.iter()
+                .any(|x| x.x < 360 && x.x + x.w > 200 && x.y < 320 && x.y + x.h > 200),
+            "{h:?}"
+        );
     }
 
     #[test]
@@ -674,16 +832,30 @@ mod tests {
         let patch = image::imageops::crop_imm(&b, 0, 0, 256, 192).to_image();
         image::imageops::overlay(&mut edited, &patch, 131, 99); // offsets 3 and 3 modulo 8
         let h = jpeg_grid(&edited);
-        assert!(h.iter().any(|x| x.x < 387 && x.x + x.w > 131 && x.y < 291 && x.y + x.h > 99), "{h:?}");
+        assert!(
+            h.iter()
+                .any(|x| x.x < 387 && x.x + x.w > 131 && x.y < 291 && x.y + x.h > 99),
+            "{h:?}"
+        );
     }
 
     fn word(t: &str, x: u32, y: u32, w: u32, h: u32) -> Word {
-        Word { text: t.into(), x, y, w, h, conf: 90.0, line: 0 }
+        Word {
+            text: t.into(),
+            x,
+            y,
+            w,
+            h,
+            conf: 90.0,
+            line: 0,
+        }
     }
 
     #[test]
     fn a_word_out_of_line_is_reported_and_an_even_line_is_not() {
-        let mut ws: Vec<Word> = (0..8).map(|i| word("abcd", 20 + i * 60, 100, 50, 30)).collect();
+        let mut ws: Vec<Word> = (0..8)
+            .map(|i| word("abcd", 20 + i * 60, 100, 50, 30))
+            .collect();
         assert!(line_outliers(&ws).is_empty());
         ws[4] = word("7", 260, 112, 18, 30); // same height, 12 px lower
         let h = line_outliers(&ws);
@@ -700,12 +872,24 @@ mod tests {
         assert_eq!(rep.skipped.len(), 3); // two JPEG signals and line_size
         let mut p = rep.clone();
         for s in ALL_SIGNALS {
-            p.hints.push(Hint { signal: s, x: 1, y: 2, w: 3, h: 4, strength: 0.5, detail: "x".into() });
+            p.hints.push(Hint {
+                signal: s,
+                x: 1,
+                y: 2,
+                w: 3,
+                h: 4,
+                strength: 0.5,
+                detail: "x".into(),
+            });
         }
         let j = to_json(&[p], &ALL_SIGNALS).to_lowercase();
         for bad in ["forg", "fake", "tamper", "fraud", "counterfeit"] {
             assert!(!j.contains(bad), "{bad}");
         }
-        assert!(j.contains("common_innocent_causes") && j.contains("not a verdict") && j.contains("diploma"));
+        assert!(
+            j.contains("common_innocent_causes")
+                && j.contains("not a verdict")
+                && j.contains("diploma")
+        );
     }
 }
