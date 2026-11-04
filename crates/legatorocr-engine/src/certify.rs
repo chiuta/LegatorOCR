@@ -2,7 +2,7 @@
 //! meant to be written: page count, pixel size and a 96×128 thumbnail comparison. This catches
 //! an encoder or reader fault (wrong size, swapped or dropped page, damaged image data), not
 //! subtle loss inside the chosen compression; lossy JPEG pages are expected to differ a little.
-//! Layered pages (mixed / hybrid output) are only checked for count and size.
+//! Layered pages (mixed / hybrid output) are compared as the flattened picture of their layers.
 
 use image::imageops::FilterType;
 use legatorocr_core::Page;
@@ -15,7 +15,6 @@ struct Rec {
     w: u32,
     h: u32,
     thumb: Vec<u8>,
-    layered: bool,
 }
 
 static RECS: Mutex<Vec<Rec>> = Mutex::new(Vec::new());
@@ -40,12 +39,15 @@ pub fn record(pg: &Page) {
     if !enabled() {
         return;
     }
-    let img = pg.image.to_dynamic();
+    // a layered page (mixed / hybrid) is compared as the flattened picture of its layers
+    let img = match &pg.layers {
+        Some(l) => image::DynamicImage::ImageRgb8(l.compose()),
+        None => pg.image.to_dynamic(),
+    };
     let r = Rec {
         w: img.width(),
         h: img.height(),
         thumb: thumb(&img),
-        layered: pg.layers.is_some(),
     };
     if let Ok(mut v) = RECS.lock() {
         v.push(r);
@@ -81,9 +83,6 @@ fn verify(pdf: &[u8], recs: &[Rec]) -> (bool, Vec<String>) {
                 if (w, h) != (r.w, r.h) {
                     lines.push(format!("page {}: size {}×{} written, {w}×{h} read back", i + 1, r.w, r.h));
                     ok = false;
-                    continue;
-                }
-                if r.layered {
                     continue;
                 }
                 let t = thumb(&p.image);
@@ -136,7 +135,7 @@ mod tests {
 
     fn rec_of(p: &Page) -> Rec {
         let img = p.image.to_dynamic();
-        Rec { w: img.width(), h: img.height(), thumb: thumb(&img), layered: false }
+        Rec { w: img.width(), h: img.height(), thumb: thumb(&img) }
     }
 
     fn pdf_of(pages: &[Page]) -> Vec<u8> {
@@ -164,6 +163,43 @@ mod tests {
         assert!(verify(&pdf, &other).1.iter().any(|l| l.contains("size")));
         // not a PDF
         assert!(!verify(b"garbage", &good).0);
+    }
+
+    /// A mixed-mode page: black ink mask over a coloured background of the given shade.
+    fn layered(w: u32, h: u32, shade: u8) -> Page {
+        let mut mask = legatorocr_core::BitImage::new(w, h);
+        for x in 0..w / 2 {
+            mask.data[((h / 2) * w + x) as usize] = 1;
+        }
+        let layers = legatorocr_core::layers::Layers {
+            mask,
+            fg: [0, 0, 0],
+            bg: Some(legatorocr_core::layers::Background {
+                img: image::RgbImage::from_pixel(w, h, image::Rgb([shade, shade, shade])),
+                dpi: 150,
+            }),
+            patches: Vec::new(),
+        };
+        let mut p = page(w, h, shade);
+        p.image = PageImage::Rgb(layers.compose());
+        p.layers = Some(layers);
+        p
+    }
+
+    #[test]
+    fn layered_pages_are_compared_too() {
+        let (a, b) = (layered(100, 140, 240), layered(100, 140, 100));
+        let mut w = PdfWriter::new(Compress::Flate);
+        w.add_page(&a, &[]);
+        w.add_page(&b, &[]);
+        let pdf = w.finish();
+        let rec = |p: &Page| {
+            let img = image::DynamicImage::ImageRgb8(p.layers.as_ref().unwrap().compose());
+            Rec { w: img.width(), h: img.height(), thumb: thumb(&img) }
+        };
+        assert!(verify(&pdf, &[rec(&a), rec(&b)]).0);
+        let (ok, lines) = verify(&pdf, &[rec(&b), rec(&a)]);
+        assert!(!ok && lines.iter().any(|l| l.contains("differs")), "{lines:?}");
     }
 
     trait ClonePage {
