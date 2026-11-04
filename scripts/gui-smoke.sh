@@ -3,7 +3,7 @@
 #   scripts/gui-smoke.sh target/debug/legatorocr-gui IMAGE.jpg
 # Needs xvfb-run, xdotool, ImageMagick `import`, python3 with Pillow and numpy, and Mesa software
 # GL. Coordinates assume a 1400x900 screen and the default English window; they were taken from
-# screenshots of version 0.2.0-pre.15 and break when the layout changes. Checks: the welcome card
+# screenshots of version 0.2.0-pre.16 and break when the layout changes. Checks: the welcome card
 # is shown without pages; with a page loaded the preview appears; tracing a guide line draws its
 # green nodes; a double click on a node removes it; the program is still running at the end.
 set -e
