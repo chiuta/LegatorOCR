@@ -92,6 +92,7 @@ pub fn write(dest: &Path, files: &[PathBuf], id: &str, when: u64) -> Result<Summ
         "      \"message\": {},\n",
         json_str(&format!("Written by LegatorOCR {}", env!("CARGO_PKG_VERSION")))
     ));
+    inv.push_str("      \"user\": {\"name\": \"LegatorOCR\"},\n");
     inv.push_str("      \"state\": {\n");
     for (k, (d, _, names)) in by_digest.iter().enumerate() {
         let list: Vec<String> = names.iter().map(|n| json_str(n)).collect();

@@ -1,5 +1,5 @@
 //! TEI P5 output (roadmap 6.4, first step): one `<pb/>` per scanned page, a `<p>` per paragraph,
-//! `<table>` for tables and `<ab type="column">` for column sections. This is the page structure
+//! `<table>` for tables and `<div type="column">` for column sections. This is the page structure
 //! the OCR found, not a scholarly edition: headings only as `<head>` for a short line clearly taller than the body text in the upper part of the page (a heuristic), no footnotes, bibliography or index markup,
 //! and no check against the TEI schema was possible here (well-formedness only).
 
@@ -36,9 +36,9 @@ fn blocks(bs: &[Block], depth: usize, out: &mut String) {
             }
             Block::Columns(cols) => {
                 for c in cols {
-                    out.push_str(&format!("{pad}<ab type=\"column\">\n"));
+                    out.push_str(&format!("{pad}<div type=\"column\">\n"));
                     blocks(c, depth + 1, out);
-                    out.push_str(&format!("{pad}</ab>\n"));
+                    out.push_str(&format!("{pad}</div>\n"));
                 }
             }
         }
@@ -77,7 +77,7 @@ mod tests {
         let x = render(&pages, "Carte \"x\"", Some("ro"), &[None, Some(7)]);
         assert!(x.contains("<p>A &amp; B &lt;c&gt;</p>") && x.contains("<cell>2</cell>"));
         assert!(x.contains("<pb n=\"1\" xml:id=\"p1\"/>") && x.contains("<pb n=\"7\" xml:id=\"p2\"/>"));
-        assert_eq!(x.matches("<ab type=\"column\">").count(), 2);
+        assert_eq!(x.matches("<div type=\"column\">").count(), 2);
         assert!(x.contains("xml:lang=\"ro\"") && x.contains("&quot;x&quot;"));
         // balanced tags: every open has a close
         assert_eq!(x.matches("<p>").count(), x.matches("</p>").count());
