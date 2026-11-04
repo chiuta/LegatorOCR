@@ -24,7 +24,7 @@ fn collect(blocks: &[Block], page: usize, out: &mut Vec<Found>) {
                     collect(c, page, out);
                 }
             }
-            Block::Para(_) => {}
+            Block::Para(_) | Block::Head(_) => {}
         }
     }
 }

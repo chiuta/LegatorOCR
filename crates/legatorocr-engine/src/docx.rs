@@ -47,6 +47,8 @@ fn paragraphs(page: &str) -> Vec<String> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Block {
     Para(String),
+    /// A heading line: short, clearly taller than the body text, in the upper part of the page.
+    Head(String),
     Table(Vec<Vec<String>>),
     /// A section laid out in columns (left to right), each a list of blocks.
     Columns(Vec<Vec<Block>>),
@@ -340,6 +342,16 @@ fn blocks_flat(words: &[legatorocr_core::text::Word]) -> Vec<Block> {
     let mut out: Vec<Block> = Vec::new();
     let mut para = String::new();
     let mut prev_bottom: Option<f32> = None;
+    let page_top = lines.iter().map(|l| l.top).fold(f32::MAX, f32::min);
+    let page_bottom = lines.iter().map(|l| l.top + l.h).fold(f32::MIN, f32::max);
+    let is_heading = |l: &Line, text: &str| {
+        l.cells.len() == 1
+            && l.h >= 1.4 * med
+            && text.split_whitespace().count() <= 10
+            && text.chars().filter(|c| c.is_alphabetic()).count() >= 3
+            && l.top <= page_top + 0.4 * (page_bottom - page_top)
+            && lines.len() >= 4
+    };
     let flush = |para: &mut String, out: &mut Vec<Block>| {
         if !para.is_empty() {
             out.push(Block::Para(std::mem::take(para)));
@@ -360,6 +372,12 @@ fn blocks_flat(words: &[legatorocr_core::text::Word]) -> Vec<Block> {
             .map(|c| c.text.as_str())
             .collect::<Vec<_>>()
             .join(" ");
+        if is_heading(l, &text) {
+            flush(&mut para, &mut out);
+            out.push(Block::Head(text));
+            prev_bottom = None;
+            continue;
+        }
         if prev_bottom.is_some_and(|b| l.top - b > 0.9 * med) {
             flush(&mut para, &mut out);
         }
@@ -404,7 +422,7 @@ fn blocks_xml(blocks: &[Block]) -> String {
     let mut body = String::new();
     for b in blocks {
         match b {
-            Block::Para(t) => body.push_str(&para_xml(t)),
+            Block::Para(t) | Block::Head(t) => body.push_str(&para_xml(t)),
             Block::Columns(cols) => {
                 // the single-column part so far ends here; the columns form a continuous
                 // section of their own, closed by the paragraph that carries its properties
@@ -751,5 +769,23 @@ mod tests {
     fn blank_lines_split_paragraphs_and_lines_are_joined() {
         let p = super::paragraphs("alpha\nbeta con-\ntinued\n\ngamma\n\n\ndelta");
         assert_eq!(p, vec!["alpha beta con-tinued", "gamma", "delta"]);
+    }
+
+    #[test]
+    fn a_tall_short_line_near_the_top_becomes_a_heading_block() {
+        use legatorocr_core::text::Word;
+        let w = |t: &str, x: u32, y: u32, h: u32, line: u32| Word { text: t.into(), x, y, w: 80, h, conf: 90.0, line };
+        let mut v = vec![w("Uscarea", 100, 100, 44, 0), w("artificiala", 200, 100, 44, 0)];
+        for l in 1..6u32 {
+            for k in 0..6u32 {
+                v.push(w("text", 100 + k * 90, 200 + l * 40, 20, l));
+            }
+        }
+        let b = blocks_from_words(&v);
+        assert_eq!(b[0], Block::Head("Uscarea artificiala".into()), "{b:?}");
+        assert!(matches!(&b[1], Block::Para(_)));
+        // the same words without the tall line stay one paragraph
+        let plain = blocks_from_words(&v[2..]);
+        assert!(plain.iter().all(|b| !matches!(b, Block::Head(_))), "{plain:?}");
     }
 }

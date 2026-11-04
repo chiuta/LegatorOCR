@@ -1,6 +1,6 @@
 //! TEI P5 output (roadmap 6.4, first step): one `<pb/>` per scanned page, a `<p>` per paragraph,
 //! `<table>` for tables and `<ab type="column">` for column sections. This is the page structure
-//! the OCR found, not a scholarly edition: no headings, footnotes, bibliography or index markup,
+//! the OCR found, not a scholarly edition: headings only as `<head>` for a short line clearly taller than the body text in the upper part of the page (a heuristic), no footnotes, bibliography or index markup,
 //! and no check against the TEI schema was possible here (well-formedness only).
 
 use crate::docx::Block;
@@ -16,6 +16,11 @@ fn blocks(bs: &[Block], depth: usize, out: &mut String) {
             Block::Para(t) => {
                 if !t.trim().is_empty() {
                     out.push_str(&format!("{pad}<p>{}</p>\n", esc(t.trim())));
+                }
+            }
+            Block::Head(t) => {
+                if !t.trim().is_empty() {
+                    out.push_str(&format!("{pad}<head>{}</head>\n", esc(t.trim())));
                 }
             }
             Block::Table(rows) => {
