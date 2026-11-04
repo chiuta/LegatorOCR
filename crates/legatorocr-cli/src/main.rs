@@ -758,14 +758,14 @@ struct Cli {
     mode: Mode,
 
     #[arg(long, value_enum, default_value = "auto")]
+    split: Split,
+
     /// Write recognised Romanian text in today's spelling: `î` inside a word becomes `â`
     /// (`pînză` -> `pânză`), `sînt` -> `sunt`. For scans of books printed 1953-1993. Needs --ocr.
     /// Changes the text layer, the hOCR and the text outputs; search the original spelling with
     /// --search-old-orthography instead when you want to keep it.
     #[arg(long)]
     ocr_modern_spelling: bool,
-
-    split: Split,
 
     /// Disable skew correction.
     #[arg(long)]
@@ -1914,6 +1914,7 @@ fn real_main() -> Result<()> {
         min_conf: cli.min_conf,
         tesseract: cli.tesseract.clone(),
         tessdata: cli.tessdata.clone(),
+        modern_spelling: cli.ocr_modern_spelling,
     };
     if let Some(d) = cli.dpi.filter(|_| cli.ocr) {
         if d < 200 {
@@ -1946,10 +1947,10 @@ fn real_main() -> Result<()> {
         || cli.hocr.is_some()
         || cli.alto.is_some()
         || cli.page_xml.is_some()
-        modern_spelling: cli.ocr_modern_spelling,
         || cli.docx.is_some()
         || cli.tei.is_some()
         || cli.json.is_some()
+        || cli.passages_jsonl.is_some()
         || cli.fff_out.is_some())
         && !cli.ocr
     {
@@ -1963,6 +1964,7 @@ fn real_main() -> Result<()> {
         .chain(cli.json.iter())
         .chain(cli.docx.iter())
         .chain(cli.tei.iter())
+        .chain(cli.passages_jsonl.iter())
     {
         legatorocr_engine::check_writable(p)?;
     }
@@ -1970,7 +1972,6 @@ fn real_main() -> Result<()> {
         && cli.djvu.is_none()
         && matches!(cli.format, Fmt::None)
         && cli.txt.is_none()
-        || cli.passages_jsonl.is_some()
         && cli.hocr.is_none()
         && cli.alto.is_none()
         && cli.page_xml.is_none()
@@ -1978,13 +1979,13 @@ fn real_main() -> Result<()> {
         && cli.fff_out.is_none()
         && cli.docx.is_none()
         && cli.tei.is_none()
+        && cli.passages_jsonl.is_none()
         && cli.report.is_none()
         && cli.multitiff.is_none()
         && !cli.report_outliers
     {
         bail!("nothing to do: give --pdf and/or an image --format");
     }
-        .chain(cli.passages_jsonl.iter())
 
     // --- run: process → (save images) → OCR → PDF ---------------------------
     // Fail now, not after an hour of OCR: make sure the outputs can be written.
@@ -1997,7 +1998,6 @@ fn real_main() -> Result<()> {
         for (p, a) in &pr.sheets {
             inputs.push(p.clone());
             adjusts.push(a.clone());
-        && cli.passages_jsonl.is_none()
         }
     }
     for p in &cli.inputs {
@@ -2184,6 +2184,7 @@ fn real_main() -> Result<()> {
             &cli.hocr,
             &cli.alto,
             &cli.json,
+            &cli.passages_jsonl,
             &cli.fff_out,
             &cli.docx,
             &cli.multitiff,
@@ -2205,7 +2206,6 @@ fn real_main() -> Result<()> {
     let first_err: Mutex<Option<String>> = Mutex::new(None);
     let saved_images: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
     if cli.multitiff.is_some()
-            &cli.passages_jsonl,
         && (cli.skip_duplicates || cli.split_on_blank || cli.split_on_barcode || cli.skip_blank)
     {
         bail!("--multitiff writes every processed page; do not combine it with --skip-duplicates, --split-on-blank or --skip-blank");
@@ -2929,6 +2929,7 @@ fn run_search(cli: &Cli, query: &str) -> Result<()> {
         exact: cli.search_exact,
         max_hits: cli.search_max,
         query: cli.search_query,
+        old_orthography: cli.search_old_orthography,
     };
     let mut out = std::io::BufWriter::new(std::io::stdout().lock());
     let mut write_err = None;
@@ -3007,4 +3008,3 @@ mod tests {
         }
     }
 }
-        old_orthography: cli.search_old_orthography,
