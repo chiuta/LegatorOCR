@@ -10,7 +10,8 @@ a human to open the submission under their own account.
 | `homebrew/legatorocr.rb` | Homebrew tap | `ruby -c` syntax only |
 | `winget/ChiutaAlexio.LegatorOCR.yaml` | winget | parsed as YAML only |
 | `flatpak/tf.trom.LegatorOCR.yml` | Flathub | parsed as YAML only; needs vendored crates |
-| `debian/control`, `debian/rules` | Debian | not built |
+| `debian/control`, `debian/rules` | Debian source skeleton | not built, not submitted |
+| `debian/build-deb.sh` | Debian/Ubuntu binary .deb | built with `dpkg-deb` from the release binary; installed, run (`--version`) and removed with `dpkg` in a container (amd64 only; no lintian, no other distro) |
 
 ## Portable folder (roadmap 1.11)
 
