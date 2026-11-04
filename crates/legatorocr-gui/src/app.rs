@@ -47,6 +47,29 @@ struct PageTex {
     dpi: u32,
 }
 
+/// Why a processed sheet deserves a look (None = nothing suspicious). A heuristic on the preview
+/// only: blank result, skew at the limit, no content found, content touching the page edge.
+fn attention(r: &Ready, max_skew: f32) -> Option<&'static str> {
+    let p = r.pages.first()?;
+    if r.pages.iter().any(|p| p.blank) {
+        return Some("attn.blank");
+    }
+    if r.pages.iter().any(|p| p.skew_deg.abs() >= 0.9 * max_skew) {
+        return Some("attn.skew");
+    }
+    if r.pages.iter().any(|p| p.content_box.is_none()) {
+        return Some("attn.nocontent");
+    }
+    let touches = |p: &PageTex| {
+        p.content_box.is_some_and(|[x, y, w, h]| {
+            let (mx, my) = ((p.w / 200).max(2), (p.h / 200).max(2));
+            x <= mx || y <= my || x + w + mx >= p.w || y + h + my >= p.h
+        })
+    };
+    let _ = p;
+    r.pages.iter().any(touches).then_some("attn.edge")
+}
+
 struct Ready {
     key: u64,
     original: TextureHandle,
@@ -130,6 +153,10 @@ pub struct App {
     installed: Vec<String>,
     /// Tesseract has the `osd` data (orientation detection).
     has_osd: bool,
+    /// Undo / redo of the global settings (the sheet adjustments have their own stacks).
+    settings_undo: Vec<crate::settings::UiSettings>,
+    settings_redo: Vec<crate::settings::UiSettings>,
+    settings_edit: Option<std::time::Instant>,
     /// When the running preview was started (watchdog for a hung decode).
     preview_started: Option<std::time::Instant>,
     ocr_info: String,
@@ -190,6 +217,9 @@ impl App {
             langs_rx: None,
             installed: Vec::new(),
             has_osd: false,
+            settings_undo: Vec::new(),
+            settings_redo: Vec::new(),
+            settings_edit: None,
             preview_started: None,
             ocr_info: String::new(),
             show_about: false,
@@ -1109,6 +1139,33 @@ impl App {
             }
         });
         ui.separator();
+        let max_skew = self.s.max_skew;
+        let flagged: Vec<usize> = (0..self.sheets.len())
+            .filter(|&i| {
+                let key = self.key_of(&self.sheets[i]);
+                self.sheets[i]
+                    .ready
+                    .as_ref()
+                    .is_some_and(|r| r.key == key && attention(r, max_skew).is_some())
+            })
+            .collect();
+        if !flagged.is_empty() {
+            ui.horizontal(|ui| {
+                ui.colored_label(
+                    Color32::from_rgb(235, 140, 30),
+                    format!("{} {}", flagged.len(), self.tr("attn.count")),
+                );
+                if ui.small_button(self.tr("attn.next")).clicked() {
+                    let cur = self.selected.unwrap_or(usize::MAX);
+                    let nxt = flagged
+                        .iter()
+                        .copied()
+                        .find(|&i| cur == usize::MAX || i > cur)
+                        .unwrap_or(flagged[0]);
+                    self.selected = Some(nxt);
+                }
+            });
+        }
         if self.sheets.is_empty() {
             ui.label(self.tr("list.empty"));
             return;
@@ -1119,8 +1176,15 @@ impl App {
                 for i in 0..self.sheets.len() {
                     let key = self.key_of(&self.sheets[i]);
                     let s = &self.sheets[i];
+                    let warn = s
+                        .ready
+                        .as_ref()
+                        .filter(|r| r.key == key)
+                        .and_then(|r| attention(r, max_skew));
                     let color = if s.failed.as_ref().map(|f| f.0) == Some(key) {
                         Color32::from_rgb(220, 70, 60)
+                    } else if warn.is_some() {
+                        Color32::from_rgb(235, 140, 30)
                     } else if s.ready.as_ref().map(|r| r.key) == Some(key) {
                         Color32::from_rgb(70, 170, 90)
                     } else if s.pending.is_some() {
@@ -1133,10 +1197,11 @@ impl App {
                         let (rect, _) =
                             ui.allocate_exact_size(Vec2::splat(10.0), egui::Sense::hover());
                         ui.painter().circle_filled(rect.center(), 4.0, color);
-                        if ui
-                            .selectable_label(self.selected == Some(i), label)
-                            .clicked()
-                        {
+                        let mut resp = ui.selectable_label(self.selected == Some(i), label);
+                        if let Some(w) = warn {
+                            resp = resp.on_hover_text(self.tr(w));
+                        }
+                        if resp.clicked() {
                             self.selected = Some(i);
                             // a failed preview (timeout, transient read error) is tried again
                             // when the page is selected again
@@ -1151,7 +1216,25 @@ impl App {
         let lang = self.lang;
         let tr = |k: &'static str| t(lang, k);
         let mut ch = false;
-        ui.heading(tr("set.title"));
+        let settings_before = self.s.clone();
+        let mut swap: Option<bool> = None; // Some(true) = undo, Some(false) = redo
+        ui.horizontal(|ui| {
+            ui.heading(tr("set.title"));
+            if ui
+                .add_enabled(!self.settings_undo.is_empty(), egui::Button::new("↶"))
+                .on_hover_text(tr("set.undo_tip"))
+                .clicked()
+            {
+                swap = Some(true);
+            }
+            if ui
+                .add_enabled(!self.settings_redo.is_empty(), egui::Button::new("↷"))
+                .on_hover_text(tr("set.redo_tip"))
+                .clicked()
+            {
+                swap = Some(false);
+            }
+        });
         let mut chosen: Option<String> = None;
         let mut to_save: Option<String> = None;
         ui.horizontal(|ui| {
@@ -1728,6 +1811,26 @@ impl App {
                     }
                 });
             });
+        if let Some(undo) = swap {
+            let (from, to) = if undo {
+                (&mut self.settings_undo, &mut self.settings_redo)
+            } else {
+                (&mut self.settings_redo, &mut self.settings_undo)
+            };
+            if let Some(prev) = from.pop() {
+                to.push(std::mem::replace(&mut self.s, prev));
+                self.settings_edit = None;
+                ch = true;
+            }
+        } else if ch {
+            let fresh = self.settings_edit.is_none_or(|t| t.elapsed().as_secs_f32() > 1.0);
+            if fresh {
+                self.settings_undo.push(settings_before);
+                self.settings_undo.drain(..self.settings_undo.len().saturating_sub(100));
+                self.settings_redo.clear();
+            }
+            self.settings_edit = Some(std::time::Instant::now());
+        }
         if ch {
             self.settings_gen += 1;
             self.config_dirty = true;
