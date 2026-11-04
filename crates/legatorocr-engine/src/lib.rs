@@ -44,6 +44,7 @@ pub mod profile;
 pub mod profiles;
 pub mod project;
 pub mod headings;
+pub mod tagstruct;
 pub mod merkle;
 pub mod ocrcache;
 pub mod pagelang;
@@ -75,7 +76,7 @@ pub use legatorocr_ocr as ocr;
 
 pub use legatorocr_pdf::g4;
 pub use legatorocr_pdf::LabelStyle;
-pub use legatorocr_pdf::{DEFAULT_PDFA_PART, DEFAULT_TAGGED};
+pub use legatorocr_pdf::{DEFAULT_PDFA_PART, DEFAULT_TAGGED, DEFAULT_TAGGED_STRUCT};
 pub use legatorocr_pdf::Meta as PdfMeta;
 
 #[derive(Debug, Clone)]
@@ -974,6 +975,9 @@ pub fn run_export(
                         let f = formfields::for_page(&pg);
                         res.form_fields += f.len();
                         w.set_form_fields(f);
+                    }
+                    if legatorocr_pdf::DEFAULT_TAGGED_STRUCT.load(Ordering::Relaxed) {
+                        w.set_next_structure(tagstruct::plan(&words, pg.image.height()));
                     }
                     w.add_page(&pg, &words);
                 }

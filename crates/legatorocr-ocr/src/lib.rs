@@ -905,6 +905,28 @@ pub fn paragraph_boxes(words: &[Word]) -> Vec<ParagraphBox> {
     out
 }
 
+/// Paragraphs of a page as ranges `(first, end)` of indices into `words` (same split as
+/// [`paragraph_boxes`]; paragraphs with no visible text are left out). The ranges are in reading
+/// order, do not overlap, and every one starts at the first word of a line.
+pub fn paragraph_word_ranges(words: &[Word]) -> Vec<(usize, usize)> {
+    let lines = line_boxes(words);
+    let starts = paragraph_starts(&lines);
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    let mut cur: Option<(usize, usize)> = None;
+    for (i, l) in lines.iter().enumerate() {
+        if starts[i] {
+            out.extend(cur.take());
+        }
+        cur = Some(match cur {
+            Some((a, _)) => (a, l.end),
+            None => (l.first, l.end),
+        });
+    }
+    out.extend(cur);
+    out.retain(|&(a, b)| words[a..b].iter().any(|w| !w.text.trim().is_empty()));
+    out
+}
+
 /// One text line: the run of consecutive words sharing a `line` id, with its bounding box.
 pub(crate) struct LineBox {
     pub first: usize,

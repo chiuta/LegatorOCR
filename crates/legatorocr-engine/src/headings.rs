@@ -24,6 +24,11 @@ pub fn detect(words: &[Word], page_h: u32) -> Option<String> {
 
 /// The heading and how many times taller its letters are than the page's typical word.
 pub fn detect_sized(words: &[Word], page_h: u32) -> Option<(String, f32)> {
+    detect_line(words, page_h).map(|d| (d.0, d.2))
+}
+
+/// Like [`detect_sized`], also giving the `line` id of the heading line.
+pub fn detect_line(words: &[Word], page_h: u32) -> Option<(String, u32, f32)> {
     if words.len() < 4 || page_h == 0 {
         return None;
     }
@@ -33,7 +38,7 @@ pub fn detect_sized(words: &[Word], page_h: u32) -> Option<(String, f32)> {
     let mut lines: Vec<u32> = words.iter().map(|w| w.line).collect();
     lines.sort_unstable();
     lines.dedup();
-    let mut best: Option<(u32, String, f32)> = None;
+    let mut best: Option<(u32, String, f32, u32)> = None;
     for l in lines {
         let ws: Vec<&Word> = words.iter().filter(|w| w.line == l).collect();
         let y = ws.iter().map(|w| w.y).min()?;
@@ -53,10 +58,10 @@ pub fn detect_sized(words: &[Word], page_h: u32) -> Option<(String, f32)> {
         }
         if best.as_ref().is_none_or(|b| y < b.0) {
             let tall_h = ws.iter().map(|w| w.h).max().unwrap_or(1) as f32;
-            best = Some((y, text.chars().take(120).collect(), tall_h / med as f32));
+            best = Some((y, text.chars().take(120).collect(), tall_h / med as f32, l));
         }
     }
-    best.map(|b| (b.1, b.2))
+    best.map(|b| (b.1, b.3, b.2))
 }
 
 #[cfg(test)]

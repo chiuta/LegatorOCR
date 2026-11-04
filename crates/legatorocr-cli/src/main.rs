@@ -604,6 +604,14 @@ struct Cli {
     #[arg(long, value_name = "CODE", num_args = 0..=1, default_missing_value = "")]
     tagged: Option<String>,
 
+    /// Structured tagged PDF (toward PDF/UA, not a conformance claim): like --tagged, but one
+    /// element per OCR paragraph instead of per line, the page heading found by the
+    /// --bookmarks-headings detector as /H1../H3, one marked-content id per element in reading
+    /// order, /Lang taken from --lang (ron -> ro), a document /Title (the output file name) and
+    /// DisplayDocTitle. No figures, lists or tables. Needs --ocr and --pdf.
+    #[arg(long)]
+    tagged_pdf: bool,
+
     /// Sign FILE with your PKCS#12 certificate (--sign-p12): CAdES detached, SHA-256, added as an
     /// incremental update (the earlier bytes stay unchanged). Output: --pdf NAME or FILE.signed.pdf.
     /// Needs openssl and a PDF whose last xref is a classic table. The legal level (simple,
@@ -1249,9 +1257,20 @@ fn real_main() -> Result<()> {
         // the global pool is built once, before any parallel work
         let _ = rayon::ThreadPoolBuilder::new().num_threads(n).build_global();
     }
-    if let Ok(mut g) = legatorocr_engine::DEFAULT_TAGGED.lock() {
-        *g = cli.tagged.clone();
+    if cli.tagged_pdf && !cli.ocr {
+        bail!("--tagged-pdf tags the recognised text; add --ocr");
     }
+    if cli.tagged_pdf && cli.pdf.is_none() {
+        bail!("--tagged-pdf needs --pdf");
+    }
+    if let Ok(mut g) = legatorocr_engine::DEFAULT_TAGGED.lock() {
+        *g = if cli.tagged_pdf && cli.tagged.is_none() {
+            Some(legatorocr_engine::tagstruct::bcp47(&cli.lang))
+        } else {
+            cli.tagged.clone()
+        };
+    }
+    legatorocr_engine::DEFAULT_TAGGED_STRUCT.store(cli.tagged_pdf, std::sync::atomic::Ordering::Relaxed);
     legatorocr_engine::DEFAULT_PDFA_PART.store(cli.pdfa_part, std::sync::atomic::Ordering::Relaxed);
     if let Some(dir) = cli.watch.clone() {
         return watch_loop(&cli, &dir);

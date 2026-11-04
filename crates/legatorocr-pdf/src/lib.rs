@@ -16,6 +16,9 @@ pub mod pdfa;
 /// Part used by writers created afterwards (set once from the command line).
 /// Tagged-PDF default for new writers: `None` = off, `Some("")` = on without a language.
 pub static DEFAULT_TAGGED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+/// Structured tagged PDF (paragraphs and headings instead of one element per line) for the
+/// engine to feed: set from `--tagged-pdf`.
+pub static DEFAULT_TAGGED_STRUCT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 pub static DEFAULT_PDFA_PART: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
 pub mod reader;
 
@@ -55,7 +58,37 @@ pub struct PdfWriter {
     /// Marked-content ids used on the page being written.
     page_mc: u32,
     /// Per page: (page object, structure element ids by MCID), for the tree.
-    struct_pages: Vec<(u32, Vec<u32>)>,
+    struct_pages: Vec<(u32, Vec<(u32, StructKind)>)>,
+    /// Kinds of the marked-content sequences of the page being written, by MCID.
+    page_kinds: Vec<StructKind>,
+    /// Paragraph/heading ranges for the next page (`set_next_structure`).
+    next_struct: Option<Vec<StructPara>>,
+}
+
+/// Tag of a structure element.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StructKind {
+    /// `/P`
+    Para,
+    /// `/H1` .. `/H3` (the level is clamped to 1..=3)
+    Heading(u8),
+}
+
+impl StructKind {
+    fn tag(self) -> String {
+        match self {
+            StructKind::Para => "P".into(),
+            StructKind::Heading(n) => format!("H{}", n.clamp(1, 3)),
+        }
+    }
+}
+
+/// One structure element of a page: words `first..end` of the slice given to `add_page`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StructPara {
+    pub kind: StructKind,
+    pub first: usize,
+    pub end: usize,
 }
 
 /// Numbering style of a page-label range.
@@ -152,6 +185,8 @@ impl PdfWriter {
             tagged: DEFAULT_TAGGED.lock().ok().and_then(|g| g.clone()),
             page_mc: 0,
             struct_pages: Vec::new(),
+            page_kinds: Vec::new(),
+            next_struct: None,
             field_ids: Vec::new(),
         };
         w.buf.extend_from_slice(b"%PDF-1.5\n%\xE2\xE3\xCF\xD3\n");
@@ -237,7 +272,16 @@ impl PdfWriter {
     /// and DisplayDocTitle. This is the base of PDF/UA, not a full conformance claim (no
     /// headings, lists, tables or alternative text; the scan itself is an artifact).
     pub fn set_tagged(&mut self, lang: Option<&str>) {
+        // (see also `set_next_structure`)
         self.tagged = lang.map(str::to_string).or(Some(String::new()));
+    }
+
+    /// Tagged PDF only: for the next page added, group its words into the given structure
+    /// elements (paragraphs and headings) instead of one `/P` per OCR line. The ranges index the
+    /// word slice passed to `add_page`; words outside every range are tagged line by line.
+    /// Ignored when the writer is not tagged.
+    pub fn set_next_structure(&mut self, paras: Vec<StructPara>) {
+        self.next_struct = Some(paras);
     }
 
     pub fn set_meta(&mut self, m: Meta) {
@@ -359,6 +403,8 @@ impl PdfWriter {
     /// Invisible-text operators for OCR words.
     fn text_ops(&mut self, cs: &mut String, words: &[Word], dpi: f32, wpt: f32, hpt: f32) {
         self.page_mc = 0;
+        self.page_kinds.clear();
+        let plan = self.next_struct.take().filter(|_| self.tagged.is_some());
         if self.tagged.is_some() {
             *cs = format!("/Artifact BMC\n{cs}EMC\n");
         }
@@ -369,11 +415,14 @@ impl PdfWriter {
         // font size (like ABBYY's output): readers then select a line as a line instead of a
         // cloud of differently sized words whose boxes happen to have ascenders or descenders.
         let mut i = 0;
+        // the structure element whose marked content is open: (plan index or none, kind)
+        let mut open: Option<Option<usize>> = None;
         while i < words.len() {
             let mut j = i + 1;
             while j < words.len() && words[j].line == words[i].line {
                 j += 1;
             }
+            let line_start = i;
             let group: Vec<&Word> = words[i..j]
                 .iter()
                 .filter(|w| {
@@ -455,12 +504,29 @@ impl PdfWriter {
             }
             if !body.is_empty() {
                 if self.tagged.is_some() {
-                    cs.push_str(&format!("/P <</MCID {}>> BDC\nBT 3 Tr /F1 {size:.2} Tf\n{body}ET\nEMC\n", self.page_mc));
-                    self.page_mc += 1;
+                    let which = plan.as_ref().and_then(|p| {
+                        p.iter().position(|s| s.first <= line_start && line_start < s.end)
+                    });
+                    // one marked-content sequence per planned element; lines outside the plan
+                    // (or every line, without a plan) get one each
+                    if open.is_none() || which.is_none() || open != Some(which) {
+                        if open.is_some() {
+                            cs.push_str("EMC\n");
+                        }
+                        let kind = which.and_then(|k| plan.as_ref().map(|p| p[k].kind)).unwrap_or(StructKind::Para);
+                        cs.push_str(&format!("/{} <</MCID {}>> BDC\n", kind.tag(), self.page_mc));
+                        self.page_kinds.push(kind);
+                        self.page_mc += 1;
+                        open = Some(which);
+                    }
+                    cs.push_str(&format!("BT 3 Tr /F1 {size:.2} Tf\n{body}ET\n"));
                 } else {
                     cs.push_str(&format!("BT 3 Tr /F1 {size:.2} Tf\n{body}ET\n"));
                 }
             }
+        }
+        if open.is_some() {
+            cs.push_str("EMC\n");
         }
     }
 
@@ -517,8 +583,9 @@ impl PdfWriter {
         if self.tagged.is_some() {
             // structure elements are written in finish(), once the tree root has an id
             let mut ids = Vec::new();
-            for _ in 0..self.page_mc {
-                ids.push(self.alloc());
+            for k in 0..self.page_mc as usize {
+                let kind = self.page_kinds.get(k).copied().unwrap_or(StructKind::Para);
+                ids.push((self.alloc(), kind));
             }
             tag_attrs = format!(" /StructParents {} /Tabs /S", self.struct_pages.len());
             self.struct_pages.push((page_id, ids));
@@ -840,8 +907,8 @@ impl PdfWriter {
             let pages = std::mem::take(&mut self.struct_pages);
             for (k, (pg, ids)) in pages.iter().enumerate() {
                 let mut arr = String::new();
-                for (mc, id) in ids.iter().enumerate() {
-                    self.plain_obj(*id, &format!("<< /Type /StructElem /S /P /P {doc} 0 R /Pg {pg} 0 R /K {mc} >>"));
+                for (mc, (id, kind)) in ids.iter().enumerate() {
+                    self.plain_obj(*id, &format!("<< /Type /StructElem /S /{} /P {doc} 0 R /Pg {pg} 0 R /K {mc} >>", kind.tag()));
                     kids.push_str(&format!("{id} 0 R "));
                     arr.push_str(&format!("{id} 0 R "));
                 }
@@ -870,8 +937,12 @@ impl PdfWriter {
             &format!("<< /Type /Catalog /Pages {PAGES} 0 R{cat_extra} >>"),
         );
         let info_id = self.alloc();
+        // DisplayDocTitle needs a title: a tagged file without one gets a neutral placeholder
+        let fallback = self.tagged.as_ref().map(|_| "Untitled document".to_string());
         let title = self
             .title
+            .clone()
+            .or(fallback)
             .as_deref()
             .map(|t| format!(" /Title {}", pdf_text_string(t)))
             .unwrap_or_default();
@@ -1062,6 +1133,50 @@ mod tests {
         // content streams are compressed; check through the reader instead
         let doc = reader::PdfDoc::open(pdf.clone()).unwrap();
         assert_eq!(doc.page_count(), 2);
+    }
+
+    /// All inflatable streams of a PDF, concatenated (test helper).
+    fn inflated(pdf: &[u8]) -> String {
+        use std::io::Read;
+        let mut out = String::new();
+        let mut i = 0;
+        while let Some(k) = pdf[i..].windows(7).position(|w| w == b"stream\n") {
+            let st = i + k + 7;
+            let end = st + pdf[st..].windows(9).position(|w| w == b"endstream").unwrap_or(0);
+            let mut d = String::new();
+            if flate2::read::ZlibDecoder::new(&pdf[st..end]).read_to_string(&mut d).is_ok() {
+                out.push_str(&d);
+            }
+            i = end.max(st) + 9;
+        }
+        out
+    }
+
+    #[test]
+    fn structured_tagging_groups_lines_into_paragraphs_and_headings() {
+        let w = |t: &str, y: u32, line: u32| Word { text: t.into(), x: 100, y, w: 200, h: 40, conf: 90.0, line };
+        let words = [w("Titlu", 20, 0), w("a", 100, 1), w("b", 150, 2), w("c", 300, 3)];
+        let mut pw = PdfWriter::new(Compress::Flate);
+        pw.set_tagged(Some("ro"));
+        pw.set_next_structure(vec![
+            StructPara { kind: StructKind::Heading(1), first: 0, end: 1 },
+            StructPara { kind: StructKind::Para, first: 1, end: 3 },
+            StructPara { kind: StructKind::Para, first: 3, end: 4 },
+        ]);
+        let mut b = BitImage::new(600, 400);
+        b.set(1, 1, true);
+        pw.add_page(&page(PageImage::Bw(b)), &words);
+        let pdf = pw.finish();
+        let text = String::from_utf8_lossy(&pdf);
+        assert!(text.contains("/Type /StructElem /S /H1 "));
+        assert_eq!(text.matches("/Type /StructElem /S /P ").count(), 2, "two paragraphs, not four lines");
+        assert!(text.contains("/Title (Untitled document)"), "DisplayDocTitle needs a title");
+        let cs = inflated(&pdf);
+        assert!(cs.contains("/H1 <</MCID 0>> BDC") && cs.contains("/P <</MCID 1>> BDC") && cs.contains("/P <</MCID 2>> BDC"));
+        assert_eq!(cs.matches(" BDC").count(), 3);
+        // the two lines of paragraph 1 share one marked-content sequence: 2 BT inside one BDC
+        let p1 = cs.split("/P <</MCID 1>> BDC").nth(1).unwrap().split("EMC").next().unwrap();
+        assert_eq!(p1.matches("BT ").count(), 2);
     }
 
     #[test]
