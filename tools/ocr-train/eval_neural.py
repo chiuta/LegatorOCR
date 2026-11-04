@@ -1,6 +1,6 @@
-"""CER of EasyOCR (CRAFT + latin_g2 recogniser, a 2020-era neural baseline) and of Tesseract on the same 12 real pages
+"""Order-free word recall (and the CER, which depends on reading order) of EasyOCR (CRAFT + latin_g2 recogniser, a 2020-era neural baseline) and of Tesseract on the same 12 real pages
 and the same references/normalisation as eval_real.py. EasyOCR boxes are put in reading order by line clustering
-(single column assumed), so two-column pages are NOT a fair test; GOOD8 is the comparable figure.
+(single column assumed), so the CER is meaningless on two-column pages (it measured 67 % on GOOD8 for that reason alone); the word recall, which ignores order, is the comparable figure.
 Usage: eval_neural.py [IMG_DIR REF_DIR]. Needs easyocr (+ torchvision, or a stand-in), tesseract with ron."""
 import sys, os, re, subprocess, unicodedata, json
 from rapidfuzz.distance import Levenshtein as L
@@ -25,13 +25,18 @@ def easy(p):
     return " ".join(t for ln in lines for x, t in sorted(ln))
 def tess(p):
     return subprocess.run(["tesseract", f"{img}/p{p}.png", "-", "-l", "ron"], capture_output=True, text=True).stdout
-rows = {"easy": {}, "tess": {}}
+from collections import Counter
+def words(t): return Counter(w for w in re.findall(r"\w+", t.lower()) if len(w) >= 3)
+rows = {"easy": {}, "tess": {}}; rec = {"easy": {}, "tess": {}}
+os.makedirs("/tmp/neural_out", exist_ok=True)
 for p in PAGES:
     R = norm(open(f"{ref}/p{p}.txt", encoding="utf8").read())
     for k, f in (("easy", easy), ("tess", tess)):
-        H = norm(f(p)); rows[k][p] = (L.distance(R, H), len(R), L.distance(strip_dia(R), strip_dia(H)))
+        H = norm(f(p)); open(f'/tmp/neural_out/{k}_p{p}.txt','w').write(H); rw = words(R); rec[k][p] = (sum((rw & words(H)).values()), sum(rw.values())); rows[k][p] = (L.distance(R, H), len(R), L.distance(strip_dia(R), strip_dia(H)))
     print(p, {k: round(100 * rows[k][p][0] / rows[k][p][1], 1) for k in rows}, flush=True)
 for k in rows:
     for name, ps in (("ALL12", PAGES), ("GOOD8", GOOD)):
         e = sum(rows[k][p][0] for p in ps); n = sum(rows[k][p][1] for p in ps); d = sum(rows[k][p][2] for p in ps)
+        a = sum(rec[k][p][0] for p in ps); b = sum(rec[k][p][1] for p in ps)
+        print(f"{k:5s} {name} word recall {100*a/b:.1f} %")
         print(f"{k:5s} {name} CER {100*e/n:.2f} %   (diacritic-blind {100*d/n:.2f} %)")
