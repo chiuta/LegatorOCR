@@ -59,7 +59,7 @@ and the open licensing questions.
 | bytes | 1.12.1 | MIT |
 | calloop | 0.13.0 | MIT |
 | calloop-wayland-source | 0.3.0 | MIT |
-| cc | 1.10.0 | MIT OR Apache-2.0 |
+| cc | 1.11.0 | MIT OR Apache-2.0 |
 | cfg-if | 1.0.5 | MIT OR Apache-2.0 |
 | cfg_aliases | 0.2.2 | MIT |
 | cgl | 0.3.2 | MIT / Apache-2.0 |
@@ -77,7 +77,7 @@ and the open licensing questions.
 | core-foundation-sys | 0.8.7 | MIT OR Apache-2.0 |
 | core-graphics | 0.23.2 | MIT OR Apache-2.0 |
 | core-graphics-types | 0.1.3 | MIT OR Apache-2.0 |
-| crc32fast | 1.5.3 | MIT OR Apache-2.0 |
+| crc32fast | 1.5.4 | MIT OR Apache-2.0 |
 | crossbeam-deque | 0.8.8 | MIT OR Apache-2.0 |
 | crossbeam-epoch | 0.9.21 | MIT OR Apache-2.0 |
 | crossbeam-utils | 0.8.23 | MIT OR Apache-2.0 |
@@ -85,6 +85,14 @@ and the open licensing questions.
 | cursor-icon | 1.2.0 | MIT OR Apache-2.0 OR Zlib |
 | dispatch | 0.2.0 | MIT |
 | dispatch2 | 0.3.1 | Zlib OR Apache-2.0 OR MIT |
+| djvu-bitmap | 0.44.0 | MIT |
+| djvu-bzz | 0.44.0 | MIT |
+| djvu-iff | 0.44.0 | MIT |
+| djvu-iw44 | 0.44.0 | MIT |
+| djvu-jb2 | 0.44.0 | MIT |
+| djvu-pixmap | 0.44.0 | MIT |
+| djvu-rs | 0.44.0 | MIT |
+| djvu-zp | 0.44.0 | MIT |
 | dlib | 0.5.3 | MIT |
 | document-features | 0.2.12 | MIT OR Apache-2.0 |
 | downcast-rs | 1.2.1 | MIT/Apache-2.0 |
@@ -118,6 +126,9 @@ and the open licensing questions.
 | futures-core | 0.3.34 | MIT OR Apache-2.0 |
 | futures-task | 0.3.34 | MIT OR Apache-2.0 |
 | futures-util | 0.3.34 | MIT OR Apache-2.0 |
+| g2gen | 1.2.2 | MIT/Apache-2.0 |
+| g2p | 1.2.2 | MIT/Apache-2.0 |
+| g2poly | 1.2.2 | MIT/Apache-2.0 |
 | gethostname | 1.1.0 | Apache-2.0 |
 | getrandom | 0.3.4 | MIT OR Apache-2.0 |
 | getrandom | 0.4.3 | MIT OR Apache-2.0 |
@@ -149,16 +160,18 @@ and the open licensing questions.
 | js-sys | 0.3.107 | MIT OR Apache-2.0 |
 | khronos_api | 3.1.0 | Apache-2.0 |
 | kurbo | 0.13.1 | Apache-2.0 OR MIT |
+| leb128fmt | 0.1.0 | MIT OR Apache-2.0 |
 | libc | 0.2.191 | MIT OR Apache-2.0 |
 | libloading | 0.8.9 | ISC |
 | libm | 0.2.16 | MIT |
 | libredox | 0.1.25 | MIT |
 | linebender_resource_handle | 0.1.1 | Apache-2.0 OR MIT |
-| linux-raw-sys | 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | linux-raw-sys | 0.4.15 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
+| linux-raw-sys | 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | litrs | 1.0.1 | MIT OR Apache-2.0 |
 | lock_api | 0.4.14 | MIT OR Apache-2.0 |
 | log | 0.4.35 | MIT OR Apache-2.0 |
+| lru | 0.18.5 | MIT |
 | memchr | 2.8.3 | Unlicense OR MIT |
 | memmap2 | 0.9.12 | MIT OR Apache-2.0 |
 | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 |
@@ -212,6 +225,7 @@ and the open licensing questions.
 | pin-project-lite | 0.2.17 | Apache-2.0 OR MIT |
 | pkg-config | 0.3.34 | MIT OR Apache-2.0 |
 | plain | 0.2.3 | MIT/Apache-2.0 |
+| png | 0.17.16 | MIT OR Apache-2.0 |
 | png | 0.18.1 | MIT OR Apache-2.0 |
 | polling | 3.11.0 | Apache-2.0 OR MIT |
 | pollster | 0.4.0 | Apache-2.0/MIT |
@@ -239,12 +253,14 @@ and the open licensing questions.
 | regex-syntax | 0.8.11 | MIT OR Apache-2.0 |
 | renderdoc-sys | 1.1.0 | MIT OR Apache-2.0 |
 | rfd | 0.17.2 | MIT |
+| rqrr | 0.11.0 | (MIT OR Apache-2.0) AND ISC |
 | rustc-hash | 1.1.0 | Apache-2.0/MIT |
 | rustc-hash | 2.1.3 | Apache-2.0 OR MIT |
 | rustc_version | 0.4.1 | MIT OR Apache-2.0 |
 | rustix | 0.38.44 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | rustix | 1.1.6 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | rustversion | 1.0.23 | MIT OR Apache-2.0 |
+| safe_arch | 0.7.4 | Zlib OR Apache-2.0 OR MIT |
 | same-file | 1.0.6 | Unlicense/MIT |
 | scoped-tls | 1.0.1 | MIT/Apache-2.0 |
 | scopeguard | 1.2.0 | MIT OR Apache-2.0 |
@@ -264,7 +280,9 @@ and the open licensing questions.
 | smallvec | 1.16.4 | MIT OR Apache-2.0 |
 | smithay-client-toolkit | 0.19.2 | MIT |
 | smol_str | 0.2.2 | MIT OR Apache-2.0 |
+| spin | 0.9.9 | MIT |
 | static_assertions | 1.1.0 | MIT OR Apache-2.0 |
+| string-interner | 0.19.0 | MIT/Apache-2.0 |
 | strsim | 0.11.1 | MIT |
 | syn | 2.0.119 | MIT OR Apache-2.0 |
 | syn | 3.0.9 | MIT OR Apache-2.0 |
@@ -276,7 +294,7 @@ and the open licensing questions.
 | tiff | 0.11.3 | MIT |
 | tokio | 1.54.1 | MIT |
 | toml_datetime | 1.1.2+spec-1.1.0 | MIT OR Apache-2.0 |
-| toml_edit | 0.25.17+spec-1.1.0 | MIT OR Apache-2.0 |
+| toml_edit | 0.25.18+spec-1.1.0 | MIT OR Apache-2.0 |
 | toml_parser | 1.1.5+spec-1.1.0 | MIT OR Apache-2.0 |
 | tracing | 0.1.44 | MIT |
 | tracing-core | 0.1.36 | MIT |
@@ -284,7 +302,7 @@ and the open licensing questions.
 | type-map | 0.5.1 | MIT/Apache-2.0 |
 | unicode-general-category | 1.1.0 | Apache-2.0 |
 | unicode-ident | 1.0.27 | (MIT OR Apache-2.0) AND Unicode-3.0 |
-| unicode-properties | 0.1.4 | MIT/Apache-2.0 |
+| unicode-properties | 0.1.5 | (MIT OR Apache-2.0) AND Unicode-3.0 |
 | unicode-segmentation | 1.13.3 | MIT OR Apache-2.0 |
 | unicode-width | 0.2.3 | MIT OR Apache-2.0 |
 | utf8parse | 0.2.2 | Apache-2.0 OR MIT |
@@ -299,6 +317,15 @@ and the open licensing questions.
 | wasm-bindgen-macro | 0.2.130 | MIT OR Apache-2.0 |
 | wasm-bindgen-macro-support | 0.2.130 | MIT OR Apache-2.0 |
 | wasm-bindgen-shared | 0.2.130 | MIT OR Apache-2.0 |
+| wasm-encoder | 0.263.0 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
+| wasmi | 2.0.0 | MIT/Apache-2.0 |
+| wasmi_collections | 2.0.0 | MIT/Apache-2.0 |
+| wasmi_core | 2.0.0 | MIT/Apache-2.0 |
+| wasmi_ir | 2.0.0 | MIT/Apache-2.0 |
+| wasmparser | 0.228.0 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
+| wasmparser | 0.263.0 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
+| wast | 263.0.0 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
+| wat | 1.263.0 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | wayland-backend | 0.3.17 | MIT |
 | wayland-client | 0.31.15 | MIT |
 | wayland-csd-frame | 0.3.0 | MIT |
@@ -317,6 +344,7 @@ and the open licensing questions.
 | wgpu-hal | 30.0.1 | MIT OR Apache-2.0 |
 | wgpu-naga-bridge | 30.0.1 | MIT OR Apache-2.0 |
 | wgpu-types | 30.0.1 | MIT OR Apache-2.0 |
+| wide | 0.7.33 | Zlib OR Apache-2.0 OR MIT |
 | winapi-util | 0.1.11 | Unlicense OR MIT |
 | windows-link | 0.2.1 | MIT OR Apache-2.0 |
 | windows-sys | 0.52.0 | MIT OR Apache-2.0 |
