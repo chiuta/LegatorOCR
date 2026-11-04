@@ -49,12 +49,12 @@ struct PageTex {
 
 /// Why a processed sheet deserves a look (None = nothing suspicious). A heuristic on the preview
 /// only: blank result, skew at the limit, no content found, content touching the page edge.
-fn attention(r: &Ready, max_skew: f32) -> Option<&'static str> {
+fn attention(r: &Ready, max_skew: f32, manual_skew: bool) -> Option<&'static str> {
     let p = r.pages.first()?;
     if r.pages.iter().any(|p| p.blank) {
         return Some("attn.blank");
     }
-    if r.pages.iter().any(|p| p.skew_deg.abs() >= 0.9 * max_skew) {
+    if !manual_skew && r.pages.iter().any(|p| p.skew_deg.abs() >= 0.9 * max_skew) {
         return Some("attn.skew");
     }
     if r.pages.iter().any(|p| p.content_box.is_none()) {
@@ -1146,14 +1146,17 @@ impl App {
                 self.sheets[i]
                     .ready
                     .as_ref()
-                    .is_some_and(|r| r.key == key && attention(r, max_skew).is_some())
+                    .is_some_and(|r| {
+                        r.key == key
+                            && attention(r, max_skew, self.sheets[i].adj.skew_deg.is_some()).is_some()
+                    })
             })
             .collect();
         if !flagged.is_empty() {
             ui.horizontal(|ui| {
                 ui.colored_label(
                     Color32::from_rgb(235, 140, 30),
-                    format!("{} {}", flagged.len(), self.tr("attn.count")),
+                    format!("{}: {}", self.tr("attn.count"), flagged.len()),
                 );
                 if ui.small_button(self.tr("attn.next")).clicked() {
                     let cur = self.selected.unwrap_or(usize::MAX);
@@ -1180,7 +1183,7 @@ impl App {
                         .ready
                         .as_ref()
                         .filter(|r| r.key == key)
-                        .and_then(|r| attention(r, max_skew));
+                        .and_then(|r| attention(r, max_skew, s.adj.skew_deg.is_some()));
                     let color = if s.failed.as_ref().map(|f| f.0) == Some(key) {
                         Color32::from_rgb(220, 70, 60)
                     } else if warn.is_some() {
@@ -1221,14 +1224,14 @@ impl App {
         ui.horizontal(|ui| {
             ui.heading(tr("set.title"));
             if ui
-                .add_enabled(!self.settings_undo.is_empty(), egui::Button::new("↶"))
+                .add_enabled(!self.settings_undo.is_empty(), egui::Button::new(tr("zones.undo")))
                 .on_hover_text(tr("set.undo_tip"))
                 .clicked()
             {
                 swap = Some(true);
             }
             if ui
-                .add_enabled(!self.settings_redo.is_empty(), egui::Button::new("↷"))
+                .add_enabled(!self.settings_redo.is_empty(), egui::Button::new(tr("zones.redo")))
                 .on_hover_text(tr("set.redo_tip"))
                 .clicked()
             {
@@ -1962,7 +1965,7 @@ impl App {
                 Some(SplitChoice::Off) => tr("split.off"),
             };
             egui::ComboBox::from_id_salt("adj_split")
-                .selected_text(format!("{} → {label}", tr("adj.split_page")))
+                .selected_text(format!("{} - {label}", tr("adj.split_page")))
                 .show_ui(ui, |ui| {
                     adj_changed |= ui
                         .selectable_value(&mut adj.split, None, tr("adj.split_default"))

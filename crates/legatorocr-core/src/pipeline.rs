@@ -489,7 +489,9 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
         }
     }
 
-    if s.auto_orient {
+    // a sheet the user turned by hand is not turned again: the automatic check would take the
+    // sideways result for a mistake and add a second quarter turn (90 + 90 = upside down)
+    if s.auto_orient && s.rotate_quarters.is_multiple_of(4) {
         let a = analyse(&transform::gray_of(&rgb), s.dpi);
         if orient::needs_quarter_turn(&a.ink, a.dpi) {
             rot90_rects(&mut zones, rgb.width(), rgb.height(), 1);
@@ -1291,6 +1293,29 @@ mod tests {
         let r = q.content.unwrap();
         assert_eq!(r.w, 984);
         assert!(s2.is_some());
+    }
+
+    #[test]
+    fn a_manual_quarter_turn_is_not_turned_again_by_auto_orient() {
+        // portrait page of horizontal text lines
+        let src = image::DynamicImage::ImageRgb8(to_rgb(&text_page(600, 800, 60, 540)));
+        let base = Settings {
+            dpi: 150,
+            deskew: false,
+            split: SplitMode::Off,
+            auto_orient: true,
+            ..Settings::default()
+        };
+        let upright = &process_page(&src, &base)[0];
+        assert!(upright.image.height() > upright.image.width(), "left alone it stays portrait");
+        let turned = Settings { rotate_quarters: 1, ..base };
+        let p = &process_page(&src, &turned)[0];
+        assert!(
+            p.image.width() > p.image.height(),
+            "the user's turn must stay: {}x{}",
+            p.image.width(),
+            p.image.height()
+        );
     }
 
     #[test]
