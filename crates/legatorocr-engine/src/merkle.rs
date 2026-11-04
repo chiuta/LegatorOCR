@@ -1,4 +1,5 @@
-//! Merkle tree over a `SHA256SUMS.txt`, built as in RFC 6962 (Certificate Transparency):
+//! Merkle tree over a `SHA256SUMS.txt`, built as in RFC 6962 (Certificate Transparency; RFC 6962 has since been
+//! obsoleted by RFC 9162, CT v2.0, whose hashing was not compared here):
 //! leaf = SHA-256(0x00 ‖ name ‖ 0x00 ‖ file hash), node = SHA-256(0x01 ‖ left ‖ right), the
 //! tree split at the largest power of two below the leaf count. One short root then stands for a
 //! whole collection: publish or timestamp the root (e.g. with an RFC 3161 service of your

@@ -66,9 +66,9 @@ shows schema validity of the structure, not OCR quality.
    request (SDK behaviour). Also update the tests at `mcp.rs` ~l.450 and the README row. Gate: run
    `scripts/mcp-client-test.py` against both an old (1.x) and a new (2.x) SDK client.
 2. **OCFL 1.1.1**: confirm in the spec text whether `conformsTo`/namaste must say `1.1` or `1.1.1`; ocfl-py accepted `1.1`.
-3. **ALTO** `schemaLocation` in `xmlout.rs` ~l.117: `alto-4-2.xsd` to `alto-4-4.xsd` (cosmetic, one line, needs a rebuild and the unit tests that compare output).
+3. **ALTO — NOT DONE (loc.gov is unreachable from here, so the 4-4 URL could not be checked; the validator uses the GitHub copy)** `schemaLocation` in `xmlout.rs` ~l.117: `alto-4-2.xsd` to `alto-4-4.xsd` (cosmetic, one line, needs a rebuild and the unit tests that compare output).
 4. **RFC 5816**: test `tsa.rs` against a reply whose signing certificate is identified by ESSCertIDv2 (SHA-256); the code was only tested with an OpenSSL throw-away TSA.
-5. Doc wording: `merkle.rs` header and README/ROADMAP 5.4: "RFC 6962 (since obsoleted by RFC 9162 CT v2; the Merkle hashing is the same idea)"; compare 9162 section 2.1 before claiming identical hashes.
+5. DONE 2026-11-04 (merkle.rs header, ROADMAP 5.4): doc wording: `merkle.rs` header and README/ROADMAP 5.4: "RFC 6962 (since obsoleted by RFC 9162 CT v2; the Merkle hashing is the same idea)"; compare 9162 section 2.1 before claiming identical hashes.
 6. **PAGE namespace**: consider emitting 2024-07-15 only if a downstream tool is shown to read it; today's consumers were not checked.
 7. **CycloneDX**: `scripts/sbom.py` writes specVersion 1.5; 1.6 and 1.7 schemas exist in the CycloneDX repository (raw files read, HTTP 200). 1.5 is still valid; bump only after validating output against the 1.7 JSON schema.
 8. **e-Factura**: before trusting the CIUS-RO check, a person with browser access should open mfinante.gov.ro/web/efactura/informatii-tehnice and legislatie and note the current CIUS-RO version, the schematron release and any CustomizationID change; our check only looks for the substring `cius-ro`, so a new version string would still pass, but BR-RO rules are not validated at all.
