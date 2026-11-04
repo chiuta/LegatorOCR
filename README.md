@@ -178,6 +178,11 @@ compares the passages of each page with the same page of the `--txt` output (whi
 collapsed) and prints the match percentage. The format is LegatorOCR's own; whether a given
 research tool (for example TEZAUR) can import it has not been checked.
 
+## Phone capture assistant
+
+`web/capture/index.html` is one offline HTML file (no external requests, no storage, no telemetry; English and Romanian, strings in one object). Open it on a phone (a camera needs https or localhost on most browsers; `file://` works in some), start the camera, lay the page on a darker surface. It finds the bright page (Otsu threshold, largest connected region, corners by extreme x+y / x-y, so up to about 45 degrees of rotation), draws the outline, and shoots by itself when the outline has been still for 0.8 s and the page passes the checks; otherwise it says why: no page found, page not fully visible, too blurry (variance of the Laplacian), too dark, too bright. A manual button, a thumbnail strip with delete, and "Save burst as ZIP" (hand-written stored ZIP) give `burst-YYYYMMDD-HHMMSS.zip` with `page-0001.jpg`, `page-0002.jpg`, ... at the camera's stream resolution (a video frame, not necessarily the sensor's full still resolution). Each JPEG carries an EXIF capture time, at least 4 s after the previous one, so that `legatorocr --burst` (default `--burst-gap 3`) keeps the order and does not take two pages for one burst. Then: `legatorocr --burst --pdf book.pdf page-*.jpg`.
+Tested only on **synthetic** frames in headless Chromium with a fake camera (`scripts/test-capture-assistant.py`): corner error 1.0-2.1 px at 640 wide on 6 placements (rotation -14 to +31 degrees, shifts, one keystone), the refusals fire with the right reason, the ZIP passes `zipfile.testzip` and `unzip -t`, and `--burst` accepts the unzipped pages. **Not tested:** real phones, real lighting and shadows, motion blur, autofocus, iOS Safari, a bright or white desk (the page then merges with the background), the "too bright" refusal. All thresholds are untuned guesses.
+
 ## Known limits
 
 See `COMPARISON.md` for what other tools do that this one does not. In short:

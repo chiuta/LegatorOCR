@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LegatorOCR - capture assistant</title>
+<!-- Single file, no external requests, no storage, no telemetry. Works from file:// (where the browser allows the camera) or any static host. -->
+<style>
+  :root { color-scheme: light dark; --bg:#fafafa; --fg:#1b1b1b; --ok:#0a7d3b; --bad:#b3261e; --warn:#8a5a00; --line:#c9c9c9; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#161616; --fg:#eee; --ok:#4cc27f; --bad:#ff8a80; --warn:#f2b84b; --line:#444; } }
+  body { margin:0; font:16px/1.4 system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+  main { max-width:760px; margin:0 auto; padding:12px 16px; }
+  h1 { font-size:1.25rem; margin:.3em 0; }
+  #stage { position:relative; width:100%; background:#000; border:1px solid var(--line); aspect-ratio:3/4; max-height:70vh; margin:0 auto; overflow:hidden; }
+  #cam, #ov { position:absolute; inset:0; width:100%; height:100%; object-fit:fill; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0; align-items:center; }
+  button, select { font:inherit; padding:10px 14px; }
+  #reason { font-weight:600; min-height:1.4em; }
+  #reason[data-kind=ok] { color:var(--ok); } #reason[data-kind=bad] { color:var(--bad); } #reason[data-kind=warn] { color:var(--warn); }
+  #bar { height:6px; background:var(--line); } #barfill { height:100%; width:0; background:var(--ok); }
+  #strip { display:flex; gap:8px; overflow-x:auto; padding:4px 0; }
+  .th { position:relative; flex:0 0 auto; }
+  .th img { display:block; height:110px; border:1px solid var(--line); }
+  .th b { position:absolute; left:2px; top:2px; background:rgba(0,0,0,.65); color:#fff; padding:0 5px; font-size:.8rem; }
+  .th button { position:absolute; right:2px; top:2px; padding:2px 8px; }
+  p.note { opacity:.8; }
+</style>
+</head>
+<body>
+<main>
+  <h1 data-i18n="title"></h1>
+  <p class="note" data-i18n="intro"></p>
+  <div class="row">
+    <button id="start" data-i18n="start"></button>
+    <label><span data-i18n="lang"></span> <select id="lang"><option value="en">English</option><option value="ro">Rom&acirc;n&#259;</option></select></label>
+  </div>
+  <div id="stage"><video id="cam" autoplay playsinline muted></video><canvas id="ov"></canvas></div>
+  <div id="bar"><div id="barfill"></div></div>
+  <div class="row"><span id="reason" role="status" data-kind="" data-state="idle"></span></div>
+  <div class="row">
+    <button id="shoot" disabled data-i18n="shoot"></button>
+    <label><input type="checkbox" id="auto" checked> <span data-i18n="auto"></span></label>
+    <span id="count"></span>
+  </div>
+  <div id="strip"></div>
+  <div class="row">
+    <button id="save" disabled data-i18n="save"></button>
+    <button id="clear" disabled data-i18n="clear"></button>
+  </div>
+  <p class="note" id="msg" role="status"></p>
+  <p class="note" data-i18n="cli"></p>
+</main>
+<script>
+"use strict";
+// ---------- strings (add a language by adding one object) ----------
+const I18N = {
+  en: {
+    title: "LegatorOCR - page capture assistant",
+    intro: "Runs entirely in this browser; nothing is uploaded. Put the page on a darker surface, keep the whole page in view and hold the phone still: the shot is taken by itself.",
+    start: "Start camera", lang: "Language", shoot: "Take photo now", auto: "Automatic capture",
+    save: "Save burst as ZIP", clear: "Delete all", del: "Delete", count: "{n} page(s)",
+    camOff: "Camera is off.", camErr: "Camera not available: {e}",
+    noPage: "No page found: lay it on a darker surface",
+    notFull: "Page not fully visible: move back so all four corners are in view",
+    blurry: "Too blurry: hold still or tap to focus",
+    dark: "Too dark: add light",
+    bright: "Too bright: reduce glare or exposure",
+    hold: "Hold still... {s} s", ready: "Page looks good",
+    captured: "Captured page {n}", saved: "Saved {name} ({n} pages, {mb} MB)",
+    manual: "manual capture (not checked)", big: "Burst is too large for one ZIP (over 3.5 GB); delete some pages.",
+    confirmClear: "Delete all captured pages?",
+    cli: "Next step on the computer: unzip, then run  legatorocr --burst --pdf book.pdf page-*.jpg  (the files are numbered in capture order)."
+  },
+  ro: {
+    title: "LegatorOCR - asistent de captură a paginilor",
+    intro: "Rulează integral în browser; nimic nu se încarcă nicăieri. Așază pagina pe o suprafață mai închisă, ține toată pagina în cadru și telefonul nemișcat: fotografia se face singură.",
+    start: "Pornește camera", lang: "Limba", shoot: "Fotografiază acum", auto: "Captură automată",
+    save: "Salvează seria ca ZIP", clear: "Șterge tot", del: "Șterge", count: "{n} pagină/pagini",
+    camOff: "Camera este oprită.", camErr: "Camera nu e disponibilă: {e}",
+    noPage: "Nu s-a găsit nicio pagină: așaz-o pe o suprafață mai închisă",
+    notFull: "Pagina nu se vede întreagă: deprtează-te ca cele patru colțuri să fie în cadru",
+    blurry: "Prea neclar: ține nemișcat sau atinge ecranul pentru focalizare",
+    dark: "Prea întunecat: adaugă lumină",
+    bright: "Prea luminos: redu reflexiile sau expunerea",
+    hold: "Ține nemișcat... {s} s", ready: "Pagina arată bine",
+    captured: "Pagina {n} capturată", saved: "Salvat {name} ({n} pagini, {mb} MB)",
+    manual: "captură manuală (fără verificare)", big: "Seria e prea mare pentru un ZIP (peste 3,5 GB); șterge câteva pagini.",
+    confirmClear: "Ștergi toate paginile capturate?",
+    cli: "Pasul următor, pe calculator: dezarhivează, apoi rulează  legatorocr --burst --pdf carte.pdf page-*.jpg  (fișierele sunt numerotate în ordinea capturii)."
+  }
+};
+I18N.ro.notFull = "Pagina nu se vede întreagă: depărtează-te ca cele patru colțuri să fie în cadru";
+let L = (navigator.language || "en").toLowerCase().startsWith("ro") ? "ro" : "en";
+const $ = (id) => document.getElementById(id);
+const tr = (k, v) => (I18N[L][k] ?? I18N.en[k] ?? k).replace(/\{(\w+)\}/g, (_, n) => (v && v[n] != null ? v[n] : ""));
+function applyLang() {
+  document.documentElement.lang = L; $("lang").value = L;
+  document.querySelectorAll("[data-i18n]").forEach((e) => { e.textContent = tr(e.dataset.i18n); });
+  updateCount(); if (!stream) setReason("camOff", "", null, "idle");
+}
+
+// ---------- parameters (untuned on real phones) ----------
+const P = {
+  AW: 640,             // analysis width
+  minArea: 0.12,       // page must cover this share of the frame
+  minFill: 0.75,       // component area / quadrilateral area
+  contrast: 40,        // min gap between dark and bright class means (Otsu)
+  stableMs: 800, stablePx: 7.7, // corners may move this many px (at 640 wide) from the anchor
+  lapMin: 60,          // variance of Laplacian on the page crop (crop <= 800 px wide)
+  darkMean: 90, brightShare: 0.70, // mean page luma / share of luma >= 250
+  minGapMs: 4000,      // minimum time between two automatic captures
+  jpeg: 0.92
+};
+
+// ---------- state ----------
+let stream = null, running = false, shots = [], seq = 0, busy = false;
+const video = $("cam"), ov = $("ov"), octx = ov.getContext("2d");
+const an = document.createElement("canvas"), actx = an.getContext("2d", { willReadFrequently: true });
+const crop = document.createElement("canvas"), cctx = crop.getContext("2d", { willReadFrequently: true });
+let anchor = null, stableSince = 0, armed = true, lastCapAt = -1e9, lastSig = null;
+window.__cap = { corners: null, reason: null, lap: null, mean: null, auto: 0 }; // read by the test script
+
+function setReason(key, kind, v, state) {
+  const r = $("reason"); r.textContent = tr(key, v); r.dataset.kind = kind; r.dataset.state = state || key;
+  window.__cap.reason = state || key;
+}
+
+// ---------- page detection ----------
+function otsu(hist, n) {
+  let sum = 0; for (let i = 0; i < 256; i++) sum += i * hist[i];
+  let wb = 0, sb = 0, best = -1, t = 0;
+  for (let i = 0; i < 256; i++) {
+    wb += hist[i]; if (!wb) continue; const wf = n - wb; if (!wf) break;
+    sb += i * hist[i]; const mb = sb / wb, mf = (sum - sb) / wf, d = wb * wf * (mb - mf) * (mb - mf);
+    if (d > best) { best = d; t = i; }
+  }
+  return t;
+}
+// Largest bright connected region; corners by extreme x+y / x-y (valid up to ~45 deg of rotation).
+function detectPage(gray, w, h) {
+  const hist = new Uint32Array(256); for (let i = 0; i < gray.length; i++) hist[gray[i]]++;
+  const t = otsu(hist, gray.length);
+  let sd = 0, nd = 0, sl = 0, nl = 0;
+  for (let i = 0; i < 256; i++) { if (i <= t) { sd += i * hist[i]; nd += hist[i]; } else { sl += i * hist[i]; nl += hist[i]; } }
+  if (!nd || !nl || sl / nl - sd / nd < P.contrast) return null;
+  const mask = new Uint8Array(w * h); for (let i = 0; i < mask.length; i++) mask[i] = gray[i] > t ? 1 : 0;
+  const seen = new Uint8Array(w * h), stack = new Int32Array(w * h);
+  let best = null;
+  for (let s = 0; s < mask.length; s++) {
+    if (!mask[s] || seen[s]) continue;
+    let sp = 0, area = 0, touches = false;
+    let mnS = 1e9, mxS = -1e9, mnD = 1e9, mxD = -1e9, cTL = 0, cBR = 0, cTR = 0, cBL = 0;
+    stack[sp++] = s; seen[s] = 1;
+    while (sp) {
+      const p = stack[--sp], x = p % w, y = (p - x) / w; area++;
+      if (x <= 1 || y <= 1 || x >= w - 2 || y >= h - 2) touches = true;
+      const a = x + y, d = x - y;
+      if (a < mnS) { mnS = a; cTL = p; } if (a > mxS) { mxS = a; cBR = p; }
+      if (d > mxD) { mxD = d; cTR = p; } if (d < mnD) { mnD = d; cBL = p; }
+      if (x > 0 && mask[p - 1] && !seen[p - 1]) { seen[p - 1] = 1; stack[sp++] = p - 1; }
+      if (x < w - 1 && mask[p + 1] && !seen[p + 1]) { seen[p + 1] = 1; stack[sp++] = p + 1; }
+      if (y > 0 && mask[p - w] && !seen[p - w]) { seen[p - w] = 1; stack[sp++] = p - w; }
+      if (y < h - 1 && mask[p + w] && !seen[p + w]) { seen[p + w] = 1; stack[sp++] = p + w; }
+    }
+    if (!best || area > best.area) best = { area, touches, c: [cTL, cTR, cBR, cBL] };
+  }
+  if (!best || best.area < P.minArea * w * h) return null;
+  const corners = best.c.map((p) => { const x = p % w; return [x, (p - x) / w]; });
+  let q = 0; for (let i = 0; i < 4; i++) { const a = corners[i], b = corners[(i + 1) % 4]; q += a[0] * b[1] - b[0] * a[1]; }
+  q = Math.abs(q) / 2;
+  const fill = q > 0 ? best.area / q : 0;
+  const near = corners.some(([x, y]) => x <= 2 || y <= 2 || x >= w - 3 || y >= h - 3);
+  return { corners, area: best.area, fill, touches: best.touches || near, thr: t };
+}
+
+// Variance of the 4-neighbour Laplacian + luma statistics on the page crop (inner 84 % of its bounding box).
+function pageQuality(det, vw) {
+  const k = vw / P.AW, xs = det.corners.map((c) => c[0] * k), ys = det.corners.map((c) => c[1] * k);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const mx = (x1 - x0) * 0.08, my = (y1 - y0) * 0.08;
+  const sx = x0 + mx, sy = y0 + my, sw = Math.max(16, x1 - x0 - 2 * mx), sh = Math.max(16, y1 - y0 - 2 * my);
+  const sc = Math.min(1, 800 / sw), cw = Math.max(8, Math.round(sw * sc)), ch = Math.max(8, Math.round(sh * sc));
+  crop.width = cw; crop.height = ch; cctx.imageSmoothingQuality = "high";
+  cctx.drawImage(video, sx, sy, sw, sh, 0, 0, cw, ch);
+  const d = cctx.getImageData(0, 0, cw, ch).data, g = new Float32Array(cw * ch);
+  let sum = 0, bright = 0;
+  for (let i = 0; i < g.length; i++) { const v = (77 * d[4 * i] + 150 * d[4 * i + 1] + 29 * d[4 * i + 2]) / 256; g[i] = v; sum += v; if (v >= 250) bright++; }
+  let ls = 0, ls2 = 0, n = 0;
+  for (let y = 1; y < ch - 1; y++) for (let x = 1; x < cw - 1; x++) {
+    const i = y * cw + x, l = g[i - 1] + g[i + 1] + g[i - cw] + g[i + cw] - 4 * g[i];
+    ls += l; ls2 += l * l; n++;
+  }
+  return { lap: n ? ls2 / n - (ls / n) * (ls / n) : 0, mean: sum / g.length, brightShare: bright / g.length };
+}
+
+function sigOf() { // 12x16 luma signature of the frame, to notice that the page was changed
+  const s = document.createElement("canvas"); s.width = 12; s.height = 16;
+  const c = s.getContext("2d", { willReadFrequently: true }); c.drawImage(video, 0, 0, 12, 16);
+  const d = c.getImageData(0, 0, 12, 16).data, o = new Float32Array(192);
+  for (let i = 0; i < 192; i++) o[i] = (77 * d[4 * i] + 150 * d[4 * i + 1] + 29 * d[4 * i + 2]) / 256;
+  return o;
+}
+
+function draw(det, kind, aw, ah) {
+  if (ov.width !== ov.clientWidth || ov.height !== ov.clientHeight) { ov.width = ov.clientWidth; ov.height = ov.clientHeight; }
+  octx.clearRect(0, 0, ov.width, ov.height);
+  if (!det) return;
+  const col = kind === "ok" ? "#2ecc71" : kind === "warn" ? "#f1c40f" : "#ff5252";
+  octx.lineWidth = 3; octx.strokeStyle = col; octx.fillStyle = col; octx.beginPath();
+  det.corners.forEach(([x, y], i) => { const X = x / aw * ov.width, Y = y / ah * ov.height; i ? octx.lineTo(X, Y) : octx.moveTo(X, Y); });
+  octx.closePath(); octx.stroke();
+  det.corners.forEach(([x, y]) => octx.fillRect(x / aw * ov.width - 4, y / ah * ov.height - 4, 8, 8));
+}
+
+function tick() {
+  if (!running) return;
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw) { setTimeout(tick, 100); return; }
+  const aw = P.AW, ah = Math.round(aw * vh / vw), now = performance.now();
+  if (an.width !== aw || an.height !== ah) { an.width = aw; an.height = ah; $("stage").style.aspectRatio = vw + "/" + vh; }
+  actx.imageSmoothingQuality = "high"; actx.drawImage(video, 0, 0, aw, ah);
+  const d = actx.getImageData(0, 0, aw, ah).data, gray = new Uint8Array(aw * ah);
+  for (let i = 0; i < gray.length; i++) gray[i] = (77 * d[4 * i] + 150 * d[4 * i + 1] + 29 * d[4 * i + 2]) >> 8;
+  const det = detectPage(gray, aw, ah);
+  window.__cap.corners = det ? det.corners : null; window.__cap.aw = aw; window.__cap.ah = ah;
+  let key = "noPage", state = "no-page", ready = false;
+  if (!det) { anchor = null; armed = true; }
+  else if (det.touches || det.fill < P.minFill) { key = "notFull"; state = "not-full"; anchor = null; armed = true; }
+  else {
+    const q = pageQuality(det, vw); window.__cap.lap = q.lap; window.__cap.mean = q.mean;
+    if (q.mean < P.darkMean) { key = "dark"; state = "too-dark"; }
+    else if (q.brightShare > P.brightShare) { key = "bright"; state = "too-bright"; }
+    else if (q.lap < P.lapMin) { key = "blurry"; state = "too-blurry"; }
+    else ready = true;
+    const moved = anchor && Math.max(...det.corners.map((c, i) => Math.hypot(c[0] - anchor[i][0], c[1] - anchor[i][1]))) > P.stablePx;
+    if (!anchor || moved) { anchor = det.corners.map((c) => c.slice()); stableSince = now; }
+  }
+  const held = anchor ? now - stableSince : 0;
+  if (ready) {
+    if (!armed && lastSig) { // after a shot wait until the page was removed or changed
+      const s = sigOf(); let m = 0; for (let i = 0; i < 192; i++) m += Math.abs(s[i] - lastSig[i]);
+      if (m / 192 > 12) armed = true;
+    }
+    if (!armed) setReason("ready", "ok", null, "wait-new-page");
+    else if (held < P.stableMs || now - lastCapAt < P.minGapMs) setReason("hold", "warn", { s: Math.max(0, (P.stableMs - held) / 1000).toFixed(1) }, "hold");
+    else { setReason("ready", "ok", null, "ready"); if ($("auto").checked && !busy) capture(true); }
+  } else setReason(key, "bad", null, state);
+  $("barfill").style.width = ready && armed ? Math.min(100, held / P.stableMs * 100) + "%" : "0";
+  draw(det, ready ? (held >= P.stableMs ? "ok" : "warn") : "bad", aw, ah);
+  setTimeout(tick, 80);
+}
+
+// ---------- capture ----------
+function capture(auto) {
+  if (busy || !video.videoWidth) return; busy = true;
+  const w = video.videoWidth, h = video.videoHeight, c = document.createElement("canvas");
+  c.width = w; c.height = h; c.getContext("2d").drawImage(video, 0, 0, w, h);
+  const t = document.createElement("canvas"); t.width = Math.round(160 * w / h); t.height = 160; t.getContext("2d").drawImage(c, 0, 0, t.width, t.height);
+  const when = new Date();
+  c.toBlob((blob) => {
+    busy = false;
+    if (!blob) return;
+    shots.push({ id: ++seq, blob, thumb: t.toDataURL("image/jpeg", 0.7), when, w, h, auto: !!auto });
+    lastCapAt = performance.now(); armed = false; lastSig = sigOf(); anchor = null;
+    if (auto) window.__cap.auto++;
+    try { navigator.vibrate && navigator.vibrate(60); } catch (e) { /* not supported */ }
+    $("msg").textContent = tr("captured", { n: shots.length }) + (auto ? "" : " (" + tr("manual") + ")");
+    render();
+  }, "image/jpeg", P.jpeg);
+}
+function updateCount() { $("count").textContent = tr("count", { n: shots.length }); }
+function render() {
+  const strip = $("strip"); strip.textContent = "";
+  shots.forEach((s, i) => {
+    const d = document.createElement("div"); d.className = "th";
+    const im = new Image(); im.src = s.thumb; im.alt = "";
+    const b = document.createElement("b"); b.textContent = String(i + 1);
+    const x = document.createElement("button"); x.textContent = "×"; x.title = tr("del"); x.setAttribute("aria-label", tr("del"));
+    x.onclick = () => { shots = shots.filter((q) => q.id !== s.id); render(); };
+    d.append(im, b, x); strip.append(d);
+  });
+  $("save").disabled = $("clear").disabled = !shots.length; updateCount();
+}
+
+// ---------- EXIF time, so that `legatorocr --burst` keeps the order ----------
+function pad(n, k = 2) { return String(n).padStart(k, "0"); }
+function exifStamp(d) { return `${d.getFullYear()}:${pad(d.getMonth() + 1)}:${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; }
+function withExifTime(jpeg, date) { // inserts an APP1/Exif block carrying DateTimeOriginal
+  const s = new TextEncoder().encode(exifStamp(date) + "\0");
+  const tiff = new Uint8Array(8 + 18 + 18 + 20);
+  tiff.set([0x4d, 0x4d, 0, 0x2a, 0, 0, 0, 8]);
+  tiff.set([0, 1, 0x87, 0x69, 0, 4, 0, 0, 0, 1, 0, 0, 0, 26, 0, 0, 0, 0], 8);   // IFD0: pointer to the Exif IFD at 26
+  tiff.set([0, 1, 0x90, 0x03, 0, 2, 0, 0, 0, 20, 0, 0, 0, 44, 0, 0, 0, 0], 26); // Exif IFD: DateTimeOriginal at 44
+  tiff.set(s, 44);
+  const body = new Uint8Array(6 + tiff.length); body.set([0x45, 0x78, 0x69, 0x66, 0, 0]); body.set(tiff, 6);
+  const seg = new Uint8Array(4 + body.length); seg[0] = 0xff; seg[1] = 0xe1; seg[2] = (body.length + 2) >> 8; seg[3] = (body.length + 2) & 255; seg.set(body, 4);
+  let at = 2; // after SOI, or after a JFIF APP0 when there is one
+  if (jpeg[2] === 0xff && jpeg[3] === 0xe0) at = 4 + ((jpeg[4] << 8) | jpeg[5]);
+  const out = new Uint8Array(jpeg.length + seg.length);
+  out.set(jpeg.subarray(0, at)); out.set(seg, at); out.set(jpeg.subarray(at), at + seg.length);
+  return out;
+}
+
+// ---------- stored ZIP writer ----------
+const CRC_T = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(b) { let c = 0xffffffff; for (let i = 0; i < b.length; i++) c = CRC_T[(c ^ b[i]) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; }
+function makeZip(files, date) { // method 0 (stored), no ZIP64
+  const enc = new TextEncoder(), parts = [], cd = [];
+  const dosT = (date.getHours() << 11) | (date.getMinutes() << 5) | (date.getSeconds() >> 1);
+  const dosD = ((date.getFullYear() - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate();
+  let off = 0, cdLen = 0;
+  for (const f of files) {
+    const nm = enc.encode(f.name), crc = crc32(f.data), sz = f.data.length;
+    const lh = new DataView(new ArrayBuffer(30));
+    lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(6, 0x0800, true);
+    lh.setUint16(10, dosT, true); lh.setUint16(12, dosD, true); lh.setUint32(14, crc, true); lh.setUint32(18, sz, true); lh.setUint32(22, sz, true);
+    lh.setUint16(26, nm.length, true);
+    parts.push(lh.buffer, nm, f.data);
+    const ch = new DataView(new ArrayBuffer(46));
+    ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 20, true); ch.setUint16(6, 20, true); ch.setUint16(8, 0x0800, true);
+    ch.setUint16(12, dosT, true); ch.setUint16(14, dosD, true); ch.setUint32(16, crc, true); ch.setUint32(20, sz, true); ch.setUint32(24, sz, true);
+    ch.setUint16(28, nm.length, true); ch.setUint32(42, off, true);
+    cd.push(ch.buffer, nm); cdLen += 46 + nm.length;
+    off += 30 + nm.length + sz;
+  }
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true); end.setUint16(8, files.length, true); end.setUint16(10, files.length, true); end.setUint32(12, cdLen, true); end.setUint32(16, off, true);
+  return new Blob([...parts, ...cd, end.buffer], { type: "application/zip" });
+}
+
+async function saveZip() {
+  if (!shots.length) return;
+  if (shots.reduce((a, s) => a + s.blob.size, 0) > 3.5e9) { $("msg").textContent = tr("big"); return; }
+  // EXIF times = real capture time, but at least 4 s apart (the --burst-gap default is 3 s), so that
+  // legatorocr --burst does not take two consecutive pages for one burst and drop one of them.
+  const files = []; let prev = 0;
+  for (let i = 0; i < shots.length; i++) {
+    let t = Math.floor(shots[i].when.getTime() / 1000); if (t < prev + 4) t = prev + 4; prev = t;
+    const raw = new Uint8Array(await shots[i].blob.arrayBuffer());
+    files.push({ name: `page-${pad(i + 1, 4)}.jpg`, data: withExifTime(raw, new Date(t * 1000)) });
+  }
+  const now = new Date(), name = `burst-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.zip`;
+  const blob = makeZip(files, now), a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = name; document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  $("msg").textContent = tr("saved", { name, n: files.length, mb: (blob.size / 1e6).toFixed(1) });
+}
+
+// ---------- wiring ----------
+$("start").onclick = async () => {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: "environment" }, width: { ideal: 4096 }, height: { ideal: 3072 } } });
+    video.srcObject = stream; await video.play();
+    $("shoot").disabled = false; running = true; setReason("noPage", "bad", null, "no-page"); tick();
+  } catch (e) { setReason("camErr", "bad", { e: (e && e.message) || e }, "camera-error"); }
+};
+$("shoot").onclick = () => capture(false);
+$("save").onclick = saveZip;
+$("clear").onclick = () => { if (confirm(tr("confirmClear"))) { shots = []; render(); } };
+$("lang").onchange = (e) => { L = e.target.value; applyLang(); render(); };
+window.addEventListener("beforeunload", (e) => { if (shots.length) { e.preventDefault(); e.returnValue = ""; } });
+applyLang(); render();
+</script>
+</body>
+</html>
