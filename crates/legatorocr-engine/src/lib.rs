@@ -15,6 +15,7 @@ pub mod altbin;
 pub mod audit;
 pub mod djvu;
 pub mod doubtful;
+pub mod proofsheet;
 pub mod isolate;
 pub mod mrz;
 pub mod plugin;
@@ -951,6 +952,9 @@ pub fn run_export(
                 }
                 if djvu::enabled() {
                     djvu::record(&pg, &words)?;
+                }
+                if proofsheet::enabled() {
+                    proofsheet::record(base + i + 1, &pg, &words);
                 }
                 if doubtful::enabled() {
                     if let Some(o) = ocr_opts {

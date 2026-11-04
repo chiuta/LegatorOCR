@@ -479,6 +479,13 @@ struct Cli {
     #[arg(long, value_name = "FILE.tsv")]
     doubtful_words: Option<PathBuf>,
 
+    /// With --ocr: write one HTML page for correcting the text by hand: each page picture next to
+    /// an editable box with the recognised text, unsure words listed, and a button that saves the
+    /// corrected text (pages separated by a form feed). Self-contained, works offline. Corrections
+    /// are not checked; a person must read every page against its picture.
+    #[arg(long, value_name = "FILE.html")]
+    proof_sheet: Option<PathBuf>,
+
     /// Confidence limit for --doubtful-words (0-100).
     #[arg(long, value_name = "CONF", default_value_t = 85.0)]
     doubtful_conf: f32,
@@ -2265,6 +2272,9 @@ fn real_main() -> Result<()> {
     if cli.doubtful_words.is_some() {
         legatorocr_engine::doubtful::begin(cli.doubtful_conf);
     }
+    if cli.proof_sheet.is_some() {
+        legatorocr_engine::proofsheet::begin();
+    }
     if cli.djvu.is_some() {
         legatorocr_engine::djvu::set_thumbnails(cli.djvu_thumbnails);
         legatorocr_engine::djvu::begin();
@@ -2564,6 +2574,17 @@ fn real_main() -> Result<()> {
         write_atomic(p, &bytes)?;
         eprintln!("wrote {}", p.display());
         written.push(p.clone());
+    }
+    if let Some(p) = &cli.proof_sheet {
+        let title = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Proof sheet");
+        match legatorocr_engine::proofsheet::finish(title) {
+            Some(h) => {
+                write_atomic(p, h.as_bytes())?;
+                eprintln!("wrote {}", p.display());
+                written.push(p.clone());
+            }
+            None => eprintln!("--proof-sheet needs --ocr: no page was read, nothing written"),
+        }
     }
     if let Some(p) = &cli.doubtful_words {
         if let Some((tsv, n, total)) = legatorocr_engine::doubtful::finish() {

@@ -38,6 +38,7 @@ CASES = {
  "legal-hold": ["--audit-log", "{d}/audit2.jsonl", "--legal-hold"], "front-matter": ["--front-matter", "1"], "uniform2": ["--punch-holes"], "fingers": ["--fingers"],
  "phone-paper": ["--phone-paper", "A4"], "djvu-thumbs": ["--djvu", "{o}.djvu", "--djvu-thumbnails"],
  "max-memory": ["--max-memory", "512"], "decoder": ["--isolate-decoders", "--decoder-memory", "512", "--decoder-timeout", "30"],
+"proof-sheet": ["--ocr", "--proof-sheet", "{o}.html"],
  "skip-dup": ["--skip-duplicates"], "dewarp-guide": ["--dewarp", "--dewarp-guide", "0.1,0.5 0.5,0.5 0.9,0.5"],
 }
 fail = []
