@@ -840,6 +840,71 @@ pub fn words_to_paragraphs(words: &[Word]) -> String {
     out
 }
 
+/// One paragraph as `--passages-jsonl` needs it: the same paragraphs as [`words_to_paragraphs`]
+/// (same line grouping, same break rule), with the pixel box that encloses their words and the
+/// mean engine confidence of the words that have one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParagraphBox {
+    /// Lines joined by `\n`, words by a space (exactly the text of `words_to_text` for these lines).
+    pub text: String,
+    pub x0: u32,
+    pub y0: u32,
+    pub x1: u32,
+    pub y1: u32,
+    /// Mean of the non-negative word confidences (0..100); `None` when no word has one.
+    pub mean_conf: Option<f32>,
+}
+
+/// Paragraphs of a page with their boxes (see [`ParagraphBox`]); paragraphs with no visible text are left out.
+pub fn paragraph_boxes(words: &[Word]) -> Vec<ParagraphBox> {
+    let lines = line_boxes(words);
+    let starts = paragraph_starts(&lines);
+    let mut out: Vec<ParagraphBox> = Vec::new();
+    let mut cur: Option<(ParagraphBox, f64, usize, Vec<String>)> = None;
+    let flush = |c: Option<(ParagraphBox, f64, usize, Vec<String>)>, out: &mut Vec<ParagraphBox>| {
+        if let Some((mut p, sum, n, ls)) = c {
+            p.text = ls.join("\n");
+            p.mean_conf = (n > 0).then(|| (sum / n as f64) as f32);
+            if !p.text.trim().is_empty() {
+                out.push(p);
+            }
+        }
+    };
+    for (i, l) in lines.iter().enumerate() {
+        if starts[i] {
+            let c = cur.take();
+            flush(c, &mut out);
+        }
+        let ws = &words[l.first..l.end];
+        let line = ws.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ");
+        let (s, n) = ws
+            .iter()
+            .filter(|w| w.conf >= 0.0)
+            .fold((0.0f64, 0usize), |(s, n), w| (s + w.conf as f64, n + 1));
+        match cur.as_mut() {
+            Some((p, sum, cnt, ls)) => {
+                p.x0 = p.x0.min(l.x0);
+                p.y0 = p.y0.min(l.y0);
+                p.x1 = p.x1.max(l.x1);
+                p.y1 = p.y1.max(l.y1);
+                *sum += s;
+                *cnt += n;
+                ls.push(line);
+            }
+            None => {
+                cur = Some((
+                    ParagraphBox { text: String::new(), x0: l.x0, y0: l.y0, x1: l.x1, y1: l.y1, mean_conf: None },
+                    s,
+                    n,
+                    vec![line],
+                ));
+            }
+        }
+    }
+    flush(cur.take(), &mut out);
+    out
+}
+
 /// One text line: the run of consecutive words sharing a `line` id, with its bounding box.
 pub(crate) struct LineBox {
     pub first: usize,
@@ -1078,6 +1143,24 @@ mod paragraph_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn paragraph_boxes_match_paragraph_text_and_enclose_words() {
+        let w = |t: &str, x: u32, y: u32, line: u32, conf: f32| Word { text: t.into(), x, y, w: 40, h: 20, conf, line };
+        let words = vec![
+            w("one", 10, 10, 0, 90.0), w("a", 60, 10, 0, 70.0),
+            w("two", 10, 32, 1, 80.0),
+            w("four", 12, 200, 2, -1.0), // big gap: new paragraph, unknown confidence
+        ];
+        let ps = paragraph_boxes(&words);
+        assert_eq!(ps.len(), 2);
+        assert_eq!(ps[0].text, "one a\ntwo");
+        assert_eq!((ps[0].x0, ps[0].y0, ps[0].x1, ps[0].y1), (10, 10, 100, 52));
+        assert!((ps[0].mean_conf.unwrap() - 80.0).abs() < 1e-3);
+        assert_eq!(ps[1].mean_conf, None);
+        let joined = ps.iter().map(|p| p.text.as_str()).collect::<Vec<_>>().join("\n\n");
+        assert_eq!(joined, words_to_paragraphs(&words));
+    }
+
     #[test]
     fn osd_parsing() {
         let ok = "Page number: 0\nOrientation in degrees: 270\nRotate: 90\nOrientation confidence: 7.31\nScript: Latin\n";

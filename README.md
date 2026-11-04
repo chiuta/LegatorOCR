@@ -125,6 +125,7 @@ Without Tesseract the native engine is used (the OCR switch stays enabled).
 | PDF toolbox | On existing PDFs, without re-rendering: `--merge-pdf`, `--extract-pages 1-3,7`, `--split-pdf-every N`, `--watermark TEXT`, `--number-pages "{n} / {total}"`. Pages are copied as they are; outlines, forms and tags are dropped; encrypted files are refused. Also `--max-memory MB` (fewer pages at once) and `--shard I/N` (split a big batch across machines, join with `--merge-pdf`), `--djvu FILE` [`--djvu-thumbnails`] (bundled DjVu: lossless JB2 for black & white, layered JB2 + IW44 for colour, OCR text layer; checked with DjVuLibre), `--ocfl DIR` [`--ocfl-id ID`] and `--verify-ocfl DIR` (the run's files as version v1 of an OCFL 1.1 object with a SHA-512 inventory; the checker reads only objects this program wrote and the layout was not run through the reference validator), `--proof-sheet FILE.html` (with `--ocr`: page pictures next to editable text, unsure words listed, a button saves the corrected text with pages separated by a form feed; the way to make a hand-checked reference text, corrections are not checked), `--doubtful-words FILE.tsv` (with `--ocr`: words outside the word list and read with low confidence, for a person to check first; text not changed), `--verify-document` (QR contents and copied regions in a picture; hints only), `--fuse-frames OUT.png` (merge several photos of one page: aligned, median; helps with strong noise, neutral otherwise), `--mrz` (read passport / ID-card machine-readable zone from the OCR text and check its check digits; printed zone only), `--plugin FILE.wasm` (image filter in WebAssembly: no imports, instruction budget, run on every loaded page; ABI in `crates/legatorocr-engine/src/plugin.rs`), `--isolate-decoders` (decode each input in a limited worker process; not a security sandbox), `--archive-package DIR` (reprocessable folder: originals, project, OCR words with confidence, hashes, how to re-run), `--tagged [LANG]` (tagged PDF: paragraph structure from OCR lines, language; base for screen readers, not a PDF/UA claim), `--pdfa-part 1|2|3` |
 | e-Factura | `--efactura FILE` reads a Romanian e-Factura invoice (UBL XML or ANAF's ZIP) and prints the key fields; it checks that the amounts add up and that CUI check digits are valid. It does not validate against the official schematron or check signatures |
 | Backup | `--backup-from DIR --backup-to D1 --backup-to D2 [--backup-read-only]`: copies a folder to each destination, reads every copy back and compares SHA-256, writes `SHA256SUMS.txt`; it checks bytes only, whether the copies are on different media or off site is yours to arrange |
+| Passage export | `--passages-jsonl FILE` (needs `--ocr`; optional `--passages-title TEXT`, `--page-labels`, `--clean-text`): one JSON object per paragraph, for citation-grounded research tools; schema in "Passage export" below, checked by `scripts/check-passages.py`. Import into any particular tool is not checked |
 | TEI | `--tei FILE` (needs `--ocr`): TEI P5 XML with a page break per scanned page, paragraphs, tables and columns; page structure only |
 | FFF envelope | `--fff-out FILE.fff.json` (needs `--ocr`; optional `--fff-title`, `--author`, `--fff-year`): the recognised text per page and the SHA-256 of the scan as an envelope of type `document/ocr`, the first step of the offline source chain LegatorOCR -> TEZAUR (`tezaur ingest --fff-in`) -> VERIGA (`veriga --fff-in … --fff-out`) -> AcademiSearch (Library -> Receive). Format: `docs/FFF-ENVELOPE.md` and `docs/FLUXURI.md` in github.com/chiuta/chiuta.github.io. The title is the first heading of the OCR text unless given; OCR errors travel with the text |
 | Sharpness | `--measure-edge IMAGE [--edge-roi X,Y,W,H] [--dpi N]`: MTF50 / MTF10 from a slanted black / white edge in a scan or test target. Edge only: no target detection, colour or noise measurement, no FADGI rating |
@@ -142,6 +143,40 @@ Crates: `legatorocr-core` (pipeline) · `-pdf` (writer) · `-ocr` (engine choice
 `-engine` (shared export orchestration) · `-cli` · `-gui` (egui/eframe).
 
 Quality gates: see `FUZZING.md` (10 fuzz/property suites, run weekly in CI with qpdf/poppler cross-checks).
+
+## Passage export
+
+`--passages-jsonl FILE` (with `--ocr`) writes JSON Lines: UTF-8, one object per line, one line per
+paragraph of every kept page, pages in output order, paragraphs in the engine's reading order (on
+a two-column page the boxes of the two columns are therefore listed column by column and may
+overlap). The paragraphs are the ones `--docx` uses (`words_to_paragraphs`), not a second
+detection. Every key is always present; a value that is unknown is `null`.
+
+| Key | Type | Meaning |
+|---|---|---|
+| `schema` | string | always `"legatorocr.passage/1"` |
+| `passage_id` | string, 16 lower-case hex | first 16 digits of SHA-256 of `"<page_image_sha256>:x0,y0,x1,y1"` (the `bbox_px` numbers); the same page image and box always give the same id, unique in the file |
+| `source_file` | string | file name of the input (with `#N` for page N of a multi-page input) |
+| `page` | integer >= 1 | page number in the output (after blank-page and duplicate removal; a split spread counts two) |
+| `page_label` | string or `null` | printed page number, only with `--page-labels` and only where its run rule would label the PDF page; otherwise `null` |
+| `paragraph_index` | integer >= 0 | 0, 1, 2, ... within the page |
+| `text` | string, not blank | the paragraph; lines separated by `\n`, words by a space. With `--clean-text` the clean-up is applied to the paragraph, so the text is what `--txt` shows |
+| `bbox_px` | 4 integers | `[x0, y0, x1, y1]` in pixels of the output page image, origin top left, `x1`/`y1` exclusive; `0 <= x0 < x1 <= page_width_px`, same for y |
+| `bbox_frac` | 4 numbers | the same box divided by page width / height, 6 decimals, within 0..1 |
+| `page_width_px`, `page_height_px` | integers | size of the output page image |
+| `language` | string | the OCR language setting used for the page (Tesseract codes such as `ron+eng`, honouring `--page-lang`); it is the setting, not a detected language |
+| `mean_confidence` | number 0..100 or `null` | mean of the engine's word confidences in the paragraph, 2 decimals; `null` if no word has one |
+| `page_image_sha256` | string, 64 lower-case hex | SHA-256 of the page image bytes (see `page_image_basis`) |
+| `page_image_file` | string or `null` | name of that image inside `-o` when it was written (`--format png/jpeg/tiff`); `null` otherwise |
+| `page_image_basis` | `"file"` or `"png-encoding"` | `"file"`: the hash is of the written image file. `"png-encoding"` (with `--format none`): no image was written; the hash is of the PNG bytes `--format png` would write for this page |
+| `cite` | string | `"<title> p.<label>"`: the title is `--passages-title` or the source file name without extension; the label is `page_label`, else `page` |
+
+Check a file (stdlib Python only): `python3 scripts/check-passages.py out.jsonl [--txt out.txt] [--images DIR]`.
+It checks every key and type, that each box lies inside its page, the fractions, the id hash, the
+`cite` form and, with `--images`, the image hashes against the written files; with `--txt` it
+compares the passages of each page with the same page of the `--txt` output (white space
+collapsed) and prints the match percentage. The format is LegatorOCR's own; whether a given
+research tool (for example TEZAUR) can import it has not been checked.
 
 ## Known limits
 

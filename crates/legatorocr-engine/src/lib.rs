@@ -53,6 +53,7 @@ pub mod memcap;
 pub mod pdftools;
 pub mod pagenum;
 pub mod redact;
+pub mod passages;
 pub mod provenance;
 pub mod qa;
 pub mod textcheck;
@@ -372,7 +373,19 @@ pub fn save_page_image_q(pg: &Page, path: &Path, jpeg_quality: u8) -> Result<()>
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
-    let bytes = match (&pg.image, ext.as_str()) {
+    match encode_page_image(pg, &ext, jpeg_quality)? {
+        Some(bytes) => write_atomic(path, &bytes),
+        None => {
+            pg.image.to_dynamic().save(path)?;
+            Ok(())
+        }
+    }
+}
+
+/// The exact bytes [`save_page_image_q`] writes for extension `ext` (lower case: `png`, `tif`,
+/// `tiff`, `jpg`, `jpeg`); `None` for any other extension, which the `image` crate writes itself.
+pub fn encode_page_image(pg: &Page, ext: &str, jpeg_quality: u8) -> Result<Option<Vec<u8>>> {
+    let bytes = match (&pg.image, ext) {
         (legatorocr_core::PageImage::Bw(b), "tif" | "tiff") => {
             legatorocr_pdf::g4::tiff_g4(b, pg.dpi)
         }
@@ -406,12 +419,9 @@ pub fn save_page_image_q(pg: &Page, path: &Path, jpeg_quality: u8) -> Result<()>
             }
             buf
         }
-        (img, _) => {
-            img.to_dynamic().save(path)?;
-            return Ok(());
-        }
+        _ => return Ok(None),
     };
-    write_atomic(path, &bytes)
+    Ok(Some(bytes))
 }
 
 /// Insert a `pHYs` chunk (pixels per metre) right after IHDR.
@@ -964,6 +974,12 @@ pub fn run_export(
                     }
                 }
                 if pagenum::enabled() {
+                if passages::enabled() {
+                    let lang = pagelang::for_page(base + i + 1)
+                        .or_else(|| ocr_opts.map(|o| o.lang.clone()))
+                        .unwrap_or_default();
+                    passages::record(base + i, &chunk[i].path, res.pages, &pg, &words, &lang);
+                }
                     printed_nums.push(legatorocr_core::quality::detect_page_number(
                         &words,
                         pg.image.height(),

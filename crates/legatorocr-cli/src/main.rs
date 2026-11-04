@@ -153,6 +153,18 @@ struct Cli {
     #[arg(long)]
     alto: Option<PathBuf>,
 
+    /// Write one JSON object per paragraph (JSON Lines) for citation-grounded research tools:
+    /// source file, page, printed page label (with --page-labels), text (cleaned with
+    /// --clean-text), box in page pixels and as fractions, language, mean OCR confidence, SHA-256
+    /// of the page image, a stable passage id and a "cite" string. Needs --ocr. Schema in README.
+    #[arg(long, value_name = "FILE")]
+    passages_jsonl: Option<PathBuf>,
+
+    /// Title used in the "cite" string of --passages-jsonl ("<title> p.<label>"); default: the
+    /// source file name without extension.
+    #[arg(long, value_name = "TEXT")]
+    passages_title: Option<String>,
+
     /// Also write PAGE XML, one `page_NNNN.xml` per page, into this folder (needs --ocr).
     #[arg(long)]
     page_xml: Option<PathBuf>,
@@ -1921,7 +1933,7 @@ fn real_main() -> Result<()> {
         || cli.fff_out.is_some())
         && !cli.ocr
     {
-        bail!("--txt, --hocr, --alto, --page-xml, --json, --docx, --tei and --fff-out need --ocr");
+        bail!("--txt, --hocr, --alto, --page-xml, --json, --docx, --tei, --passages-jsonl and --fff-out need --ocr");
     }
     for p in cli
         .txt
@@ -1938,6 +1950,7 @@ fn real_main() -> Result<()> {
         && cli.djvu.is_none()
         && matches!(cli.format, Fmt::None)
         && cli.txt.is_none()
+        || cli.passages_jsonl.is_some()
         && cli.hocr.is_none()
         && cli.alto.is_none()
         && cli.page_xml.is_none()
@@ -1951,6 +1964,7 @@ fn real_main() -> Result<()> {
     {
         bail!("nothing to do: give --pdf and/or an image --format");
     }
+        .chain(cli.passages_jsonl.iter())
 
     // --- run: process → (save images) → OCR → PDF ---------------------------
     // Fail now, not after an hour of OCR: make sure the outputs can be written.
@@ -1963,6 +1977,7 @@ fn real_main() -> Result<()> {
         for (p, a) in &pr.sheets {
             inputs.push(p.clone());
             adjusts.push(a.clone());
+        && cli.passages_jsonl.is_none()
         }
     }
     for p in &cli.inputs {
@@ -2170,6 +2185,7 @@ fn real_main() -> Result<()> {
     let first_err: Mutex<Option<String>> = Mutex::new(None);
     let saved_images: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
     if cli.multitiff.is_some()
+            &cli.passages_jsonl,
         && (cli.skip_duplicates || cli.split_on_blank || cli.split_on_barcode || cli.skip_blank)
     {
         bail!("--multitiff writes every processed page; do not combine it with --skip-duplicates, --split-on-blank or --skip-blank");
@@ -2366,6 +2382,13 @@ fn real_main() -> Result<()> {
                             .lock()
                             .unwrap()
                             .get_or_insert(format!("{}: {e}", path.display()));
+    if cli.passages_jsonl.is_some() {
+        let ext_name = match cli.format {
+            Fmt::None => "png",
+            _ => ext,
+        };
+        legatorocr_engine::passages::begin(ext_name, cli.jpeg_quality, save_images.then(|| stems.clone()));
+    }
                     }
                 }
             }
@@ -2629,6 +2652,13 @@ fn real_main() -> Result<()> {
             }
             None => eprintln!("--proof-sheet needs --ocr: no page was read, nothing written"),
         }
+    if let Some(p) = &cli.passages_jsonl {
+        let ps = legatorocr_engine::passages::finish(cli.clean_text);
+        let title = cli.passages_title.clone();
+        write_atomic(p, legatorocr_engine::passages::to_jsonl(&ps, title.as_deref()).as_bytes())?;
+        eprintln!("wrote {} ({} passages)", p.display(), ps.len());
+        written.push(p.clone());
+    }
     }
     if let Some(p) = &cli.doubtful_words {
         if let Some((tsv, n, total)) = legatorocr_engine::doubtful::finish() {
