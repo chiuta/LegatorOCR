@@ -73,6 +73,12 @@ r = subprocess.run([exe, str(d / "p.png"), "--pdf", str(d / "ext.pdf"), "--ocr",
 words = [w["text"] for w in json.load(open(d / "ext.json"))["pages"][0]["words"]] if r.returncode == 0 else []
 print(("ok   " if "EXTERN" in words else "FAIL ") + "external engine")
 if "EXTERN" not in words: fail.append(("external-engine", r.returncode, r.stderr[-160:]))
+# the ONNX bridge (scripts/engine-onnx.py) with synthetic models; skipped when onnx/onnxruntime are missing
+r = subprocess.run([sys.executable, str(root / "scripts/test-engine-onnx.py"), exe], capture_output=True, text=True, timeout=900)
+if r.returncode == 77: print("skip onnx bridge (needs onnx + onnxruntime)")
+else:
+    print(("ok   " if r.returncode == 0 else "FAIL ") + "onnx bridge (synthetic models)")
+    if r.returncode: fail.append(("onnx-bridge", r.returncode, (r.stdout + r.stderr)[-200:]))
 print(f"{len(CASES) - len(fail)}/{len(CASES)} cases passed")
 for f_ in fail: print("  ", f_)
 sys.exit(1 if fail else 0)
