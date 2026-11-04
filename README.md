@@ -71,7 +71,7 @@ scripts/package.sh <target>    # e.g. x86_64-unknown-linux-gnu → dist/LegatorO
 
 **OCR works out of the box** with the built-in native engine (`legatorocr-nocr`, pure Rust, no
 install; `--engine native`). It reads the eight interface languages with one model plus per-language
-word lists. Its model is trained on synthetic text only: on clean and moderately degraded synthetic
+word lists. Its model was trained on synthetic text and then fine-tuned on real scanned lines of a Romanian magazine and a 1960 textbook (the scans are not in this repository; provenance and open licence questions: `docs/audit/assets-licences.md`): on clean and moderately degraded synthetic
 pages it makes under 1 % character errors, but real scans of old or unusual print can be worse than
 Tesseract. `--engine auto` (default) therefore uses **Tesseract when it is installed with the
 requested languages** and falls back to the native engine otherwise; `--engine tesseract` forces it.
