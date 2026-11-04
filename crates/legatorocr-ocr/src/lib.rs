@@ -68,6 +68,9 @@ pub struct OcrOptions {
     pub tesseract: PathBuf,
     /// Optional tessdata directory.
     pub tessdata: Option<PathBuf>,
+    /// Romanian output in today's spelling (`pînză` -> `pânză`, `sînt` -> `sunt`);
+    /// see [`legatorocr_core::text::old_ro_to_modern`]. Only for `ron` text.
+    pub modern_spelling: bool,
 }
 
 impl Default for OcrOptions {
@@ -79,6 +82,7 @@ impl Default for OcrOptions {
             min_conf: 0.0,
             tesseract: "tesseract".into(),
             tessdata: None,
+            modern_spelling: false,
         }
     }
 }
@@ -513,6 +517,21 @@ pub fn upscale_factor(dpi: u32, w: u32, h: u32) -> u32 {
 /// Recognise one processed page. Low-resolution pages are enlarged first
 /// ([`upscale_factor`]); word boxes are mapped back to the page's own pixels.
 pub fn recognize(page: &PageImage, dpi: u32, o: &OcrOptions) -> Result<Vec<Word>, OcrError> {
+    let mut words = recognize_raw(page, dpi, o)?;
+    apply_modern_spelling(&mut words, o);
+    Ok(words)
+}
+
+/// `--ocr-modern-spelling`: rewrite the words of Romanian OCR output to today's spelling.
+fn apply_modern_spelling(words: &mut [Word], o: &OcrOptions) {
+    if o.modern_spelling && canonical_lang(&o.lang).split('+').any(|l| l == "ron") {
+        for w in words {
+            w.text = legatorocr_core::text::old_ro_to_modern(&w.text);
+        }
+    }
+}
+
+fn recognize_raw(page: &PageImage, dpi: u32, o: &OcrOptions) -> Result<Vec<Word>, OcrError> {
     if effective_engine(o) == Engine::Native {
         return recognize_native(page, dpi, o);
     }
@@ -1238,3 +1257,18 @@ mod engine_choice_tests {
         assert!(recognize(&blank, 300, &o).unwrap().is_empty());
     }
 }
+    #[test]
+    fn modern_spelling_option_rewrites_romanian_words_only() {
+        let w = |t: &str| Word { text: t.into(), x: 0, y: 0, w: 1, h: 1, conf: 90.0, line: 0 };
+        let mk = |lang: &str, on: bool| OcrOptions { lang: lang.into(), modern_spelling: on, ..OcrOptions::default() };
+        let mut v = vec![w("sînt"), w("pînză")];
+        apply_modern_spelling(&mut v, &mk("ro+en", true));
+        assert_eq!((v[0].text.as_str(), v[1].text.as_str()), ("sunt", "pânză"));
+        let mut v = vec![w("sînt")];
+        apply_modern_spelling(&mut v, &mk("ron", false));
+        assert_eq!(v[0].text, "sînt");
+        let mut v = vec![w("mîine")];
+        apply_modern_spelling(&mut v, &mk("fra", true));
+        assert_eq!(v[0].text, "mîine"); // not Romanian: untouched
+    }
+

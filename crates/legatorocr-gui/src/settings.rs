@@ -440,6 +440,7 @@ impl UiSettings {
             min_conf: self.min_conf,
             tesseract: self.tesseract.clone().into(),
             tessdata: None,
+            modern_spelling: false,
         }
     }
 }

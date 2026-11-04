@@ -23,6 +23,11 @@ pub struct SearchOptions {
     /// The text is a boolean query (AND / OR / NOT, "phrase", wildcards, /regex/, `~N` fuzzy);
     /// see [`crate::fuzzy`]. Matching is per line.
     pub query: bool,
+    /// Old Romanian spelling (1953-1993: `sînt`, `pînză`, `cînd`, cedilla `ş ţ`): a line matches
+    /// when the query matches as typed OR when query and line both match after being
+    /// rewritten to modern spelling ([`legatorocr_core::text::old_ro_to_modern`]), so `sunt`
+    /// finds `sînt` and `pînză` finds `pânză`. Not used with `regex`.
+    pub old_orthography: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,6 +118,9 @@ enum Matcher {
     },
     Re(regex::Regex),
     Query(crate::fuzzy::Query),
+    /// Old-spelling search: the plain matcher, or the modern-spelling matcher run on the
+    /// text rewritten to modern spelling (same line numbers: the rewrite keeps char counts).
+    Old(Box<Matcher>, Box<Matcher>),
     /// `?` / `*` wildcards inside a plain query: the pattern runs on each (folded) line.
     Wild {
         re: regex::Regex,
@@ -159,6 +167,11 @@ impl Matcher {
     fn new(q: &str, o: &SearchOptions) -> Result<Matcher> {
         if q.trim().is_empty() {
             bail!("the search text is empty");
+        }
+        if o.old_orthography && !o.regex {
+            let plain = SearchOptions { old_orthography: false, ..o.clone() };
+            let modern = Matcher::new(&legatorocr_core::text::old_ro_to_modern(q), &plain)?;
+            return Ok(Matcher::Old(Box::new(Matcher::new(q, &plain)?), Box::new(modern)));
         }
         if o.query {
             let parsed = crate::fuzzy::parse_query(q).map_err(|e| anyhow::anyhow!("query: {e}"))?;
@@ -216,6 +229,13 @@ impl Matcher {
     /// 1-based line numbers of `text` that match (each at most once, ascending).
     fn lines(&self, text: &str) -> Vec<usize> {
         match self {
+            Matcher::Old(as_typed, modern) => {
+                let mut v = as_typed.lines(text);
+                v.extend(modern.lines(&legatorocr_core::text::old_ro_to_modern(text)));
+                v.sort_unstable();
+                v.dedup();
+                v
+            }
             Matcher::Query(qy) => text
                 .lines()
                 .enumerate()
@@ -736,6 +756,37 @@ mod tests {
         assert_eq!(lines("brasoc~1"), vec![1]);
         assert_eq!(lines("cluj OR total"), vec![2, 3]);
         assert!(search(std::slice::from_ref(&d), "(", &o, &mut |_| {}).is_err());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn old_orthography_finds_both_spellings() {
+        let d = tmp("oldorth");
+        std::fs::write(
+            d.join("a.txt"),
+            "Ruloul este din pînză și lemn\nNoi sînt\nCîte rîuri\nLa Brașov sunt pânze\nîn\nciti",
+        )
+        .unwrap();
+        let on = SearchOptions { old_orthography: true, ..SearchOptions::default() };
+        let off = SearchOptions::default();
+        let lines = |q: &str, o: &SearchOptions| run(&d, q, o).0.iter().map(|h| h.line).collect::<Vec<_>>();
+        // modern query, old text
+        assert_eq!(lines("pânză", &off), Vec::<usize>::new());
+        assert_eq!(lines("pânză", &on), vec![1]);
+        assert_eq!(lines("sunt", &off), vec![4]);
+        assert_eq!(lines("sunt", &on), vec![2, 4]);
+        assert_eq!(lines("câte", &on), vec![3]);
+        // old query, modern text; and as typed without diacritics still works
+        assert_eq!(lines("sînt", &on), vec![2, 4]);
+        assert_eq!(lines("pinza", &on), vec![1]);
+        // a query with a word-initial î still finds it
+        assert_eq!(lines("în", &on).last(), Some(&5));
+        // boolean, wildcard and NEAR queries too
+        let q = SearchOptions { query: true, old_orthography: true, ..SearchOptions::default() };
+        assert_eq!(lines("pânză AND lemn", &q), vec![1]);
+        assert_eq!(lines("râuri", &q), vec![3]);
+        assert_eq!(lines("cât*", &on), vec![3]);
+        assert_eq!(lines("câte NEAR râuri", &on), vec![3]);
         let _ = std::fs::remove_dir_all(&d);
     }
 

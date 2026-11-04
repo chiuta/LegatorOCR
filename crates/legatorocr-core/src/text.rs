@@ -65,6 +65,47 @@ pub fn normalize_ro(s: &str) -> String {
         .collect()
 }
 
+/// Rewrite pre-1993 Romanian spelling (the 1953-1993 rules, as in 1960 textbooks) to the
+/// current one, character for character (the result has as many `char`s as the input, so
+/// positions and line numbers stay valid). Rule-based, no word list:
+///
+/// * `î` inside a word becomes `â` (`pînză` -> `pânză`, `cînd` -> `când`, `rîu` -> `râu`);
+///   `î` at the start or end of a word stays (`înainte`, `a coborî`);
+/// * the verb *a fi*: `sînt`, `sîntem`, `sînteți` -> `sunt`, `suntem`, `sunteți`
+///   (the only place where the old `î` is a `u` today);
+/// * cedilla `ş ţ` become comma-below `ș ț` ([`normalize_ro`]).
+///
+/// Text that is already modern comes out unchanged, except for compounds such as `neînțeles`
+/// (modern spelling keeps `î` after a prefix), which become `neânțeles`; when used for
+/// searching, apply it to the query as well as to the text and the two still agree.
+pub fn old_ro_to_modern(s: &str) -> String {
+    let cs: Vec<char> = normalize_ro(s).chars().collect();
+    let mut out = cs.clone();
+    let mut i = 0;
+    while i < cs.len() {
+        if !cs[i].is_alphabetic() {
+            i += 1;
+            continue;
+        }
+        let st = i;
+        while i < cs.len() && cs[i].is_alphabetic() {
+            i += 1;
+        }
+        let w: String = cs[st..i].iter().flat_map(|c| c.to_lowercase()).collect();
+        let a_fi = matches!(w.as_str(), "sînt" | "sîntem" | "sînteți" | "sînteţi");
+        for k in st + 1..i.saturating_sub(1) {
+            if k == st + 1 && a_fi {
+                out[k] = if cs[k] == 'Î' { 'U' } else { 'u' };
+            } else if cs[k] == 'î' {
+                out[k] = 'â';
+            } else if cs[k] == 'Î' {
+                out[k] = 'Â';
+            }
+        }
+    }
+    out.into_iter().collect()
+}
+
 /// Lower-case and strip diacritics so that "Mobilă", "mobila" and "MOBILA" compare equal
 /// (also `ș`/`ş`/`s`, `ț`/`ţ`/`t`, and the usual Western-European accents). Length in
 /// `char`s is preserved except for ligatures (`ß`, `æ`, `œ`), which expand.
@@ -112,6 +153,22 @@ pub fn fold(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_spelling_becomes_modern() {
+        assert_eq!(old_ro_to_modern("pînză cînd rîu mîner cît"), "pânză când râu mâner cât");
+        assert_eq!(old_ro_to_modern("sînt sîntem sînteți Sînt"), "sunt suntem sunteți Sunt");
+        assert_eq!(old_ro_to_modern("SÎNT MÎNER"), "SUNT MÂNER");
+        // î at the start or end of a word stays
+        assert_eq!(old_ro_to_modern("înainte a coborî în"), "înainte a coborî în");
+        // modern text is unchanged
+        let m = "Țesăturile sunt făcute în județul Argeș, pânză și mână";
+        assert_eq!(old_ro_to_modern(m), m);
+        assert_eq!(old_ro_to_modern("ştiinţă"), "știință");
+        // same number of chars, so positions survive
+        let o = "Sînt cîteva rîuri în ţară";
+        assert_eq!(old_ro_to_modern(o).chars().count(), o.chars().count());
+    }
 
     #[test]
     fn cedilla_becomes_comma_below() {

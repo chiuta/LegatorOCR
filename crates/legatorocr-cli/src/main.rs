@@ -224,6 +224,15 @@ struct Cli {
     #[arg(long)]
     skip_duplicates: bool,
 
+    /// With --search: also match the old Romanian spelling of 1953-1993 (textbooks, books of the
+    /// time): `sunt` finds `sînt`, `pânză` finds `pînză`, `când` finds `cînd`, and `ş ţ` match
+    /// `ș ț`. The query and each line are also compared after rewriting `î` inside a word to
+    /// `â` and `sînt/sîntem/sînteți` to `sunt/suntem/sunteți`; the search as typed still runs, so
+    /// nothing found before is lost. Works with --search-query, wildcards and NEAR; ignored
+    /// with --search-regex.
+    #[arg(long)]
+    search_old_orthography: bool,
+
     /// Treat blank pages as separators and write one PDF per document
     /// (`name_001.pdf`, `name_002.pdf`, …). Needs --pdf.
     #[arg(long)]
@@ -723,6 +732,13 @@ struct Cli {
     mode: Mode,
 
     #[arg(long, value_enum, default_value = "auto")]
+    /// Write recognised Romanian text in today's spelling: `î` inside a word becomes `â`
+    /// (`pînză` -> `pânză`), `sînt` -> `sunt`. For scans of books printed 1953-1993. Needs --ocr.
+    /// Changes the text layer, the hOCR and the text outputs; search the original spelling with
+    /// --search-old-orthography instead when you want to keep it.
+    #[arg(long)]
+    ocr_modern_spelling: bool,
+
     split: Split,
 
     /// Disable skew correction.
@@ -1898,6 +1914,7 @@ fn real_main() -> Result<()> {
         || cli.hocr.is_some()
         || cli.alto.is_some()
         || cli.page_xml.is_some()
+        modern_spelling: cli.ocr_modern_spelling,
         || cli.docx.is_some()
         || cli.tei.is_some()
         || cli.json.is_some()
@@ -2910,3 +2927,4 @@ mod tests {
         }
     }
 }
+        old_orthography: cli.search_old_orthography,

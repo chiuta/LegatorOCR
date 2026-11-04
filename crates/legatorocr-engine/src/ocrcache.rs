@@ -36,14 +36,15 @@ fn key(page: &PageImage, dpi: u32, o: &OcrOptions, salt: &str) -> String {
     let mut buf = Vec::with_capacity(img.as_bytes().len() + 128);
     buf.extend_from_slice(
         format!(
-            "{salt}|{}x{}|{dpi}|{:?}|{}|{}|{}|{:?}|",
+            "{salt}|{}x{}|{dpi}|{:?}|{}|{}|{}|{:?}|{}|",
             img.width(),
             img.height(),
             o.engine,
             o.lang,
             o.psm,
             o.min_conf,
-            o.tessdata
+            o.tessdata,
+            o.modern_spelling
         )
         .as_bytes(),
     );
