@@ -45,18 +45,9 @@ pub fn decode(path: &Path, password: &[u8]) -> Result<DynamicImage> {
     decode_with(&exe, path, password, mem, secs)
 }
 
-pub fn decode_with(
-    exe: &Path,
-    path: &Path,
-    password: &[u8],
-    memory_mb: u64,
-    timeout_s: u64,
-) -> Result<DynamicImage> {
+pub fn decode_with(exe: &Path, path: &Path, password: &[u8], memory_mb: u64, timeout_s: u64) -> Result<DynamicImage> {
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    let t = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
+    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     let dir = std::env::temp_dir().join(format!("lgr_dec_{}_{n}_{t}", std::process::id()));
     std::fs::create_dir(&dir)?;
     #[cfg(unix)]
@@ -71,14 +62,7 @@ pub fn decode_with(
     res.map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))
 }
 
-fn run_worker(
-    exe: &Path,
-    input: &Path,
-    out: &Path,
-    password: &[u8],
-    memory_mb: u64,
-    timeout_s: u64,
-) -> Result<()> {
+fn run_worker(exe: &Path, input: &Path, out: &Path, password: &[u8], memory_mb: u64, timeout_s: u64) -> Result<()> {
     let mut cmd;
     #[cfg(unix)]
     {
@@ -97,14 +81,9 @@ fn run_worker(
         cmd.arg("--decode-worker").arg(input).arg(out);
         let _ = memory_mb;
     }
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped());
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
     if !password.is_empty() {
-        cmd.env(
-            "LEGATOROCR_WORKER_PW",
-            String::from_utf8_lossy(password).as_ref(),
-        );
+        cmd.env("LEGATOROCR_WORKER_PW", String::from_utf8_lossy(password).as_ref());
     }
     let mut child = cmd.spawn().context("cannot start the decoder worker")?;
     let start = Instant::now();
@@ -118,14 +97,7 @@ fn run_worker(
                     let _ = e.read_to_string(&mut err);
                 }
                 let why = err.lines().last().unwrap_or("").trim().to_string();
-                bail!(
-                    "the decoder worker failed ({st}){}",
-                    if why.is_empty() {
-                        String::new()
-                    } else {
-                        format!(": {why}")
-                    }
-                );
+                bail!("the decoder worker failed ({st}){}", if why.is_empty() { String::new() } else { format!(": {why}") });
             }
             None => {
                 if start.elapsed() > Duration::from_secs(timeout_s) {

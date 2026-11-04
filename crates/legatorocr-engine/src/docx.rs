@@ -774,19 +774,8 @@ mod tests {
     #[test]
     fn a_tall_short_line_near_the_top_becomes_a_heading_block() {
         use legatorocr_core::text::Word;
-        let w = |t: &str, x: u32, y: u32, h: u32, line: u32| Word {
-            text: t.into(),
-            x,
-            y,
-            w: 80,
-            h,
-            conf: 90.0,
-            line,
-        };
-        let mut v = vec![
-            w("Uscarea", 100, 100, 44, 0),
-            w("artificiala", 200, 100, 44, 0),
-        ];
+        let w = |t: &str, x: u32, y: u32, h: u32, line: u32| Word { text: t.into(), x, y, w: 80, h, conf: 90.0, line };
+        let mut v = vec![w("Uscarea", 100, 100, 44, 0), w("artificiala", 200, 100, 44, 0)];
         for l in 1..6u32 {
             for k in 0..6u32 {
                 v.push(w("text", 100 + k * 90, 200 + l * 40, 20, l));
@@ -797,9 +786,6 @@ mod tests {
         assert!(matches!(&b[1], Block::Para(_)));
         // the same words without the tall line stay one paragraph
         let plain = blocks_from_words(&v[2..]);
-        assert!(
-            plain.iter().all(|b| !matches!(b, Block::Head(_))),
-            "{plain:?}"
-        );
+        assert!(plain.iter().all(|b| !matches!(b, Block::Head(_))), "{plain:?}");
     }
 }

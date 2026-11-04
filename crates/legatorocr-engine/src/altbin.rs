@@ -46,10 +46,8 @@ pub fn choose<E>(
     seq: usize,
     ocr: impl Fn(&Page) -> Result<Vec<Word>, E>,
 ) -> (Page, Vec<Word>) {
-    if !matches!(
-        settings.mode,
-        OutputMode::BlackWhite | OutputMode::Mixed | OutputMode::Hybrid
-    ) || pg.blank
+    if !matches!(settings.mode, OutputMode::BlackWhite | OutputMode::Mixed | OutputMode::Hybrid)
+        || pg.blank
         || words.is_empty()
     {
         return (pg, words);
@@ -59,11 +57,7 @@ pub fn choose<E>(
         return (pg, words);
     }
     let mut s2 = settings.clone();
-    s2.threshold = if settings.threshold == Threshold::Otsu {
-        Threshold::Sauvola
-    } else {
-        Threshold::Otsu
-    };
+    s2.threshold = if settings.threshold == Threshold::Otsu { Threshold::Sauvola } else { Threshold::Otsu };
     let Some(alt) = process_page(src, &s2).into_iter().nth(seq) else {
         return (pg, words);
     };
@@ -78,15 +72,7 @@ mod tests {
     use super::*;
 
     fn w(t: &str, c: f32) -> Word {
-        Word {
-            text: t.into(),
-            x: 0,
-            y: 0,
-            w: 10,
-            h: 10,
-            conf: c,
-            line: 0,
-        }
+        Word { text: t.into(), x: 0, y: 0, w: 10, h: 10, conf: c, line: 0 }
     }
 
     #[test]

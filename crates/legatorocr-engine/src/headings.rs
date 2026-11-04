@@ -51,11 +51,7 @@ pub fn detect_line(words: &[Word], page_h: u32) -> Option<(String, u32, f32)> {
         }
         let mut ws = ws;
         ws.sort_by_key(|w| w.x);
-        let text = ws
-            .iter()
-            .map(|w| w.text.as_str())
-            .collect::<Vec<_>>()
-            .join(" ");
+        let text = ws.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ");
         let letters = text.chars().filter(|c| c.is_alphabetic()).count();
         if letters < 3 {
             continue; // a lone number or ornament is not a heading
@@ -73,21 +69,11 @@ mod tests {
     use super::*;
 
     fn w(t: &str, x: u32, y: u32, h: u32, line: u32) -> Word {
-        Word {
-            text: t.into(),
-            x,
-            y,
-            w: 40,
-            h,
-            conf: 90.0,
-            line,
-        }
+        Word { text: t.into(), x, y, w: 40, h, conf: 90.0, line }
     }
 
     fn body(n: u32, start_line: u32) -> Vec<Word> {
-        (0..n)
-            .map(|i| w("text", 100 + i * 60, 400 + start_line * 40, 20, start_line))
-            .collect()
+        (0..n).map(|i| w("text", 100 + i * 60, 400 + start_line * 40, 20, start_line)).collect()
     }
 
     #[test]
@@ -118,11 +104,7 @@ mod tests {
         assert_eq!(detect(&num, 1600), None, "a page number is not a heading");
         let mut low = vec![w("Titlu", 100, 1200, 44, 0), w("jos", 300, 1200, 44, 0)];
         low.extend(body(8, 1));
-        assert_eq!(
-            detect(&low, 1600),
-            None,
-            "a tall line low on the page is not a heading"
-        );
+        assert_eq!(detect(&low, 1600), None, "a tall line low on the page is not a heading");
         assert_eq!(detect(&[], 1600), None);
     }
 }

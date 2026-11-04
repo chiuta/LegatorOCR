@@ -520,15 +520,9 @@ fn drop_duplicates(lines: &mut Vec<Line>) {
                 continue;
             }
             let (li, lj) = (&lines[i], &lines[j]);
-            let ox = (li.x + li.w)
-                .min(lj.x + lj.w)
-                .saturating_sub(li.x.max(lj.x)) as u64;
-            let oy = (li.y + li.h)
-                .min(lj.y + lj.h)
-                .saturating_sub(li.y.max(lj.y)) as u64;
-            let small = (li.w as u64 * li.h as u64)
-                .min(lj.w as u64 * lj.h as u64)
-                .max(1);
+            let ox = (li.x + li.w).min(lj.x + lj.w).saturating_sub(li.x.max(lj.x)) as u64;
+            let oy = (li.y + li.h).min(lj.y + lj.h).saturating_sub(li.y.max(lj.y)) as u64;
+            let small = (li.w as u64 * li.h as u64).min(lj.w as u64 * lj.h as u64).max(1);
             if ox * oy * 10 > small * 6 {
                 gone[j] = true;
             }
@@ -622,26 +616,12 @@ fn cut(p: &Prof, r: Region, med: u32, depth: u32, out: &mut Vec<Line>) {
         return;
     }
     if h <= med * 2 + med / 2 {
-        out.push(Line {
-            x: x0,
-            y: y0,
-            w,
-            h,
-            slope: 0.0,
-            curve: 0.0,
-        }); // one text line (thin pieces are attached later)
+        out.push(Line { x: x0, y: y0, w, h, slope: 0.0, curve: 0.0 }); // one text line (thin pieces are attached later)
         return;
     }
     if depth > 60 {
         if h <= med * 4 {
-            out.push(Line {
-                x: x0,
-                y: y0,
-                w,
-                h,
-                slope: 0.0,
-                curve: 0.0,
-            });
+            out.push(Line { x: x0, y: y0, w, h, slope: 0.0, curve: 0.0 });
         }
         return;
     }
@@ -730,14 +710,7 @@ fn cut(p: &Prof, r: Region, med: u32, depth: u32, out: &mut Vec<Line>) {
         return;
     }
     if h <= med * 4 {
-        out.push(Line {
-            x: x0,
-            y: y0,
-            w,
-            h,
-            slope: 0.0,
-            curve: 0.0,
-        });
+        out.push(Line { x: x0, y: y0, w, h, slope: 0.0, curve: 0.0 });
     }
 }
 
@@ -820,11 +793,7 @@ fn chain_cut(p: &Prof, r: Region, med: u32, out: &mut Vec<Line>) -> bool {
                 let (sxy, sxx) = tail.iter().fold((0.0, 0.0), |a, t| {
                     (a.0 + (t.0 - mx) * (t.1 - my), a.1 + (t.0 - mx) * (t.0 - mx))
                 });
-                let slope = if sxx > 1.0 {
-                    (sxy / sxx).clamp(-0.12, 0.12)
-                } else {
-                    0.0
-                };
+                let slope = if sxx > 1.0 { (sxy / sxx).clamp(-0.12, 0.12) } else { 0.0 };
                 my + slope * (cx - mx)
             } else {
                 last.1
@@ -843,16 +812,12 @@ fn chain_cut(p: &Prof, r: Region, med: u32, out: &mut Vec<Line>) -> bool {
     let lh = (medf * 2.0).round() as u32;
     let xc_page = |c: &[(f32, f32)]| (c[0].0 + c[c.len() - 1].0) / 2.0;
     let mut found: Vec<Line> = Vec::new();
-    for c in chains
-        .iter()
-        .filter(|c| c.len() >= 6 && c[c.len() - 1].0 - c[0].0 >= medf * 6.0)
-    {
+    for c in chains.iter().filter(|c| c.len() >= 6 && c[c.len() - 1].0 - c[0].0 >= medf * 6.0) {
         // parabola through the centres, relative to the middle: y = a + b u + c u²
         let xc = xc_page(c);
         let fit = |pts: &[(f32, f32)]| -> Option<(f32, f32, f32)> {
             let n = pts.len() as f64;
-            let (mut s1, mut s2, mut s3, mut s4, mut t0, mut t1, mut t2) =
-                (0f64, 0f64, 0f64, 0f64, 0f64, 0f64, 0f64);
+            let (mut s1, mut s2, mut s3, mut s4, mut t0, mut t1, mut t2) = (0f64, 0f64, 0f64, 0f64, 0f64, 0f64, 0f64);
             for &(x, y) in pts {
                 let (u, y) = ((x - xc) as f64, y as f64);
                 s1 += u;
@@ -968,8 +933,7 @@ fn piece(line: &Line, start: u32, w: u32) -> Line {
         y: (line.y as f32 + shift).round().max(0.0) as u32,
         w,
         h: line.h,
-        slope: line.slope
-            + 2.0 * line.curve * (start as f32 + w as f32 / 2.0 - line.w as f32 / 2.0),
+        slope: line.slope + 2.0 * line.curve * (start as f32 + w as f32 / 2.0 - line.w as f32 / 2.0),
         curve: line.curve,
     }
 }

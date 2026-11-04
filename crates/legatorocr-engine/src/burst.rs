@@ -22,13 +22,7 @@ fn parse_datetime(s: &[u8]) -> Option<i64> {
     let (y, mo, da) = (n(dp.next()?)?, n(dp.next()?)?, n(dp.next()?)?);
     let mut hp = h.split(':');
     let (hh, mi, ss) = (n(hp.next()?)?, n(hp.next()?)?, n(hp.next()?)?);
-    if !(1..=12).contains(&mo)
-        || !(1..=31).contains(&da)
-        || y < 1990
-        || hh > 23
-        || mi > 59
-        || ss > 60
-    {
+    if !(1..=12).contains(&mo) || !(1..=31).contains(&da) || y < 1990 || hh > 23 || mi > 59 || ss > 60 {
         return None;
     }
     Some(days_from_civil(y, mo, da) * 86_400 + hh * 3600 + mi * 60 + ss)
@@ -63,11 +57,7 @@ fn tiff_time(t: &[u8]) -> Option<i64> {
     };
     let u16_at = |o: usize| -> Option<u16> {
         let b = t.get(o..o + 2)?;
-        Some(if le {
-            u16::from_le_bytes([b[0], b[1]])
-        } else {
-            u16::from_be_bytes([b[0], b[1]])
-        })
+        Some(if le { u16::from_le_bytes([b[0], b[1]]) } else { u16::from_be_bytes([b[0], b[1]]) })
     };
     let u32_at = |o: usize| -> Option<u32> {
         let b = t.get(o..o + 4)?;
@@ -134,8 +124,7 @@ pub struct Ingest {
 /// each burst: consecutive frames within `max_gap_s` seconds, or, without times, whose
 /// perceptual hashes differ in at most 6 bits.
 pub fn ingest(paths: &[PathBuf], max_gap_s: i64) -> Ingest {
-    let mut items: Vec<(PathBuf, Option<i64>)> =
-        paths.iter().map(|p| (p.clone(), exif_time(p))).collect();
+    let mut items: Vec<(PathBuf, Option<i64>)> = paths.iter().map(|p| (p.clone(), exif_time(p))).collect();
     let all_timed = !items.is_empty() && items.iter().all(|i| i.1.is_some());
     let mut reordered = false;
     if all_timed {
@@ -154,8 +143,7 @@ pub fn ingest(paths: &[PathBuf], max_gap_s: i64) -> Ingest {
             }
             Err(_) => {
                 sharp.push(f32::NAN);
-                hashes.push(0x9E37_79B9_7F4A_7C15u64.wrapping_mul(sharp.len() as u64 + 1));
-                // unlikely to group
+                hashes.push(0x9E37_79B9_7F4A_7C15u64.wrapping_mul(sharp.len() as u64 + 1)); // unlikely to group
             }
         }
     }
@@ -178,11 +166,7 @@ pub fn ingest(paths: &[PathBuf], max_gap_s: i64) -> Ingest {
             dropped.push((p.clone(), items[k].0.clone()));
         }
     }
-    Ingest {
-        paths: out,
-        reordered,
-        dropped,
-    }
+    Ingest { paths: out, reordered, dropped }
 }
 
 #[cfg(test)]

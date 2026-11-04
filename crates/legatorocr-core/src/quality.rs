@@ -370,17 +370,14 @@ pub fn detect_page_number(words: &[crate::text::Word], page_h: u32) -> Option<u3
         return None;
     }
     let clean = |t: &str| -> Option<u32> {
-        let d: String = t
-            .trim_matches(|c: char| "-–—.·•|[]() ".contains(c))
-            .to_string();
+        let d: String = t.trim_matches(|c: char| "-–—.·•|[]() ".contains(c)).to_string();
         if (1..=4).contains(&d.len()) && d.chars().all(|c| c.is_ascii_digit()) {
             d.parse().ok().filter(|n| *n > 0)
         } else {
             None
         }
     };
-    let line_of =
-        |idx: u32| -> Vec<&crate::text::Word> { words.iter().filter(|w| w.line == idx).collect() };
+    let line_of = |idx: u32| -> Vec<&crate::text::Word> { words.iter().filter(|w| w.line == idx).collect() };
     let (first, last) = (
         words.iter().map(|w| w.line).min()?,
         words.iter().map(|w| w.line).max()?,
@@ -397,13 +394,7 @@ pub fn detect_page_number(words: &[crate::text::Word], page_h: u32) -> Option<u3
         let nums: Vec<u32> = ws.iter().filter_map(|w| clean(&w.text)).collect();
         let others = ws
             .iter()
-            .filter(|w| {
-                clean(&w.text).is_none()
-                    && !w
-                        .text
-                        .trim_matches(|c: char| "-–—.·•|".contains(c))
-                        .is_empty()
-            })
+            .filter(|w| clean(&w.text).is_none() && !w.text.trim_matches(|c: char| "-–—.·•|".contains(c)).is_empty())
             .count();
         if nums.len() == 1 && others == 0 {
             return Some(nums[0]);
@@ -421,11 +412,7 @@ pub fn label_runs(nums: &[Option<u32>]) -> Vec<(usize, u32)> {
         .enumerate()
         .map(|(i, n)| n.map(|n| n as i64 - i as i64))
         .collect();
-    let det: Vec<(usize, i64)> = offs
-        .iter()
-        .enumerate()
-        .filter_map(|(i, o)| o.map(|o| (i, o)))
-        .collect();
+    let det: Vec<(usize, i64)> = offs.iter().enumerate().filter_map(|(i, o)| o.map(|o| (i, o))).collect();
     let mut runs: Vec<(usize, usize, i64)> = Vec::new(); // (first detected idx, last detected idx, offset)
     let mut k = 0;
     while k < det.len() {
@@ -467,34 +454,16 @@ mod tests {
     use image::Luma;
 
     fn w(text: &str, y: u32, line: u32) -> crate::text::Word {
-        crate::text::Word {
-            text: text.into(),
-            x: 100,
-            y,
-            w: 30,
-            h: 20,
-            conf: 90.0,
-            line,
-        }
+        crate::text::Word { text: text.into(), x: 100, y, w: 30, h: 20, conf: 90.0, line }
     }
 
     #[test]
     fn page_number_found_at_foot_or_head_only_when_alone() {
         let body = vec![w("Hello", 100, 0), w("world", 100, 0), w("17", 1180, 1)];
         assert_eq!(detect_page_number(&body, 1200), Some(17));
-        let wrapped = vec![
-            w("text", 100, 0),
-            w("-", 1180, 1),
-            w("42", 1180, 1),
-            w("-", 1180, 1),
-        ];
+        let wrapped = vec![w("text", 100, 0), w("-", 1180, 1), w("42", 1180, 1), w("-", 1180, 1)];
         assert_eq!(detect_page_number(&wrapped, 1200), Some(42));
-        let head = vec![
-            w("5", 20, 0),
-            w("text", 600, 1),
-            w("more", 700, 2),
-            w("end", 800, 3),
-        ];
+        let head = vec![w("5", 20, 0), w("text", 600, 1), w("more", 700, 2), w("end", 800, 3)];
         assert_eq!(detect_page_number(&head, 1200), Some(5));
         let year = vec![w("in", 100, 0), w("1999", 1180, 1), w("war", 1180, 1)];
         assert_eq!(detect_page_number(&year, 1200), None);
@@ -512,15 +481,9 @@ mod tests {
         // numbering 1.. from the first page needs no labels
         assert!(label_runs(&[Some(1), Some(2), Some(3), Some(4)]).is_empty());
         // numbers offset by 8 across the whole book
-        assert_eq!(
-            label_runs(&[Some(9), Some(10), Some(11), Some(12)]),
-            vec![(0, 9)]
-        );
+        assert_eq!(label_runs(&[Some(9), Some(10), Some(11), Some(12)]), vec![(0, 9)]);
         // unnumbered cover keeps the default label, numbering starts at the first printed page
-        assert_eq!(
-            label_runs(&[None, Some(17), Some(18), Some(19)]),
-            vec![(1, 17)]
-        );
+        assert_eq!(label_runs(&[None, Some(17), Some(18), Some(19)]), vec![(1, 17)]);
     }
 
     /// Text-like page: dark horizontal strokes on paper, 3 px thick, irregular.

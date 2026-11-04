@@ -36,10 +36,7 @@ pub fn enabled() -> bool {
 
 /// Pages whose ink coverage is under `v` (0..1; above 1 retries every page) are retried.
 pub fn set_below(v: f64) {
-    BELOW.store(
-        (v * 1000.0).round().clamp(0.0, 100_000.0) as u32,
-        Ordering::Relaxed,
-    );
+    BELOW.store((v * 1000.0).round().clamp(0.0, 100_000.0) as u32, Ordering::Relaxed);
 }
 
 fn below() -> f64 {
@@ -58,14 +55,8 @@ impl Score {
     /// Higher is better. A failed certificate check costs one point.
     pub fn value(&self) -> f64 {
         let n = (self.check.empty + self.check.found).max(1) as f64;
-        self.coverage
-            - 2.0 * self.check.empty as f64 / n
-            - (1.0 - self.check.text_frac)
-            - if self.check.problems.is_empty() {
-                0.0
-            } else {
-                1.0
-            }
+        self.coverage - 2.0 * self.check.empty as f64 / n - (1.0 - self.check.text_frac)
+            - if self.check.problems.is_empty() { 0.0 } else { 1.0 }
     }
 
     pub fn doubtful(&self, below: f64) -> bool {
@@ -74,11 +65,7 @@ impl Score {
 }
 
 fn otsu(hist: &[u32; 256], total: u64) -> u8 {
-    let sum: f64 = hist
-        .iter()
-        .enumerate()
-        .map(|(i, &c)| i as f64 * c as f64)
-        .sum();
+    let sum: f64 = hist.iter().enumerate().map(|(i, &c)| i as f64 * c as f64).sum();
     let (mut wb, mut sb, mut best, mut t) = (0f64, 0f64, -1f64, 0u8);
     for (i, &c) in hist.iter().enumerate() {
         wb += c as f64;
@@ -137,10 +124,7 @@ pub fn score(pg: &Page, words: &[Word]) -> Option<Score> {
         Some(l) => image::DynamicImage::ImageRgb8(l.compose()).to_luma8(),
         None => pg.image.to_dynamic().to_luma8(),
     };
-    Some(Score {
-        check,
-        coverage: ink_coverage(&luma, words),
-    })
+    Some(Score { check, coverage: ink_coverage(&luma, words) })
 }
 
 /// One thing to try: a name for the report, changed settings, and the dpi given to the OCR.
@@ -154,43 +138,21 @@ pub struct Alt {
 /// different resolution. NICK, Niblack and Bradley are left out: ROADMAP 1.4 measured them far worse.
 pub fn alternatives(s: &Settings, dpi: u32) -> Vec<Alt> {
     let mut v = Vec::new();
-    if matches!(
-        s.mode,
-        OutputMode::BlackWhite | OutputMode::Mixed | OutputMode::Hybrid
-    ) {
-        for (t, n) in [
-            (Threshold::Otsu, "Otsu"),
-            (Threshold::Wolf, "Wolf"),
-            (Threshold::Sauvola, "Sauvola"),
-        ] {
+    if matches!(s.mode, OutputMode::BlackWhite | OutputMode::Mixed | OutputMode::Hybrid) {
+        for (t, n) in [(Threshold::Otsu, "Otsu"), (Threshold::Wolf, "Wolf"), (Threshold::Sauvola, "Sauvola")] {
             if s.threshold != t {
-                v.push(Alt {
-                    name: format!("binariser {n}"),
-                    settings: Settings {
-                        threshold: t,
-                        ..s.clone()
-                    },
-                    ocr_dpi: None,
-                });
+                v.push(Alt { name: format!("binariser {n}"), settings: Settings { threshold: t, ..s.clone() }, ocr_dpi: None });
             }
         }
     }
     v.push(Alt {
         name: format!("deskew {}", if s.deskew { "off" } else { "on" }),
-        settings: Settings {
-            deskew: !s.deskew,
-            manual_skew_deg: None,
-            ..s.clone()
-        },
+        settings: Settings { deskew: !s.deskew, manual_skew_deg: None, ..s.clone() },
         ocr_dpi: None,
     });
     let od = (dpi * 4 / 3).clamp(150, 600);
     if od != dpi {
-        v.push(Alt {
-            name: format!("OCR at {od} dpi"),
-            settings: s.clone(),
-            ocr_dpi: Some(od),
-        });
+        v.push(Alt { name: format!("OCR at {od} dpi"), settings: s.clone(), ocr_dpi: Some(od) });
     }
     v
 }
@@ -216,12 +178,8 @@ pub fn refine<E>(
         return (pg, words);
     }
     let base = first.value();
-    let (mut best_pg, mut best_words, mut best_val, mut best_name) =
-        (pg, words, base, "first reading".to_string());
-    let mut tried = vec![format!(
-        "first reading {base:.3} (ink covered {:.0}%)",
-        100.0 * first.coverage
-    )];
+    let (mut best_pg, mut best_words, mut best_val, mut best_name) = (pg, words, base, "first reading".to_string());
+    let mut tried = vec![format!("first reading {base:.3} (ink covered {:.0}%)", 100.0 * first.coverage)];
     let dpi = best_pg.dpi;
     for alt in alternatives(settings, dpi) {
         let (cand, w2) = match alt.ocr_dpi {
@@ -231,9 +189,7 @@ pub fn refine<E>(
                 Err(_) => continue,
             },
             None => {
-                let Some(p) = process_page(src, &alt.settings).into_iter().nth(seq) else {
-                    continue;
-                };
+                let Some(p) = process_page(src, &alt.settings).into_iter().nth(seq) else { continue };
                 match ocr(&p, p.dpi) {
                     Ok(w) => (Some(p), w),
                     Err(_) => continue,
@@ -245,12 +201,7 @@ pub fn refine<E>(
             None => score(&best_pg, &w2),
         };
         let Some(sc) = sc else { continue };
-        tried.push(format!(
-            "{} {:.3} (ink covered {:.0}%)",
-            alt.name,
-            sc.value(),
-            100.0 * sc.coverage
-        ));
+        tried.push(format!("{} {:.3} (ink covered {:.0}%)", alt.name, sc.value(), 100.0 * sc.coverage));
         if sc.value() > best_val + MARGIN {
             if let Some(p) = cand {
                 best_pg = p;
@@ -261,42 +212,24 @@ pub fn refine<E>(
         }
     }
     if let Ok(mut l) = LOG.lock() {
-        l.push((
-            index,
-            seq,
-            format!("retried; kept: {best_name}; scores: {}", tried.join(", ")),
-        ));
+        l.push((index, seq, format!("retried; kept: {best_name}; scores: {}", tried.join(", "))));
     }
     (best_pg, best_words)
 }
 
 /// Note for page `(index, seq)` when it was retried (used by `--explain`).
 pub fn note(index: usize, seq: usize) -> Option<String> {
-    LOG.lock()
-        .ok()?
-        .iter()
-        .find(|(i, s, _)| (*i, *s) == (index, seq))
-        .map(|(_, _, t)| t.clone())
+    LOG.lock().ok()?.iter().find(|(i, s, _)| (*i, *s) == (index, seq)).map(|(_, _, t)| t.clone())
 }
 
 /// A summary line and one line per retried page, in page order.
 pub fn report() -> Vec<String> {
     let mut l = LOG.lock().map(|l| l.clone()).unwrap_or_default();
     l.sort_by_key(|(i, s, _)| (*i, *s));
-    let changed = l
-        .iter()
-        .filter(|(_, _, t)| !t.contains("kept: first reading"))
-        .count();
-    let mut out = vec![format!(
-        "auto-retry: {} page(s) retried, {changed} changed",
-        l.len()
-    )];
+    let changed = l.iter().filter(|(_, _, t)| !t.contains("kept: first reading")).count();
+    let mut out = vec![format!("auto-retry: {} page(s) retried, {changed} changed", l.len())];
     for (i, s, t) in &l {
-        let seq = if *s > 0 {
-            format!(" [{}]", s + 1)
-        } else {
-            String::new()
-        };
+        let seq = if *s > 0 { format!(" [{}]", s + 1) } else { String::new() };
         out.push(format!("auto-retry: sheet {}{seq}: {t}", i + 1));
     }
     out
@@ -307,15 +240,7 @@ mod tests {
     use super::*;
 
     fn w(x: u32, y: u32, wd: u32, h: u32) -> Word {
-        Word {
-            text: "ab".into(),
-            x,
-            y,
-            w: wd,
-            h,
-            conf: 90.0,
-            line: 0,
-        }
+        Word { text: "ab".into(), x, y, w: wd, h, conf: 90.0, line: 0 }
     }
 
     fn sheet() -> image::GrayImage {
@@ -334,64 +259,27 @@ mod tests {
         assert!((ink_coverage(&g, &[w(10, 10, 50, 10), w(10, 50, 50, 10)]) - 1.0).abs() < 1e-9);
         let half = ink_coverage(&g, &[w(10, 10, 50, 10)]);
         assert!((half - 0.5).abs() < 1e-9, "{half}");
-        assert_eq!(
-            ink_coverage(
-                &image::GrayImage::from_pixel(10, 10, image::Luma([200])),
-                &[]
-            ),
-            1.0
-        );
+        assert_eq!(ink_coverage(&image::GrayImage::from_pixel(10, 10, image::Luma([200])), &[]), 1.0);
     }
 
     #[test]
     fn score_prefers_covered_ink_and_punishes_boxes_on_paper() {
-        let good = Score {
-            check: PageCheck {
-                text_frac: 1.0,
-                found: 10,
-                ..Default::default()
-            },
-            coverage: 0.95,
-        };
-        let missing = Score {
-            check: PageCheck {
-                text_frac: 1.0,
-                found: 10,
-                ..Default::default()
-            },
-            coverage: 0.5,
-        };
-        let invented = Score {
-            check: PageCheck {
-                text_frac: 1.0,
-                found: 6,
-                empty: 4,
-                ..Default::default()
-            },
-            coverage: 0.95,
-        };
+        let good = Score { check: PageCheck { text_frac: 1.0, found: 10, ..Default::default() }, coverage: 0.95 };
+        let missing = Score { check: PageCheck { text_frac: 1.0, found: 10, ..Default::default() }, coverage: 0.5 };
+        let invented = Score { check: PageCheck { text_frac: 1.0, found: 6, empty: 4, ..Default::default() }, coverage: 0.95 };
         assert!(good.value() > missing.value() && good.value() > invented.value());
         assert!(missing.doubtful(0.8) && !good.doubtful(0.8) && good.doubtful(1.01));
     }
 
     #[test]
     fn alternatives_depend_on_the_mode() {
-        let mut s = Settings {
-            mode: OutputMode::Color,
-            ..Settings::default()
-        };
+        let mut s = Settings { mode: OutputMode::Color, ..Settings::default() };
         let a = alternatives(&s, 300);
         assert!(a.iter().all(|x| !x.name.starts_with("binariser")));
-        assert!(
-            a.iter().any(|x| x.name.starts_with("deskew"))
-                && a.iter().any(|x| x.ocr_dpi == Some(400))
-        );
+        assert!(a.iter().any(|x| x.name.starts_with("deskew")) && a.iter().any(|x| x.ocr_dpi == Some(400)));
         s.mode = OutputMode::BlackWhite;
         let b = alternatives(&s, 300);
-        assert_eq!(
-            b.iter().filter(|x| x.name.starts_with("binariser")).count(),
-            2
-        );
+        assert_eq!(b.iter().filter(|x| x.name.starts_with("binariser")).count(), 2);
         assert!(!b.iter().any(|x| x.name == "binariser Sauvola"));
     }
 
@@ -399,27 +287,16 @@ mod tests {
     fn a_page_with_unread_ink_is_retried_and_the_better_reading_kept() {
         set_enabled(true);
         let src = image::DynamicImage::ImageLuma8(sheet());
-        let s = Settings {
-            mode: OutputMode::Gray,
-            ..Settings::default()
-        };
+        let s = Settings { mode: OutputMode::Gray, ..Settings::default() };
         let pg = process_page(&src, &s).into_iter().next().unwrap();
         let (iw, ih) = (pg.image.width(), pg.image.height());
         let full = vec![w(0, 0, iw, ih)];
         let n = std::cell::Cell::new(0);
         // the first reading covers nothing; every alternative reads the whole sheet
-        let (_, words) = refine(
-            0,
-            0,
-            pg,
-            vec![w(0, 0, 3, 3)],
-            &src,
-            &s,
-            |_, _| -> Result<Vec<Word>, ()> {
-                n.set(n.get() + 1);
-                Ok(full.clone())
-            },
-        );
+        let (_, words) = refine(0, 0, pg, vec![w(0, 0, 3, 3)], &src, &s, |_, _| -> Result<Vec<Word>, ()> {
+            n.set(n.get() + 1);
+            Ok(full.clone())
+        });
         assert!(n.get() > 0, "a page with uncovered ink must be retried");
         assert_eq!(words, full);
         assert!(note(0, 0).unwrap().contains("kept: "));

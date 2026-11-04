@@ -31,13 +31,7 @@ fn runs(bw: &BitImage, min_len: usize, horizontal: bool) -> Vec<(usize, usize, u
     for o in 0..outer {
         let mut i = 0;
         while i < inner {
-            let at = |i: usize| {
-                if horizontal {
-                    bw.data[o * w + i]
-                } else {
-                    bw.data[i * w + o]
-                }
-            };
+            let at = |i: usize| if horizontal { bw.data[o * w + i] } else { bw.data[i * w + o] };
             if at(i) == 0 {
                 i += 1;
                 continue;
@@ -68,10 +62,7 @@ fn lines(rs: Vec<(usize, usize, usize)>) -> Vec<(f32, usize, usize, usize)> {
     // (centre, start, end, thickness)
     let mut out: Vec<(f32, usize, usize, usize, usize)> = Vec::new(); // (sum, n, s, e, last)
     for (o, s, e) in rs {
-        match out
-            .iter_mut()
-            .find(|l| l.4 + 1 >= o && l.4 <= o && s.abs_diff(l.2) <= 3 && e.abs_diff(l.3) <= 3)
-        {
+        match out.iter_mut().find(|l| l.4 + 1 >= o && l.4 <= o && s.abs_diff(l.2) <= 3 && e.abs_diff(l.3) <= 3) {
             Some(l) => {
                 l.0 += o as f32;
                 l.1 += 1;
@@ -82,9 +73,7 @@ fn lines(rs: Vec<(usize, usize, usize)>) -> Vec<(f32, usize, usize, usize)> {
             None => out.push((o as f32, 1, s, e, o)),
         }
     }
-    out.into_iter()
-        .map(|(sum, n, s, e, _)| (sum / n as f32, s, e, n))
-        .collect()
+    out.into_iter().map(|(sum, n, s, e, _)| (sum / n as f32, s, e, n)).collect()
 }
 
 fn ink_in(bw: &BitImage, x0: usize, y0: usize, x1: usize, y1: usize) -> f32 {
@@ -95,10 +84,7 @@ fn ink_in(bw: &BitImage, x0: usize, y0: usize, x1: usize, y1: usize) -> f32 {
     }
     let mut n = 0usize;
     for y in y0..y1 {
-        n += bw.data[y * w + x0..y * w + x1]
-            .iter()
-            .map(|&b| b as usize)
-            .sum::<usize>();
+        n += bw.data[y * w + x0..y * w + x1].iter().map(|&b| b as usize).sum::<usize>();
     }
     n as f32 / ((x1 - x0) * (y1 - y0)) as f32
 }
@@ -121,45 +107,20 @@ pub fn detect(bw: &BitImage, dpi: u32) -> Vec<Field> {
                 continue;
             }
             let (x0, x1) = (top.1.min(bot.1), top.2.max(bot.2));
-            let has_v = |x: usize| {
-                vl.iter().any(|v| {
-                    (v.0 - x as f32).abs() <= tol as f32
-                        && v.1 <= top.0 as usize + tol
-                        && v.2 + tol >= bot.0 as usize
-                })
-            };
+            let has_v = |x: usize| vl.iter().any(|v| (v.0 - x as f32).abs() <= tol as f32 && v.1 <= top.0 as usize + tol && v.2 + tol >= bot.0 as usize);
             if !(has_v(x0 + tol / 2) && has_v(x1.saturating_sub(tol / 2 + 1))) {
                 continue;
             }
             let (ix0, iy0) = (x0 + tol, top.0 as usize + top.3 + 1);
-            let (ix1, iy1) = (
-                x1.saturating_sub(tol),
-                (bot.0 as usize).saturating_sub(bot.3),
-            );
+            let (ix1, iy1) = (x1.saturating_sub(tol), (bot.0 as usize).saturating_sub(bot.3));
             if ix1 <= ix0 + 2 || iy1 <= iy0 + 2 || ink_in(bw, ix0, iy0, ix1, iy1) > 0.04 {
                 continue;
             }
             let (w, h) = ((ix1 - ix0) as u32, (iy1 - iy0) as u32);
-            let kind =
-                if w <= px(9.0) as u32 && h <= px(9.0) as u32 && w.abs_diff(h) <= px(2.0) as u32 {
-                    Kind::Check
-                } else {
-                    Kind::Text
-                };
-            let f = Field {
-                kind,
-                x: ix0 as u32,
-                y: iy0 as u32,
-                w,
-                h,
-            };
+            let kind = if w <= px(9.0) as u32 && h <= px(9.0) as u32 && w.abs_diff(h) <= px(2.0) as u32 { Kind::Check } else { Kind::Text };
+            let f = Field { kind, x: ix0 as u32, y: iy0 as u32, w, h };
             // a box inside an already found one is a duplicate of the same cell
-            if !out.iter().any(|o| {
-                o.x <= f.x + 2
-                    && o.y <= f.y + 2
-                    && o.x + o.w + 2 >= f.x + f.w
-                    && o.y + o.h + 2 >= f.y + f.h
-            }) {
+            if !out.iter().any(|o| o.x <= f.x + 2 && o.y <= f.y + 2 && o.x + o.w + 2 >= f.x + f.w && o.y + o.h + 2 >= f.y + f.h) {
                 out.push(f);
                 used_h[i] = true;
                 used_h[j] = true;
@@ -174,11 +135,7 @@ pub fn detect(bw: &BitImage, dpi: u32) -> Vec<Field> {
         }
         let y = l.0 as usize;
         // the edge of a frame (a vertical line leaves it downward at an end) is not an underline
-        if vl.iter().any(|v| {
-            ((v.0 - l.1 as f32).abs() <= tol as f32 || (v.0 - l.2 as f32).abs() <= tol as f32)
-                && v.1 <= y + tol
-                && v.2 > y + px(2.0)
-        }) {
+        if vl.iter().any(|v| ((v.0 - l.1 as f32).abs() <= tol as f32 || (v.0 - l.2 as f32).abs() <= tol as f32) && v.1 <= y + tol && v.2 > y + px(2.0)) {
             continue;
         }
         let strip = px(7.0);
@@ -190,17 +147,8 @@ pub fn detect(bw: &BitImage, dpi: u32) -> Vec<Field> {
         if ink_in(bw, x0, y0, x1, y1) > 0.02 {
             continue;
         }
-        let f = Field {
-            kind: Kind::Text,
-            x: x0 as u32,
-            y: y0 as u32,
-            w: (x1 - x0) as u32,
-            h: (y1 - y0) as u32,
-        };
-        if out
-            .iter()
-            .any(|o| f.x < o.x + o.w && o.x < f.x + f.w && f.y < o.y + o.h && o.y < f.y + f.h)
-        {
+        let f = Field { kind: Kind::Text, x: x0 as u32, y: y0 as u32, w: (x1 - x0) as u32, h: (y1 - y0) as u32 };
+        if out.iter().any(|o| f.x < o.x + o.w && o.x < f.x + f.w && f.y < o.y + o.h && o.y < f.y + f.h) {
             continue;
         }
         out.push(f);
@@ -255,11 +203,7 @@ mod tests {
         }
         let f = detect(&b, dpi);
         let text: Vec<_> = f.iter().filter(|f| f.kind == Kind::Text).collect();
-        assert_eq!(
-            f.iter().filter(|f| f.kind == Kind::Check).count(),
-            1,
-            "{f:?}"
-        );
+        assert_eq!(f.iter().filter(|f| f.kind == Kind::Check).count(), 1, "{f:?}");
         assert_eq!(text.len(), 2, "{f:?}");
         let boxed = text.iter().find(|t| t.y < 200).expect("box");
         assert!(boxed.x >= 100 && boxed.x + boxed.w <= 700 && boxed.w > 500 && boxed.h > 40);

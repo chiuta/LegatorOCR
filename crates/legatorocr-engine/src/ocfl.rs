@@ -14,10 +14,7 @@ pub struct Summary {
 }
 
 fn sha512_hex(data: &[u8]) -> String {
-    legatorocr_pdf::crypt::sha512(data)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    legatorocr_pdf::crypt::sha512(data).iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn json_str(s: &str) -> String {
@@ -46,12 +43,7 @@ fn rfc3339(when: u64) -> String {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = yoe + era * 400 + i64::from(m <= 2);
     let s = when % 86_400;
-    format!(
-        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
-        s / 3600,
-        s % 3600 / 60,
-        s % 60
-    )
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", s / 3600, s % 3600 / 60, s % 60)
 }
 
 /// Write object `id` at `dest` (a new or empty folder) from `files` (flat, unique names).
@@ -59,19 +51,11 @@ pub fn write(dest: &Path, files: &[PathBuf], id: &str, when: u64) -> Result<Summ
     if id.trim().is_empty() {
         bail!("an OCFL object needs a non-empty id");
     }
-    if dest.exists()
-        && std::fs::read_dir(dest)
-            .map(|mut d| d.next().is_some())
-            .unwrap_or(true)
-    {
-        bail!(
-            "{} exists and is not empty; an OCFL object is written into a new folder",
-            dest.display()
-        );
+    if dest.exists() && std::fs::read_dir(dest).map(|mut d| d.next().is_some()).unwrap_or(true) {
+        bail!("{} exists and is not empty; an OCFL object is written into a new folder", dest.display());
     }
     let content = dest.join("v1").join("content");
-    std::fs::create_dir_all(&content)
-        .with_context(|| format!("{}: cannot create", content.display()))?;
+    std::fs::create_dir_all(&content).with_context(|| format!("{}: cannot create", content.display()))?;
     // digest -> (content path, logical names); a repeated content is stored once
     let mut by_digest: Vec<(String, String, Vec<String>)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -100,30 +84,19 @@ pub fn write(dest: &Path, files: &[PathBuf], id: &str, when: u64) -> Result<Summ
     inv.push_str("  \"type\": \"https://ocfl.io/1.1/spec/#inventory\",\n  \"digestAlgorithm\": \"sha512\",\n  \"head\": \"v1\",\n");
     inv.push_str("  \"manifest\": {\n");
     for (k, (d, p, _)) in by_digest.iter().enumerate() {
-        inv.push_str(&format!(
-            "    \"{d}\": [{}]{}\n",
-            json_str(p),
-            if k + 1 < by_digest.len() { "," } else { "" }
-        ));
+        inv.push_str(&format!("    \"{d}\": [{}]{}\n", json_str(p), if k + 1 < by_digest.len() { "," } else { "" }));
     }
     inv.push_str("  },\n  \"versions\": {\n    \"v1\": {\n");
     inv.push_str(&format!("      \"created\": \"{}\",\n", rfc3339(when)));
     inv.push_str(&format!(
         "      \"message\": {},\n",
-        json_str(&format!(
-            "Written by LegatorOCR {}",
-            env!("CARGO_PKG_VERSION")
-        ))
+        json_str(&format!("Written by LegatorOCR {}", env!("CARGO_PKG_VERSION")))
     ));
     inv.push_str("      \"user\": {\"name\": \"LegatorOCR\"},\n");
     inv.push_str("      \"state\": {\n");
     for (k, (d, _, names)) in by_digest.iter().enumerate() {
         let list: Vec<String> = names.iter().map(|n| json_str(n)).collect();
-        inv.push_str(&format!(
-            "        \"{d}\": [{}]{}\n",
-            list.join(", "),
-            if k + 1 < by_digest.len() { "," } else { "" }
-        ));
+        inv.push_str(&format!("        \"{d}\": [{}]{}\n", list.join(", "), if k + 1 < by_digest.len() { "," } else { "" }));
     }
     inv.push_str("      }\n    }\n  }\n}\n");
     let side = format!("{}  inventory.json\n", sha512_hex(inv.as_bytes()));
@@ -132,10 +105,7 @@ pub fn write(dest: &Path, files: &[PathBuf], id: &str, when: u64) -> Result<Summ
         std::fs::write(dir.join("inventory.json.sha512"), &side)?;
     }
     std::fs::write(dest.join("0=ocfl_object_1.1"), "ocfl_object_1.1\n")?;
-    Ok(Summary {
-        files: files.len(),
-        bytes,
-    })
+    Ok(Summary { files: files.len(), bytes })
 }
 
 /// Problems found in an object written by [`write`] (empty = intact).
@@ -145,8 +115,7 @@ pub fn verify(dir: &Path) -> Result<Vec<String>> {
         Ok(t) if t == "ocfl_object_1.1\n" => {}
         _ => problems.push("0=ocfl_object_1.1 is missing or wrong".into()),
     }
-    let inv = std::fs::read(dir.join("inventory.json"))
-        .with_context(|| format!("{}: no inventory.json", dir.display()))?;
+    let inv = std::fs::read(dir.join("inventory.json")).with_context(|| format!("{}: no inventory.json", dir.display()))?;
     let side = std::fs::read_to_string(dir.join("inventory.json.sha512")).unwrap_or_default();
     if side.split_whitespace().next() != Some(sha512_hex(&inv).as_str()) {
         problems.push("inventory.json does not match inventory.json.sha512".into());
@@ -190,12 +159,7 @@ pub fn verify(dir: &Path) -> Result<Vec<String>> {
     }
     let listed: std::collections::HashSet<String> = text
         .lines()
-        .filter_map(|l| {
-            l.split("\"v1/content/")
-                .nth(1)
-                .and_then(|r| r.split('"').next())
-                .map(str::to_string)
-        })
+        .filter_map(|l| l.split("\"v1/content/").nth(1).and_then(|r| r.split('"').next()).map(str::to_string))
         .collect();
     if let Ok(rd) = std::fs::read_dir(dir.join("v1").join("content")) {
         for e in rd.flatten() {
@@ -224,33 +188,16 @@ mod tests {
         let obj = d.join("obj");
         let s = write(&obj, &[a, b, c], "urn:test:1", 1_793_000_000).unwrap();
         assert_eq!(s.files, 3);
-        assert_eq!(
-            std::fs::read_dir(obj.join("v1/content")).unwrap().count(),
-            2
-        );
+        assert_eq!(std::fs::read_dir(obj.join("v1/content")).unwrap().count(), 2);
         assert!(verify(&obj).unwrap().is_empty(), "{:?}", verify(&obj));
         let inv = std::fs::read_to_string(obj.join("inventory.json")).unwrap();
-        assert!(
-            inv.contains("\"digestAlgorithm\": \"sha512\"") && inv.contains("\"head\": \"v1\"")
-        );
-        assert!(
-            inv.contains("\"created\": \"2026-10-26T07:33:20Z\""),
-            "{inv}"
-        );
+        assert!(inv.contains("\"digestAlgorithm\": \"sha512\"") && inv.contains("\"head\": \"v1\""));
+        assert!(inv.contains("\"created\": \"2026-10-26T07:33:20Z\""), "{inv}");
         std::fs::write(obj.join("v1/content/c.pdf"), "tampered").unwrap();
-        assert!(verify(&obj)
-            .unwrap()
-            .iter()
-            .any(|p| p.contains("c.pdf: content changed")));
+        assert!(verify(&obj).unwrap().iter().any(|p| p.contains("c.pdf: content changed")));
         std::fs::write(obj.join("v1/content/extra.txt"), "x").unwrap();
-        assert!(verify(&obj)
-            .unwrap()
-            .iter()
-            .any(|p| p.contains("extra.txt")));
-        assert!(
-            write(&obj, &[], "x", 0).is_err(),
-            "a non-empty folder is refused"
-        );
+        assert!(verify(&obj).unwrap().iter().any(|p| p.contains("extra.txt")));
+        assert!(write(&obj, &[], "x", 0).is_err(), "a non-empty folder is refused");
         let _ = std::fs::remove_dir_all(&d);
     }
 }

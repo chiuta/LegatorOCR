@@ -18,8 +18,7 @@ pub mod pdfa;
 pub static DEFAULT_TAGGED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 /// Structured tagged PDF (paragraphs and headings instead of one element per line) for the
 /// engine to feed: set from `--tagged-pdf`.
-pub static DEFAULT_TAGGED_STRUCT: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+pub static DEFAULT_TAGGED_STRUCT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 pub static DEFAULT_PDFA_PART: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
 pub mod reader;
 
@@ -247,11 +246,7 @@ impl PdfWriter {
 
     fn apply_part(&mut self) {
         // byte 7 of the header is the minor version digit
-        self.buf[7] = if self.pdfa && self.pdfa_part == 1 {
-            b'4'
-        } else {
-            b'5'
-        };
+        self.buf[7] = if self.pdfa && self.pdfa_part == 1 { b'4' } else { b'5' };
     }
 
     fn gray_cs(&self) -> &'static str {
@@ -510,8 +505,7 @@ impl PdfWriter {
             if !body.is_empty() {
                 if self.tagged.is_some() {
                     let which = plan.as_ref().and_then(|p| {
-                        p.iter()
-                            .position(|s| s.first <= line_start && line_start < s.end)
+                        p.iter().position(|s| s.first <= line_start && line_start < s.end)
                     });
                     // one marked-content sequence per planned element; lines outside the plan
                     // (or every line, without a plan) get one each
@@ -519,9 +513,7 @@ impl PdfWriter {
                         if open.is_some() {
                             cs.push_str("EMC\n");
                         }
-                        let kind = which
-                            .and_then(|k| plan.as_ref().map(|p| p[k].kind))
-                            .unwrap_or(StructKind::Para);
+                        let kind = which.and_then(|k| plan.as_ref().map(|p| p[k].kind)).unwrap_or(StructKind::Para);
                         cs.push_str(&format!("/{} <</MCID {}>> BDC\n", kind.tag(), self.page_mc));
                         self.page_kinds.push(kind);
                         self.page_mc += 1;
@@ -854,10 +846,7 @@ impl PdfWriter {
                     (f.data.clone(), "")
                 };
                 let mime = f.mime.replace('/', "#2F");
-                let moddate = date
-                    .as_deref()
-                    .map(|d| format!(" /ModDate ({d})"))
-                    .unwrap_or_default();
+                let moddate = date.as_deref().map(|d| format!(" /ModDate ({d})")).unwrap_or_default();
                 self.stream_obj(
                     sid,
                     &format!("/Type /EmbeddedFile /Subtype /{mime}{filt} /Params << /Size {}{moddate} >>", f.data.len()),
@@ -875,9 +864,7 @@ impl PdfWriter {
                 names.push_str(&format!("{n} {fid} 0 R "));
                 af.push_str(&format!("{fid} 0 R "));
             }
-            cat_extra.push_str(&format!(
-                " /Names << /EmbeddedFiles << /Names [{names}] >> >> /AF [{af}]"
-            ));
+            cat_extra.push_str(&format!(" /Names << /EmbeddedFiles << /Names [{names}] >> >> /AF [{af}]"));
         }
         let producer = format!("LegatorOCR {}", env!("CARGO_PKG_VERSION"));
         if self.pdfa {
@@ -921,22 +908,13 @@ impl PdfWriter {
             for (k, (pg, ids)) in pages.iter().enumerate() {
                 let mut arr = String::new();
                 for (mc, (id, kind)) in ids.iter().enumerate() {
-                    self.plain_obj(
-                        *id,
-                        &format!(
-                            "<< /Type /StructElem /S /{} /P {doc} 0 R /Pg {pg} 0 R /K {mc} >>",
-                            kind.tag()
-                        ),
-                    );
+                    self.plain_obj(*id, &format!("<< /Type /StructElem /S /{} /P {doc} 0 R /Pg {pg} 0 R /K {mc} >>", kind.tag()));
                     kids.push_str(&format!("{id} 0 R "));
                     arr.push_str(&format!("{id} 0 R "));
                 }
                 parent_nums.push_str(&format!("{k} [{arr}] "));
             }
-            self.plain_obj(
-                doc,
-                &format!("<< /Type /StructElem /S /Document /P {root} 0 R /K [{kids}] >>"),
-            );
+            self.plain_obj(doc, &format!("<< /Type /StructElem /S /Document /P {root} 0 R /K [{kids}] >>"));
             self.plain_obj(
                 root,
                 &format!("<< /Type /StructTreeRoot /K {doc} 0 R /ParentTree << /Nums [{parent_nums}] >> /ParentTreeNextKey {} >>", pages.len()),
@@ -948,10 +926,7 @@ impl PdfWriter {
         }
         if !self.field_ids.is_empty() {
             let helv = self.alloc();
-            self.plain_obj(
-                helv,
-                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
-            );
+            self.plain_obj(helv, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>");
             let list: String = self.field_ids.iter().map(|i| format!("{i} 0 R ")).collect();
             cat_extra.push_str(&format!(
                 " /AcroForm << /Fields [{list}] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv {helv} 0 R >> >> /NeedAppearances true >>"
@@ -963,10 +938,7 @@ impl PdfWriter {
         );
         let info_id = self.alloc();
         // DisplayDocTitle needs a title: a tagged file without one gets a neutral placeholder
-        let fallback = self
-            .tagged
-            .as_ref()
-            .map(|_| "Untitled document".to_string());
+        let fallback = self.tagged.as_ref().map(|_| "Untitled document".to_string());
         let title = self
             .title
             .clone()
@@ -990,12 +962,7 @@ impl PdfWriter {
                 extra.push_str(&format!(" /Rights {}", pdf_text_string(r)));
             }
         }
-        if let Some(p) = self
-            .meta
-            .provenance
-            .as_deref()
-            .filter(|v| !v.trim().is_empty())
-        {
+        if let Some(p) = self.meta.provenance.as_deref().filter(|v| !v.trim().is_empty()) {
             if !self.pdfa {
                 extra.push_str(&format!(" /LegatorOCRProvenance {}", pdf_text_string(p)));
             }
@@ -1150,23 +1117,12 @@ mod tests {
 
     #[test]
     fn tagged_pdf_has_structure_tree_marked_content_and_language() {
-        let w = |t: &str, y: u32, line: u32| Word {
-            text: t.into(),
-            x: 100,
-            y,
-            w: 200,
-            h: 40,
-            conf: 90.0,
-            line,
-        };
+        let w = |t: &str, y: u32, line: u32| Word { text: t.into(), x: 100, y, w: 200, h: 40, conf: 90.0, line };
         let mut pw = PdfWriter::new(Compress::Flate);
         pw.set_tagged(Some("ro"));
         let mut b = BitImage::new(600, 400);
         b.set(1, 1, true);
-        pw.add_page(
-            &page(PageImage::Bw(b.clone())),
-            &[w("Bună", 50, 0), w("ziua", 50, 0), w("A doua", 120, 1)],
-        );
+        pw.add_page(&page(PageImage::Bw(b.clone())), &[w("Bună", 50, 0), w("ziua", 50, 0), w("A doua", 120, 1)]);
         pw.add_page(&page(PageImage::Bw(b)), &[w("Pagina", 50, 0)]);
         let pdf = pw.finish();
         let text = String::from_utf8_lossy(&pdf);
@@ -1186,16 +1142,9 @@ mod tests {
         let mut i = 0;
         while let Some(k) = pdf[i..].windows(7).position(|w| w == b"stream\n") {
             let st = i + k + 7;
-            let end = st
-                + pdf[st..]
-                    .windows(9)
-                    .position(|w| w == b"endstream")
-                    .unwrap_or(0);
+            let end = st + pdf[st..].windows(9).position(|w| w == b"endstream").unwrap_or(0);
             let mut d = String::new();
-            if flate2::read::ZlibDecoder::new(&pdf[st..end])
-                .read_to_string(&mut d)
-                .is_ok()
-            {
+            if flate2::read::ZlibDecoder::new(&pdf[st..end]).read_to_string(&mut d).is_ok() {
                 out.push_str(&d);
             }
             i = end.max(st) + 9;
@@ -1205,39 +1154,14 @@ mod tests {
 
     #[test]
     fn structured_tagging_groups_lines_into_paragraphs_and_headings() {
-        let w = |t: &str, y: u32, line: u32| Word {
-            text: t.into(),
-            x: 100,
-            y,
-            w: 200,
-            h: 40,
-            conf: 90.0,
-            line,
-        };
-        let words = [
-            w("Titlu", 20, 0),
-            w("a", 100, 1),
-            w("b", 150, 2),
-            w("c", 300, 3),
-        ];
+        let w = |t: &str, y: u32, line: u32| Word { text: t.into(), x: 100, y, w: 200, h: 40, conf: 90.0, line };
+        let words = [w("Titlu", 20, 0), w("a", 100, 1), w("b", 150, 2), w("c", 300, 3)];
         let mut pw = PdfWriter::new(Compress::Flate);
         pw.set_tagged(Some("ro"));
         pw.set_next_structure(vec![
-            StructPara {
-                kind: StructKind::Heading(1),
-                first: 0,
-                end: 1,
-            },
-            StructPara {
-                kind: StructKind::Para,
-                first: 1,
-                end: 3,
-            },
-            StructPara {
-                kind: StructKind::Para,
-                first: 3,
-                end: 4,
-            },
+            StructPara { kind: StructKind::Heading(1), first: 0, end: 1 },
+            StructPara { kind: StructKind::Para, first: 1, end: 3 },
+            StructPara { kind: StructKind::Para, first: 3, end: 4 },
         ]);
         let mut b = BitImage::new(600, 400);
         b.set(1, 1, true);
@@ -1245,30 +1169,13 @@ mod tests {
         let pdf = pw.finish();
         let text = String::from_utf8_lossy(&pdf);
         assert!(text.contains("/Type /StructElem /S /H1 "));
-        assert_eq!(
-            text.matches("/Type /StructElem /S /P ").count(),
-            2,
-            "two paragraphs, not four lines"
-        );
-        assert!(
-            text.contains("/Title (Untitled document)"),
-            "DisplayDocTitle needs a title"
-        );
+        assert_eq!(text.matches("/Type /StructElem /S /P ").count(), 2, "two paragraphs, not four lines");
+        assert!(text.contains("/Title (Untitled document)"), "DisplayDocTitle needs a title");
         let cs = inflated(&pdf);
-        assert!(
-            cs.contains("/H1 <</MCID 0>> BDC")
-                && cs.contains("/P <</MCID 1>> BDC")
-                && cs.contains("/P <</MCID 2>> BDC")
-        );
+        assert!(cs.contains("/H1 <</MCID 0>> BDC") && cs.contains("/P <</MCID 1>> BDC") && cs.contains("/P <</MCID 2>> BDC"));
         assert_eq!(cs.matches(" BDC").count(), 3);
         // the two lines of paragraph 1 share one marked-content sequence: 2 BT inside one BDC
-        let p1 = cs
-            .split("/P <</MCID 1>> BDC")
-            .nth(1)
-            .unwrap()
-            .split("EMC")
-            .next()
-            .unwrap();
+        let p1 = cs.split("/P <</MCID 1>> BDC").nth(1).unwrap().split("EMC").next().unwrap();
         assert_eq!(p1.matches("BT ").count(), 2);
     }
 
@@ -1303,10 +1210,7 @@ mod tests {
         assert!(pdf.contains("/Author (Ana)") && pdf.contains("/Subject <FEFF"));
         assert!(pdf.contains("/CreationDate (D:19700101000000Z)"));
         assert!(!pdf.contains("/Keywords"));
-        assert!(
-            pdf.contains("/LegatorOCRProvenance ("),
-            "provenance missing from the Info dictionary"
-        );
+        assert!(pdf.contains("/LegatorOCRProvenance ("), "provenance missing from the Info dictionary");
     }
 
     #[test]
@@ -1716,10 +1620,7 @@ fn outline_levels(marks: &[(String, usize, f32)]) -> Vec<u8> {
         return vec![0; marks.len()];
     }
     let cut = (lo + hi) / 2.0;
-    marks
-        .iter()
-        .map(|m| u8::from(m.2 > 0.0 && m.2 < cut))
-        .collect()
+    marks.iter().map(|m| u8::from(m.2 > 0.0 && m.2 < cut)).collect()
 }
 
 #[cfg(test)]
@@ -1742,58 +1643,23 @@ mod outline_tests {
     #[test]
     fn headings_of_clearly_different_size_are_nested() {
         let mut w = PdfWriter::new(Compress::Flate);
-        for (t, size) in [
-            ("Part one", 2.4f32),
-            ("Section a", 1.5),
-            ("Section b", 1.5),
-            ("Part two", 2.4),
-            ("Section c", 1.5),
-        ] {
+        for (t, size) in [("Part one", 2.4f32), ("Section a", 1.5), ("Section b", 1.5), ("Part two", 2.4), ("Section c", 1.5)] {
             w.add_heading_bookmark(t, size);
             w.add_page(&pg(), &[]);
         }
         let pdf = w.finish();
         let txt = String::from_utf8_lossy(&pdf).to_string();
         // two top-level entries and five in all; each part lists its sections
-        assert!(
-            txt.contains("/Type /Outlines") && txt.contains("/Count 5"),
-            "{txt}"
-        );
-        assert_eq!(
-            txt.matches("/Count 2").count(),
-            1,
-            "first part has two sections"
-        );
-        assert_eq!(
-            txt.matches("/Count 1 ").count() + txt.matches("/Count 1>>").count(),
-            1,
-            "second part has one"
-        );
+        assert!(txt.contains("/Type /Outlines") && txt.contains("/Count 5"), "{txt}");
+        assert_eq!(txt.matches("/Count 2").count(), 1, "first part has two sections");
+        assert_eq!(txt.matches("/Count 1 ").count() + txt.matches("/Count 1>>").count(), 1, "second part has one");
         // similar sizes stay flat
-        assert_eq!(
-            outline_levels(&[("a".into(), 0, 1.5), ("b".into(), 1, 1.6)]),
-            vec![0, 0]
-        );
-        assert_eq!(
-            outline_levels(&[
-                ("a".into(), 0, 2.4),
-                ("b".into(), 1, 1.5),
-                ("c".into(), 2, 0.0)
-            ]),
-            vec![0, 1, 0]
-        );
-        if std::process::Command::new("qpdf")
-            .arg("--version")
-            .output()
-            .is_ok()
-        {
+        assert_eq!(outline_levels(&[("a".into(), 0, 1.5), ("b".into(), 1, 1.6)]), vec![0, 0]);
+        assert_eq!(outline_levels(&[("a".into(), 0, 2.4), ("b".into(), 1, 1.5), ("c".into(), 2, 0.0)]), vec![0, 1, 0]);
+        if std::process::Command::new("qpdf").arg("--version").output().is_ok() {
             let p = std::env::temp_dir().join(format!("lgr-nest-{}.pdf", std::process::id()));
             std::fs::write(&p, &pdf).unwrap();
-            let o = std::process::Command::new("qpdf")
-                .arg("--check")
-                .arg(&p)
-                .output()
-                .unwrap();
+            let o = std::process::Command::new("qpdf").arg("--check").arg(&p).output().unwrap();
             let _ = std::fs::remove_file(&p);
             assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
         }

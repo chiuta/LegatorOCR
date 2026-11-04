@@ -87,10 +87,7 @@ mod tests {
         assert_eq!(w.poll(), vec![d.join("a.png")]);
         assert!(w.poll().is_empty(), "reported only once");
         std::fs::write(d.join("empty.jpg"), b"").unwrap();
-        assert!(
-            w.poll().is_empty() && w.poll().is_empty(),
-            "empty files wait"
-        );
+        assert!(w.poll().is_empty() && w.poll().is_empty(), "empty files wait");
         let _ = std::fs::remove_dir_all(&d);
     }
 

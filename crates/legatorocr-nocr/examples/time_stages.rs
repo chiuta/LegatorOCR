@@ -26,12 +26,5 @@ fn main() {
             }
         }
     }
-    println!(
-        "prepare {:?}  find_lines {:?}  network {:?} ({} lines, {} columns)",
-        t1 - t0,
-        t2 - t1,
-        net,
-        lines.len(),
-        cols
-    );
+    println!("prepare {:?}  find_lines {:?}  network {:?} ({} lines, {} columns)", t1 - t0, t2 - t1, net, lines.len(), cols);
 }

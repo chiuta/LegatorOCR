@@ -13,11 +13,7 @@ fn main() {
     let out = std::path::Path::new(&a[3]);
     let dpi = a.get(4).and_then(|s| s.parse().ok()).unwrap_or(300);
     std::fs::create_dir_all(out).unwrap();
-    let stem = std::path::Path::new(&a[2])
-        .file_stem()
-        .unwrap()
-        .to_string_lossy()
-        .to_string();
+    let stem = std::path::Path::new(&a[2]).file_stem().unwrap().to_string_lossy().to_string();
     let prep = layout::prepare(&PageImage::Gray(img), dpi);
     let mut rows = std::fs::File::create(out.join(format!("{stem}.jsonl"))).unwrap();
     let mut n = 0;
@@ -27,15 +23,8 @@ fn main() {
                 continue;
             };
             let (t, lp) = model.forward(&li.data, li.w);
-            let text: String = ctc::greedy(&lp, t, model.nc, &model.charset)
-                .iter()
-                .map(|g| g.ch)
-                .collect();
-            let buf: Vec<u8> = li
-                .data
-                .iter()
-                .map(|v| (255.0 - v * 255.0).round() as u8)
-                .collect();
+            let text: String = ctc::greedy(&lp, t, model.nc, &model.charset).iter().map(|g| g.ch).collect();
+            let buf: Vec<u8> = li.data.iter().map(|v| (255.0 - v * 255.0).round() as u8).collect();
             image::GrayImage::from_raw(li.w as u32, LINE_H as u32, buf)
                 .unwrap()
                 .save(out.join(format!("{stem}_{n}.png")))

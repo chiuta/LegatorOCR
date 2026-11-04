@@ -455,22 +455,12 @@ pub fn portable_data_dir(exe: &std::path::Path) -> Option<PathBuf> {
     if !dir.join("portable.txt").is_file() {
         return None;
     }
-    let pa = dir.parent().and_then(|p| p.parent()).filter(|_| {
-        dir.parent()
-            .and_then(|p| p.file_name())
-            .is_some_and(|n| n == "App")
-    });
-    Some(
-        pa.map(|r| r.join("Data"))
-            .unwrap_or_else(|| dir.join("Data")),
-    )
+    let pa = dir.parent().and_then(|p| p.parent()).filter(|_| dir.parent().and_then(|p| p.file_name()).is_some_and(|n| n == "App"));
+    Some(pa.map(|r| r.join("Data")).unwrap_or_else(|| dir.join("Data")))
 }
 
 pub fn config_path() -> Option<PathBuf> {
-    if let Some(d) = std::env::current_exe()
-        .ok()
-        .and_then(|e| portable_data_dir(&e))
-    {
+    if let Some(d) = std::env::current_exe().ok().and_then(|e| portable_data_dir(&e)) {
         return Some(d.join("settings.lgr"));
     }
     let base = if cfg!(windows) {
@@ -499,17 +489,11 @@ mod portable_tests {
         let exe = app.join("legatorocr-gui.exe");
         assert_eq!(portable_data_dir(&exe), None, "no marker: normal profile");
         std::fs::write(app.join("portable.txt"), "").unwrap();
-        assert_eq!(
-            portable_data_dir(&exe),
-            Some(base.join("LegatorOCRPortable/Data"))
-        );
+        assert_eq!(portable_data_dir(&exe), Some(base.join("LegatorOCRPortable/Data")));
         let plain = base.join("stick/legatorocr");
         std::fs::create_dir_all(&plain).unwrap();
         std::fs::write(plain.join("portable.txt"), "").unwrap();
-        assert_eq!(
-            portable_data_dir(&plain.join("legatorocr-gui")),
-            Some(plain.join("Data"))
-        );
+        assert_eq!(portable_data_dir(&plain.join("legatorocr-gui")), Some(plain.join("Data")));
         let _ = std::fs::remove_dir_all(&base);
     }
 }
@@ -687,16 +671,11 @@ mod tests {
     fn steps_of_45_degrees_add_up() {
         let mut a = SheetAdjust::default();
         let mut total = 0.0f32;
-        for step in [
-            45.0, 45.0, 45.0, -45.0, -45.0, 45.0, 45.0, 45.0, 45.0, -45.0,
-        ] {
+        for step in [45.0, 45.0, 45.0, -45.0, -45.0, 45.0, 45.0, 45.0, 45.0, -45.0] {
             a.turn(step);
             total += step;
             let t = a.total_turn().rem_euclid(360.0);
-            assert!(
-                (t - total.rem_euclid(360.0)).abs() < 0.02,
-                "after {total}: {t}"
-            );
+            assert!((t - total.rem_euclid(360.0)).abs() < 0.02, "after {total}: {t}");
             assert!(a.skew_deg.unwrap().abs() <= 45.0 + 1e-3);
             assert!(a.rotate_quarters < 4);
         }

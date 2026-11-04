@@ -28,9 +28,7 @@ pub unsafe extern "C" fn lgr_free(ptr: *mut u8, n: usize) {
 }
 
 fn decode(bytes: &[u8]) -> Result<image::DynamicImage, ()> {
-    let mut r = image::ImageReader::new(std::io::Cursor::new(bytes))
-        .with_guessed_format()
-        .map_err(|_| ())?;
+    let mut r = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().map_err(|_| ())?;
     let mut limits = image::Limits::default();
     limits.max_alloc = Some(1 << 30);
     r.limits(limits);
@@ -63,16 +61,9 @@ pub unsafe extern "C" fn lgr_process(ptr: *const u8, len: usize, mode: u32, dpi:
     let bytes = std::slice::from_raw_parts(ptr, len);
     let Ok(img) = decode(bytes) else { return -1 };
     let pages = process_page(&img, &settings(mode, dpi));
-    let Some(first) = pages.first() else {
-        return -2;
-    };
+    let Some(first) = pages.first() else { return -2 };
     let mut png = Vec::new();
-    if first
-        .image
-        .to_dynamic()
-        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-        .is_err()
-    {
+    if first.image.to_dynamic().write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).is_err() {
         return -2;
     }
     *OUT.lock().unwrap() = png;
@@ -86,9 +77,7 @@ pub unsafe extern "C" fn lgr_process(ptr: *const u8, len: usize, mode: u32, dpi:
 /// `ptr` must point to `len` readable bytes inside this module.
 #[no_mangle]
 pub unsafe extern "C" fn lgr_sharpness(ptr: *const u8, len: usize) -> i32 {
-    let Ok(img) = decode(std::slice::from_raw_parts(ptr, len)) else {
-        return -1;
-    };
+    let Ok(img) = decode(std::slice::from_raw_parts(ptr, len)) else { return -1 };
     (legatorocr_core::quality::sharpness(&img.to_luma8()) * 1000.0).round() as i32
 }
 
@@ -115,9 +104,7 @@ mod tests {
             }
         }
         let mut png = Vec::new();
-        image::DynamicImage::ImageLuma8(img)
-            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-            .unwrap();
+        image::DynamicImage::ImageLuma8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
         unsafe {
             let p = lgr_alloc(png.len());
             std::ptr::copy_nonoverlapping(png.as_ptr(), p, png.len());

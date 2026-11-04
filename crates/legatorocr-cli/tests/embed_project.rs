@@ -16,11 +16,7 @@ fn run(dir: &Path, args: &[&str]) -> Output {
 
 fn ok(dir: &Path, args: &[&str]) -> String {
     let o = run(dir, args);
-    assert!(
-        o.status.success(),
-        "{args:?}: {}",
-        String::from_utf8_lossy(&o.stderr)
-    );
+    assert!(o.status.success(), "{args:?}: {}", String::from_utf8_lossy(&o.stderr));
     String::from_utf8_lossy(&o.stderr).into_owned()
 }
 
@@ -73,92 +69,27 @@ fn the_pdf_returns_its_originals_and_processing_them_again_gives_the_same_pdf() 
     std::fs::create_dir_all(one.join("plain")).unwrap();
     std::fs::create_dir_all(one.join("emb")).unwrap();
     // run 1: plain PDF and the same with the project embedded
-    ok(
-        &one,
-        &[
-            "--project",
-            "in.lgr",
-            "--pdf",
-            "plain/o.pdf",
-            "-o",
-            "plain/pages",
-        ],
-    );
-    let log = ok(
-        &one,
-        &[
-            "--project",
-            "in.lgr",
-            "--pdf",
-            "emb/o.pdf",
-            "-o",
-            "emb/pages",
-            "--embed-project",
-        ],
-    );
+    ok(&one, &["--project", "in.lgr", "--pdf", "plain/o.pdf", "-o", "plain/pages"]);
+    let log = ok(&one, &["--project", "in.lgr", "--pdf", "emb/o.pdf", "-o", "emb/pages", "--embed-project"]);
     assert!(log.contains("--embed-project: 2 original file(s)"), "{log}");
     let plain = std::fs::read(one.join("plain/o.pdf")).unwrap();
     let emb = std::fs::read(one.join("emb/o.pdf")).unwrap();
-    let orig = std::fs::metadata(one.join("a.jpg")).unwrap().len()
-        + std::fs::metadata(one.join("b.png")).unwrap().len();
-    assert!(
-        emb.len() as u64 >= plain.len() as u64 + orig,
-        "originals must be inside"
-    );
-    assert!(
-        !String::from_utf8_lossy(&plain).contains("/EmbeddedFiles"),
-        "off by default"
-    );
+    let orig = std::fs::metadata(one.join("a.jpg")).unwrap().len() + std::fs::metadata(one.join("b.png")).unwrap().len();
+    assert!(emb.len() as u64 >= plain.len() as u64 + orig, "originals must be inside");
+    assert!(!String::from_utf8_lossy(&plain).contains("/EmbeddedFiles"), "off by default");
     // extract and process again
     let x = base.join("extracted");
-    ok(
-        &base,
-        &[
-            "--extract-project",
-            one.join("emb/o.pdf").to_str().unwrap(),
-            x.to_str().unwrap(),
-        ],
-    );
+    ok(&base, &["--extract-project", one.join("emb/o.pdf").to_str().unwrap(), x.to_str().unwrap()]);
     for (n, src) in [("001_a.jpg", "a.jpg"), ("002_b.png", "b.png")] {
-        assert_eq!(
-            std::fs::read(x.join(n)).unwrap(),
-            std::fs::read(one.join(src)).unwrap(),
-            "{n} not byte for byte"
-        );
+        assert_eq!(std::fs::read(x.join(n)).unwrap(), std::fs::read(one.join(src)).unwrap(), "{n} not byte for byte");
     }
     std::fs::create_dir_all(x.join("again")).unwrap();
-    ok(
-        &x,
-        &[
-            "--project",
-            "project.lgr",
-            "--pdf",
-            "again/o.pdf",
-            "-o",
-            "again/pages",
-        ],
-    );
-    assert_eq!(
-        pages(&one.join("emb/pages")),
-        pages(&x.join("again/pages")),
-        "page images differ"
-    );
+    ok(&x, &["--project", "project.lgr", "--pdf", "again/o.pdf", "-o", "again/pages"]);
+    assert_eq!(pages(&one.join("emb/pages")), pages(&x.join("again/pages")), "page images differ");
     assert!(pages(&x.join("again/pages")).len() >= 2);
-    assert!(
-        std::fs::read(x.join("again/o.pdf")).unwrap() == plain,
-        "re-processed PDF differs from the first plain PDF"
-    );
+    assert!(std::fs::read(x.join("again/o.pdf")).unwrap() == plain, "re-processed PDF differs from the first plain PDF");
     // a second extraction into the same folder is refused
-    assert!(!run(
-        &base,
-        &[
-            "--extract-project",
-            one.join("emb/o.pdf").to_str().unwrap(),
-            x.to_str().unwrap()
-        ]
-    )
-    .status
-    .success());
+    assert!(!run(&base, &["--extract-project", one.join("emb/o.pdf").to_str().unwrap(), x.to_str().unwrap()]).status.success());
     let _ = std::fs::remove_dir_all(&base);
 }
 
@@ -169,74 +100,19 @@ fn detected_resolution_is_kept_without_a_project_and_pdfa_needs_part_3() {
     make_inputs(&base);
     std::fs::create_dir_all(base.join("d0")).unwrap();
     // inputs given on the command line (not a project): the JPEG's 150 dpi comes from its header
-    ok(
-        &base,
-        &[
-            "a.jpg", "b.png", "--mode", "bw", "--pdf", "d0/o.pdf", "-o", "p0",
-        ],
-    );
-    ok(
-        &base,
-        &[
-            "a.jpg",
-            "b.png",
-            "--mode",
-            "bw",
-            "--pdf",
-            "e.pdf",
-            "-o",
-            "p1",
-            "--embed-project",
-        ],
-    );
+    ok(&base, &["a.jpg", "b.png", "--mode", "bw", "--pdf", "d0/o.pdf", "-o", "p0"]);
+    ok(&base, &["a.jpg", "b.png", "--mode", "bw", "--pdf", "e.pdf", "-o", "p1", "--embed-project"]);
     ok(&base, &["--extract-project", "e.pdf", "x"]);
     std::fs::create_dir_all(base.join("x/d2")).unwrap();
-    ok(
-        &base.join("x"),
-        &[
-            "--project",
-            "project.lgr",
-            "--pdf",
-            "d2/o.pdf",
-            "-o",
-            "../p2",
-        ],
-    );
-    assert_eq!(
-        pages(&base.join("p0")),
-        pages(&base.join("p2")),
-        "resolution detected from the JPEG was lost"
-    );
-    assert!(
-        std::fs::read(base.join("d0/o.pdf")).unwrap()
-            == std::fs::read(base.join("x/d2/o.pdf")).unwrap()
-    );
+    ok(&base.join("x"), &["--project", "project.lgr", "--pdf", "d2/o.pdf", "-o", "../p2"]);
+    assert_eq!(pages(&base.join("p0")), pages(&base.join("p2")), "resolution detected from the JPEG was lost");
+    assert!(std::fs::read(base.join("d0/o.pdf")).unwrap() == std::fs::read(base.join("x/d2/o.pdf")).unwrap());
     // PDF/A-2 cannot carry these files; PDF/A-3 can
-    let o = run(
-        &base,
-        &["a.jpg", "--pdf", "f.pdf", "--pdfa", "--embed-project"],
-    );
+    let o = run(&base, &["a.jpg", "--pdf", "f.pdf", "--pdfa", "--embed-project"]);
     assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("--pdfa-part 3"));
-    ok(
-        &base,
-        &[
-            "a.jpg",
-            "--pdf",
-            "g.pdf",
-            "--pdfa",
-            "--pdfa-part",
-            "3",
-            "--embed-project",
-            "-o",
-            "p3",
-        ],
-    );
+    ok(&base, &["a.jpg", "--pdf", "g.pdf", "--pdfa", "--pdfa-part", "3", "--embed-project", "-o", "p3"]);
     let g = std::fs::read(base.join("g.pdf")).unwrap();
     let s = String::from_utf8_lossy(&g);
-    assert!(
-        s.contains("<pdfaid:part>3</pdfaid:part>")
-            && s.contains("/AFRelationship /Source")
-            && s.contains("/AF [")
-    );
+    assert!(s.contains("<pdfaid:part>3</pdfaid:part>") && s.contains("/AFRelationship /Source") && s.contains("/AF ["));
     let _ = std::fs::remove_dir_all(&base);
 }

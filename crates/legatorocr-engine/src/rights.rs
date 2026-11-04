@@ -13,12 +13,7 @@ pub fn public_domain_year(death_year: i32) -> i32 {
 
 /// Notice text for `death_year`, judged at `today_year`.
 /// `deed`: assignment deed number and date, printed as written.
-pub fn notice(
-    death_year: i32,
-    today_year: i32,
-    author: Option<&str>,
-    deed: Option<(&str, &str)>,
-) -> Result<String> {
+pub fn notice(death_year: i32, today_year: i32, author: Option<&str>, deed: Option<(&str, &str)>) -> Result<String> {
     if !(1000..=today_year).contains(&death_year) {
         bail!("--rights-death-year {death_year}: expected a year between 1000 and {today_year}");
     }
@@ -48,14 +43,9 @@ mod tests {
     #[test]
     fn term_runs_from_the_year_after_death() {
         assert_eq!(public_domain_year(1955), 2026);
-        assert!(notice(1955, 2026, None, None)
-            .unwrap()
-            .contains("public domain in Romania since 1 January 2026"));
+        assert!(notice(1955, 2026, None, None).unwrap().contains("public domain in Romania since 1 January 2026"));
         let n = notice(1956, 2026, Some("I. Autor"), Some(("12/B", "3 March 2026"))).unwrap();
-        assert!(
-            n.contains("until 31 December 2026") && n.contains("I. Autor"),
-            "{n}"
-        );
+        assert!(n.contains("until 31 December 2026") && n.contains("I. Autor"), "{n}");
         assert!(n.contains("deed no. 12/B of 3 March 2026"));
         assert!(notice(2030, 2026, None, None).is_err());
         assert!(notice(12, 2026, None, None).is_err());

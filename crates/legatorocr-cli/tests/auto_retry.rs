@@ -18,11 +18,7 @@ fn auto_retry_needs_ocr_and_is_listed() {
         .output()
         .unwrap();
     assert!(!out.status.success());
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains("--auto-retry needs --ocr"),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--auto-retry needs --ocr"), "{}", String::from_utf8_lossy(&out.stderr));
     let help = Command::new(exe()).arg("--help").output().unwrap();
     let h = String::from_utf8_lossy(&help.stdout);
     assert!(h.contains("--auto-retry-below") && h.contains("EXPERIMENTAL"));

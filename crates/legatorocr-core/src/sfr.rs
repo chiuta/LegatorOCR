@@ -56,18 +56,11 @@ pub fn measure(img: &GrayImage, roi: (u32, u32, u32, u32)) -> Option<Sfr> {
     // least-squares line x = m*y + c
     let n = pts.len() as f64;
     let (sy, sx) = pts.iter().fold((0.0, 0.0), |a, p| (a.0 + p.0, a.1 + p.1));
-    let (syy, sxy) = pts
-        .iter()
-        .fold((0.0, 0.0), |a, p| (a.0 + p.0 * p.0, a.1 + p.0 * p.1));
+    let (syy, sxy) = pts.iter().fold((0.0, 0.0), |a, p| (a.0 + p.0 * p.0, a.1 + p.0 * p.1));
     let m = (n * sxy - sy * sx) / (n * syy - sy * sy);
     let c = (sx - m * sy) / n;
     // the fit must explain the rows: otherwise this is not a straight edge
-    let rms = (pts
-        .iter()
-        .map(|p| (p.1 - (m * p.0 + c)).powi(2))
-        .sum::<f64>()
-        / n)
-        .sqrt();
+    let rms = (pts.iter().map(|p| (p.1 - (m * p.0 + c)).powi(2)).sum::<f64>() / n).sqrt();
     if rms > 1.5 {
         return None;
     }
@@ -105,15 +98,8 @@ pub fn measure(img: &GrayImage, roi: (u32, u32, u32, u32)) -> Option<Sfr> {
     }
     let mut lsf: Vec<f64> = esf.windows(2).map(|p| p[1] - p[0]).collect();
     // centre a Hann window on the peak
-    let peak = lsf
-        .iter()
-        .enumerate()
-        .max_by(|a, b| a.1.total_cmp(b.1))
-        .map(|p| p.0)?;
-    let half = (lsf.len() / 2)
-        .min(peak)
-        .min(lsf.len() - 1 - peak)
-        .min(64 * OS as usize);
+    let peak = lsf.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).map(|p| p.0)?;
+    let half = (lsf.len() / 2).min(peak).min(lsf.len() - 1 - peak).min(64 * OS as usize);
     if half < 16 {
         return None;
     }
@@ -149,12 +135,7 @@ pub fn measure(img: &GrayImage, roi: (u32, u32, u32, u32)) -> Option<Sfr> {
         }
         1.0
     };
-    Some(Sfr {
-        angle_deg: m.atan().to_degrees(),
-        mtf50: cross(0.5),
-        mtf10: cross(0.1),
-        curve,
-    })
+    Some(Sfr { angle_deg: m.atan().to_degrees(), mtf50: cross(0.5), mtf10: cross(0.1), curve })
 }
 
 #[cfg(test)]
@@ -171,8 +152,7 @@ mod tests {
                 let mut acc = 0.0;
                 for sx in 0..8 {
                     let xs = x as f64 + (sx as f64 + 0.5) / 8.0;
-                    let d = (xs - (48.0 + slope * y as f64))
-                        / (sigma.max(1e-3) * std::f64::consts::SQRT_2);
+                    let d = (xs - (48.0 + slope * y as f64)) / (sigma.max(1e-3) * std::f64::consts::SQRT_2);
                     acc += 0.5 * (1.0 + erf(d));
                 }
                 im.put_pixel(x, y, image::Luma([(30.0 + 195.0 * acc / 8.0) as u8]));
@@ -184,16 +164,8 @@ mod tests {
     fn erf(x: f64) -> f64 {
         // Abramowitz-Stegun 7.1.26
         let t = 1.0 / (1.0 + 0.3275911 * x.abs());
-        let y = 1.0
-            - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t
-                + 0.254829592)
-                * t
-                * (-x * x).exp();
-        if x >= 0.0 {
-            y
-        } else {
-            -y
-        }
+        let y = 1.0 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * (-x * x).exp();
+        if x >= 0.0 { y } else { -y }
     }
 
     #[test]
@@ -209,16 +181,8 @@ mod tests {
             while (-2.0 * std::f64::consts::PI.powi(2) * s * s * f * f).exp() * box_resp(f) > 0.5 {
                 f += 0.001;
             }
-            assert!(
-                (r.mtf50 - f).abs() / f < 0.12,
-                "sigma {s}: measured {} expected {f} (gauss only {ideal})",
-                r.mtf50
-            );
-            assert!(
-                (r.angle_deg - (0.08f64).atan().to_degrees()).abs() < 0.5,
-                "{}",
-                r.angle_deg
-            );
+            assert!((r.mtf50 - f).abs() / f < 0.12, "sigma {s}: measured {} expected {f} (gauss only {ideal})", r.mtf50);
+            assert!((r.angle_deg - (0.08f64).atan().to_degrees()).abs() < 0.5, "{}", r.angle_deg);
         }
         let sharp = measure(&edge(0.8, 0.08), (0, 0, 96, 128)).unwrap().mtf50;
         let soft = measure(&edge(2.0, 0.08), (0, 0, 96, 128)).unwrap().mtf50;

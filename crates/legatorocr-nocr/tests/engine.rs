@@ -223,10 +223,7 @@ fn tilted_lines_with_overlapping_rows_are_traced() {
     }
     let lines = layout::find_lines(&b, 10);
     // the fitted slope must be the real one (0.06), not merely non-zero
-    let tilted: Vec<_> = lines
-        .iter()
-        .filter(|l| (l.slope - 0.06).abs() < 0.012)
-        .collect();
+    let tilted: Vec<_> = lines.iter().filter(|l| (l.slope - 0.06).abs() < 0.012).collect();
     assert!(tilted.len() >= 3, "{lines:?}");
 }
 

@@ -47,13 +47,7 @@ fn win_ansi(s: &str) -> Vec<u8> {
     s.chars()
         .map(|c| match c {
             c if (c as u32) < 256 => c as u32 as u8,
-            'ă' | 'Ă' => {
-                if c == 'ă' {
-                    b'a'
-                } else {
-                    b'A'
-                }
-            }
+            'ă' | 'Ă' => if c == 'ă' { b'a' } else { b'A' },
             'ș' | 'ş' => b's',
             'Ș' | 'Ş' => b'S',
             'ț' | 'ţ' => b't',
@@ -176,11 +170,7 @@ impl PdfDoc {
             Val::Bool(b) => s.extend_from_slice(if *b { b"true" } else { b"false" }),
             Val::Int(i) => s.extend_from_slice(i.to_string().as_bytes()),
             Val::Real(r) => {
-                let t = if r.is_finite() {
-                    format!("{r:.6}")
-                } else {
-                    "0".into()
-                };
+                let t = if r.is_finite() { format!("{r:.6}") } else { "0".into() };
                 s.extend_from_slice(t.trim_end_matches('0').trim_end_matches('.').as_bytes());
             }
             Val::Name(n) => s.extend_from_slice(esc_name(n).as_bytes()),
@@ -226,10 +216,7 @@ impl PdfDoc {
         let mut keys: Vec<_> = d.keys().collect();
         keys.sort();
         for k in keys {
-            if matches!(
-                k.as_str(),
-                "Parent" | "P" | "Length" | "StructParent" | "StructParents"
-            ) {
+            if matches!(k.as_str(), "Parent" | "P" | "Length" | "StructParent" | "StructParents") {
                 continue;
             }
             s.extend_from_slice(esc_name(k).as_bytes());
@@ -271,12 +258,7 @@ impl PdfDoc {
         if let Val::Arr(a) = self.resolve(page.get("MediaBox").unwrap_or(&Val::Null)) {
             let n: Vec<f64> = a.iter().filter_map(|v| self.resolve(v).num()).collect();
             if n.len() == 4 {
-                return (
-                    n[0].min(n[2]),
-                    n[1].min(n[3]),
-                    (n[2] - n[0]).abs(),
-                    (n[3] - n[1]).abs(),
-                );
+                return (n[0].min(n[2]), n[1].min(n[3]), (n[2] - n[0]).abs(), (n[3] - n[1]).abs());
             }
         }
         (0.0, 0.0, 612.0, 792.0)
@@ -302,11 +284,7 @@ pub fn assemble(
     if total == 0 {
         return fail("no pages selected");
     }
-    let mut out = Out {
-        objs: Vec::new(),
-        map: HashMap::new(),
-        queue: Vec::new(),
-    };
+    let mut out = Out { objs: Vec::new(), map: HashMap::new(), queue: Vec::new() };
     let catalog = out.alloc();
     let pages_id = out.alloc();
     let mut kids = Vec::new();
@@ -317,21 +295,14 @@ pub fn assemble(
         }
         for &pi in idxs {
             let Some(page) = doc.pages.get(pi) else {
-                return fail(format!(
-                    "page {} does not exist (file has {})",
-                    pi + 1,
-                    doc.pages.len()
-                ));
+                return fail(format!("page {} does not exist (file has {})", pi + 1, doc.pages.len()));
             };
             let mut page = page.clone();
             let st = stamps(n_out, total);
             let mut stamp_ids: Vec<u32> = Vec::new();
             if !st.is_empty() {
                 let (llx, lly, w, h) = doc.page_box(&page);
-                let rot = doc
-                    .resolve(page.get("Rotate").unwrap_or(&Val::Null))
-                    .int()
-                    .unwrap_or(0);
+                let rot = doc.resolve(page.get("Rotate").unwrap_or(&Val::Null)).int().unwrap_or(0);
                 let mut body = String::new();
                 let mut any_alpha = false;
                 for s in &st {
@@ -340,12 +311,8 @@ pub fn assemble(
                 }
                 let alpha = st.iter().map(|s| s.opacity).fold(1.0, f64::min);
                 // resources: the page's own, plus our font (and transparency) entry
-                let mut res = doc
-                    .dict_of(page.get("Resources").unwrap_or(&Val::Null))
-                    .unwrap_or_default();
-                let mut fonts = doc
-                    .dict_of(res.get("Font").unwrap_or(&Val::Null))
-                    .unwrap_or_default();
+                let mut res = doc.dict_of(page.get("Resources").unwrap_or(&Val::Null)).unwrap_or_default();
+                let mut fonts = doc.dict_of(res.get("Font").unwrap_or(&Val::Null)).unwrap_or_default();
                 let mut f = Dict::new();
                 f.insert("Type".into(), Val::Name("Font".into()));
                 f.insert("Subtype".into(), Val::Name("Type1".into()));
@@ -354,9 +321,7 @@ pub fn assemble(
                 fonts.insert("LGRF".into(), Val::Dict(f));
                 res.insert("Font".into(), Val::Dict(fonts));
                 if any_alpha {
-                    let mut egs = doc
-                        .dict_of(res.get("ExtGState").unwrap_or(&Val::Null))
-                        .unwrap_or_default();
+                    let mut egs = doc.dict_of(res.get("ExtGState").unwrap_or(&Val::Null)).unwrap_or_default();
                     let mut g = Dict::new();
                     g.insert("ca".into(), Val::Real(alpha));
                     g.insert("CA".into(), Val::Real(alpha));
@@ -413,18 +378,13 @@ pub fn assemble(
     }
     // pages tree and catalog
     let kid_list: String = kids.iter().map(|k| format!("{k} 0 R ")).collect();
-    out.objs[pages_id as usize - 1] = Some(
-        format!(
-            "<< /Type /Pages /Count {} /Kids [{kid_list}] >>",
-            kids.len()
-        )
-        .into_bytes(),
-    );
-    out.objs[catalog as usize - 1] =
-        Some(format!("<< /Type /Catalog /Pages {pages_id} 0 R >>").into_bytes());
+    out.objs[pages_id as usize - 1] =
+        Some(format!("<< /Type /Pages /Count {} /Kids [{kid_list}] >>", kids.len()).into_bytes());
+    out.objs[catalog as usize - 1] = Some(format!("<< /Type /Catalog /Pages {pages_id} 0 R >>").into_bytes());
     let info = out.alloc();
-    out.objs[info as usize - 1] =
-        Some(format!("<< /Producer (LegatorOCR {}) >>", env!("CARGO_PKG_VERSION")).into_bytes());
+    out.objs[info as usize - 1] = Some(
+        format!("<< /Producer (LegatorOCR {}) >>", env!("CARGO_PKG_VERSION")).into_bytes(),
+    );
     let mut buf: Vec<u8> = b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n".to_vec();
     let mut offs = Vec::new();
     for (i, o) in out.objs.iter().enumerate() {
@@ -434,11 +394,7 @@ pub fn assemble(
         buf.extend_from_slice(b"\nendobj\n");
     }
     let xref = buf.len();
-    let _ = write!(
-        UnsafeVec(&mut buf),
-        "xref\n0 {}\n0000000000 65535 f \n",
-        offs.len() + 1
-    );
+    let _ = write!(UnsafeVec(&mut buf), "xref\n0 {}\n0000000000 65535 f \n", offs.len() + 1);
     for o in &offs {
         let _ = writeln!(UnsafeVec(&mut buf), "{o:010} 00000 n ");
     }
@@ -461,16 +417,9 @@ fn raw_stream(data: &[u8]) -> Vec<u8> {
 pub fn parse_ranges(spec: &str, n: usize) -> Result<Vec<usize>, String> {
     let mut v = Vec::new();
     for part in spec.split(',').map(str::trim).filter(|p| !p.is_empty()) {
-        let num = |t: &str| {
-            t.trim()
-                .parse::<usize>()
-                .map_err(|_| format!("not a page number: {t:?}"))
-        };
+        let num = |t: &str| t.trim().parse::<usize>().map_err(|_| format!("not a page number: {t:?}"));
         let (a, b) = match part.split_once('-') {
-            Some((a, b)) => (
-                if a.trim().is_empty() { 1 } else { num(a)? },
-                if b.trim().is_empty() { n } else { num(b)? },
-            ),
+            Some((a, b)) => (if a.trim().is_empty() { 1 } else { num(a)? }, if b.trim().is_empty() { n } else { num(b)? }),
             None => {
                 let x = num(part)?;
                 (x, x)
@@ -541,20 +490,10 @@ mod tests {
         // the pixels of the picked pages are the same as in the source
         let src = a.page_image(2).unwrap();
         let got = m.page_image(0).unwrap();
-        assert_eq!(
-            src.image.to_luma8().into_raw(),
-            got.image.to_luma8().into_raw()
-        );
+        assert_eq!(src.image.to_luma8().into_raw(), got.image.to_luma8().into_raw());
         // stamped copy still opens and keeps page count; text is on top of the image
         let st = |i: usize, n: usize| {
-            vec![Stamp {
-                text: format!("{} / {}", i + 1, n),
-                size: 10.0,
-                anchor: Anchor::BottomCenter,
-                gray: 0.0,
-                angle: 0.0,
-                opacity: 1.0,
-            }]
+            vec![Stamp { text: format!("{} / {}", i + 1, n), size: 10.0, anchor: Anchor::BottomCenter, gray: 0.0, angle: 0.0, opacity: 1.0 }]
         };
         let out = assemble(&[(&a, vec![0, 1, 2, 3])], &st).unwrap();
         let s = String::from_utf8_lossy(&out).into_owned();

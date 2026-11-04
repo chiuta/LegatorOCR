@@ -58,10 +58,7 @@ pub fn enabled() -> bool {
 pub fn record(sheet: usize, source: &Path, page: usize, pg: &Page, words: &[Word], lang: &str) {
     let mut g = STATE.lock().unwrap();
     let Some(st) = g.as_mut() else { return };
-    let (bytes, basis, file) = match (
-        &st.stems,
-        crate::encode_page_image(pg, &st.ext, st.jpeg_quality),
-    ) {
+    let (bytes, basis, file) = match (&st.stems, crate::encode_page_image(pg, &st.ext, st.jpeg_quality)) {
         (Some(stems), Ok(Some(b))) => {
             let stem = stems.get(sheet).cloned().unwrap_or_default();
             let suffix = match pg.split_index {
@@ -72,10 +69,7 @@ pub fn record(sheet: usize, source: &Path, page: usize, pg: &Page, words: &[Word
             (b, "file", Some(format!("{stem}{suffix}.{}", st.ext)))
         }
         _ => {
-            let b = crate::encode_page_image(pg, "png", st.jpeg_quality)
-                .ok()
-                .flatten()
-                .unwrap_or_default();
+            let b = crate::encode_page_image(pg, "png", st.jpeg_quality).ok().flatten().unwrap_or_default();
             (b, "png-encoding", None)
         }
     };
@@ -122,8 +116,7 @@ pub struct Passage {
 
 /// Stable id: first 16 hex digits of SHA-256 over `"<page image sha256>:x0,y0,x1,y1"`.
 pub fn passage_id(page_sha: &str, b: [u32; 4]) -> String {
-    sha256_hex(format!("{page_sha}:{},{},{},{}", b[0], b[1], b[2], b[3]).as_bytes())[..16]
-        .to_string()
+    sha256_hex(format!("{page_sha}:{},{},{},{}", b[0], b[1], b[2], b[3]).as_bytes())[..16].to_string()
 }
 
 fn round6(x: f64) -> f64 {
@@ -135,21 +128,14 @@ fn round6(x: f64) -> f64 {
 fn labels(printed: &[Option<u32>]) -> Vec<Option<u32>> {
     let runs = legatorocr_core::quality::label_runs(printed);
     (0..printed.len())
-        .map(|i| {
-            runs.iter()
-                .rev()
-                .find(|(at, _)| *at <= i)
-                .map(|(at, n)| n + (i - at) as u32)
-        })
+        .map(|i| runs.iter().rev().find(|(at, _)| *at <= i).map(|(at, n)| n + (i - at) as u32))
         .collect()
 }
 
 /// Stop collecting and return the passages. `clean`: apply the `--clean-text` clean-up to each
 /// paragraph (so the text equals what `--txt` shows for it).
 pub fn finish(clean: bool) -> Vec<Passage> {
-    let Some(st) = STATE.lock().unwrap().take() else {
-        return Vec::new();
-    };
+    let Some(st) = STATE.lock().unwrap().take() else { return Vec::new() };
     let labs = if crate::pagenum::enabled() {
         labels(&st.pages.iter().map(|p| p.printed).collect::<Vec<_>>())
     } else {
@@ -161,20 +147,11 @@ pub fn finish(clean: bool) -> Vec<Passage> {
         let (w, h) = (p.w.max(1), p.h.max(1));
         let mut idx = 0;
         for para in &p.paras {
-            let text = if clean {
-                crate::ropost::postprocess(&para.text, &opts)
-            } else {
-                para.text.clone()
-            };
+            let text = if clean { crate::ropost::postprocess(&para.text, &opts) } else { para.text.clone() };
             if text.trim().is_empty() {
                 continue;
             }
-            let b = [
-                para.x0.min(p.w),
-                para.y0.min(p.h),
-                para.x1.min(p.w),
-                para.y1.min(p.h),
-            ];
+            let b = [para.x0.min(p.w), para.y0.min(p.h), para.x1.min(p.w), para.y1.min(p.h)];
             out.push(Passage {
                 passage_id: passage_id(&p.image_sha256, b),
                 source_file: p.source.clone(),
@@ -237,10 +214,7 @@ pub fn to_jsonl(ps: &[Passage], title: Option<&str>) -> String {
                 .map(|x| x.to_string_lossy().into_owned())
                 .unwrap_or_else(|| p.source_file.clone())
         });
-        let cite = format!(
-            "{t} p.{}",
-            p.page_label.clone().unwrap_or_else(|| p.page.to_string())
-        );
+        let cite = format!("{t} p.{}", p.page_label.clone().unwrap_or_else(|| p.page.to_string()));
         let px = p.bbox_px;
         let fr = p.bbox_frac;
         s.push_str(&format!(
@@ -260,35 +234,15 @@ mod tests {
     use super::*;
 
     fn word(t: &str, x: u32, y: u32, line: u32) -> Word {
-        Word {
-            text: t.into(),
-            x,
-            y,
-            w: 40,
-            h: 20,
-            conf: 80.0,
-            line,
-        }
+        Word { text: t.into(), x, y, w: 40, h: 20, conf: 80.0, line }
     }
 
     #[test]
     fn records_paragraphs_with_stable_ids_and_valid_json() {
         let img = legatorocr_core::PageImage::Bw(legatorocr_core::BitImage::new(300, 400));
-        let pg = Page {
-            image: img,
-            dpi: 300,
-            skew_deg: 0.0,
-            blank: false,
-            split_index: None,
-            content_box: None,
-            layers: None,
-        };
+        let pg = Page { image: img, dpi: 300, skew_deg: 0.0, blank: false, split_index: None, content_box: None, layers: None };
         begin("png", 90, None);
-        let words = vec![
-            word("Salut", 10, 10, 0),
-            word("lume", 60, 10, 0),
-            word("doi", 10, 300, 1),
-        ];
+        let words = vec![word("Salut", 10, 10, 0), word("lume", 60, 10, 0), word("doi", 10, 300, 1)];
         record(0, Path::new("/x/carte \"1\".png"), 1, &pg, &words, "ron");
         record(1, Path::new("/x/carte \"1\".png"), 2, &pg, &words, "ron");
         let ps = finish(false);
@@ -297,20 +251,13 @@ mod tests {
         assert_eq!(ps[0].bbox_px, [10, 10, 100, 30]);
         assert_eq!(ps[0].bbox_frac[2], round6(100.0 / 300.0));
         assert_eq!(ps[0].page_image_basis, "png-encoding");
-        assert_eq!(
-            ps[0].passage_id,
-            passage_id(&ps[0].page_image_sha256, ps[0].bbox_px)
-        );
+        assert_eq!(ps[0].passage_id, passage_id(&ps[0].page_image_sha256, ps[0].bbox_px));
         // same image, same box: same id on both pages (ids hash page image + box)
         assert_eq!(ps[0].passage_id, ps[2].passage_id);
         assert_ne!(ps[0].passage_id, ps[1].passage_id);
         assert_eq!(ps[0].page_image_sha256.len(), 64);
         let j = to_jsonl(&ps[..1], Some("Titlu"));
-        assert!(
-            j.ends_with("}\n")
-                && j.contains("\"source_file\":\"carte \\\"1\\\".png\"")
-                && j.contains("\"cite\":\"Titlu p.1\"")
-        );
+        assert!(j.ends_with("}\n") && j.contains("\"source_file\":\"carte \\\"1\\\".png\"") && j.contains("\"cite\":\"Titlu p.1\""));
         assert!(!enabled());
     }
 

@@ -63,21 +63,12 @@ pub fn report() -> String {
     if m.is_empty() {
         return String::new();
     }
-    let total: Duration = m
-        .iter()
-        .filter(|(k, _)| !k.contains('/'))
-        .map(|v| v.1 .0)
-        .sum();
-    let mut out =
-        String::from("stage                  calls     time (s)   share   per call (ms)\n");
+    let total: Duration = m.iter().filter(|(k, _)| !k.contains('/')).map(|v| v.1 .0).sum();
+    let mut out = String::from("stage                  calls     time (s)   share   per call (ms)\n");
     let mut rows: Vec<_> = m.into_iter().collect();
     rows.sort_by_key(|b| std::cmp::Reverse(b.1 .0));
     for (name, (d, n)) in rows {
-        let name = if name.contains('/') {
-            format!("  {name}")
-        } else {
-            name.to_string()
-        };
+        let name = if name.contains('/') { format!("  {name}") } else { name.to_string() };
         let share = if total.is_zero() {
             0.0
         } else {

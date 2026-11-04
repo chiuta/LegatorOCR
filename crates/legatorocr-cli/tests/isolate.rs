@@ -39,37 +39,14 @@ fn good_file_matches_direct_and_corrupt_file_fails_cleanly() {
     };
     let direct = run(&[], "a.png", "o1");
     let iso = run(&["--isolate-decoders"], "a.png", "o2");
-    assert!(
-        direct.status.success() && iso.status.success(),
-        "{}",
-        String::from_utf8_lossy(&iso.stderr)
-    );
-    let name = |o: &str| {
-        std::fs::read_dir(d.join(o))
-            .unwrap()
-            .next()
-            .unwrap()
-            .unwrap()
-            .path()
-    };
-    assert_eq!(
-        std::fs::read(name("o1")).unwrap(),
-        std::fs::read(name("o2")).unwrap()
-    );
+    assert!(direct.status.success() && iso.status.success(), "{}", String::from_utf8_lossy(&iso.stderr));
+    let name = |o: &str| std::fs::read_dir(d.join(o)).unwrap().next().unwrap().unwrap().path();
+    assert_eq!(std::fs::read(name("o1")).unwrap(), std::fs::read(name("o2")).unwrap());
     let bad = run(&["--isolate-decoders"], "bad.png", "o3");
     assert!(!bad.status.success());
     assert!(String::from_utf8_lossy(&bad.stderr).contains("bad.png"));
     // nothing is left behind in the temp directory by the worker
-    let left = std::fs::read_dir(std::env::temp_dir())
-        .unwrap()
-        .filter(|e| {
-            e.as_ref()
-                .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .starts_with(&format!("lgr_dec_{}_", std::process::id()))
-        })
-        .count();
+    let left = std::fs::read_dir(std::env::temp_dir()).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().starts_with(&format!("lgr_dec_{}_", std::process::id()))).count();
     assert_eq!(left, 0);
     let _ = std::fs::remove_dir_all(&d);
 }

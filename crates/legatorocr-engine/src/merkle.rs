@@ -19,9 +19,7 @@ fn from_hex(s: &str) -> Option<Hash> {
     if !s.len().is_multiple_of(2) || !s.is_ascii() {
         return None;
     }
-    (0..s.len() / 2)
-        .map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).ok())
-        .collect()
+    (0..s.len() / 2).map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).ok()).collect()
 }
 
 pub fn leaf_hash(name: &str, file_hash_hex: &str) -> Hash {
@@ -123,19 +121,8 @@ pub fn leaves_of(entries: &[(String, String)]) -> Vec<Hash> {
 }
 
 /// Check an audit path given as hex strings against an expected root.
-pub fn check(
-    name: &str,
-    file_hash: &str,
-    m: usize,
-    n: usize,
-    path_hex: &[String],
-    expected: &str,
-) -> bool {
-    let Some(path) = path_hex
-        .iter()
-        .map(|h| from_hex(h))
-        .collect::<Option<Vec<_>>>()
-    else {
+pub fn check(name: &str, file_hash: &str, m: usize, n: usize, path_hex: &[String], expected: &str) -> bool {
+    let Some(path) = path_hex.iter().map(|h| from_hex(h)).collect::<Option<Vec<_>>>() else {
         return false;
     };
     root_from_proof(&leaf_hash(name, file_hash), m, n, &path)
@@ -147,22 +134,14 @@ mod tests {
     use super::*;
 
     fn leaves(n: usize) -> Vec<Hash> {
-        (0..n)
-            .map(|i| leaf_hash(&format!("f{i}"), &"ab".repeat(32)))
-            .collect()
+        (0..n).map(|i| leaf_hash(&format!("f{i}"), &"ab".repeat(32))).collect()
     }
 
     #[test]
     fn rfc6962_known_values() {
         // empty tree = SHA-256 of nothing; a single empty leaf = SHA-256(0x00)
-        assert_eq!(
-            hex(&root(&[])),
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        );
-        assert_eq!(
-            hex(&sha256(&[0u8])),
-            "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d"
-        );
+        assert_eq!(hex(&root(&[])), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        assert_eq!(hex(&sha256(&[0u8])), "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d");
     }
 
     #[test]
@@ -172,22 +151,11 @@ mod tests {
             let r = root(&l);
             for m in 0..n {
                 let p = proof(&l, m);
-                assert_eq!(
-                    root_from_proof(&l[m], m, n, &p).as_deref(),
-                    Some(r.as_slice()),
-                    "n={n} m={m}"
-                );
+                assert_eq!(root_from_proof(&l[m], m, n, &p).as_deref(), Some(r.as_slice()), "n={n} m={m}");
                 let other = leaf_hash("forged", &"cd".repeat(32));
-                assert_ne!(
-                    root_from_proof(&other, m, n, &p).as_deref(),
-                    Some(r.as_slice())
-                );
+                assert_ne!(root_from_proof(&other, m, n, &p).as_deref(), Some(r.as_slice()));
                 if n > 1 {
-                    assert_ne!(
-                        root_from_proof(&l[m], (m + 1) % n, n, &p).as_deref(),
-                        Some(r.as_slice()),
-                        "wrong position n={n} m={m}"
-                    );
+                    assert_ne!(root_from_proof(&l[m], (m + 1) % n, n, &p).as_deref(), Some(r.as_slice()), "wrong position n={n} m={m}");
                 }
             }
         }

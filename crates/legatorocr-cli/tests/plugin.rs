@@ -33,12 +33,8 @@ fn run(d: &std::path::Path, out: &str, extra: &[&str]) -> std::process::Output {
 }
 
 fn first_png(d: &std::path::Path) -> image::GrayImage {
-    let f = std::fs::read_dir(d)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .find(|p| p.extension().is_some_and(|e| e == "png"))
-        .expect("an output page");
+    let f = std::fs::read_dir(d).unwrap().filter_map(|e| e.ok()).map(|e| e.path())
+        .find(|p| p.extension().is_some_and(|e| e == "png")).expect("an output page");
     image::open(f).unwrap().to_luma8()
 }
 
@@ -58,35 +54,15 @@ fn a_wasm_plugin_changes_the_pages_and_a_broken_one_is_refused() {
     std::fs::write(d.join("bad.wasm"), b"not wasm").unwrap();
 
     let plain = run(&d, "plain", &[]);
-    assert!(
-        plain.status.success(),
-        "{}",
-        String::from_utf8_lossy(&plain.stderr)
-    );
+    assert!(plain.status.success(), "{}", String::from_utf8_lossy(&plain.stderr));
     let inv = run(&d, "inv", &["--plugin", "invert.wasm"]);
-    assert!(
-        inv.status.success(),
-        "{}",
-        String::from_utf8_lossy(&inv.stderr)
-    );
-    let mean = |g: &image::GrayImage| {
-        g.pixels().map(|p| p[0] as u64).sum::<u64>() / g.pixels().len() as u64
-    };
-    let (m0, m1) = (
-        mean(&first_png(&d.join("plain"))),
-        mean(&first_png(&d.join("inv"))),
-    );
-    assert!(
-        m0 > 200 && m1 + 50 < m0,
-        "plain page mean {m0}, inverted page mean {m1}"
-    );
+    assert!(inv.status.success(), "{}", String::from_utf8_lossy(&inv.stderr));
+    let mean = |g: &image::GrayImage| g.pixels().map(|p| p[0] as u64).sum::<u64>() / g.pixels().len() as u64;
+    let (m0, m1) = (mean(&first_png(&d.join("plain"))), mean(&first_png(&d.join("inv"))));
+    assert!(m0 > 200 && m1 + 50 < m0, "plain page mean {m0}, inverted page mean {m1}");
 
     let bad = run(&d, "bad", &["--plugin", "bad.wasm"]);
     assert!(!bad.status.success());
-    assert!(
-        String::from_utf8_lossy(&bad.stderr).contains("WebAssembly"),
-        "{}",
-        String::from_utf8_lossy(&bad.stderr)
-    );
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("WebAssembly"), "{}", String::from_utf8_lossy(&bad.stderr));
     let _ = std::fs::remove_dir_all(&d);
 }

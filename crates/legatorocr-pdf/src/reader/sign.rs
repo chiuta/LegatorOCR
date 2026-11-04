@@ -31,10 +31,7 @@ impl Prepared {
     /// Put the DER signature into the reserved space.
     pub fn embed(mut self, der: &[u8]) -> R<Vec<u8>> {
         if der.len() > RESERVED {
-            return fail(format!(
-                "the signature ({} bytes) does not fit the reserved {RESERVED} bytes",
-                der.len()
-            ));
+            return fail(format!("the signature ({} bytes) does not fit the reserved {RESERVED} bytes", der.len()));
         }
         let mut hex = String::with_capacity(der.len() * 2);
         for b in der {
@@ -134,35 +131,18 @@ pub fn prepare(data: &[u8], when: u64, name: Option<&str>, reason: Option<&str>)
     if doc.crypt.is_some() {
         return fail("encrypted PDF: a signature cannot be added");
     }
-    let Some(prev) = last_startxref(data) else {
-        return fail("no startxref: not a signable PDF");
-    };
+    let Some(prev) = last_startxref(data) else { return fail("no startxref: not a signable PDF") };
     if !data.get(prev..prev + 4).is_some_and(|s| s == b"xref") {
         return fail("the file uses a cross-reference stream; only classic xref tables are supported for signing");
     }
-    let tpos = data[prev..]
-        .windows(7)
-        .position(|w| w == b"trailer")
-        .map(|p| p + prev);
-    let Some(tpos) = tpos else {
-        return fail("no trailer dictionary");
-    };
-    let Some(Val::Dict(trailer)) = P::new(data, tpos + 7).val(0) else {
-        return fail("unreadable trailer");
-    };
-    let size = trailer
-        .get("Size")
-        .and_then(|v| v.int())
-        .unwrap_or(0)
-        .max(1) as u32;
-    let Some(Val::Ref(root)) = trailer.get("Root") else {
-        return fail("trailer without /Root");
-    };
+    let tpos = data[prev..].windows(7).position(|w| w == b"trailer").map(|p| p + prev);
+    let Some(tpos) = tpos else { return fail("no trailer dictionary") };
+    let Some(Val::Dict(trailer)) = P::new(data, tpos + 7).val(0) else { return fail("unreadable trailer") };
+    let size = trailer.get("Size").and_then(|v| v.int()).unwrap_or(0).max(1) as u32;
+    let Some(Val::Ref(root)) = trailer.get("Root") else { return fail("trailer without /Root") };
     let root = *root;
     let mut catalog = doc.dict_val(&Val::Ref(root));
-    let Some(page_n) = catalog.get("Pages").and_then(|p| doc.first_page(p, 0)) else {
-        return fail("no page to attach the signature to");
-    };
+    let Some(page_n) = catalog.get("Pages").and_then(|p| doc.first_page(p, 0)) else { return fail("no page to attach the signature to") };
     let mut page = doc.dict_val(&Val::Ref(page_n));
     // new object numbers
     let (sig_n, wid_n) = (size, size + 1);
@@ -176,10 +156,7 @@ pub fn prepare(data: &[u8], when: u64, name: Option<&str>, reason: Option<&str>)
     // AcroForm
     let mut extra_objs: Vec<(u32, String)> = Vec::new();
     let acro_src = catalog.get("AcroForm").cloned();
-    let mut acro = acro_src
-        .as_ref()
-        .map(|a| doc.dict_val(a))
-        .unwrap_or_default();
+    let mut acro = acro_src.as_ref().map(|a| doc.dict_val(a)).unwrap_or_default();
     let mut fields = match acro.get("Fields").map(|f| doc.resolve(f)) {
         Some(Val::Arr(a)) => a,
         _ => Vec::new(),
@@ -277,23 +254,11 @@ pub fn prepare(data: &[u8], when: u64, name: Option<&str>, reason: Option<&str>)
     let b = contents_at + RESERVED * 2 + 1;
     let range = [0, a, b, buf.len() - b];
     let pat = b"/ByteRange [0 0000000000 0000000000 0000000000]";
-    let at = buf[a.saturating_sub(200)..a]
-        .windows(pat.len())
-        .position(|w| w == pat)
-        .map(|p| p + a.saturating_sub(200));
-    let Some(at) = at else {
-        return fail("internal: byte range placeholder not found");
-    };
-    let fixed = format!(
-        "/ByteRange [0 {:010} {:010} {:010}]",
-        range[1], range[2], range[3]
-    );
+    let at = buf[a.saturating_sub(200)..a].windows(pat.len()).position(|w| w == pat).map(|p| p + a.saturating_sub(200));
+    let Some(at) = at else { return fail("internal: byte range placeholder not found") };
+    let fixed = format!("/ByteRange [0 {:010} {:010} {:010}]", range[1], range[2], range[3]);
     buf[at..at + pat.len()].copy_from_slice(fixed.as_bytes());
-    Ok(Prepared {
-        bytes: buf,
-        byte_range: range,
-        contents_at,
-    })
+    Ok(Prepared { bytes: buf, byte_range: range, contents_at })
 }
 
 /// One signature found in a file.
@@ -331,25 +296,13 @@ pub fn signatures(data: &[u8]) -> R<Vec<SigInfo>> {
     nums.dedup();
     let mut out = Vec::new();
     for n in nums {
-        let Some(Val::Dict(d)) = doc.get(n) else {
-            continue;
-        };
-        let (Some(Val::Arr(r)), Some(Val::Str(c))) = (d.get("ByteRange"), d.get("Contents")) else {
-            continue;
-        };
-        let range: Vec<usize> = r
-            .iter()
-            .filter_map(|v| v.int())
-            .map(|v| v.max(0) as usize)
-            .collect();
+        let Some(Val::Dict(d)) = doc.get(n) else { continue };
+        let (Some(Val::Arr(r)), Some(Val::Str(c))) = (d.get("ByteRange"), d.get("Contents")) else { continue };
+        let range: Vec<usize> = r.iter().filter_map(|v| v.int()).map(|v| v.max(0) as usize).collect();
         out.push(SigInfo {
             byte_range: range,
             contents: c.clone(),
-            sub_filter: d
-                .get("SubFilter")
-                .and_then(|v| v.name())
-                .unwrap_or("")
-                .to_string(),
+            sub_filter: d.get("SubFilter").and_then(|v| v.name()).unwrap_or("").to_string(),
             name: match d.get("Name") {
                 Some(Val::Str(s)) => Some(String::from_utf8_lossy(s).into_owned()),
                 _ => None,
@@ -367,15 +320,7 @@ mod tests {
     fn sample() -> Vec<u8> {
         let mut w = PdfWriter::new(Compress::Flate);
         w.add_page(
-            &Page {
-                image: PageImage::Bw(BitImage::new(32, 32)),
-                dpi: 72,
-                skew_deg: 0.0,
-                blank: false,
-                split_index: None,
-                content_box: None,
-                layers: None,
-            },
+            &Page { image: PageImage::Bw(BitImage::new(32, 32)), dpi: 72, skew_deg: 0.0, blank: false, split_index: None, content_box: None, layers: None },
             &[],
         );
         w.finish()

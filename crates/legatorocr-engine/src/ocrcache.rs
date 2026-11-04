@@ -127,24 +127,8 @@ mod tests {
     #[test]
     fn words_survive_the_round_trip() {
         let w = vec![
-            Word {
-                text: "școala".into(),
-                x: 1,
-                y: 2,
-                w: 30,
-                h: 12,
-                conf: 93.5,
-                line: 0,
-            },
-            Word {
-                text: "a\tb".into(),
-                x: 40,
-                y: 2,
-                w: 8,
-                h: 12,
-                conf: -1.0,
-                line: 1,
-            },
+            Word { text: "școala".into(), x: 1, y: 2, w: 30, h: 12, conf: 93.5, line: 0 },
+            Word { text: "a\tb".into(), x: 40, y: 2, w: 8, h: 12, conf: -1.0, line: 1 },
         ];
         let back = decode(&encode(&w)).unwrap();
         assert_eq!(back[0], w[0]);

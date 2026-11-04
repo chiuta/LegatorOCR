@@ -25,11 +25,7 @@ pub fn set_thumbnails(on: bool) {
 
 /// Append `TH44` chunks to a single-page `AT&TFORM....DJVU` file and fix the form length.
 fn add_thumbnail(mut page: Vec<u8>, payloads: &[Vec<u8>]) -> Result<Vec<u8>> {
-    if page.len() < 16
-        || &page[..4] != b"AT&T"
-        || &page[4..8] != b"FORM"
-        || &page[12..16] != b"DJVU"
-    {
+    if page.len() < 16 || &page[..4] != b"AT&T" || &page[4..8] != b"FORM" || &page[12..16] != b"DJVU" {
         return Err(anyhow!("unexpected DjVu page structure"));
     }
     if page.len() % 2 == 1 {
@@ -60,19 +56,11 @@ pub fn enabled() -> bool {
 }
 
 fn text_layer(words: &[Word], w: u32, h: u32) -> Option<TextLayer> {
-    let words: Vec<&Word> = words
-        .iter()
-        .filter(|x| !x.text.trim().is_empty() && x.w > 0 && x.h > 0 && x.x < w && x.y < h)
-        .collect();
+    let words: Vec<&Word> = words.iter().filter(|x| !x.text.trim().is_empty() && x.w > 0 && x.h > 0 && x.x < w && x.y < h).collect();
     if words.is_empty() {
         return None;
     }
-    let rect = |x: u32, y: u32, ww: u32, hh: u32| Rect {
-        x,
-        y,
-        width: ww.min(w.saturating_sub(x)),
-        height: hh.min(h.saturating_sub(y)),
-    };
+    let rect = |x: u32, y: u32, ww: u32, hh: u32| Rect { x, y, width: ww.min(w.saturating_sub(x)), height: hh.min(h.saturating_sub(y)) };
     let mut lines: Vec<TextZone> = Vec::new();
     let mut page_text = String::new();
     let mut i = 0;
@@ -82,50 +70,22 @@ fn text_layer(words: &[Word], w: u32, h: u32) -> Option<TextLayer> {
             j += 1;
         }
         let group = &words[i..j];
-        let (x0, y0) = (
-            group.iter().map(|g| g.x).min().unwrap(),
-            group.iter().map(|g| g.y).min().unwrap(),
-        );
-        let (x1, y1) = (
-            group.iter().map(|g| g.x + g.w).max().unwrap(),
-            group.iter().map(|g| g.y + g.h).max().unwrap(),
-        );
-        let line_text = group
-            .iter()
-            .map(|g| g.text.trim())
-            .collect::<Vec<_>>()
-            .join(" ");
+        let (x0, y0) = (group.iter().map(|g| g.x).min().unwrap(), group.iter().map(|g| g.y).min().unwrap());
+        let (x1, y1) = (group.iter().map(|g| g.x + g.w).max().unwrap(), group.iter().map(|g| g.y + g.h).max().unwrap());
+        let line_text = group.iter().map(|g| g.text.trim()).collect::<Vec<_>>().join(" ");
         let children = group
             .iter()
-            .map(|g| TextZone {
-                kind: TextZoneKind::Word,
-                rect: rect(g.x, g.y, g.w, g.h),
-                text: g.text.trim().to_string(),
-                children: Vec::new(),
-            })
+            .map(|g| TextZone { kind: TextZoneKind::Word, rect: rect(g.x, g.y, g.w, g.h), text: g.text.trim().to_string(), children: Vec::new() })
             .collect();
         if !page_text.is_empty() {
             page_text.push('\n');
         }
         page_text.push_str(&line_text);
-        lines.push(TextZone {
-            kind: TextZoneKind::Line,
-            rect: rect(x0, y0, x1 - x0, y1 - y0),
-            text: line_text,
-            children,
-        });
+        lines.push(TextZone { kind: TextZoneKind::Line, rect: rect(x0, y0, x1 - x0, y1 - y0), text: line_text, children });
         i = j;
     }
-    let page = TextZone {
-        kind: TextZoneKind::Page,
-        rect: rect(0, 0, w, h),
-        text: page_text.clone(),
-        children: lines,
-    };
-    Some(TextLayer {
-        text: page_text,
-        zones: vec![page],
-    })
+    let page = TextZone { kind: TextZoneKind::Page, rect: rect(0, 0, w, h), text: page_text.clone(), children: lines };
+    Some(TextLayer { text: page_text, zones: vec![page] })
 }
 
 /// Encode one page now and keep the bytes.
@@ -147,15 +107,13 @@ pub fn record(page: &Page, words: &[Word]) -> Result<()> {
             if let Some(l) = layer {
                 enc = enc.with_text_layer(l);
             }
-            enc.encode()
-                .map_err(|e| anyhow!("DjVu encoding failed: {e}"))
-                .and_then(|b| {
-                    if THUMBS.load(std::sync::atomic::Ordering::Relaxed) {
-                        add_thumbnail(b, &djvu_rs::thumbnail::encode_th44_gray_from_bitmap(&bm))
-                    } else {
-                        Ok(b)
-                    }
-                })
+            enc.encode().map_err(|e| anyhow!("DjVu encoding failed: {e}")).and_then(|b| {
+                if THUMBS.load(std::sync::atomic::Ordering::Relaxed) {
+                    add_thumbnail(b, &djvu_rs::thumbnail::encode_th44_gray_from_bitmap(&bm))
+                } else {
+                    Ok(b)
+                }
+            })
         }
         other => {
             let rgb = match other {
@@ -167,21 +125,17 @@ pub fn record(page: &Page, words: &[Word]) -> Result<()> {
             for (x, y, p) in rgb.enumerate_pixels() {
                 pm.set_rgb(x, y, p[0], p[1], p[2]);
             }
-            let mut enc = PageEncoder::from_pixmap(&pm)
-                .with_dpi(dpi)
-                .with_quality(EncodeQuality::Quality);
+            let mut enc = PageEncoder::from_pixmap(&pm).with_dpi(dpi).with_quality(EncodeQuality::Quality);
             if let Some(l) = layer {
                 enc = enc.with_text_layer(l);
             }
-            enc.encode()
-                .map_err(|e| anyhow!("DjVu encoding failed: {e}"))
-                .and_then(|b| {
-                    if THUMBS.load(std::sync::atomic::Ordering::Relaxed) {
-                        add_thumbnail(b, &djvu_rs::thumbnail::encode_th44_color(&pm))
-                    } else {
-                        Ok(b)
-                    }
-                })
+            enc.encode().map_err(|e| anyhow!("DjVu encoding failed: {e}")).and_then(|b| {
+                if THUMBS.load(std::sync::atomic::Ordering::Relaxed) {
+                    add_thumbnail(b, &djvu_rs::thumbnail::encode_th44_color(&pm))
+                } else {
+                    Ok(b)
+                }
+            })
         }
     }?;
     if let Some(v) = PAGES.lock().unwrap().as_mut() {
@@ -192,17 +146,13 @@ pub fn record(page: &Page, words: &[Word]) -> Result<()> {
 
 /// Bundle the collected pages into one document (a single page stays a plain page file).
 pub fn finish() -> Result<Option<Vec<u8>>> {
-    let Some(pages) = PAGES.lock().unwrap().take() else {
-        return Ok(None);
-    };
+    let Some(pages) = PAGES.lock().unwrap().take() else { return Ok(None) };
     match pages.len() {
         0 => Ok(None),
         1 => Ok(pages.into_iter().next()),
         _ => {
             let refs: Vec<&[u8]> = pages.iter().map(|p| p.as_slice()).collect();
-            Ok(Some(
-                djvu_rs::djvm::merge(&refs).map_err(|e| anyhow!("DjVu bundling failed: {e}"))?,
-            ))
+            Ok(Some(djvu_rs::djvm::merge(&refs).map_err(|e| anyhow!("DjVu bundling failed: {e}"))?))
         }
     }
 }

@@ -69,10 +69,7 @@ fn elements(xml: &str) -> Vec<(String, String)> {
             continue;
         }
         let selfclose = tag.ends_with('/');
-        let name = tag
-            .split(|c: char| c.is_whitespace() || c == '/')
-            .next()
-            .unwrap_or("");
+        let name = tag.split(|c: char| c.is_whitespace() || c == '/').next().unwrap_or("");
         let local = name.rsplit(':').next().unwrap_or(name);
         if selfclose {
             i = next;
@@ -101,13 +98,7 @@ fn unescape(s: &str) -> String {
 /// Romanian CUI check digit: weights 7 5 3 2 1 7 5 3 2 over the digits before the last,
 /// (sum * 10) mod 11, with 10 mapping to 0. Accepts an `RO` prefix.
 pub fn cui_valid(id: &str) -> bool {
-    let d: String = id
-        .trim()
-        .trim_start_matches("RO")
-        .trim_start_matches("ro")
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect();
+    let d: String = id.trim().trim_start_matches("RO").trim_start_matches("ro").chars().filter(|c| !c.is_whitespace()).collect();
     if d.len() < 2 || d.len() > 10 || !d.bytes().all(|b| b.is_ascii_digit()) {
         return false;
     }
@@ -129,10 +120,7 @@ fn num(s: &str) -> Option<f64> {
 
 pub fn parse(xml: &str) -> Result<Invoice> {
     let els = elements(xml);
-    let Some(root) = els
-        .first()
-        .map(|e| e.0.split('/').next().unwrap_or("").to_string())
-    else {
+    let Some(root) = els.first().map(|e| e.0.split('/').next().unwrap_or("").to_string()) else {
         bail!("empty XML");
     };
     if root != "Invoice" && root != "CreditNote" {
@@ -140,33 +128,19 @@ pub fn parse(xml: &str) -> Result<Invoice> {
     }
     let get = |p: &str| -> String {
         let full = format!("{root}/{p}");
-        els.iter()
-            .find(|e| e.0 == full)
-            .map(|e| e.1.clone())
-            .unwrap_or_default()
+        els.iter().find(|e| e.0 == full).map(|e| e.1.clone()).unwrap_or_default()
     };
     let party = |side: &str| Party {
         name: {
             let n = get(&format!("{side}/Party/PartyLegalEntity/RegistrationName"));
-            if n.is_empty() {
-                get(&format!("{side}/Party/PartyName/Name"))
-            } else {
-                n
-            }
+            if n.is_empty() { get(&format!("{side}/Party/PartyName/Name")) } else { n }
         },
         tax_id: get(&format!("{side}/Party/PartyTaxScheme/CompanyID")),
         legal_id: get(&format!("{side}/Party/PartyLegalEntity/CompanyID")),
     };
-    let line_tag = if root == "Invoice" {
-        "InvoiceLine"
-    } else {
-        "CreditNoteLine"
-    };
+    let line_tag = if root == "Invoice" { "InvoiceLine" } else { "CreditNoteLine" };
     let line_prefix = format!("{root}/{line_tag}/");
-    let lines = els
-        .iter()
-        .filter(|e| e.0 == format!("{root}/{line_tag}/ID"))
-        .count();
+    let lines = els.iter().filter(|e| e.0 == format!("{root}/{line_tag}/ID")).count();
     let line_sum: f64 = els
         .iter()
         .filter(|e| e.0 == format!("{line_prefix}LineExtensionAmount"))
@@ -206,33 +180,23 @@ pub fn check(inv: &Invoice) -> Vec<String> {
     }
     if let (Some(s), Some(n)) = (inv.line_sum, inv.net) {
         if !close(s, n) {
-            p.push(format!(
-                "line amounts add up to {s:.2}, document net is {n:.2}"
-            ));
+            p.push(format!("line amounts add up to {s:.2}, document net is {n:.2}"));
         }
     }
     if let (Some(g), Some(pay)) = (inv.gross, inv.payable) {
         let expected = g - inv.prepaid.unwrap_or(0.0);
         // a rounding amount may legitimately differ by a small amount
         if (expected - pay).abs() > 1.0 {
-            p.push(format!(
-                "payable {pay:.2} differs from gross - prepaid {expected:.2}"
-            ));
+            p.push(format!("payable {pay:.2} differs from gross - prepaid {expected:.2}"));
         }
     }
-    for (who, id) in [
-        ("supplier", &inv.supplier.tax_id),
-        ("customer", &inv.customer.tax_id),
-    ] {
+    for (who, id) in [("supplier", &inv.supplier.tax_id), ("customer", &inv.customer.tax_id)] {
         if id.to_uppercase().starts_with("RO") && !cui_valid(id) {
             p.push(format!("{who} VAT id {id} fails the CUI check digit"));
         }
     }
     if !inv.customization.is_empty() && !inv.customization.to_lowercase().contains("cius-ro") {
-        p.push(format!(
-            "CustomizationID {:?} does not name CIUS-RO",
-            inv.customization
-        ));
+        p.push(format!("CustomizationID {:?} does not name CIUS-RO", inv.customization));
     }
     p
 }
@@ -241,15 +205,11 @@ pub fn check(inv: &Invoice) -> Vec<String> {
 pub fn read_xml(path: &std::path::Path) -> Result<String> {
     let data = std::fs::read(path)?;
     if data.starts_with(b"PK") {
-        let Some(list) = crate::zipmini::list(&data) else {
-            bail!("unreadable ZIP")
-        };
+        let Some(list) = crate::zipmini::list(&data) else { bail!("unreadable ZIP") };
         for e in &list {
             let n = e.name.to_lowercase();
             if n.ends_with(".xml") && !n.contains("semnatura") && !n.contains("signature") {
-                let Some(b) = crate::zipmini::read(&data, e) else {
-                    bail!("cannot unpack {}", e.name)
-                };
+                let Some(b) = crate::zipmini::read(&data, e) else { bail!("cannot unpack {}", e.name) };
                 return Ok(String::from_utf8_lossy(&b).into_owned());
             }
         }
@@ -328,9 +288,7 @@ mod tests {
         assert!(p[0].contains("customer VAT id"));
         let mut bad = inv.clone();
         bad.gross = Some(1200.0);
-        assert!(check(&bad)
-            .iter()
-            .any(|x| x.contains("net 1000.00 + tax 190.00")));
+        assert!(check(&bad).iter().any(|x| x.contains("net 1000.00 + tax 190.00")));
     }
 
     #[test]

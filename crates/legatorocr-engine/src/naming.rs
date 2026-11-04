@@ -143,10 +143,7 @@ mod tests {
             Some("Contract de prestări servicii nr. 5")
         );
         assert_eq!(title_from_text("1 2 3\n- - -"), None);
-        assert_eq!(
-            title_from_text("a/b:c? Titlu").as_deref(),
-            Some("a_b_c_ Titlu")
-        );
+        assert_eq!(title_from_text("a/b:c? Titlu").as_deref(), Some("a_b_c_ Titlu"));
     }
 
     #[test]

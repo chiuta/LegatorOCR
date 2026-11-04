@@ -16,11 +16,7 @@ static STATE: Mutex<Option<State>> = Mutex::new(None);
 
 /// Start collecting; words under `max_conf` that are not in the word list are flagged.
 pub fn begin(max_conf: f32) {
-    *STATE.lock().unwrap() = Some(State {
-        max_conf,
-        rows: Vec::new(),
-        words: 0,
-    });
+    *STATE.lock().unwrap() = Some(State { max_conf, rows: Vec::new(), words: 0 });
 }
 
 pub fn enabled() -> bool {
@@ -31,11 +27,7 @@ pub fn enabled() -> bool {
 pub fn record(page: usize, lang: &str, words: &[Word]) {
     let mut g = STATE.lock().unwrap();
     let Some(st) = g.as_mut() else { return };
-    let lex: Vec<&Lexicon> = lexicon::codes(lang)
-        .iter()
-        .filter_map(|c| Lexicon::load(c))
-        .filter(|l| !l.is_empty())
-        .collect();
+    let lex: Vec<&Lexicon> = lexicon::codes(lang).iter().filter_map(|c| Lexicon::load(c)).filter(|l| !l.is_empty()).collect();
     if lex.is_empty() {
         return; // no word list for this language: nothing can be judged
     }
@@ -46,15 +38,7 @@ pub fn record(page: usize, lang: &str, words: &[Word]) {
         }
         st.words += 1;
         if w.conf < st.max_conf && !lexicon::known(&lex, t) {
-            st.rows.push(format!(
-                "{page}\t{}\t{}\t{}\t{}\t{:.0}\t{}",
-                w.x,
-                w.y,
-                w.w,
-                w.h,
-                w.conf,
-                t.replace(['\t', '\n'], " ")
-            ));
+            st.rows.push(format!("{page}\t{}\t{}\t{}\t{}\t{:.0}\t{}", w.x, w.y, w.w, w.h, w.conf, t.replace(['\t', '\n'], " ")));
         }
     }
 }
@@ -76,41 +60,17 @@ mod tests {
     use super::*;
 
     fn w(text: &str, conf: f32) -> Word {
-        Word {
-            text: text.to_string(),
-            x: 1,
-            y: 2,
-            w: 30,
-            h: 10,
-            conf,
-            line: 0,
-        }
+        Word { text: text.to_string(), x: 1, y: 2, w: 30, h: 10, conf, line: 0 }
     }
 
     #[test]
     fn only_low_confidence_words_outside_the_word_list_are_flagged() {
         begin(85.0);
-        record(
-            3,
-            "ron",
-            &[
-                w("casa", 50.0),
-                w("xqzvkp", 95.0),
-                w("xqzvkp,", 60.0),
-                w("12", 10.0),
-                w("și", 40.0),
-            ],
-        );
+        record(3, "ron", &[w("casa", 50.0), w("xqzvkp", 95.0), w("xqzvkp,", 60.0), w("12", 10.0), w("și", 40.0)]);
         let (tsv, n, judged) = finish().unwrap();
         assert_eq!(n, 1, "{tsv}");
         assert_eq!(judged, 3, "digits and 2-letter words are not judged");
-        assert!(
-            tsv.lines()
-                .nth(1)
-                .unwrap()
-                .starts_with("3\t1\t2\t30\t10\t60\txqzvkp,"),
-            "{tsv}"
-        );
+        assert!(tsv.lines().nth(1).unwrap().starts_with("3\t1\t2\t30\t10\t60\txqzvkp,"), "{tsv}");
         // a language without a word list: nothing is judged
         begin(85.0);
         record(1, "ara", &[w("xqzvkp", 10.0)]);

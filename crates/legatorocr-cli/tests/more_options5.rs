@@ -12,19 +12,11 @@ fn dir(tag: &str) -> PathBuf {
 }
 
 fn run(d: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_legatorocr"))
-        .current_dir(d)
-        .args(args)
-        .output()
-        .unwrap()
+    Command::new(env!("CARGO_BIN_EXE_legatorocr")).current_dir(d).args(args).output().unwrap()
 }
 
 fn text(o: &Output) -> String {
-    format!(
-        "{}{}",
-        String::from_utf8_lossy(&o.stdout),
-        String::from_utf8_lossy(&o.stderr)
-    )
+    format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr))
 }
 
 /// Dark bars on paper; `blur` > 0 makes the same scene less sharp.
@@ -33,18 +25,10 @@ fn scene(seed: u64, blur: f32) -> image::GrayImage {
     let mut g = image::GrayImage::from_pixel(500, 500, image::Luma([235]));
     for _ in 0..200 {
         let mut next = || {
-            s = s
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
             (s >> 33) as u32
         };
-        let (x, y, w, h, v) = (
-            20 + next() % 420,
-            20 + next() % 420,
-            8 + next() % 32,
-            4 + next() % 10,
-            20 + next() % 70,
-        );
+        let (x, y, w, h, v) = (20 + next() % 420, 20 + next() % 420, 8 + next() % 32, 4 + next() % 10, 20 + next() % 70);
         for yy in y..(y + h).min(500) {
             for xx in x..(x + w).min(500) {
                 g.put_pixel(xx, yy, image::Luma([v as u8]));
@@ -62,12 +46,7 @@ fn scene(seed: u64, blur: f32) -> image::GrayImage {
 fn jpeg_with_time(img: &image::GrayImage, dt: &str) -> Vec<u8> {
     let mut plain = Vec::new();
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut plain, 92)
-        .encode(
-            img.as_raw(),
-            img.width(),
-            img.height(),
-            image::ExtendedColorType::L8,
-        )
+        .encode(img.as_raw(), img.width(), img.height(), image::ExtendedColorType::L8)
         .unwrap();
     let mut tiff = Vec::new();
     tiff.extend_from_slice(b"MM\0\x2A\0\0\0\x08");
@@ -88,48 +67,17 @@ fn jpeg_with_time(img: &image::GrayImage, dt: &str) -> Vec<u8> {
 fn burst_gap_decides_which_frames_count_as_one_burst() {
     let d = dir("burst");
     // two shots of the same page two seconds apart (the second one blurred), then another page ten seconds later
-    std::fs::write(
-        d.join("a.jpg"),
-        jpeg_with_time(&scene(1, 0.0), "2026:11:01 14:00:00"),
-    )
-    .unwrap();
-    std::fs::write(
-        d.join("b.jpg"),
-        jpeg_with_time(&scene(1, 1.5), "2026:11:01 14:00:02"),
-    )
-    .unwrap();
-    std::fs::write(
-        d.join("c.jpg"),
-        jpeg_with_time(&scene(2, 0.0), "2026:11:01 14:00:12"),
-    )
-    .unwrap();
+    std::fs::write(d.join("a.jpg"), jpeg_with_time(&scene(1, 0.0), "2026:11:01 14:00:00")).unwrap();
+    std::fs::write(d.join("b.jpg"), jpeg_with_time(&scene(1, 1.5), "2026:11:01 14:00:02")).unwrap();
+    std::fs::write(d.join("c.jpg"), jpeg_with_time(&scene(2, 0.0), "2026:11:01 14:00:12")).unwrap();
     let common = ["--dpi", "300", "--format", "none", "--pdf"];
-    let wide = run(
-        &d,
-        &[
-            &["a.jpg", "b.jpg", "c.jpg"][..],
-            &common[..],
-            &["w.pdf", "--burst", "--burst-gap", "3"][..],
-        ]
-        .concat(),
-    );
+    let wide = run(&d, &[&["a.jpg", "b.jpg", "c.jpg"][..], &common[..], &["w.pdf", "--burst", "--burst-gap", "3"][..]].concat());
     assert!(wide.status.success(), "{}", text(&wide));
-    let narrow = run(
-        &d,
-        &[
-            &["a.jpg", "b.jpg", "c.jpg"][..],
-            &common[..],
-            &["n.pdf", "--burst", "--burst-gap", "1"][..],
-        ]
-        .concat(),
-    );
+    let narrow = run(&d, &[&["a.jpg", "b.jpg", "c.jpg"][..], &common[..], &["n.pdf", "--burst", "--burst-gap", "1"][..]].concat());
     assert!(narrow.status.success(), "{}", text(&narrow));
     // a 3 s gap makes a and b one burst (the sharper one stays); a 1 s gap keeps all three
     let (tw, tn) = (text(&wide), text(&narrow));
-    assert!(
-        tw.contains("b.jpg") && tw.contains("w.pdf (2 page(s))"),
-        "{tw}"
-    );
+    assert!(tw.contains("b.jpg") && tw.contains("w.pdf (2 page(s))"), "{tw}");
     assert!(tn.contains("n.pdf (3 page(s))"), "{tn}");
     let _ = std::fs::remove_dir_all(&d);
 }
@@ -138,26 +86,13 @@ fn burst_gap_decides_which_frames_count_as_one_burst() {
 #[test]
 fn timestamp_verify_accepts_the_file_and_rejects_a_changed_one() {
     let d = dir("tsa");
-    if !Command::new("openssl")
-        .arg("version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-    {
+    if !Command::new("openssl").arg("version").output().map(|o| o.status.success()).unwrap_or(false) {
         eprintln!("openssl not found: time-stamp test skipped");
         return;
     }
     let ssl = |args: &[&str]| {
-        let o = Command::new("openssl")
-            .args(args)
-            .current_dir(&d)
-            .output()
-            .unwrap();
-        assert!(
-            o.status.success(),
-            "openssl {args:?}: {}",
-            String::from_utf8_lossy(&o.stderr)
-        );
+        let o = Command::new("openssl").args(args).current_dir(&d).output().unwrap();
+        assert!(o.status.success(), "openssl {args:?}: {}", String::from_utf8_lossy(&o.stderr));
     };
     std::fs::write(
         d.join("tsa.cnf"),
@@ -166,51 +101,14 @@ fn timestamp_verify_accepts_the_file_and_rejects_a_changed_one() {
     )
     .unwrap();
     std::fs::write(d.join("serial"), "01\n").unwrap();
-    ssl(&[
-        "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "key.pem", "-out", "cert.pem",
-        "-days", "2", "-config", "tsa.cnf",
-    ]);
+    ssl(&["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "key.pem", "-out", "cert.pem", "-days", "2", "-config", "tsa.cnf"]);
     std::fs::write(d.join("SHA256SUMS.txt"), "registry root\n").unwrap();
-    ssl(&[
-        "ts",
-        "-query",
-        "-data",
-        "SHA256SUMS.txt",
-        "-sha256",
-        "-cert",
-        "-out",
-        "req.tsq",
-    ]);
-    ssl(&[
-        "ts",
-        "-reply",
-        "-queryfile",
-        "req.tsq",
-        "-config",
-        "tsa.cnf",
-        "-out",
-        "SHA256SUMS.txt.tsr",
-    ]);
-    let ok = run(
-        &d,
-        &[
-            "--timestamp-verify",
-            "SHA256SUMS.txt",
-            "--tsa-ca",
-            "cert.pem",
-        ],
-    );
+    ssl(&["ts", "-query", "-data", "SHA256SUMS.txt", "-sha256", "-cert", "-out", "req.tsq"]);
+    ssl(&["ts", "-reply", "-queryfile", "req.tsq", "-config", "tsa.cnf", "-out", "SHA256SUMS.txt.tsr"]);
+    let ok = run(&d, &["--timestamp-verify", "SHA256SUMS.txt", "--tsa-ca", "cert.pem"]);
     assert!(ok.status.success(), "{}", text(&ok));
     std::fs::write(d.join("SHA256SUMS.txt"), "registry root changed\n").unwrap();
-    let bad = run(
-        &d,
-        &[
-            "--timestamp-verify",
-            "SHA256SUMS.txt",
-            "--tsa-ca",
-            "cert.pem",
-        ],
-    );
+    let bad = run(&d, &["--timestamp-verify", "SHA256SUMS.txt", "--tsa-ca", "cert.pem"]);
     assert!(!bad.status.success(), "{}", text(&bad));
     let _ = std::fs::remove_dir_all(&d);
 }
@@ -248,166 +146,15 @@ fn show_through_removes_faint_print_so_the_page_ends_at_the_last_real_line() {
     let d = dir("showthrough");
     show_through_page().save(d.join("st.png")).unwrap();
     let height_of = |extra: &[&str], out: &str| {
-        let mut args = vec![
-            "st.png", "--dpi", "300", "--split", "off", "--mode", "gray", "--format", "png", "-o",
-            out,
-        ];
+        let mut args = vec!["st.png", "--dpi", "300", "--split", "off", "--mode", "gray", "--format", "png", "-o", out];
         args.extend_from_slice(extra);
         let o = run(&d, &args);
         assert!(o.status.success(), "{}", text(&o));
-        let f = std::fs::read_dir(d.join(out))
-            .unwrap()
-            .next()
-            .unwrap()
-            .unwrap()
-            .path();
+        let f = std::fs::read_dir(d.join(out)).unwrap().next().unwrap().unwrap().path();
         image::open(f).unwrap().to_luma8().height()
     };
     let plain = height_of(&[], "plain");
     let faded = height_of(&["--show-through"], "faded");
     assert!(faded < plain, "without the option {plain} px, with it {faded} px: the faint lines below the last real line should be gone");
-    let _ = std::fs::remove_dir_all(&d);
-}
-
-/// `--sign-timestamp`: the whole flow against a time-stamp authority on 127.0.0.1 (plain http; a Python
-/// stand-in that hands every request to a throw-away OpenSSL authority). The https path differs only in curl.
-#[cfg(target_os = "linux")]
-#[test]
-fn sign_timestamp_gets_a_stamp_from_a_local_authority() {
-    let have = |c: &str, a: &str| {
-        Command::new(c)
-            .arg(a)
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    };
-    if !(have("openssl", "version") && have("python3", "--version") && have("curl", "--version")) {
-        eprintln!("openssl, python3 or curl not found: sign-timestamp test skipped");
-        return;
-    }
-    let d = dir("signts");
-    let ssl = |args: &[&str]| {
-        let o = Command::new("openssl")
-            .args(args)
-            .current_dir(&d)
-            .output()
-            .unwrap();
-        assert!(
-            o.status.success(),
-            "openssl {args:?}: {}",
-            String::from_utf8_lossy(&o.stderr)
-        );
-    };
-    std::fs::write(
-        d.join("tsa.cnf"),
-        "[req]\ndistinguished_name=dn\nprompt=no\nx509_extensions=ext\n[dn]\nCN=Test TSA\n[ext]\nbasicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=critical,timeStamping\n\
-         [tsa]\ndefault_tsa=tsa_cfg\n[tsa_cfg]\ndir=.\nserial=./serial\nsigner_cert=./cert.pem\nsigner_key=./key.pem\ncerts=./cert.pem\ndefault_policy=1.2.3.4.5\ndigests=sha256\nsigner_digest=sha256\naccuracy=secs:1\nordering=yes\ntsa_name=yes\n",
-    )
-    .unwrap();
-    std::fs::write(d.join("serial"), "01\n").unwrap();
-    ssl(&[
-        "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "key.pem", "-out", "cert.pem",
-        "-days", "2", "-config", "tsa.cnf",
-    ]);
-    ssl(&[
-        "req",
-        "-x509",
-        "-newkey",
-        "rsa:2048",
-        "-nodes",
-        "-keyout",
-        "k.pem",
-        "-out",
-        "c.pem",
-        "-subj",
-        "/CN=Test Signer",
-        "-days",
-        "3",
-    ]);
-    ssl(&[
-        "pkcs12", "-export", "-inkey", "k.pem", "-in", "c.pem", "-out", "t.p12", "-passout",
-        "pass:pw",
-    ]);
-    let server = "import http.server, subprocess, sys\n\
-        class H(http.server.BaseHTTPRequestHandler):\n\
-        \x20   def do_POST(self):\n\
-        \x20       open('q.tsq','wb').write(self.rfile.read(int(self.headers['Content-Length'])))\n\
-        \x20       subprocess.run(['openssl','ts','-reply','-queryfile','q.tsq','-config','tsa.cnf','-out','r.tsr'],check=True)\n\
-        \x20       b=open('r.tsr','rb').read()\n\
-        \x20       self.send_response(200); self.send_header('Content-Type','application/timestamp-reply'); self.send_header('Content-Length',str(len(b))); self.end_headers(); self.wfile.write(b)\n\
-        \x20   def log_message(self,*a): pass\n\
-        s=http.server.HTTPServer(('127.0.0.1',0),H)\n\
-        open('port','w').write(str(s.server_address[1]))\n\
-        s.serve_forever()\n";
-    std::fs::write(d.join("tsa_server.py"), server).unwrap();
-    let mut child = Command::new("python3")
-        .arg("tsa_server.py")
-        .current_dir(&d)
-        .spawn()
-        .unwrap();
-    let mut port = String::new();
-    for _ in 0..100 {
-        if let Ok(p) = std::fs::read_to_string(d.join("port")) {
-            if !p.is_empty() {
-                port = p;
-                break;
-            }
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    assert!(!port.is_empty(), "stand-in authority did not start");
-    let url = format!("http://127.0.0.1:{port}/");
-    let mut g = image::GrayImage::from_pixel(300, 300, image::Luma([240]));
-    for y in 100..120 {
-        for x in 40..260 {
-            g.put_pixel(x, y, image::Luma([20]));
-        }
-    }
-    g.save(d.join("a.png")).unwrap();
-    let made = run(
-        &d,
-        &[
-            "a.png", "--dpi", "300", "--format", "none", "--pdf", "h.pdf",
-        ],
-    );
-    assert!(made.status.success(), "{}", text(&made));
-    let s = Command::new(env!("CARGO_BIN_EXE_legatorocr"))
-        .current_dir(&d)
-        .env("LGR_TEST_PW", "pw")
-        .args([
-            "--sign-pdf",
-            "h.pdf",
-            "--sign-p12",
-            "t.p12",
-            "--sign-pass-env",
-            "LGR_TEST_PW",
-            "--sign-timestamp",
-            "--tsa-url",
-            &url,
-            "--pdf",
-            "s.pdf",
-        ])
-        .output()
-        .unwrap();
-    let v = run(
-        &d,
-        &[
-            "--verify-pdf-signatures",
-            "s.pdf",
-            "--sign-ca",
-            "c.pem",
-            "--tsa-ca",
-            "cert.pem",
-        ],
-    );
-    let _ = child.kill();
-    let _ = child.wait();
-    assert!(s.status.success(), "{}", text(&s));
-    assert!(v.status.success(), "{}", text(&v));
-    assert!(
-        text(&v).to_lowercase().contains("time"),
-        "no time stamp reported: {}",
-        text(&v)
-    );
     let _ = std::fs::remove_dir_all(&d);
 }

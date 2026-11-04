@@ -15,10 +15,7 @@ use std::process::Command;
 struct TempDir(PathBuf);
 impl TempDir {
     fn new() -> Result<Self> {
-        let n = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
+        let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
         let p = std::env::temp_dir().join(format!("lgr_sign_{}_{n}", std::process::id()));
         std::fs::create_dir(&p)?;
         #[cfg(unix)]
@@ -41,22 +38,12 @@ fn openssl() -> Command {
 
 /// Sign `input` into `output`. The PKCS#12 password is read from the environment variable
 /// `pass_env` (never from the command line).
-pub fn sign_pdf(
-    input: &Path,
-    output: &Path,
-    p12: &Path,
-    pass_env: &str,
-    name: Option<&str>,
-    reason: Option<&str>,
-    tsa_url: Option<&str>,
-) -> Result<()> {
+pub fn sign_pdf(input: &Path, output: &Path, p12: &Path, pass_env: &str, name: Option<&str>, reason: Option<&str>, tsa_url: Option<&str>) -> Result<()> {
     let data = std::fs::read(input).with_context(|| format!("reading {}", input.display()))?;
     if std::env::var_os(pass_env).is_none() {
         bail!("set the PKCS#12 password in the environment variable {pass_env} (use an empty value for none)");
     }
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
-        .as_secs();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
     let prepared = sign::prepare(&data, now, name, reason).map_err(|e| anyhow::anyhow!("{e}"))?;
     let tmp = TempDir::new()?;
     let pem = tmp.0.join("key.pem");
@@ -70,10 +57,7 @@ pub fn sign_pdf(
         .output()
         .context("cannot run openssl")?;
     if !st.status.success() {
-        bail!(
-            "openssl could not open the PKCS#12 file (wrong password?): {}",
-            String::from_utf8_lossy(&st.stderr).trim()
-        );
+        bail!("openssl could not open the PKCS#12 file (wrong password?): {}", String::from_utf8_lossy(&st.stderr).trim());
     }
     // intermediate / root certificates of the file, if any (the signer's own is embedded already)
     let chain = tmp.0.join("chain.pem");
@@ -87,35 +71,23 @@ pub fn sign_pdf(
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
-    let has_chain = ok
-        && std::fs::read_to_string(&chain)
-            .map(|t| t.contains("BEGIN CERTIFICATE"))
-            .unwrap_or(false);
+    let has_chain = ok && std::fs::read_to_string(&chain).map(|t| t.contains("BEGIN CERTIFICATE")).unwrap_or(false);
     let content = tmp.0.join("content.bin");
     std::fs::write(&content, prepared.signed_data())?;
     let der = tmp.0.join("sig.der");
     let mut cmd = openssl();
-    cmd.args([
-        "cms", "-sign", "-binary", "-md", "sha256", "-cades", "-outform", "DER", "-in",
-    ])
-    .arg(&content)
-    .arg("-signer")
-    .arg(&pem)
-    .arg("-inkey")
-    .arg(&pem);
+    cmd.args(["cms", "-sign", "-binary", "-md", "sha256", "-cades", "-outform", "DER", "-in"])
+        .arg(&content)
+        .arg("-signer")
+        .arg(&pem)
+        .arg("-inkey")
+        .arg(&pem);
     if has_chain {
         cmd.arg("-certfile").arg(&chain);
     }
-    let st = cmd
-        .arg("-out")
-        .arg(&der)
-        .output()
-        .context("cannot run openssl")?;
+    let st = cmd.arg("-out").arg(&der).output().context("cannot run openssl")?;
     if !st.status.success() {
-        bail!(
-            "openssl cms -sign failed: {}",
-            String::from_utf8_lossy(&st.stderr).trim()
-        );
+        bail!("openssl cms -sign failed: {}", String::from_utf8_lossy(&st.stderr).trim());
     }
     let mut cms = std::fs::read(&der)?;
     if let Some(url) = tsa_url {
@@ -193,24 +165,16 @@ pub fn signature_value(cms: &[u8]) -> Option<Vec<u8>> {
 /// unsigned attribute id-aa-signatureTimeStampToken.
 pub fn add_timestamp(cms: &[u8], resp: &[u8]) -> Result<Vec<u8>> {
     let bad = || anyhow::anyhow!("unexpected CMS structure");
-    let token = children(body_of(resp).ok_or_else(bad)?)
-        .ok_or_else(bad)?
-        .get(1)
-        .ok_or_else(bad)?
-        .1
-        .clone();
+    let token = children(body_of(resp).ok_or_else(bad)?).ok_or_else(bad)?.get(1).ok_or_else(bad)?.1.clone();
     // Attribute ::= SEQUENCE { attrType OID, attrValues SET { token } }
-    let oid = [
-        0x06, 0x0B, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09, 0x10, 0x02, 0x0E,
-    ];
+    let oid = [0x06, 0x0B, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09, 0x10, 0x02, 0x0E];
     let attr = der_tlv(0x30, &[oid.to_vec(), der_tlv(0x31, &token)].concat());
     let unsigned = der_tlv(0xA1, &attr);
 
     let ci = children(body_of(cms).ok_or_else(bad)?).ok_or_else(bad)?;
     let ctx0 = &ci.get(1).ok_or_else(bad)?.1;
     let sd = children(body_of(ctx0).ok_or_else(bad)?).ok_or_else(bad)?;
-    let sd_items =
-        children(body_of(&sd.first().ok_or_else(bad)?.1).ok_or_else(bad)?).ok_or_else(bad)?;
+    let sd_items = children(body_of(&sd.first().ok_or_else(bad)?.1).ok_or_else(bad)?).ok_or_else(bad)?;
     let (set_tag, set) = sd_items.last().ok_or_else(bad)?.clone();
     let sis = children(body_of(&set).ok_or_else(bad)?).ok_or_else(bad)?;
     let (si_tag, si) = sis.first().ok_or_else(bad)?.clone();
@@ -223,10 +187,7 @@ pub fn add_timestamp(cms: &[u8], resp: &[u8]) -> Result<Vec<u8>> {
     }
     let new_si = der_tlv(si_tag, &[body_of(&si).ok_or_else(bad)?, &unsigned].concat());
     let new_set = der_tlv(set_tag, &new_si);
-    let mut items: Vec<u8> = sd_items[..sd_items.len() - 1]
-        .iter()
-        .flat_map(|(_, e)| e.clone())
-        .collect();
+    let mut items: Vec<u8> = sd_items[..sd_items.len() - 1].iter().flat_map(|(_, e)| e.clone()).collect();
     items.extend(new_set);
     let new_sd = der_tlv(sd[0].0, &items);
     let new_ctx0 = der_tlv(0xA0, &new_sd);
@@ -252,11 +213,7 @@ fn embedded_token(cms: &[u8]) -> Option<Vec<u8>> {
     let (_, unsigned) = items.iter().find(|(t, _)| *t == 0xA1)?;
     for (_, attr) in children(body_of(unsigned)?)? {
         let parts = children(body_of(&attr)?)?;
-        if body_of(&parts.first()?.1)?
-            == [
-                0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09, 0x10, 0x02, 0x0E,
-            ]
-        {
+        if body_of(&parts.first()?.1)? == [0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09, 0x10, 0x02, 0x0E] {
             let vals = children(body_of(&parts.get(1)?.1)?)?;
             return Some(vals.first()?.1.clone());
         }
@@ -266,20 +223,12 @@ fn embedded_token(cms: &[u8]) -> Option<Vec<u8>> {
 
 /// Check the time stamp inside `cms` (None when there is none): it must be for exactly the
 /// signature value; with `tsa_ca` OpenSSL also checks the authority's signature.
-fn check_embedded_timestamp(
-    cms: &[u8],
-    tsa_ca: Option<&Path>,
-    tmp: &Path,
-    i: usize,
-) -> Option<std::result::Result<String, String>> {
+fn check_embedded_timestamp(cms: &[u8], tsa_ca: Option<&Path>, tmp: &Path, i: usize) -> Option<std::result::Result<String, String>> {
     let token = embedded_token(cms)?;
     Some((|| {
         let sig = signature_value(cms).ok_or("no signature value")?;
         // wrap as a TimeStampResp with status 0 so the existing parser can read it
-        let resp = der_tlv(
-            0x30,
-            &[der_tlv(0x30, &[0x02, 0x01, 0x00]), token.clone()].concat(),
-        );
+        let resp = der_tlv(0x30, &[der_tlv(0x30, &[0x02, 0x01, 0x00]), token.clone()].concat());
         let r = crate::tsa::parse_reply(&resp).map_err(|e| e.to_string())?;
         if r.digest != legatorocr_pdf::crypt::sha256(&sig) {
             return Err("the time stamp is for a different signature value".to_string());
@@ -299,10 +248,7 @@ fn check_embedded_timestamp(
                 .output()
                 .map_err(|e| format!("cannot run openssl: {e}"))?;
             if !o.status.success() {
-                return Err(format!(
-                    "the authority's signature was not accepted: {}",
-                    String::from_utf8_lossy(&o.stderr).trim()
-                ));
+                return Err(format!("the authority's signature was not accepted: {}", String::from_utf8_lossy(&o.stderr).trim()));
             }
         }
         Ok(r.gen_time)
@@ -318,9 +264,7 @@ pub fn verify_pdf(file: &Path, ca: Option<&Path>, tsa_ca: Option<&Path>) -> Resu
     let mut out = Vec::new();
     for (i, s) in sigs.iter().enumerate() {
         let result = (|| -> std::result::Result<(), String> {
-            let signed = s
-                .signed_data(&data)
-                .ok_or("the byte range does not fit the file")?;
+            let signed = s.signed_data(&data).ok_or("the byte range does not fit the file")?;
             // DER length tells where the CMS structure ends; the rest is zero padding
             let der = der_trim(&s.contents).ok_or("the signature value is not DER")?;
             let c = tmp.0.join(format!("c{i}.bin"));
@@ -328,12 +272,7 @@ pub fn verify_pdf(file: &Path, ca: Option<&Path>, tsa_ca: Option<&Path>) -> Resu
             std::fs::write(&c, signed).map_err(|e| e.to_string())?;
             std::fs::write(&d, der).map_err(|e| e.to_string())?;
             let mut cmd = openssl();
-            cmd.args(["cms", "-verify", "-binary", "-inform", "DER", "-in"])
-                .arg(&d)
-                .arg("-content")
-                .arg(&c)
-                .arg("-out")
-                .arg(tmp.0.join(format!("o{i}.bin")));
+            cmd.args(["cms", "-verify", "-binary", "-inform", "DER", "-in"]).arg(&d).arg("-content").arg(&c).arg("-out").arg(tmp.0.join(format!("o{i}.bin")));
             match ca {
                 Some(p) => {
                     cmd.arg("-CAfile").arg(p);
@@ -342,25 +281,15 @@ pub fn verify_pdf(file: &Path, ca: Option<&Path>, tsa_ca: Option<&Path>) -> Resu
                     cmd.arg("-noverify");
                 }
             }
-            let o = cmd
-                .output()
-                .map_err(|e| format!("cannot run openssl: {e}"))?;
+            let o = cmd.output().map_err(|e| format!("cannot run openssl: {e}"))?;
             if o.status.success() {
                 Ok(())
             } else {
                 Err(String::from_utf8_lossy(&o.stderr).trim().to_string())
             }
         })();
-        let timestamp =
-            der_trim(&s.contents).and_then(|d| check_embedded_timestamp(d, tsa_ca, &tmp.0, i));
-        out.push(SigReport {
-            index: i + 1,
-            name: s.name.clone(),
-            sub_filter: s.sub_filter.clone(),
-            covers_whole_file: s.covers_whole_file(&data),
-            result,
-            timestamp,
-        });
+        let timestamp = der_trim(&s.contents).and_then(|d| check_embedded_timestamp(d, tsa_ca, &tmp.0, i));
+        out.push(SigReport { index: i + 1, name: s.name.clone(), sub_filter: s.sub_filter.clone(), covers_whole_file: s.covers_whole_file(&data), result, timestamp });
     }
     Ok(out)
 }
@@ -378,12 +307,7 @@ fn der_trim(d: &[u8]) -> Option<&[u8]> {
         if n == 0 || n > 4 || d.len() < 2 + n {
             return None;
         }
-        (
-            d[2..2 + n]
-                .iter()
-                .fold(0usize, |a, &b| (a << 8) | b as usize),
-            2 + n,
-        )
+        (d[2..2 + n].iter().fold(0usize, |a, &b| (a << 8) | b as usize), 2 + n)
     };
     d.get(..off + len)
 }
@@ -393,11 +317,7 @@ mod tests {
     use super::*;
 
     fn have_openssl() -> bool {
-        Command::new("openssl")
-            .arg("version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        Command::new("openssl").arg("version").output().map(|o| o.status.success()).unwrap_or(false)
     }
 
     #[test]
@@ -408,54 +328,16 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let d = &tmp.0;
         let ok = |c: &mut Command| c.output().unwrap().status.success();
-        assert!(ok(openssl()
-            .args([
-                "req",
-                "-x509",
-                "-newkey",
-                "rsa:2048",
-                "-nodes",
-                "-days",
-                "2",
-                "-subj",
-                "/CN=Test Signer",
-                "-keyout"
-            ])
-            .arg(d.join("k.pem"))
-            .arg("-out")
-            .arg(d.join("c.pem"))));
-        assert!(ok(openssl()
-            .args(["pkcs12", "-export", "-passout", "pass:pw", "-inkey"])
-            .arg(d.join("k.pem"))
-            .arg("-in")
-            .arg(d.join("c.pem"))
-            .arg("-out")
-            .arg(d.join("t.p12"))));
+        assert!(ok(openssl().args(["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", "/CN=Test Signer", "-keyout"]).arg(d.join("k.pem")).arg("-out").arg(d.join("c.pem"))));
+        assert!(ok(openssl().args(["pkcs12", "-export", "-passout", "pass:pw", "-inkey"]).arg(d.join("k.pem")).arg("-in").arg(d.join("c.pem")).arg("-out").arg(d.join("t.p12"))));
         let mut w = legatorocr_pdf::PdfWriter::new(legatorocr_pdf::Compress::Flate);
         w.add_page(
-            &legatorocr_core::Page {
-                image: legatorocr_core::PageImage::Bw(legatorocr_core::BitImage::new(32, 32)),
-                dpi: 72,
-                skew_deg: 0.0,
-                blank: false,
-                split_index: None,
-                content_box: None,
-                layers: None,
-            },
+            &legatorocr_core::Page { image: legatorocr_core::PageImage::Bw(legatorocr_core::BitImage::new(32, 32)), dpi: 72, skew_deg: 0.0, blank: false, split_index: None, content_box: None, layers: None },
             &[],
         );
         std::fs::write(d.join("in.pdf"), w.finish()).unwrap();
         std::env::set_var("LGR_TEST_P12", "pw");
-        sign_pdf(
-            &d.join("in.pdf"),
-            &d.join("out.pdf"),
-            &d.join("t.p12"),
-            "LGR_TEST_P12",
-            Some("Test"),
-            Some("Approved"),
-            None,
-        )
-        .unwrap();
+        sign_pdf(&d.join("in.pdf"), &d.join("out.pdf"), &d.join("t.p12"), "LGR_TEST_P12", Some("Test"), Some("Approved"), None).unwrap();
         let r = verify_pdf(&d.join("out.pdf"), Some(&d.join("c.pem")), None).unwrap();
         assert_eq!(r.len(), 1);
         assert!(r[0].result.is_ok(), "{:?}", r[0].result);
@@ -468,16 +350,7 @@ mod tests {
         assert!(r[0].result.is_err());
         // wrong password
         std::env::set_var("LGR_TEST_P12", "nope");
-        assert!(sign_pdf(
-            &d.join("in.pdf"),
-            &d.join("x.pdf"),
-            &d.join("t.p12"),
-            "LGR_TEST_P12",
-            None,
-            None,
-            None
-        )
-        .is_err());
+        assert!(sign_pdf(&d.join("in.pdf"), &d.join("x.pdf"), &d.join("t.p12"), "LGR_TEST_P12", None, None, None).is_err());
     }
 
     /// PAdES-B-T: a time stamp from a local OpenSSL authority is put inside a CMS signature;
@@ -492,132 +365,45 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         let run = |args: &[&str]| {
-            let o = Command::new("openssl")
-                .args(args)
-                .current_dir(&d)
-                .output()
-                .unwrap();
-            assert!(
-                o.status.success(),
-                "openssl {args:?}: {}",
-                String::from_utf8_lossy(&o.stderr)
-            );
+            let o = Command::new("openssl").args(args).current_dir(&d).output().unwrap();
+            assert!(o.status.success(), "openssl {args:?}: {}", String::from_utf8_lossy(&o.stderr));
             o
         };
         std::fs::write(d.join("tsa.cnf"), "[req]\ndistinguished_name=dn\nprompt=no\nx509_extensions=ext\n[dn]\nCN=Test TSA\n[ext]\nbasicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=critical,timeStamping\n[tsa]\ndefault_tsa=t\n[t]\ndir=.\nserial=./serial\nsigner_cert=./tsa.pem\nsigner_key=./tsakey.pem\ncerts=./tsa.pem\ndefault_policy=1.2.3.4.5\ndigests=sha256\nsigner_digest=sha256\naccuracy=secs:1\nordering=yes\ntsa_name=yes\n").unwrap();
         std::fs::write(d.join("serial"), "01\n").unwrap();
-        run(&[
-            "req",
-            "-x509",
-            "-newkey",
-            "rsa:2048",
-            "-nodes",
-            "-keyout",
-            "tsakey.pem",
-            "-out",
-            "tsa.pem",
-            "-days",
-            "2",
-            "-config",
-            "tsa.cnf",
-        ]);
-        run(&[
-            "req",
-            "-x509",
-            "-newkey",
-            "rsa:2048",
-            "-nodes",
-            "-days",
-            "2",
-            "-subj",
-            "/CN=Signer",
-            "-keyout",
-            "k.pem",
-            "-out",
-            "c.pem",
-        ]);
+        run(&["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "tsakey.pem", "-out", "tsa.pem", "-days", "2", "-config", "tsa.cnf"]);
+        run(&["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", "/CN=Signer", "-keyout", "k.pem", "-out", "c.pem"]);
         std::fs::write(d.join("data.bin"), b"signed bytes").unwrap();
-        run(&[
-            "cms", "-sign", "-binary", "-md", "sha256", "-cades", "-outform", "DER", "-in",
-            "data.bin", "-signer", "c.pem", "-inkey", "k.pem", "-out", "sig.der",
-        ]);
+        run(&["cms", "-sign", "-binary", "-md", "sha256", "-cades", "-outform", "DER", "-in", "data.bin", "-signer", "c.pem", "-inkey", "k.pem", "-out", "sig.der"]);
         let cms = std::fs::read(d.join("sig.der")).unwrap();
         let sigval = signature_value(&cms).expect("signature value");
         assert_eq!(sigval.len(), 256, "RSA-2048 signature");
         let mut dg = [0u8; 32];
         dg.copy_from_slice(&legatorocr_pdf::crypt::sha256(&sigval));
         std::fs::write(d.join("req.tsq"), crate::tsa::build_request(&dg, 77)).unwrap();
-        run(&[
-            "ts",
-            "-reply",
-            "-queryfile",
-            "req.tsq",
-            "-config",
-            "tsa.cnf",
-            "-out",
-            "resp.tsr",
-        ]);
+        run(&["ts", "-reply", "-queryfile", "req.tsq", "-config", "tsa.cnf", "-out", "resp.tsr"]);
         let resp = std::fs::read(d.join("resp.tsr")).unwrap();
         let stamped = add_timestamp(&cms, &resp).unwrap();
         assert!(stamped.len() > cms.len() + 500);
         std::fs::write(d.join("stamped.der"), &stamped).unwrap();
         // the signature is still good, and the attribute is there
-        run(&[
-            "cms",
-            "-verify",
-            "-binary",
-            "-inform",
-            "DER",
-            "-in",
-            "stamped.der",
-            "-content",
-            "data.bin",
-            "-noverify",
-            "-out",
-            "out.bin",
-        ]);
-        let dump = String::from_utf8_lossy(
-            &run(&["asn1parse", "-inform", "DER", "-in", "stamped.der"]).stdout,
-        )
-        .into_owned();
+        run(&["cms", "-verify", "-binary", "-inform", "DER", "-in", "stamped.der", "-content", "data.bin", "-noverify", "-out", "out.bin"]);
+        let dump = String::from_utf8_lossy(&run(&["asn1parse", "-inform", "DER", "-in", "stamped.der"]).stdout).into_owned();
         assert!(dump.contains("id-smime-aa-timeStampToken"), "{dump}");
         // the token stamps exactly the signature value
         std::fs::write(d.join("sigval.bin"), &sigval).unwrap();
-        run(&[
-            "ts",
-            "-verify",
-            "-in",
-            "resp.tsr",
-            "-data",
-            "sigval.bin",
-            "-CAfile",
-            "tsa.pem",
-        ]);
+        run(&["ts", "-verify", "-in", "resp.tsr", "-data", "sigval.bin", "-CAfile", "tsa.pem"]);
         // and the signature value read back from the stamped CMS is unchanged
         assert_eq!(signature_value(&stamped).unwrap(), sigval);
-        assert!(
-            add_timestamp(&stamped, &resp).is_err(),
-            "no second time stamp"
-        );
+        assert!(add_timestamp(&stamped, &resp).is_err(), "no second time stamp");
         // the checker reads it back: time, right signature, and the authority when its certificate is given
         let tmp = d.clone();
-        let t = check_embedded_timestamp(&stamped, None, &tmp, 0)
-            .expect("has a stamp")
-            .expect("good stamp");
+        let t = check_embedded_timestamp(&stamped, None, &tmp, 0).expect("has a stamp").expect("good stamp");
         assert!(t.ends_with('Z'), "{t}");
-        check_embedded_timestamp(&stamped, Some(&d.join("tsa.pem")), &tmp, 1)
-            .unwrap()
-            .unwrap();
-        assert!(
-            check_embedded_timestamp(&stamped, Some(&d.join("c.pem")), &tmp, 2)
-                .unwrap()
-                .is_err(),
-            "wrong authority"
-        );
-        assert!(
-            check_embedded_timestamp(&cms, None, &tmp, 3).is_none(),
-            "unstamped signature"
-        );
+        check_embedded_timestamp(&stamped, Some(&d.join("tsa.pem")), &tmp, 1).unwrap().unwrap();
+        assert!(check_embedded_timestamp(&stamped, Some(&d.join("c.pem")), &tmp, 2).unwrap().is_err(), "wrong authority");
+        assert!(check_embedded_timestamp(&cms, None, &tmp, 3).is_none(), "unstamped signature");
         let _ = std::fs::remove_dir_all(&d);
     }
+
 }

@@ -30,30 +30,16 @@ pub struct Embedded {
 }
 
 fn safe_name(n: usize, path: &Path) -> String {
-    let raw = path
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "input".into());
+    let raw = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "input".into());
     let clean: String = raw
         .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
-                c
-            } else {
-                '_'
-            }
-        })
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' })
         .collect();
     format!("{n:03}_{}", clean.trim_start_matches('.'))
 }
 
 fn mime_of(name: &str) -> &'static str {
-    match name
-        .rsplit('.')
-        .next()
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
+    match name.rsplit('.').next().map(str::to_ascii_lowercase).as_deref() {
         Some("png") => "image/png",
         Some("jpg") | Some("jpeg") => "image/jpeg",
         Some("tif") | Some("tiff") => "image/tiff",
@@ -71,17 +57,12 @@ pub fn build(
     sheets: &[(PathBuf, SheetAdj)],
 ) -> Result<(Vec<Attachment>, Embedded)> {
     let mut files: Vec<(PathBuf, String)> = Vec::new(); // canonical source, embedded name
-    let mut project = Project {
-        settings: settings.clone(),
-        extra,
-        sheets: Vec::new(),
-    };
+    let mut project = Project { settings: settings.clone(), extra, sheets: Vec::new() };
     let mut total = 0u64;
     let mut atts = Vec::new();
     for (path, adj) in sheets {
         let (base, frame) = crate::files::split_frame(path);
-        let src = std::fs::canonicalize(&base)
-            .with_context(|| format!("{}: not found", base.display()))?;
+        let src = std::fs::canonicalize(&base).with_context(|| format!("{}: not found", base.display()))?;
         let name = match files.iter().find(|(s, _)| *s == src) {
             Some((_, n)) => n.clone(),
             None => {
@@ -89,18 +70,12 @@ pub fn build(
                 let len = std::fs::metadata(&src)?.len();
                 total += len;
                 if total > MAX_ORIGINALS {
-                    bail!(
-                        "--embed-project: the originals are larger than 1 GiB; embed fewer pages"
-                    );
+                    bail!("--embed-project: the originals are larger than 1 GiB; embed fewer pages");
                 }
-                let data =
-                    std::fs::read(&src).with_context(|| format!("reading {}", src.display()))?;
+                let data = std::fs::read(&src).with_context(|| format!("reading {}", src.display()))?;
                 atts.push(Attachment {
                     mime: mime_of(&name).into(),
-                    description: format!(
-                        "LegatorOCR original input {} (byte for byte)",
-                        files.len() + 1
-                    ),
+                    description: format!("LegatorOCR original input {} (byte for byte)", files.len() + 1),
                     deflate: name.to_ascii_lowercase().ends_with(".bmp"),
                     data,
                     name: name.clone(),
@@ -124,11 +99,7 @@ pub fn build(
         data: text.into_bytes(),
         deflate: true,
     });
-    let info = Embedded {
-        files: files.len(),
-        original_bytes: total,
-        project_bytes,
-    };
+    let info = Embedded { files: files.len(), original_bytes: total, project_bytes };
     Ok((atts, info))
 }
 
@@ -137,29 +108,18 @@ pub fn build(
 pub fn extract(pdf: &Path, dir: &Path) -> Result<(PathBuf, usize)> {
     let doc = legatorocr_pdf::reader::PdfDoc::open_file_with_password(pdf, b"")
         .map_err(|e| anyhow::anyhow!("{}: {e}", pdf.display()))?;
-    let found = doc
-        .embedded_files()
-        .map_err(|e| anyhow::anyhow!("{}: {e}", pdf.display()))?;
+    let found = doc.embedded_files().map_err(|e| anyhow::anyhow!("{}: {e}", pdf.display()))?;
     if !found.iter().any(|(n, _)| n == PROJECT_NAME) {
-        bail!(
-            "{}: no embedded {PROJECT_NAME} (made without --embed-project?)",
-            pdf.display()
-        );
+        bail!("{}: no embedded {PROJECT_NAME} (made without --embed-project?)", pdf.display());
     }
     for (n, _) in &found {
         if n.is_empty() || n.contains(['/', '\\', '\0']) || n.starts_with('.') {
-            bail!(
-                "{}: embedded file name '{n}' is not a plain file name; refusing to write it",
-                pdf.display()
-            );
+            bail!("{}: embedded file name '{n}' is not a plain file name; refusing to write it", pdf.display());
         }
     }
     std::fs::create_dir_all(dir)?;
     if std::fs::read_dir(dir)?.next().is_some() {
-        bail!(
-            "{} is not empty; --extract-project never overwrites",
-            dir.display()
-        );
+        bail!("{} is not empty; --extract-project never overwrites", dir.display());
     }
     for (n, data) in &found {
         std::fs::write(dir.join(n), data).with_context(|| format!("writing {n}"))?;
@@ -182,10 +142,7 @@ mod tests {
 
     #[test]
     fn names_are_plain_and_numbered() {
-        assert_eq!(
-            safe_name(1, Path::new("/a/b/Pagină 1.png")),
-            "001_Pagin__1.png"
-        );
+        assert_eq!(safe_name(1, Path::new("/a/b/Pagină 1.png")), "001_Pagin__1.png");
         assert_eq!(safe_name(12, Path::new("/x/.hidden")), "012_hidden");
         assert_eq!(mime_of("001_a.JPG"), "image/jpeg");
     }
@@ -197,22 +154,10 @@ mod tests {
         let a = dir.join("a.png");
         std::fs::write(&a, b"not really a png").unwrap();
         let sheets = vec![
-            (
-                a.clone(),
-                SheetAdj {
-                    rotate_quarters: 1,
-                    dpi: Some(150),
-                    ..Default::default()
-                },
-            ),
+            (a.clone(), SheetAdj { rotate_quarters: 1, dpi: Some(150), ..Default::default() }),
             (a.clone(), SheetAdj::default()),
         ];
-        let (atts, info) = build(
-            &Settings::default(),
-            vec![("pdf_quality".into(), "70".into())],
-            &sheets,
-        )
-        .unwrap();
+        let (atts, info) = build(&Settings::default(), vec![("pdf_quality".into(), "70".into())], &sheets).unwrap();
         assert_eq!(atts.len(), 2);
         assert_eq!(atts[0].data, b"not really a png");
         assert_eq!(atts[1].name, PROJECT_NAME);
@@ -233,20 +178,11 @@ mod tests {
         let a = dir.join("scan.png");
         let bytes: Vec<u8> = (0..5000u32).map(|i| (i * 7 % 251) as u8).collect();
         std::fs::write(&a, &bytes).unwrap();
-        let (atts, _) = build(
-            &Settings::default(),
-            Vec::new(),
-            &[(a, SheetAdj::default())],
-        )
-        .unwrap();
+        let (atts, _) = build(&Settings::default(), Vec::new(), &[(a, SheetAdj::default())]).unwrap();
         let mut w = PdfWriter::new(Compress::Flate);
         w.set_pdfa(true);
         w.set_pdfa_part(3);
-        w.set_meta(Meta {
-            attachments: atts,
-            created_unix: Some(0),
-            ..Meta::default()
-        });
+        w.set_meta(Meta { attachments: atts, created_unix: Some(0), ..Meta::default() });
         w.add_page(
             &legatorocr_core::Page {
                 image: legatorocr_core::PageImage::Bw(legatorocr_core::BitImage::new(40, 40)),
@@ -261,11 +197,7 @@ mod tests {
         );
         let pdf = w.finish();
         let s = String::from_utf8_lossy(&pdf);
-        assert!(
-            s.contains("/AFRelationship /Source")
-                && s.contains("/EmbeddedFiles")
-                && s.contains("/AF [")
-        );
+        assert!(s.contains("/AFRelationship /Source") && s.contains("/EmbeddedFiles") && s.contains("/AF ["));
         let f = dir.join("out.pdf");
         std::fs::write(&f, &pdf).unwrap();
         let out = dir.join("x");
@@ -273,10 +205,7 @@ mod tests {
         assert_eq!(n, 2);
         assert_eq!(std::fs::read(out.join("001_scan.png")).unwrap(), bytes);
         assert_eq!(Project::load(&proj).unwrap().sheets.len(), 1);
-        assert!(
-            extract(&f, &out).is_err(),
-            "must not write into a folder that has files"
-        );
+        assert!(extract(&f, &out).is_err(), "must not write into a folder that has files");
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -50,8 +50,7 @@ pub fn run(src: &Path, dests: &[PathBuf], read_only: bool) -> Result<Vec<Report>
     let mut sums: Vec<(PathBuf, String, u64)> = Vec::new();
     for f in &files {
         let p = src.join(f);
-        let h =
-            crate::checksums::file_hash(&p).with_context(|| format!("reading {}", p.display()))?;
+        let h = crate::checksums::file_hash(&p).with_context(|| format!("reading {}", p.display()))?;
         sums.push((f.clone(), h, std::fs::metadata(&p)?.len()));
     }
     let manifest: String = sums
@@ -64,20 +63,14 @@ pub fn run(src: &Path, dests: &[PathBuf], read_only: bool) -> Result<Vec<Report>
         if d.canonicalize()? == canon_src || d.canonicalize()?.starts_with(&canon_src) {
             bail!("{} is inside the source folder", d.display());
         }
-        let mut rep = Report {
-            dest: d.clone(),
-            files: 0,
-            bytes: 0,
-            problems: Vec::new(),
-        };
+        let mut rep = Report { dest: d.clone(), files: 0, bytes: 0, problems: Vec::new() };
         for (f, h, len) in &sums {
             let to = d.join(f);
             if let Some(parent) = to.parent() {
                 std::fs::create_dir_all(parent)?;
             }
             if let Err(e) = std::fs::copy(src.join(f), &to) {
-                rep.problems
-                    .push(format!("{}: copy failed: {e}", f.display()));
+                rep.problems.push(format!("{}: copy failed: {e}", f.display()));
                 continue;
             }
             // read back from the destination, do not trust the copy call
@@ -86,12 +79,8 @@ pub fn run(src: &Path, dests: &[PathBuf], read_only: bool) -> Result<Vec<Report>
                     rep.files += 1;
                     rep.bytes += len;
                 }
-                Ok(_) => rep
-                    .problems
-                    .push(format!("{}: copy differs from the source", f.display())),
-                Err(e) => rep
-                    .problems
-                    .push(format!("{}: cannot read back: {e}", f.display())),
+                Ok(_) => rep.problems.push(format!("{}: copy differs from the source", f.display())),
+                Err(e) => rep.problems.push(format!("{}: cannot read back: {e}", f.display())),
             }
             if read_only {
                 if let Ok(m) = std::fs::metadata(&to) {
@@ -110,10 +99,7 @@ pub fn run(src: &Path, dests: &[PathBuf], read_only: bool) -> Result<Vec<Report>
 /// Questions the program cannot answer for the person.
 pub fn checklist(copies: usize) -> String {
     let mut s = String::from("3-2-1 check (the program verified the bytes, not the setup):\n");
-    s += &format!(
-        "  [{}] at least 3 copies in total (original + {copies} backup folder(s))\n",
-        if copies >= 2 { "x" } else { " " }
-    );
+    s += &format!("  [{}] at least 3 copies in total (original + {copies} backup folder(s))\n", if copies >= 2 { "x" } else { " " });
     s += "  [ ] the copies are on at least 2 different kinds of media / disks\n";
     s += "  [ ] at least 1 copy is somewhere else (another building or a provider)\n";
     s += "  [ ] a cold copy is kept read-only or offline (use --backup-read-only)\n";
@@ -134,16 +120,11 @@ mod tests {
         std::fs::write(src.join("sub/b.txt"), b"beta").unwrap();
         let (d1, d2) = (base.join("d1"), base.join("d2"));
         let r = run(&src, &[d1.clone(), d2.clone()], true).unwrap();
-        assert!(r
-            .iter()
-            .all(|x| x.problems.is_empty() && x.files == 2 && x.bytes == 9));
+        assert!(r.iter().all(|x| x.problems.is_empty() && x.files == 2 && x.bytes == 9));
         assert_eq!(std::fs::read(d2.join("sub/b.txt")).unwrap(), b"beta");
         let sums = std::fs::read_to_string(d1.join("SHA256SUMS.txt")).unwrap();
         assert!(sums.contains("  sub/b.txt") && sums.lines().count() == 2);
-        assert!(std::fs::metadata(d1.join("a.txt"))
-            .unwrap()
-            .permissions()
-            .readonly());
+        assert!(std::fs::metadata(d1.join("a.txt")).unwrap().permissions().readonly());
         // a destination inside the source is refused
         assert!(run(&src, &[src.join("inner")], false).is_err());
         assert!(run(&src, &[], false).is_err());

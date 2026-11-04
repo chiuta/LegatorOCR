@@ -41,10 +41,7 @@ pub fn embedded_model() -> Option<&'static Model> {
     M.get_or_init(|| {
         // developer override for trying a newly trained model without rebuilding
         if let Some(p) = std::env::var_os("LEGATOROCR_NATIVE_MODEL") {
-            if let Some(m) = std::fs::read(p)
-                .ok()
-                .and_then(|b| Model::from_bytes(&b).ok())
-            {
+            if let Some(m) = std::fs::read(p).ok().and_then(|b| Model::from_bytes(&b).ok()) {
                 return Some(m);
             }
         }

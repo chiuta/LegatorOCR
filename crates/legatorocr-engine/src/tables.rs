@@ -17,11 +17,7 @@ fn collect(blocks: &[Block], page: usize, out: &mut Vec<Found>) {
         match b {
             Block::Table(rows) => {
                 let n = out.iter().filter(|f| f.page == page).count() + 1;
-                out.push(Found {
-                    page,
-                    n,
-                    rows: rows.clone(),
-                });
+                out.push(Found { page, n, rows: rows.clone() });
             }
             Block::Columns(cols) => {
                 for c in cols {
@@ -55,13 +51,8 @@ fn esc(s: &str) -> String {
 fn is_plain_number(s: &str) -> bool {
     let t = s.strip_prefix('-').unwrap_or(s);
     let (int, frac) = t.split_once('.').map_or((t, None), |(a, b)| (a, Some(b)));
-    let int_ok = int == "0"
-        || (!int.is_empty()
-            && !int.starts_with('0')
-            && int.len() <= 15
-            && int.bytes().all(|b| b.is_ascii_digit()));
-    let frac_ok = frac
-        .is_none_or(|f| !f.is_empty() && f.len() <= 10 && f.bytes().all(|b| b.is_ascii_digit()));
+    let int_ok = int == "0" || (!int.is_empty() && !int.starts_with('0') && int.len() <= 15 && int.bytes().all(|b| b.is_ascii_digit()));
+    let frac_ok = frac.is_none_or(|f| !f.is_empty() && f.len() <= 10 && f.bytes().all(|b| b.is_ascii_digit()));
     int_ok && frac_ok
 }
 
@@ -79,11 +70,7 @@ fn col_name(mut i: usize) -> String {
 
 /// The workbook. With no tables it holds one empty sheet (a workbook needs at least one).
 pub fn xlsx(tables: &[Found]) -> Vec<u8> {
-    let empty = [Found {
-        page: 0,
-        n: 0,
-        rows: Vec::new(),
-    }];
+    let empty = [Found { page: 0, n: 0, rows: Vec::new() }];
     let list: &[Found] = if tables.is_empty() { &empty } else { tables };
     let mut sheets = Vec::new();
     for t in list {
@@ -109,16 +96,8 @@ pub fn xlsx(tables: &[Found]) -> Vec<u8> {
     let mut rels = String::new();
     let mut ct_sheets = String::new();
     for (i, t) in list.iter().enumerate() {
-        let name = if t.page == 0 {
-            "Tables".to_string()
-        } else {
-            format!("p{}-t{}", t.page, t.n)
-        };
-        wb_sheets.push_str(&format!(
-            "<sheet name=\"{name}\" sheetId=\"{}\" r:id=\"rId{}\"/>",
-            i + 1,
-            i + 1
-        ));
+        let name = if t.page == 0 { "Tables".to_string() } else { format!("p{}-t{}", t.page, t.n) };
+        wb_sheets.push_str(&format!("<sheet name=\"{name}\" sheetId=\"{}\" r:id=\"rId{}\"/>", i + 1, i + 1));
         rels.push_str(&format!(
             "<Relationship Id=\"rId{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet{}.xml\"/>",
             i + 1,
@@ -136,9 +115,7 @@ pub fn xlsx(tables: &[Found]) -> Vec<u8> {
     let root_rels = format!("{head}<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/></Relationships>");
     let wb = format!("{head}<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets>{wb_sheets}</sheets></workbook>");
     let wb_rels = format!("{head}<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">{rels}</Relationships>");
-    let names: Vec<String> = (1..=list.len())
-        .map(|i| format!("xl/worksheets/sheet{i}.xml"))
-        .collect();
+    let names: Vec<String> = (1..=list.len()).map(|i| format!("xl/worksheets/sheet{i}.xml")).collect();
     let mut parts: Vec<(&str, &[u8])> = vec![
         ("[Content_Types].xml", ct.as_bytes()),
         ("_rels/.rels", root_rels.as_bytes()),
@@ -162,10 +139,7 @@ pub fn html(tables: &[Found], title: &str) -> String {
         o.push_str("<p>No tables were found.</p>\n");
     }
     for t in tables {
-        o.push_str(&format!(
-            "<h2>Page {} - table {}</h2>\n<table>\n",
-            t.page, t.n
-        ));
+        o.push_str(&format!("<h2>Page {} - table {}</h2>\n<table>\n", t.page, t.n));
         for row in &t.rows {
             o.push_str("<tr>");
             for c in row {
@@ -206,17 +180,7 @@ mod tests {
         for n in ["0", "12", "-3", "1250.50", "0.5"] {
             assert!(is_plain_number(n), "{n}");
         }
-        for t in [
-            "007",
-            "1.234,56",
-            "12.",
-            ".5",
-            "1e5",
-            "",
-            "-",
-            "12/03/2026",
-            "1234567890123456",
-        ] {
+        for t in ["007", "1.234,56", "12.", ".5", "1e5", "", "-", "12/03/2026", "1234567890123456"] {
             assert!(!is_plain_number(t), "{t}");
         }
         assert_eq!(col_name(0), "A");
@@ -229,9 +193,6 @@ mod tests {
         let h = html(&sample(), "T <1>");
         assert!(h.contains("Școala &amp; Co") && h.contains("T &lt;1&gt;"));
         let z = xlsx(&[]);
-        assert!(crate::zipmini::list(&z)
-            .unwrap()
-            .iter()
-            .any(|e| e.name == "xl/worksheets/sheet1.xml"));
+        assert!(crate::zipmini::list(&z).unwrap().iter().any(|e| e.name == "xl/worksheets/sheet1.xml"));
     }
 }
