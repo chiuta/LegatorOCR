@@ -58,6 +58,9 @@ for k, a in CASES.items():
     o = str(d / ("o_" + k))
     args = [x.replace("{o}", o).replace("{d}", str(d)) for x in a]
     r = subprocess.run([exe, str(d / "p.png"), "--pdf", o + ".pdf", "--dpi", "150"] + args, capture_output=True, text=True, timeout=300)
+    if r.returncode and "tesseract not found" in (r.stderr or ""):
+        print("skip " + k + " (needs Tesseract)")
+        continue
     ok = r.returncode == 0
     if not ok: fail.append((k, r.returncode, (r.stderr or r.stdout)[-160:].strip()))
     print(("ok   " if ok else "FAIL ") + k)
