@@ -66,7 +66,13 @@ pub fn normalize_ro(s: &str) -> String {
 }
 
 /// Rewrite pre-1993 Romanian spelling (the 1953-1993 rules, as in 1960 textbooks) to the
-/// current one, character for character (the result has as many `char`s as the input, so
+/// current one. History (checked 2026-11-04, `docs/audit/ocr-externals.md`): the Academy's
+/// 1953 decision (16 Sept 1953) replaced `â` by `î` everywhere (`romîn`, `sînt`); in 1964
+/// `â` came back only in the `român` family; the Academy's 17 Feb 1993 decision restored `â`
+/// inside words and `sunt/suntem/sunteți`, going back to the pre-1948 norms. The rules below
+/// leave text of the earlier and later norms unchanged (modulo the compound caveat).
+///
+/// Character for character (the result has as many `char`s as the input, so
 /// positions and line numbers stay valid). Rule-based, no word list:
 ///
 /// * `î` inside a word becomes `â` (`pînză` -> `pânză`, `cînd` -> `când`, `rîu` -> `râu`);

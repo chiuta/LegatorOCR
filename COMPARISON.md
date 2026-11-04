@@ -44,7 +44,7 @@ page), a few pages with heavy noise, and "." read as ",". Twelve pages is a samp
 ABBYY, PaddleOCR or any cloud engine on the same pages. Synthetic results for 8 languages are in `docs/OCR-BENCH.md`.
 
 Tesseract's Romanian models (`ron`, both `best` 9.6 MB and `fast` 2.4 MB, stamped 2017) contain both the comma-below
-(ș, ț) and the cedilla (ş, ţ) forms, and a public issue (langdata_lstm #37, open when fetched) reports that the training
+(ș, ț) and the cedilla (ş, ţ) forms, and a public issue (langdata_lstm #37, open when fetched; still open and unanswered since the maintainers' questions, re-read 2026-11-04) reports that the training
 data maps Ș/ș/Ț/ț to the cedilla forms. We did not measure which form `ron` emits most; a normalisation step after OCR is
 justified, not proven.
 
