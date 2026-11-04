@@ -39,6 +39,7 @@ CASES = {
  "phone-paper": ["--phone-paper", "A4"], "djvu-thumbs": ["--djvu", "{o}.djvu", "--djvu-thumbnails"],
  "max-memory": ["--max-memory", "512"], "decoder": ["--isolate-decoders", "--decoder-memory", "512", "--decoder-timeout", "30"],
 "proof-sheet": ["--ocr", "--proof-sheet", "{o}.html"],
+"ocfl": ["--ocfl", "{d}/ocfl-obj"],
  "skip-dup": ["--skip-duplicates"], "dewarp-guide": ["--dewarp", "--dewarp-guide", "0.1,0.5 0.5,0.5 0.9,0.5"],
 }
 fail = []

@@ -15,6 +15,7 @@ pub mod altbin;
 pub mod audit;
 pub mod djvu;
 pub mod doubtful;
+pub mod ocfl;
 pub mod proofsheet;
 pub mod isolate;
 pub mod mrz;

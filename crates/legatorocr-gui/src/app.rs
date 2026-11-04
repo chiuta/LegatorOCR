@@ -1841,9 +1841,33 @@ impl App {
         let lang = self.lang;
         let tr = |k: &'static str| t(lang, k);
         let Some(i) = self.selected.filter(|&i| i < self.sheets.len()) else {
-            ui.centered_and_justified(|ui| {
-                ui.label(RichText::new(tr("preview.empty")).size(18.0).weak());
+            let mut picked: Vec<PathBuf> = Vec::new();
+            ui.vertical_centered(|ui| {
+                ui.add_space(60.0);
+                ui.label(RichText::new(tr("welcome.title")).size(24.0).strong());
+                ui.add_space(14.0);
+                for k in ["welcome.step1", "welcome.step2", "welcome.step3"] {
+                    ui.label(RichText::new(tr(k)).size(16.0));
+                    ui.add_space(4.0);
+                }
+                ui.add_space(14.0);
+                if ui
+                    .add(egui::Button::new(RichText::new(tr("welcome.add")).size(18.0)))
+                    .clicked()
+                {
+                    if let Some(f) = rfd::FileDialog::new()
+                        .add_filter("images, PDF, archives", &all_input_ext())
+                        .pick_files()
+                    {
+                        picked = f;
+                    }
+                }
+                ui.add_space(8.0);
+                ui.label(RichText::new(tr("preview.empty")).weak());
             });
+            if !picked.is_empty() {
+                self.add_files(&picked);
+            }
             return;
         };
         let mut make_grid = false;

@@ -44,7 +44,7 @@ enum Fmt {
 #[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_bag", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "decode_worker", "fuse_frames", "verify_document", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "search_preset", "search_help"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_bag", "verify_ocfl", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "decode_worker", "fuse_frames", "verify_document", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "search_preset", "search_help"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -327,6 +327,21 @@ struct Cli {
     /// under data/, SHA-256 manifest and tag manifest. Needs --pdf.
     #[arg(long, value_name = "DIR")]
     bagit: Option<PathBuf>,
+
+    /// Also write everything this run wrote as version v1 of an OCFL 1.1 object in DIR (a new
+    /// folder; SHA-512 inventory). The object id is --ocfl-id (default: urn:legatorocr: + the PDF's file name).
+    /// Needs --pdf. Not checked against the reference OCFL validator.
+    #[arg(long, value_name = "DIR")]
+    ocfl: Option<PathBuf>,
+
+    /// Object id for --ocfl (for example a URN or a catalogue number).
+    #[arg(long, value_name = "ID", requires = "ocfl")]
+    ocfl_id: Option<String>,
+
+    /// Check an OCFL object written by --ocfl (inventory sidecar, every file against its SHA-512,
+    /// files not in the manifest); exit 1 on any problem; then exit. Not a general validator.
+    #[arg(long, value_name = "DIR")]
+    verify_ocfl: Option<PathBuf>,
 
     /// Check a BagIt bag (such as one made by --bagit): every file against its manifest, the
     /// tag files, and files the manifest does not list; exit 1 on any problem; then exit.
@@ -1262,12 +1277,13 @@ fn real_main() -> Result<()> {
         || cli.txt_each
         || cli.rights_notice.is_some()
         || cli.bagit.is_some()
+        || cli.ocfl.is_some()
         || cli.package.is_some()
         || cli.catalog.is_some()
         || cli.dublin_core)
         && cli.pdf.is_none()
     {
-        bail!("--checksums, --txt-each, --rights-notice, --bagit, --package, --catalog and --dublin-core need --pdf");
+        bail!("--checksums, --txt-each, --rights-notice, --bagit, --ocfl, --package, --catalog and --dublin-core need --pdf");
     }
     if !cli.ocr
         && [&cli.pdf, &cli.txt, &cli.hocr, &cli.alto, &cli.page_xml, &cli.json, &cli.docx, &cli.package]
@@ -1565,6 +1581,17 @@ fn real_main() -> Result<()> {
             std::process::exit(1);
         }
         return Ok(());
+    }
+    if let Some(obj) = &cli.verify_ocfl {
+        let problems = legatorocr_engine::ocfl::verify(obj)?;
+        if problems.is_empty() {
+            println!("{}: OCFL object is intact", obj.display());
+            return Ok(());
+        }
+        for p in &problems {
+            println!("{}: {p}", obj.display());
+        }
+        std::process::exit(1);
     }
     if let Some(bag) = &cli.verify_bag {
         let problems = legatorocr_engine::bagit::verify(bag)?;
@@ -2708,6 +2735,18 @@ fn real_main() -> Result<()> {
     if let Some(bag) = &cli.bagit {
         let s = legatorocr_engine::bagit::write(bag, &written, legatorocr_engine::now_unix(), None)?;
         eprintln!("bag: {} ({} files, {} bytes)", bag.display(), s.files, s.bytes);
+    }
+    if let Some(obj) = &cli.ocfl {
+        let id = cli.ocfl_id.clone().unwrap_or_else(|| {
+            cli.pdf
+                .as_ref()
+                .and_then(|p| p.file_name())
+                .map_or("legatorocr".into(), |n| n.to_string_lossy().replace(' ', "_"))
+        });
+        // an OCFL id is a URI
+        let id = if id.contains(':') { id } else { format!("urn:legatorocr:{id}") };
+        let s = legatorocr_engine::ocfl::write(obj, &written, &id, legatorocr_engine::now_unix())?;
+        eprintln!("ocfl: {} ({} files, {} bytes)", obj.display(), s.files, s.bytes);
     }
     if cli.catalog.is_some() || cli.dublin_core {
         let pdfs: Vec<PathBuf> = written
