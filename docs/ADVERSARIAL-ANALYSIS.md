@@ -67,3 +67,12 @@ Verdict scale: **holds** (evidence supports it), **weak** (supported but narrowe
 - PP-OCRv6: raw.githubusercontent.com/PaddlePaddle/PaddleOCR/main/docs/version3.x/algorithm/PP-OCRv6/PP-OCRv6.en.md
 - Commercial prices: aiproductivity.ai/blog/best-ocr-software-2026 (no hands-on tests, conflicting totals on the page)
 - Own data: `ROADMAP.md` 4.8-4.16, `docs/OCR-BENCH.md`, `scripts/ocr-bench-fonts.py`
+
+## 7. Update, 4 November 2026, evening (after ROADMAP 4.31-4.33)
+
+Two rows of section 2 changed. Everything is on the same 12 magazine pages with ABBYY references (not hand-verified), so none of it says anything about other typefaces.
+
+- **"Tesseract is hard to beat on plain Romanian pages" is no longer true for character errors.** A docTR detector plus a small CRNN recogniser whose last layer was retrained for ă ș ț (frozen backbone, synthetic words, ROADMAP 4.32) and run through the real CLI by `scripts/engine-onnx.py --onnx-family doctr` (4.33) gives GOOD8 CER with diacritics **4.26 %** against Tesseract's **5.25 %** (ALL12 6.02 % vs 8.20 %), at 3.4 s per page vs 2.7 s. Reproduced here from a fresh model download, same numbers.
+- **It is still behind on word recall:** exact word recall 88.2 % vs 91.3 % (GOOD8). The two metrics disagree because they weigh different errors (CER counts every wrong character, recall counts whole words), so the honest summary is "different error profile, not strictly better".
+- **Costs and limits:** needs onnxruntime and a 25 MB model download, is not the default engine, is untested on other typefaces, tables, three-column layouts and phone photos, and the Tesseract-versus-bridge gap on CER is about one point on 8 pages. Page p21 (a large-type page) is at 142 % CER with the bridge, as it is for the other engines.
+- **What it does not change:** the native Rust engine is still behind Tesseract (section 2, row 1); the 2026 vision-language models were not run.
