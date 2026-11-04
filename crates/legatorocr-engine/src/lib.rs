@@ -37,6 +37,7 @@ pub mod eval;
 pub mod extpdf;
 pub mod files;
 pub mod fuzzy;
+pub mod integrity;
 pub mod iso;
 pub mod naming;
 pub mod package;

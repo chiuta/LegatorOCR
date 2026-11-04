@@ -185,6 +185,22 @@ research tool (for example TEZAUR) can import it has not been checked.
 `web/capture/index.html` is one offline HTML file (no external requests, no storage, no telemetry; English and Romanian, strings in one object). Open it on a phone (a camera needs https or localhost on most browsers; `file://` works in some), start the camera, lay the page on a darker surface. It finds the bright page (Otsu threshold, largest connected region, corners by extreme x+y / x-y, so up to about 45 degrees of rotation), draws the outline, and shoots by itself when the outline has been still for 0.8 s and the page passes the checks; otherwise it says why: no page found, page not fully visible, too blurry (variance of the Laplacian), too dark, too bright. A manual button, a thumbnail strip with delete, and "Save burst as ZIP" (hand-written stored ZIP) give `burst-YYYYMMDD-HHMMSS.zip` with `page-0001.jpg`, `page-0002.jpg`, ... at the camera's stream resolution (a video frame, not necessarily the sensor's full still resolution). Each JPEG carries an EXIF capture time, at least 4 s after the previous one, so that `legatorocr --burst` (default `--burst-gap 3`) keeps the order and does not take two pages for one burst. Then: `legatorocr --burst --pdf book.pdf page-*.jpg`.
 Tested only on **synthetic** frames in headless Chromium with a fake camera (`scripts/test-capture-assistant.py`): corner error 1.0-2.1 px at 640 wide on 6 placements (rotation -14 to +31 degrees, shifts, one keystone), the refusals fire with the right reason, the ZIP passes `zipfile.testzip` and `unzip -t`, and `--burst` accepts the unzipped pages. **Not tested:** real phones, real lighting and shadows, motion blur, autofocus, iOS Safari, a bright or white desk (the page then merges with the background), the "too bright" refusal. All thresholds are untuned guesses.
 
+## Integrity hints (`--integrity-hints`)
+
+**HIGH false-alarm risk. Read this before using it.** `--integrity-hints FILE.json` (opt-in, runs on the input pictures as they are, before any cleaning) writes, per page, boxes in page pixels that a person may want to look at again, each with a plain-language "what it means" and "common innocent causes". It is a list of things *to check*, never a verdict; the output does not say that a document is genuine or not. Do not use it as the only basis for any decision about a person or a person's diploma; ask the issuing institution.
+
+Signals (`--integrity-signals LIST`; `all`, `default`, or names):
+
+| Signal | Looks at | Runs by default |
+|---|---|---|
+| `copy_move` | identical 16x16 blocks (hashed, blank paper and glyphs repeated more than a few times ignored) at two places, at any pixel offset; boxes at least 64 px on both sides | **yes** |
+| `jpeg_grid` | JPEG inputs: a 128 px window whose 8x8 block-edge pattern is offset from the rest of the page | no: 4 of 12 unedited pages flagged, 0 of 60 edits found |
+| `jpeg_double` | JPEG inputs: comb pattern of a second save (the `--verify-document` statistic, whole page) | no: no false alarm, but 0 of 60 edited pages flagged in the test below |
+| `noise` | tiles whose fine noise is 3x the page median | no: 10 of 12 unedited pages flagged |
+| `line_size` | needs `--ocr`: a word whose height or position is out of line with its text line | no: 12 of 12 unedited pages flagged |
+
+Measured on **synthetic** edits only (12 real pages from the OCR test set, JPEG q85; edits: a digit string drawn over a word, a 220x140 patch copied elsewhere, a 260x180 patch from a q45 copy pasted at an odd offset, gaussian noise in 240x160; each edited page re-saved at q85; and the clean pages saved once, re-saved once at q85, re-saved again at q75; `docs/experiments/integrity_eval.py`, ROADMAP 7.5c). `copy_move`: found 10 of 12 copied patches, 0 of 36 unedited/re-saved pages flagged; it does **not** find a digit or a word re-typed, and it misses patches smaller than 64 px. The size limit was set after seeing false alarms on the same pages, so that figure is optimistic. These numbers say nothing about real forgeries, which are made with other tools, other fonts and other compression; real stamps, repeated logos and letterheads were not in the test and are the expected source of false alarms. The other signals are available with `--integrity-signals all` for research only.
+
 ## Known limits
 
 See `COMPARISON.md` for what other tools do that this one does not. In short:

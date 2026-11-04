@@ -44,7 +44,7 @@ enum Fmt {
 #[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_bag", "verify_ocfl", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "decode_worker", "fuse_frames", "verify_document", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "extract_project", "search_preset", "search_help"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_bag", "verify_ocfl", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "decode_worker", "fuse_frames", "verify_document", "integrity_hints", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "extract_project", "search_preset", "search_help"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -511,6 +511,21 @@ struct Cli {
     /// forgery or of authenticity.
     #[arg(long)]
     verify_document: bool,
+
+    /// Look at each input picture (as it is, no cleaning) and write a JSON list of regions a
+    /// person may want to check again: JPEG block-pattern offset, second JPEG save, noise level
+    /// that differs from the page, a word out of line with its text line (needs --ocr), and
+    /// identical patches at two places. Neutral indicators with explanations and common innocent
+    /// causes; HIGH false-alarm risk; never a verdict and never the sole basis of a decision
+    /// about a person or a diploma. Which signals run: see --integrity-signals.
+    #[arg(long, value_name = "FILE.json")]
+    integrity_hints: Option<PathBuf>,
+
+    /// Signals for --integrity-hints: comma-separated from jpeg_grid, jpeg_double, noise,
+    /// line_size, copy_move, or `all` / `default`. Signals whose false-alarm rate on unedited
+    /// test pages was above 10 % are not in `default` (see README).
+    #[arg(long, value_name = "LIST", default_value = "default")]
+    integrity_signals: String,
 
     /// Also write the pages as a DjVu document (bundled multi-page): black & white pages as
     /// lossless JB2, grey / colour pages as a JB2 foreground mask over an IW44 background, with
@@ -1500,6 +1515,40 @@ fn real_main() -> Result<()> {
             memory_mb: cli.decoder_memory,
             timeout_s: cli.decoder_timeout,
         });
+    }
+    if let Some(out) = &cli.integrity_hints {
+        let signals = legatorocr_engine::integrity::parse_signals(&cli.integrity_signals).map_err(|e| anyhow::anyhow!(e))?;
+        let ocr_o = OcrOptions {
+            engine: cli.engine,
+            lang: legatorocr_engine::ocr::canonical_lang(&cli.lang),
+            psm: cli.psm,
+            min_conf: cli.min_conf,
+            tesseract: cli.tesseract.clone(),
+            tessdata: cli.tessdata.clone(),
+            modern_spelling: cli.ocr_modern_spelling,
+        };
+        let want_words = cli.ocr && signals.contains(&"line_size");
+        if want_words {
+            check_ocr(&ocr_o)?;
+        }
+        let mut pages = Vec::new();
+        for p in &cli.inputs {
+            let img = legatorocr_engine::load_image(p)?;
+            let g = img.to_luma8();
+            let bytes = std::fs::read(p).ok();
+            let words = if want_words {
+                let pg = legatorocr_core::PageImage::Gray(g.clone());
+                legatorocr_engine::ocr::recognize(&pg, cli.dpi.unwrap_or(300), &ocr_o).map_err(|e| anyhow::anyhow!("OCR failed on {}: {e}", p.display()))?
+            } else {
+                Vec::new()
+            };
+            let rep = legatorocr_engine::integrity::analyse(&g, bytes.as_deref(), &words, &signals, &p.display().to_string());
+            eprintln!("{}: {} region(s) to check", p.display(), rep.hints.len());
+            pages.push(rep);
+        }
+        write_atomic(out, legatorocr_engine::integrity::to_json(&pages, &signals).as_bytes())?;
+        eprintln!("wrote {} (indicators for a person to check; not a verdict, high false-alarm risk)", out.display());
+        return Ok(());
     }
     if cli.verify_document {
         for p in &cli.inputs {
