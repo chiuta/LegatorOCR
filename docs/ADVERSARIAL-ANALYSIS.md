@@ -33,7 +33,7 @@ Verdict scale: **holds** (evidence supports it), **weak** (supported but narrowe
 | 10 | "PDF/A valid" | veraPDF runs only in CI on samples (`pdfa.yml`); not run in this environment; no certification. | workflow | **weak** |
 | 11 | "Cross-platform" | Windows and macOS binaries come from CI; the GUI has run only on Linux under Xvfb; macOS is unsigned. No human has used it there. | README, ROADMAP | **unsupported** for the GUI |
 | 12 | "Audit / checksums / OCFL is unique" | Paperless-ngx has edit history and checksums; absence of evidence in closed products is not uniqueness. Real archivists have not tried OCFL/ALTO/PAGE output beyond schema validation. | COMPARISON §6, 1.3, OCFL | **weak** |
-| 13 | "Production ready" | 0.2.0-pre.15, one author, ~55k lines of Rust, 230 commits, no external users, no issue tracker traffic, GUI tested by scripted pixel assertions. Bus factor 1. | repo | **refuted** |
+| 13 | "Production ready" | 0.2.0-pre.15, one author, ~55k lines of Rust, 230 commits, no external users known, GUI tested by scripted pixel assertions. Bus factor 1. | repo | **refuted** |
 
 ## 3. Where each competitor is simply better
 
