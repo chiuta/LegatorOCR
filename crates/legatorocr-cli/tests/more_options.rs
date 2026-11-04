@@ -131,3 +131,56 @@ fn backup_copies_checks_and_can_mark_read_only() {
     }
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn fit_height_fills_an_a5_page() {
+    let d = tmp("fith");
+    let o = run(&d, &["a.png", "--dpi", "300", "--format", "none", "--page-size", "a5", "--fit-height", "--pdf", "g.pdf"]);
+    assert!(o.status.success(), "{}", text(&o));
+    let pdf = String::from_utf8_lossy(&std::fs::read(d.join("g.pdf")).unwrap()).into_owned();
+    // only the height is pinned: A5 is 595.28 pt tall; the writer rounds to the pixel grid at 300 dpi
+    assert!(pdf.contains(" 595.440]"), "{}", pdf.lines().find(|l| l.contains("MediaBox")).unwrap_or("no MediaBox"));
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn report_outliers_names_the_odd_page_out_of_seven() {
+    let d = tmp("outl");
+    // the rule needs at least 5 measured pages; six alike and one much shorter
+    for i in 1..=6 {
+        std::fs::copy(d.join("a.png"), d.join(format!("p{i}.png"))).unwrap();
+    }
+    let mut small = image::GrayImage::from_pixel(600, 500, image::Luma([210]));
+    for y in (100..400).step_by(40) {
+        for yy in y..y + 10 {
+            for x in 80..520 {
+                small.put_pixel(x, yy, image::Luma([40]));
+            }
+        }
+    }
+    small.save(d.join("p7.png")).unwrap();
+    let names: Vec<String> = (1..=7).map(|i| format!("p{i}.png")).collect();
+    let mut args: Vec<&str> = names.iter().map(String::as_str).collect();
+    args.extend(["--dpi", "300", "--report-outliers"]);
+    let o = run(&d, &args);
+    let t = text(&o);
+    assert!(o.status.success(), "{t}");
+    assert!(t.contains("p7.png") && !t.contains("p1.png"), "{t}");
+    // and four pages are too few to judge
+    let few = run(&d, &["p1.png", "p2.png", "p3.png", "p7.png", "--dpi", "300", "--report-outliers"]);
+    assert!(text(&few).contains("no outlier pages among 4"), "{}", text(&few));
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn auto_levels_turns_paper_white_and_ink_black() {
+    let d = tmp("levels");
+    let o = run(&d, &["a.png", "--dpi", "300", "--split", "off", "--mode", "gray", "--auto-levels", "--format", "png", "-o", "out"]);
+    assert!(o.status.success(), "{}", text(&o));
+    let f = std::fs::read_dir(d.join("out")).unwrap().next().unwrap().unwrap().path();
+    let img = image::open(f).unwrap().to_luma8();
+    let min = img.pixels().map(|p| p.0[0]).min().unwrap();
+    let max = img.pixels().map(|p| p.0[0]).max().unwrap();
+    assert_eq!((min, max), (0, 255), "the input had paper 210 and ink 40");
+    let _ = std::fs::remove_dir_all(&d);
+}
