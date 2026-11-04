@@ -1173,6 +1173,49 @@ impl PdfDoc {
         }
     }
 
+    /// Embedded files (`/Type /Filespec` with `/EF`), as `(name, bytes)` in object order. The name
+    /// is `/UF`, else `/F`. Streams are decoded with the general-purpose filters only. A stream
+    /// that cannot be decoded is reported as an error, not skipped.
+    pub fn embedded_files(&self) -> R<Vec<(String, Vec<u8>)>> {
+        budget_reset();
+        let mut nums: Vec<u32> = self.offs.keys().chain(self.comp.keys()).copied().collect();
+        nums.sort_unstable();
+        nums.dedup();
+        let text = |b: &[u8]| {
+            if b.starts_with(&[0xFE, 0xFF]) {
+                utf16_be(&b[2..])
+            } else if b.starts_with(&[0xEF, 0xBB, 0xBF]) {
+                String::from_utf8_lossy(&b[3..]).into_owned()
+            } else {
+                b.iter().map(|&c| c as char).collect()
+            }
+        };
+        let mut out = Vec::new();
+        for n in nums {
+            let Some(Val::Dict(d)) = self.get(n) else { continue };
+            if d.get("Type").and_then(|t| t.name()) != Some("Filespec") {
+                continue;
+            }
+            let Some(ef) = d.get("EF").and_then(|v| self.dict_of(v)) else { continue };
+            let Some(f) = ef.get("F").or_else(|| ef.get("UF")) else { continue };
+            let Val::Stream(sd, s, e) = self.resolve(f) else { continue };
+            let name = ["UF", "F"]
+                .iter()
+                .find_map(|k| match d.get(*k).map(|v| self.resolve(v)) {
+                    Some(Val::Str(b)) => Some(text(&b)),
+                    _ => None,
+                })
+                .unwrap_or_else(|| format!("embedded_{n}"));
+            let mut codec = false;
+            let data = self.decode_stream(&sd, s, e, &mut |_| codec = true)?;
+            if codec {
+                return fail(format!("embedded file {name}: unsupported stream filter"));
+            }
+            out.push((name, data));
+        }
+        Ok(out)
+    }
+
     /// Features that can run code or fetch things when the file is opened in a viewer:
     /// `(name, how many objects use it)`, sorted by name. Reads the dictionaries of every
     /// object, including those inside object streams; it does not execute or decode scripts.

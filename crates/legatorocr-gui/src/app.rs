@@ -313,6 +313,7 @@ impl App {
                         erase_mm: a.erase_mm.clone(),
                         picture_mm: a.picture_mm.clone(),
                         dewarp_guides: a.dewarp_guides.clone(),
+                        ..Default::default()
                     },
                 )
             })

@@ -44,7 +44,7 @@ enum Fmt {
 #[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_bag", "verify_ocfl", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "decode_worker", "fuse_frames", "verify_document", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "search_preset", "search_help"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_bag", "verify_ocfl", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "decode_worker", "fuse_frames", "verify_document", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "extract_project", "search_preset", "search_help"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -561,6 +561,20 @@ struct Cli {
     /// Internal: decode INPUT to a BMP at OUTPUT (used by --isolate-decoders).
     #[arg(long, num_args = 2, value_names = ["INPUT", "OUTPUT"], hide = true)]
     decode_worker: Vec<PathBuf>,
+
+    /// Make the PDF a reversible project: embed the original input files (byte for byte, not
+    /// recompressed) and project.lgr (settings, per-sheet adjustments, zones, guide lines, the
+    /// resolution used) as PDF attachments (`/EmbeddedFiles`, `/AFRelationship /Source`). Opt-in:
+    /// the PDF grows by the size of the originals (the size is printed). With --pdfa it needs
+    /// --pdfa-part 3. Not with --split-on-blank / --split-on-barcode. Needs --pdf. Get them back
+    /// with --extract-project.
+    #[arg(long)]
+    embed_project: bool,
+
+    /// Write the files embedded by --embed-project (the originals and project.lgr) into a new or
+    /// empty folder, never overwriting; then exit. Re-run with `--project DIR/project.lgr`.
+    #[arg(long, num_args = 2, value_names = ["PDF", "DIR"])]
+    extract_project: Vec<PathBuf>,
 
     /// Reprocessable archive package: a NEW folder with the original inputs, project.lgr (settings
     /// and per-page adjustments, relative paths), derived/ (outputs and ocr.json with every word,
@@ -1621,6 +1635,12 @@ fn real_main() -> Result<()> {
         }
         std::process::exit(1);
     }
+    if !cli.extract_project.is_empty() {
+        let (pdf, dir) = (&cli.extract_project[0], &cli.extract_project[1]);
+        let (proj, n) = legatorocr_engine::embedproject::extract(pdf, dir)?;
+        println!("{n} files written to {}; run again with: legatorocr --project {} --pdf NEW.pdf", dir.display(), proj.display());
+        return Ok(());
+    }
     if let Some(bag) = &cli.verify_bag {
         let problems = legatorocr_engine::bagit::verify(bag)?;
         if problems.is_empty() {
@@ -2243,6 +2263,35 @@ fn real_main() -> Result<()> {
     } else {
         None
     };
+    let mut meta_attachments = Vec::new();
+    if cli.embed_project {
+        if cli.pdf.is_none() {
+            bail!("--embed-project needs --pdf");
+        }
+        if cli.pdfa && cli.pdfa_part != 3 {
+            bail!("--embed-project with --pdfa needs --pdfa-part 3 (PDF/A-1 and -2 do not allow embedded files of this kind)");
+        }
+        if cli.split_on_blank || cli.split_on_barcode {
+            bail!("--embed-project cannot be combined with --split-on-blank / --split-on-barcode (several PDFs)");
+        }
+        let pairs: Vec<(PathBuf, SheetAdj)> = inputs
+            .iter()
+            .zip(&adjusts)
+            .zip(&sheets)
+            .map(|((p, a), sh)| (p.clone(), SheetAdj { dpi: Some(sh.settings.dpi), ..a.clone() }))
+            .collect();
+        let extra = vec![
+            ("pdf_quality".to_string(), pdf_quality.to_string()),
+            ("skip_blank".to_string(), skip_blank.to_string()),
+            ("uniform_size".to_string(), uniform_size.to_string()),
+        ];
+        let (atts, info) = legatorocr_engine::embedproject::build(&settings, extra, &pairs)?;
+        eprintln!(
+            "--embed-project: {} original file(s), {} bytes, plus project.lgr ({} bytes)",
+            info.files, info.original_bytes, info.project_bytes
+        );
+        meta_attachments = atts;
+    }
     let job = ExportJob {
         sheets: &sheets,
         pdf: cli.pdf.as_ref().map(|pdf_path| PdfExport {
@@ -2260,6 +2309,7 @@ fn real_main() -> Result<()> {
                 created_unix: Some(legatorocr_engine::now_unix()),
                 rights: cli.rights_notice.clone(),
                 provenance: provenance.clone(),
+                attachments: meta_attachments,
             },
             bookmarks: cli.bookmarks,
             front_matter: cli.front_matter,

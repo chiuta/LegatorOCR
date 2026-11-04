@@ -23,6 +23,10 @@ pub const HEADER: &str = "legatorocr-project 1";
 /// Per-sheet overrides on top of the global settings.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SheetAdj {
+    /// Scan resolution of this sheet (`dpi = N` in the file). `None`: the project's global `dpi`.
+    /// `--embed-project` fills it with the resolution the run actually used (read from the image
+    /// header), because a reloaded project does not detect it again.
+    pub dpi: Option<u32>,
     pub rotate_quarters: u8,
     pub split: Option<SplitMode>,
     pub skew_deg: Option<f32>,
@@ -40,6 +44,9 @@ impl SheetAdj {
         let mut s = s.clone();
         // the sheet's turn comes on top of a global one (`--rotate`); its manual skew replaces a global
         // `--skew` only when the sheet has one (a default sheet used to wipe both options out)
+        if let Some(d) = self.dpi {
+            s.dpi = d;
+        }
         s.rotate_quarters = (s.rotate_quarters % 4 + self.rotate_quarters % 4) % 4;
         if let Some(sp) = self.split {
             s.split = sp;
@@ -316,6 +323,9 @@ impl Project {
                 "\n[sheet]\npath = {}\n",
                 escape_path(&shown.to_string_lossy())
             ));
+            if let Some(d) = a.dpi {
+                out.push_str(&format!("dpi = {d}\n"));
+            }
             if a.rotate_quarters % 4 != 0 {
                 out.push_str(&format!("rotate = {}\n", a.rotate_quarters % 4));
             }
@@ -389,6 +399,7 @@ impl Project {
                             base.map_or(pb.clone(), |b| b.join(&pb))
                         };
                     }
+                    "dpi" => adj.dpi = Some(v.parse::<u32>().map_err(|e| at(e.into()))?.clamp(36, 2400)),
                     "rotate" => {
                         adj.rotate_quarters = v.parse::<u8>().map_err(|e| at(e.into()))? % 4
                     }
@@ -470,6 +481,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn per_sheet_dpi_round_trips_and_overrides_the_global_one() {
+        let mut p = Project::default();
+        p.settings.dpi = 300;
+        p.sheets.push((PathBuf::from("a.png"), SheetAdj { dpi: Some(150), ..Default::default() }));
+        p.sheets.push((PathBuf::from("b.png"), SheetAdj::default()));
+        let q = Project::parse(&p.to_text(None), None).unwrap();
+        assert_eq!(q.sheets[0].1.dpi, Some(150));
+        assert_eq!(q.sheets[1].1.dpi, None);
+        assert_eq!(q.sheets[0].1.apply(&q.settings).dpi, 150);
+        assert_eq!(q.sheets[1].1.apply(&q.settings).dpi, 300);
+    }
+
+    #[test]
     fn a_default_sheet_keeps_global_rotate_and_skew() {
         let g = Settings {
             rotate_quarters: 1,
@@ -502,6 +526,7 @@ mod tests {
         p.sheets.push((
             PathBuf::from("/scans/a b.png"),
             SheetAdj {
+                dpi: Some(200),
                 rotate_quarters: 3,
                 split: Some(SplitMode::Off),
                 skew_deg: Some(-1.25),

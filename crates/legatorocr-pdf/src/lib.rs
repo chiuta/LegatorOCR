@@ -86,6 +86,22 @@ pub struct Meta {
     /// the custom Info key `/LegatorOCRProvenance` (not with PDF/A, which would need an XMP
     /// extension schema for it).
     pub provenance: Option<String>,
+    /// Files embedded in the PDF (`/EmbeddedFiles`, each with `/AFRelationship /Source`), e.g. the
+    /// original scans and the project (`--embed-project`). Sorted by name when written.
+    pub attachments: Vec<Attachment>,
+}
+
+/// One embedded file (PDF 1.7 file specification; with `--pdfa-part 3` an associated file).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attachment {
+    /// Name shown by viewers; also the key in the name tree. Keep it plain ASCII-safe.
+    pub name: String,
+    /// MIME type, written as the stream `/Subtype` (PDF/A-3 requires one).
+    pub mime: String,
+    pub description: String,
+    pub data: Vec<u8>,
+    /// Flate-compress the stream (leave off for PNG / JPEG / ZIP, which are compressed already).
+    pub deflate: bool,
 }
 
 /// `D:YYYYMMDDHHmmSSZ` for a Unix time (UTC, proleptic Gregorian).
@@ -750,6 +766,39 @@ impl PdfWriter {
             cat_extra.push_str(&format!(" /PageLabels << /Nums [{nums}] >>"));
         }
         let date = self.meta.created_unix.map(pdf_date);
+        if !self.meta.attachments.is_empty() {
+            let mut files = std::mem::take(&mut self.meta.attachments);
+            files.sort_by(|a, b| a.name.cmp(&b.name));
+            let mut names = String::new();
+            let mut af = String::new();
+            for f in &files {
+                let sid = self.alloc();
+                let (body, filt) = if f.deflate {
+                    (deflate(&f.data), " /Filter /FlateDecode")
+                } else {
+                    (f.data.clone(), "")
+                };
+                let mime = f.mime.replace('/', "#2F");
+                let moddate = date.as_deref().map(|d| format!(" /ModDate ({d})")).unwrap_or_default();
+                self.stream_obj(
+                    sid,
+                    &format!("/Type /EmbeddedFile /Subtype /{mime}{filt} /Params << /Size {}{moddate} >>", f.data.len()),
+                    &body,
+                );
+                let fid = self.alloc();
+                let n = pdf_text_string(&f.name);
+                self.plain_obj(
+                    fid,
+                    &format!(
+                        "<< /Type /Filespec /F {n} /UF {n} /Desc {} /AFRelationship /Source /EF << /F {sid} 0 R /UF {sid} 0 R >> >>",
+                        pdf_text_string(&f.description)
+                    ),
+                );
+                names.push_str(&format!("{n} {fid} 0 R "));
+                af.push_str(&format!("{fid} 0 R "));
+            }
+            cat_extra.push_str(&format!(" /Names << /EmbeddedFiles << /Names [{names}] >> >> /AF [{af}]"));
+        }
         let producer = format!("LegatorOCR {}", env!("CARGO_PKG_VERSION"));
         if self.pdfa {
             let xmp = pdfa::Xmp {
@@ -1032,6 +1081,7 @@ mod tests {
             created_unix: Some(0),
             rights: None,
             provenance: Some("{\"software\":\"x\"}".into()),
+            attachments: Vec::new(),
         });
         w.add_page(
             &page(PageImage::Rgb(RgbImage::from_pixel(
@@ -1183,6 +1233,7 @@ mod unicode_file {
             created_unix: Some(1_793_000_000),
             rights: Some("© Biblioteca X, contract 12/2026".into()),
             provenance: Some("{\"software\":\"x\"}".into()),
+            attachments: Vec::new(),
         });
         let mut bw = BitImage::new(600, 300);
         bw.set(1, 1, true);

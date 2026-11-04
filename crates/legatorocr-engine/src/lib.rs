@@ -20,6 +20,7 @@ pub mod proofsheet;
 pub mod isolate;
 pub mod mrz;
 pub mod plugin;
+pub mod embedproject;
 pub mod reprocess;
 pub mod scantailor;
 pub mod bagit;
