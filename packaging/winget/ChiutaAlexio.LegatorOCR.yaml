@@ -1,5 +1,10 @@
-# winget singleton manifest. Not submitted to microsoft/winget-pkgs yet. Fill InstallerUrl and
-# InstallerSha256 from the published release (the release assets are .zip files of the portable app).
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.singleton.1.12.0.schema.json
+# winget singleton manifest (schema 1.12.0 is the current one; learn.microsoft.com, read 2026-11-04).
+# The zip has ONE top-level folder named after the asset, hence the RelativeFilePath prefix (checked on the
+# v0.2.0-pre.15 asset). No stable v0.2.0 release exists yet (only -pre.N): PackageVersion/URL/hash are for the final tag.
+# winget-pkgs may ask for the three-file form (version + locale + installer) instead of a singleton.
+# Not submitted to microsoft/winget-pkgs yet. Fill InstallerUrl and InstallerSha256 from the published release
+# (the release assets are .zip files of the portable app).
 PackageIdentifier: ChiutaAlexio.LegatorOCR
 PackageVersion: 0.2.0
 PackageLocale: en-US
@@ -12,9 +17,9 @@ Installers:
     InstallerType: zip
     NestedInstallerType: portable
     NestedInstallerFiles:
-      - RelativeFilePath: legatorocr.exe
+      - RelativeFilePath: LegatorOCR-0.2.0-x86_64-pc-windows-msvc\legatorocr.exe
         PortableCommandAlias: legatorocr
     InstallerUrl: https://github.com/chiuta/LegatorOCR/releases/download/v0.2.0/LegatorOCR-0.2.0-x86_64-pc-windows-msvc.zip
     InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
 ManifestType: singleton
-ManifestVersion: 1.6.0
+ManifestVersion: 1.12.0

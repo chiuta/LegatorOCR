@@ -1,5 +1,7 @@
 # Maintainer: Alexandru-Ionuț Chiuță <alexio@trom.tf>
 # Source build from the tagged release. Not submitted to the AUR yet; syntax-checked only.
+# Layout follows the Arch wiki "Rust package guidelines" (prepare/fetch, --frozen, check without --release; read 2026-11-04).
+# Needs rustc >= 1.95 (workspace rust-version).
 pkgname=legatorocr
 pkgver=0.2.0
 pkgrel=1
@@ -13,14 +15,22 @@ makedepends=('cargo')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('SKIP') # replace with the real checksum when the tag is published
 
+prepare() {
+  cd "LegatorOCR-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
 build() {
   cd "LegatorOCR-$pkgver"
-  cargo build --release --locked -p legatorocr-cli
+  export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=target
+  cargo build --frozen --release -p legatorocr-cli
 }
 
 check() {
   cd "LegatorOCR-$pkgver"
-  cargo test --release --locked -p legatorocr-core
+  export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=target
+  cargo test --frozen -p legatorocr-core
 }
 
 package() {

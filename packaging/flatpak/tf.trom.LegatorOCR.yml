@@ -1,8 +1,13 @@
+# NOTE (docs.flathub.org requirements, read 2026-11-04): Flathub does not accept console-only software and
+# needs a metainfo file (and desktop file + icon for GUI apps); this CLI-only skeleton would be refused as is.
+# A GUI (legatorocr-gui) flatpak with metainfo/desktop/icon would be the submittable form. Runtime 24.08 went EOL
+# 2026-09-08 (endoflife.date); Flathub refuses EOL runtimes, so 26.08 is used. Not checked: that the
+# rust-stable SDK extension exists for 26.08, and --filesystem=home needs justification.
 # Flatpak skeleton for the command-line tool. Not built or submitted: Flathub needs the Cargo
 # dependencies vendored with flatpak-cargo-generator (generated-sources.json) and a tagged source.
 app-id: tf.trom.LegatorOCR
 runtime: org.freedesktop.Platform
-runtime-version: '24.08'
+runtime-version: '26.08'
 sdk: org.freedesktop.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable

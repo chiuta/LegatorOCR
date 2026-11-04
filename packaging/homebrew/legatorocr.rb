@@ -1,5 +1,6 @@
 # Homebrew formula (source build from the tagged release). Not submitted to a tap yet;
-# replace the sha256 when the tag is published.
+# replace the sha256 when the tag is published. `:recommended` is allowed in a tap but not in
+# Homebrew/homebrew-core; core also calls a bare `--version` test weak (Formula Cookbook, read 2026-11-04).
 class Legatorocr < Formula
   desc "Clean-room scan post-processing, PDF export and OCR"
   homepage "https://github.com/chiuta/LegatorOCR"
@@ -11,7 +12,7 @@ class Legatorocr < Formula
   depends_on "tesseract" => :recommended
 
   def install
-    system "cargo", "install", "--locked", "--root", prefix, "--path", "crates/legatorocr-cli"
+    system "cargo", "install", *std_cargo_args(path: "crates/legatorocr-cli")
   end
 
   test do
