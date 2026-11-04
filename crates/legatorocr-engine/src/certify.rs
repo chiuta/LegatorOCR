@@ -88,34 +88,12 @@ fn verify(pdf: &[u8], recs: &[Rec]) -> (bool, Vec<String>) {
                     ok = false;
                     continue;
                 }
-                if !r.words.is_empty() {
-                    let (empty, found) = words_on_ink(&p.image.to_luma8(), &r.words);
-                    let text_words = doc.page_text(i).map_or(0, |t| t.split_whitespace().count());
-                    if text_words * 10 < r.words.len() * 9 {
-                        lines.push(format!(
-                            "page {}: text layer holds {text_words} word(s), {} were written",
-                            i + 1,
-                            r.words.len()
-                        ));
-                        ok = false;
-                    }
-                    if empty >= 3 && empty * 20 > found + empty {
-                        lines.push(format!(
-                            "page {}: {empty} of {} text-layer boxes lie on blank paper (the text layer does not match the picture)",
-                            i + 1,
-                            found + empty
-                        ));
-                        ok = false;
-                    }
+                let c = check_page(&p.image, doc.page_text(i).ok().as_deref(), r);
+                for l in &c.problems {
+                    lines.push(format!("page {}: {l}", i + 1));
                 }
-                let t = thumb(&p.image);
-                let d = t.iter().zip(&r.thumb).map(|(a, b)| (*a as f64 - *b as f64).abs()).sum::<f64>()
-                    / t.len() as f64;
-                worst = worst.max(d);
-                if d > 6.0 {
-                    lines.push(format!("page {}: picture differs from the source page (mean difference {d:.1}/255)", i + 1));
-                    ok = false;
-                }
+                ok &= c.problems.is_empty();
+                worst = worst.max(c.thumb_diff);
             }
             Err(e) => {
                 lines.push(format!("page {}: could not be decoded ({e})", i + 1));
@@ -132,6 +110,74 @@ fn verify(pdf: &[u8], recs: &[Rec]) -> (bool, Vec<String>) {
         ),
     );
     (ok, lines)
+}
+
+
+/// What the read-back of one page showed (see [`check_page`]).
+#[derive(Debug, Clone, Default)]
+pub struct PageCheck {
+    /// Words found in the text layer divided by words written (1.0 when none were written).
+    pub text_frac: f64,
+    /// Text-layer boxes lying on blank paper / on ink.
+    pub empty: usize,
+    pub found: usize,
+    /// Mean absolute difference of the 96x128 thumbnails, 0..255.
+    pub thumb_diff: f64,
+    /// Human-readable problems; empty when the page passes.
+    pub problems: Vec<String>,
+}
+
+fn check_page(back: &image::DynamicImage, text: Option<&str>, r: &Rec) -> PageCheck {
+    let mut c = PageCheck { text_frac: 1.0, ..Default::default() };
+    if !r.words.is_empty() {
+        let (empty, found) = words_on_ink(&back.to_luma8(), &r.words);
+        let text_words = text.map_or(0, |t| t.split_whitespace().count());
+        c.text_frac = (text_words as f64 / r.words.len() as f64).min(1.0);
+        c.empty = empty;
+        c.found = found;
+        if text_words * 10 < r.words.len() * 9 {
+            c.problems.push(format!("text layer holds {text_words} word(s), {} were written", r.words.len()));
+        }
+        if empty >= 3 && empty * 20 > found + empty {
+            c.problems.push(format!(
+                "{empty} of {} text-layer boxes lie on blank paper (the text layer does not match the picture)",
+                found + empty
+            ));
+        }
+    }
+    let t = thumb(back);
+    c.thumb_diff =
+        t.iter().zip(&r.thumb).map(|(a, b)| (*a as f64 - *b as f64).abs()).sum::<f64>() / t.len() as f64;
+    if c.thumb_diff > 6.0 {
+        c.problems.push(format!(
+            "picture differs from the source page (mean difference {:.1}/255)",
+            c.thumb_diff
+        ));
+    }
+    c
+}
+
+/// Write one page with its words to an in-memory PDF, read it back and run the same checks
+/// `--certify` runs on the whole file. `None` when the PDF cannot be read back at all.
+pub fn certify_page(pg: &Page, words: &[legatorocr_core::Word]) -> Option<PageCheck> {
+    let img = match &pg.layers {
+        Some(l) => image::DynamicImage::ImageRgb8(l.compose()),
+        None => pg.image.to_dynamic(),
+    };
+    let rec = Rec {
+        w: img.width(),
+        h: img.height(),
+        thumb: thumb(&img),
+        words: words.iter().map(|w| [w.x, w.y, w.w, w.h]).collect(),
+    };
+    let mut wr = legatorocr_pdf::PdfWriter::new(legatorocr_pdf::Compress::Flate);
+    wr.add_page(pg, words);
+    let doc = legatorocr_pdf::reader::PdfDoc::open(wr.finish()).ok()?;
+    let p = doc.page_image(0).ok()?;
+    if (p.image.width(), p.image.height()) != (rec.w, rec.h) {
+        return None;
+    }
+    Some(check_page(&p.image, doc.page_text(0).ok().as_deref(), &rec))
 }
 
 /// Count text-layer boxes with no ink under them (`.0`) and with ink (`.1`). A box is blank when

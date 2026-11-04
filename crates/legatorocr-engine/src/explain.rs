@@ -82,6 +82,19 @@ pub fn record(
     }
 }
 
+/// Add a sentence to the line of page `(index, seq)` (e.g. the outcome of `--auto-retry`).
+pub fn append(index: usize, seq: usize, text: &str) {
+    if !enabled() {
+        return;
+    }
+    if let Ok(mut l) = LINES.lock() {
+        if let Some(line) = l.get_mut(&(index, seq)) {
+            line.push_str("; ");
+            line.push_str(text);
+        }
+    }
+}
+
 /// All lines, in batch order.
 pub fn report() -> Vec<String> {
     LINES.lock().map(|l| l.values().cloned().collect()).unwrap_or_default()

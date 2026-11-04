@@ -445,6 +445,20 @@ struct Cli {
     #[arg(long)]
     binarize_by_ocr: bool,
 
+    /// Needs --ocr. A page whose read-back looks doubtful (a --certify check fails, or under
+    /// --auto-retry-below of its dark pixels lie inside a recognised word) is processed again with
+    /// other binarisers (black-and-white modes), deskew flipped, and OCR at another dpi; the
+    /// alternative with the best objective score (not Tesseract's confidence) is kept. Printed under
+    /// --explain. EXPERIMENTAL and NOT recommended: it failed its gate (ROADMAP 4.24): no gain on
+    /// real pages, and it made skewed synthetic pages much worse.
+    #[arg(long)]
+    auto_retry: bool,
+
+    /// With --auto-retry: retry pages whose ink coverage is under this fraction (0.8 by default;
+    /// above 1 retries every page).
+    #[arg(long, value_name = "FRACTION", default_value_t = 0.8)]
+    auto_retry_below: f64,
+
     /// Make a scanned paper form fillable: ruled boxes, check boxes and underlines become PDF
     /// form fields over the scan. Needs --pdf; not with --pdfa. Scans with broken or faint
     /// lines lose fields: look at the result in a PDF viewer.
@@ -2328,6 +2342,13 @@ fn real_main() -> Result<()> {
     legatorocr_engine::ropost::set_enabled(cli.clean_text);
     legatorocr_engine::pagenum::set_enabled(cli.page_labels);
     legatorocr_engine::memcap::set(cli.max_memory);
+    if cli.auto_retry {
+        if !cli.ocr {
+            bail!("--auto-retry needs --ocr");
+        }
+        legatorocr_engine::autoretry::set_below(cli.auto_retry_below);
+        legatorocr_engine::autoretry::set_enabled(true);
+    }
     if cli.binarize_by_ocr {
         if !cli.ocr {
             bail!("--binarize-by-ocr needs --ocr");
@@ -2512,6 +2533,11 @@ fn real_main() -> Result<()> {
     }
     if cli.explain {
         for l in legatorocr_engine::explain::report() {
+            eprintln!("{l}");
+        }
+    }
+    if cli.auto_retry {
+        for l in legatorocr_engine::autoretry::report() {
             eprintln!("{l}");
         }
     }

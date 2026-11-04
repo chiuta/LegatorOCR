@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 pub mod altbin;
+pub mod autoretry;
 pub mod audit;
 pub mod djvu;
 pub mod doubtful;
@@ -843,6 +844,20 @@ pub fn run_export(
                         Some(o) if altbin::enabled() => altbin::choose(pg, words, &img, &settings, seq, |p| {
                             profile::time("ocr", || ocrcache::recognize(&p.image, p.dpi, o))
                         }),
+                        _ => (pg, words),
+                    };
+                    let (pg, words) = match ocr_opts {
+                        Some(o) if autoretry::enabled() => {
+                            let lang = pagelang::for_page(base + i + 1).unwrap_or_else(|| o.lang.clone());
+                            let o = OcrOptions { lang, ..o.clone() };
+                            let r = autoretry::refine(base + i, seq, pg, words, &img, &settings, |p, d| {
+                                profile::time("ocr", || ocrcache::recognize(&p.image, d, &o))
+                            });
+                            if let Some(n) = autoretry::note(base + i, seq) {
+                                explain::append(base + i, seq, &n);
+                            }
+                            r
+                        }
                         _ => (pg, words),
                     };
                     kept.push((pg, words));
