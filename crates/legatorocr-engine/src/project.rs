@@ -38,11 +38,13 @@ pub struct SheetAdj {
 impl SheetAdj {
     pub fn apply(&self, s: &Settings) -> Settings {
         let mut s = s.clone();
-        s.rotate_quarters = self.rotate_quarters % 4;
+        // the sheet's turn comes on top of a global one (`--rotate`); its manual skew replaces a global
+        // `--skew` only when the sheet has one (a default sheet used to wipe both options out)
+        s.rotate_quarters = (s.rotate_quarters % 4 + self.rotate_quarters % 4) % 4;
         if let Some(sp) = self.split {
             s.split = sp;
         }
-        s.manual_skew_deg = self.skew_deg;
+        s.manual_skew_deg = self.skew_deg.or(s.manual_skew_deg);
         s.content_adjust_mm = self.content_adjust_mm;
         s.sheet_erase_zones = self.erase_mm.clone();
         s.sheet_picture_zones = self.picture_mm.clone();
@@ -156,6 +158,8 @@ pub fn settings_to_pairs(s: &Settings) -> Vec<(&'static str, String)> {
             s.page_size_mm
                 .map_or("free".into(), |(w, h)| format!("{w},{h}")),
         ),
+        ("fit_width", s.fit_width.to_string()),
+        ("fit_height", s.fit_height.to_string()),
         ("align", align_name(s.align)),
         ("mode", mode_name(s.mode).into()),
         ("threshold", s.threshold.name().to_ascii_lowercase()),
@@ -217,6 +221,8 @@ pub fn apply_pair(s: &mut Settings, k: &str, v: &str) -> Result<bool> {
                 ))
             }
         }
+        "fit_width" => s.fit_width = b(v).ok_or_else(bad)?,
+        "fit_height" => s.fit_height = b(v).ok_or_else(bad)?,
         "align" => s.align = parse_align(v).ok_or_else(bad)?,
         "mode" => s.mode = parse_mode(v).ok_or_else(bad)?,
         "threshold" => s.threshold = Threshold::from_name(v).ok_or_else(bad)?,
@@ -464,11 +470,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_default_sheet_keeps_global_rotate_and_skew() {
+        let g = Settings {
+            rotate_quarters: 1,
+            manual_skew_deg: Some(2.5),
+            ..Settings::default()
+        };
+        let a = SheetAdj::default().apply(&g);
+        assert_eq!((a.rotate_quarters, a.manual_skew_deg), (1, Some(2.5)));
+        let b = SheetAdj {
+            rotate_quarters: 2,
+            skew_deg: Some(-1.0),
+            ..SheetAdj::default()
+        }
+        .apply(&g);
+        assert_eq!((b.rotate_quarters, b.manual_skew_deg), (3, Some(-1.0)));
+    }
+
+    #[test]
     fn round_trip_keeps_everything() {
         let mut p = Project::default();
         p.settings.mode = OutputMode::Hybrid;
         p.settings.threshold = Threshold::Wolf;
         p.settings.page_size_mm = Some((148.0, 210.5));
+        p.settings.fit_width = true;
         p.settings.align = (HAlign::Right, VAlign::Top);
         p.settings.output_dpi = Some(200);
         p.settings.dewarp = true;
@@ -493,6 +518,7 @@ mod tests {
         assert_eq!(q.settings.mode, OutputMode::Hybrid);
         assert_eq!(q.settings.threshold, Threshold::Wolf);
         assert_eq!(q.settings.page_size_mm, Some((148.0, 210.5)));
+        assert!(q.settings.fit_width && !q.settings.fit_height);
         assert_eq!(q.settings.align, (HAlign::Right, VAlign::Top));
         assert_eq!(q.settings.output_dpi, Some(200));
         assert!(q.settings.dewarp);

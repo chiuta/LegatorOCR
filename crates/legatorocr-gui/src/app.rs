@@ -60,9 +60,13 @@ struct Sheet {
     name: String,
     adj: SheetAdjust,
     adj_gen: u32,
-    /// Zone history for Undo / Redo (snapshots of `adj.erase_mm` and `adj.picture_mm`).
+    /// History for Undo / Redo: snapshots of every per-sheet adjustment (turns, skew, split, content
+    /// box, erase and picture zones, dewarp guides).
     zone_undo: Vec<ZoneSnap>,
     zone_redo: Vec<ZoneSnap>,
+    /// When the last change to a control (slider, number box, button) was recorded: changes within
+    /// a second of each other are one step, so a drag is one Undo.
+    last_edit: Option<std::time::Instant>,
     ready: Option<Ready>,
     pending: Option<u64>,
     failed: Option<(u64, String)>,
@@ -134,6 +138,8 @@ pub struct App {
     /// With `draw_zones`: the mouse draws dewarp guide lines (freehand along a bent text line).
     draw_guide: bool,
     guide_path: Vec<egui::Pos2>,
+    /// A node of a dewarp guide being dragged: (guide, node, position as fractions of the scan).
+    guide_live: Option<(usize, usize, (f32, f32))>,
     /// What the mouse draws when `draw_zones` is on: picture zones instead of erase zones.
     draw_pictures: bool,
     /// Processed pages show the content box with draggable edges.
@@ -190,6 +196,7 @@ impl App {
             draw_zones: false,
             draw_guide: false,
             guide_path: Vec::new(),
+            guide_live: None,
             draw_pictures: false,
             edit_box: false,
             box_drag: None,
@@ -401,6 +408,7 @@ impl App {
                 used: 0,
                 zone_undo: Vec::new(),
                 zone_redo: Vec::new(),
+                last_edit: None,
                 failed: None,
             });
             self.next_id += 1;
@@ -1222,7 +1230,8 @@ impl App {
                             }))
                             .changed();
                         ui.horizontal(|ui| {
-                            ui.label(tr("set.split"));
+                            ui.label(tr("set.split"))
+                                .on_hover_text(tr("set.split_tip"));
                             egui::ComboBox::from_id_salt("split")
                                 .selected_text(split_name(lang, self.s.split))
                                 .show_ui(ui, |ui| {
@@ -1283,6 +1292,16 @@ impl App {
                                     }
                                 });
                         });
+                        if self.s.page_size != PageSizeChoice::Free {
+                            ch |= ui
+                                .checkbox(&mut self.s.fit_width, tr("set.fit_width"))
+                                .on_hover_text(tr("set.fit_tip"))
+                                .changed();
+                            ch |= ui
+                                .checkbox(&mut self.s.fit_height, tr("set.fit_height"))
+                                .on_hover_text(tr("set.fit_tip"))
+                                .changed();
+                        }
                         if self.s.page_size != PageSizeChoice::Free || self.s.uniform_size {
                             ui.horizontal(|ui| {
                                 ui.label(tr("set.align"));
@@ -1422,20 +1441,6 @@ impl App {
                             ch |= ui.add(te).changed();
                         });
                         ui.horizontal(|ui| {
-                            ui.label(tr("set.pdf_password"));
-                            if ui
-                                .add(
-                                    egui::TextEdit::singleline(&mut self.pdf_password)
-                                        .password(true)
-                                        .desired_width(120.0),
-                                )
-                                .changed()
-                            {
-                                legatorocr_engine::set_pdf_password(&self.pdf_password);
-                                ch = true;
-                            }
-                        });
-                        ui.horizontal(|ui| {
                             ui.label(tr("set.output_dpi"));
                             ch |= ui
                                 .add(
@@ -1457,6 +1462,7 @@ impl App {
                     .show(ui, |ui| {
                         ch |= ui
                             .checkbox(&mut self.s.auto_invert, tr("set.invert"))
+                            .on_hover_text(tr("set.invert_tip"))
                             .changed();
                         ch |= ui
                             .checkbox(&mut self.s.auto_levels, tr("set.levels"))
@@ -1477,7 +1483,8 @@ impl App {
                             .checkbox(&mut self.s.fingers, tr("set.fingers"))
                             .changed();
                         ui.horizontal(|ui| {
-                            ui.label(tr("set.dropout"));
+                            ui.label(tr("set.dropout"))
+                                .on_hover_text(tr("set.dropout_tip"));
                             let dn = |d: legatorocr_core::Dropout| {
                                 tr(match d {
                                     legatorocr_core::Dropout::Off => "dropout.off",
@@ -1567,9 +1574,11 @@ impl App {
                             .changed();
                         self.config_dirty |= ui
                             .checkbox(&mut self.s.split_on_blank, tr("set.split_blank"))
+                            .on_hover_text(tr("set.split_blank_tip"))
                             .changed();
                         self.config_dirty |= ui
                             .checkbox(&mut self.s.split_on_barcode, tr("set.split_barcode"))
+                            .on_hover_text(tr("set.split_barcode_tip"))
                             .changed();
                         self.config_dirty |= ui
                             .checkbox(&mut self.s.bookmarks, tr("set.bookmarks"))
@@ -1607,6 +1616,21 @@ impl App {
                                 )
                                 .changed();
                         });
+                        ui.horizontal(|ui| {
+                            ui.label(tr("set.pdf_password"));
+                            if ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut self.pdf_password)
+                                        .password(true)
+                                        .desired_width(120.0),
+                                )
+                                .changed()
+                            {
+                                legatorocr_engine::set_pdf_password(&self.pdf_password);
+                                ch = true;
+                            }
+                        });
+                        ui.label(RichText::new(tr("set.pdf_password_hint")).small().weak());
                         if self.s.ocr {
                             self.config_dirty |= ui
                                 .checkbox(&mut self.s.sidecar_txt, tr("set.sidecar_txt"))
@@ -1719,6 +1743,7 @@ impl App {
             });
             return;
         };
+        let mut make_grid = false;
         // --- toolbar: view + zoom (wraps: the zone kinds must stay reachable on narrow windows)
         ui.horizontal_wrapped(|ui| {
             for (v, k) in [
@@ -1756,6 +1781,14 @@ impl App {
                 }
                 ui.selectable_value(&mut self.draw_guide, true, tr("zones.kind_guide"))
                     .on_hover_text(tr("zones.guide_hint"));
+                if self.draw_guide
+                    && ui
+                        .button(tr("zones.guide_grid"))
+                        .on_hover_text(tr("zones.guide_grid_hint"))
+                        .clicked()
+                {
+                    make_grid = true;
+                }
             }
             ui.add_enabled(
                 !self.fit,
@@ -1775,7 +1808,7 @@ impl App {
             !self.sheets[i].zone_redo.is_empty(),
         );
         let (mut clear_zones, mut undo_zone, mut redo_zone) = (false, false, false);
-        let mut reset_snap: Option<ZoneSnap> = None;
+        let adj_before = ZoneSnap::of(&self.sheets[i].adj);
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(tr("adj.title")).strong());
             let adj = &mut self.sheets[i].adj;
@@ -1790,12 +1823,7 @@ impl App {
             // 45° steps: quarter turns plus the manual skew together make the total angle
             for (label, step) in [("-45°", -45.0f32), ("+45°", 45.0)] {
                 if ui.button(label).clicked() {
-                    let total =
-                        adj.rotate_quarters as f32 * 90.0 + adj.skew_deg.unwrap_or(0.0) + step;
-                    let q = (total / 90.0).round();
-                    adj.rotate_quarters = (q as i32).rem_euclid(4) as u8;
-                    let rest = total - q * 90.0;
-                    adj.skew_deg = Some(if rest.abs() < 0.01 { 0.0 } else { rest });
+                    adj.turn(step);
                     adj_changed = true;
                 }
             }
@@ -1807,7 +1835,7 @@ impl App {
                 Some(SplitChoice::Off) => tr("split.off"),
             };
             egui::ComboBox::from_id_salt("adj_split")
-                .selected_text(format!("{}: {label}", tr("set.split")))
+                .selected_text(format!("{} → {label}", tr("adj.split_page")))
                 .show_ui(ui, |ui| {
                     adj_changed |= ui
                         .selectable_value(&mut adj.split, None, tr("adj.split_default"))
@@ -1830,9 +1858,22 @@ impl App {
                 adj_changed = true;
             }
             if let Some(v) = adj.skew_deg.as_mut() {
+                // The slider is for fine work (±10°); a larger value (left by a 45° step) must not be
+                // clamped back every frame, so the slider only clamps what the user edits, and a
+                // number box takes any angle up to ±45°.
                 adj_changed |= ui
                     .add(
                         egui::Slider::new(v, -10.0..=10.0)
+                            .clamping(egui::SliderClamping::Edits)
+                            .suffix("°")
+                            .fixed_decimals(2),
+                    )
+                    .changed();
+                adj_changed |= ui
+                    .add(
+                        egui::DragValue::new(v)
+                            .range(-45.0..=45.0)
+                            .speed(0.1)
                             .suffix("°")
                             .fixed_decimals(2),
                     )
@@ -1860,12 +1901,6 @@ impl App {
                 redo_zone = true;
             }
             if ui.button(tr("adj.reset")).clicked() {
-                if !(adj.erase_mm.is_empty()
-                    && adj.picture_mm.is_empty()
-                    && adj.dewarp_guides.is_empty())
-                {
-                    reset_snap = Some(ZoneSnap::of(adj));
-                }
                 *adj = SheetAdjust::default();
                 adj_changed = true;
             }
@@ -1892,6 +1927,29 @@ impl App {
         if adj_changed {
             self.sheets[i].adj_gen += 1;
         }
+        if make_grid {
+            // a regular grid of draggable points: 5 lines of 7 points over the page
+            let adj = &mut self.sheets[i].adj;
+            if adj.dewarp_guides.len() + 5 <= 64 {
+                for r in 0..5 {
+                    let y = 0.15 + 0.175 * r as f32;
+                    adj.dewarp_guides
+                        .push((0..7).map(|c| (0.06 + 0.88 * c as f32 / 6.0, y)).collect());
+                }
+                self.sheets[i].adj_gen += 1;
+            }
+        }
+        // Undo for every control: record the state from before this frame's change, unless it
+        // continues a change made less than a second ago (a slider drag is one step).
+        if self.sheets[i].adj != adj_before.0 {
+            let sh = &mut self.sheets[i];
+            let fresh = sh.last_edit.is_none_or(|t| t.elapsed().as_secs_f32() > 1.0);
+            if fresh {
+                sh.zone_undo.push(adj_before);
+                sh.zone_redo.clear();
+            }
+            sh.last_edit = Some(std::time::Instant::now());
+        }
         // Keyboard: Ctrl+Z undo, Ctrl+Y / Ctrl+Shift+Z redo (not while typing in a text box).
         if !ui.ctx().egui_wants_keyboard_input() {
             ui.input_mut(|inp| {
@@ -1910,10 +1968,6 @@ impl App {
         }
         {
             let sh = &mut self.sheets[i];
-            if let Some(snap) = reset_snap {
-                sh.zone_undo.push(snap);
-                sh.zone_redo.clear();
-            }
             if clear_zones
                 && !(sh.adj.erase_mm.is_empty()
                     && sh.adj.picture_mm.is_empty()
@@ -1926,11 +1980,13 @@ impl App {
                 sh.adj.dewarp_guides.clear();
                 sh.adj_gen += 1;
             } else if undo_zone {
+                sh.last_edit = None;
                 if let Some(z) = sh.zone_undo.pop() {
                     sh.zone_redo.push(z.swap_into(&mut sh.adj));
                     sh.adj_gen += 1;
                 }
             } else if redo_zone {
+                sh.last_edit = None;
                 if let Some(z) = sh.zone_redo.pop() {
                     sh.zone_undo.push(z.swap_into(&mut sh.adj));
                     sh.adj_gen += 1;
@@ -2008,6 +2064,10 @@ impl App {
         let mut new_guide: Option<Vec<(f32, f32)>> = None;
         let mut remove_guide: Option<usize> = None;
         let gpath = &mut self.guide_path;
+        let glive = &mut self.guide_live;
+        let mut node_move: Option<(usize, usize, (f32, f32))> = None;
+        let mut node_remove: Option<(usize, usize)> = None;
+        let mut node_insert: Option<(usize, usize, (f32, f32))> = None;
         let edit_box = self.edit_box;
         let mut box_delta: Option<(usize, f32)> = None;
         let bdrag = &mut self.box_drag;
@@ -2086,10 +2146,15 @@ impl App {
                                     egui::StrokeKind::Inside,
                                 );
                             }
-                            for g in &guide_list {
+                            for (gi, g) in guide_list.iter().enumerate() {
                                 let pts: Vec<egui::Pos2> = g
                                     .iter()
-                                    .map(|p| {
+                                    .enumerate()
+                                    .map(|(ki, p)| {
+                                        let p = match *glive {
+                                            Some((lg, lk, lp)) if lg == gi && lk == ki => lp,
+                                            _ => *p,
+                                        };
                                         egui::pos2(
                                             rect.min.x + p.0 * rect.width(),
                                             rect.min.y + p.1 * rect.height(),
@@ -2097,12 +2162,100 @@ impl App {
                                     })
                                     .collect();
                                 painter.add(egui::Shape::line(
-                                    pts,
+                                    pts.clone(),
                                     egui::Stroke::new(2.0, Color32::from_rgb(40, 170, 80)),
                                 ));
+                                if draw_zones && draw_guide {
+                                    for q in &pts {
+                                        painter.circle(
+                                            *q,
+                                            4.5,
+                                            Color32::WHITE,
+                                            egui::Stroke::new(1.5, Color32::from_rgb(40, 170, 80)),
+                                        );
+                                    }
+                                }
                             }
                             if draw_zones && draw_guide {
+                                let to_scr = |q: (f32, f32)| {
+                                    egui::pos2(
+                                        rect.min.x + q.0 * rect.width(),
+                                        rect.min.y + q.1 * rect.height(),
+                                    )
+                                };
+                                let from_scr = |p: egui::Pos2| {
+                                    (
+                                        ((p.x - rect.min.x) / rect.width().max(1.0)).clamp(0.0, 1.0),
+                                        ((p.y - rect.min.y) / rect.height().max(1.0)).clamp(0.0, 1.0),
+                                    )
+                                };
+                                // the node under the pointer (within 10 screen pixels)
+                                let nearest_node = |p: egui::Pos2| {
+                                    let mut best: Option<(usize, usize, f32)> = None;
+                                    for (gi, g) in guide_list.iter().enumerate() {
+                                        for (ki, q) in g.iter().enumerate() {
+                                            let d = to_scr(*q).distance(p);
+                                            if d <= 10.0 && best.is_none_or(|b| d < b.2) {
+                                                best = Some((gi, ki, d));
+                                            }
+                                        }
+                                    }
+                                    best.map(|b| (b.0, b.1))
+                                };
                                 if resp.drag_started() {
+                                    if let Some(o) = ui
+                                        .input(|i| i.pointer.press_origin())
+                                        .or_else(|| resp.interact_pointer_pos())
+                                    {
+                                        if let Some((g, k)) = nearest_node(o) {
+                                            *glive = Some((g, k, guide_list[g][k]));
+                                        }
+                                    }
+                                }
+                                if let Some((g, k, _)) = *glive {
+                                    if resp.dragged() {
+                                        if let Some(p) = ui.input(|i| i.pointer.latest_pos()) {
+                                            *glive = Some((g, k, from_scr(p)));
+                                        }
+                                    }
+                                    if resp.drag_stopped() {
+                                        if let Some((_, _, pos)) = *glive {
+                                            node_move = Some((g, k, pos));
+                                        }
+                                        *glive = None;
+                                    }
+                                }
+                                if resp.double_clicked() {
+                                    if let Some(p) = resp.interact_pointer_pos() {
+                                        if let Some((g, k)) = nearest_node(p) {
+                                            node_remove = Some((g, k));
+                                        } else {
+                                            // a new node on the nearest segment
+                                            let mut best: Option<(usize, usize, f32, egui::Pos2)> = None;
+                                            for (gi, g) in guide_list.iter().enumerate() {
+                                                for (ki, w) in g.windows(2).enumerate() {
+                                                    let (a, b) = (to_scr(w[0]), to_scr(w[1]));
+                                                    let ab = b - a;
+                                                    let l2 = ab.length_sq();
+                                                    let t = if l2 <= f32::EPSILON {
+                                                        0.0
+                                                    } else {
+                                                        ((p - a).dot(ab) / l2).clamp(0.0, 1.0)
+                                                    };
+                                                    let q = a + ab * t;
+                                                    let d = p.distance(q);
+                                                    if d <= 10.0 && best.is_none_or(|bb| d < bb.2) {
+                                                        best = Some((gi, ki + 1, d, q));
+                                                    }
+                                                }
+                                            }
+                                            if let Some((g, k, _, q)) = best {
+                                                node_insert = Some((g, k, from_scr(q)));
+                                            }
+                                        }
+                                    }
+                                }
+                                if glive.is_none() && resp.drag_started() {
                                     gpath.clear();
                                     if let Some(p) = ui
                                         .input(|i| i.pointer.press_origin())
@@ -2111,7 +2264,7 @@ impl App {
                                         gpath.push(p);
                                     }
                                 }
-                                if resp.dragged() {
+                                if glive.is_none() && resp.dragged() {
                                     if let Some(p) = ui.input(|i| i.pointer.latest_pos()) {
                                         let p = p.clamp(rect.min, rect.max);
                                         if gpath.last().is_none_or(|l| l.distance(p) >= 4.0)
@@ -2127,7 +2280,7 @@ impl App {
                                         egui::Stroke::new(2.0, Color32::from_rgb(255, 160, 0)),
                                     ));
                                 }
-                                if resp.drag_stopped() {
+                                if glive.is_none() && resp.drag_stopped() {
                                     // thin the path to at most 24 points, fractions of the image
                                     let n = gpath.len();
                                     if n >= 2
@@ -2346,8 +2499,12 @@ impl App {
                 .show(ui, draw);
         }
         if let Some((e, mm)) = box_delta {
+            let before = ZoneSnap::of(&self.sheets[i].adj);
             let a = &mut self.sheets[i].adj.content_adjust_mm[e];
             *a = (*a + mm).clamp(-100.0, 100.0);
+            self.sheets[i].zone_undo.push(before);
+            self.sheets[i].zone_redo.clear();
+            self.sheets[i].last_edit = None;
             self.sheets[i].adj_gen += 1;
         }
         if let Some(g) = new_guide {
@@ -2357,6 +2514,39 @@ impl App {
                 a.dewarp_guides.push(g);
                 self.sheets[i].zone_undo.push(before);
                 self.sheets[i].zone_redo.clear();
+                self.sheets[i].adj_gen += 1;
+            }
+        }
+        if let Some((g, k, pos)) = node_move {
+            let a = &mut self.sheets[i].adj;
+            if g < a.dewarp_guides.len() && k < a.dewarp_guides[g].len() {
+                let before = ZoneSnap::of(a);
+                a.dewarp_guides[g][k] = pos;
+                self.sheets[i].zone_undo.push(before);
+                self.sheets[i].zone_redo.clear();
+                self.sheets[i].last_edit = None;
+                self.sheets[i].adj_gen += 1;
+            }
+        }
+        if let Some((g, k)) = node_remove {
+            let a = &mut self.sheets[i].adj;
+            if g < a.dewarp_guides.len() && a.dewarp_guides[g].len() > 2 && k < a.dewarp_guides[g].len() {
+                let before = ZoneSnap::of(a);
+                a.dewarp_guides[g].remove(k);
+                self.sheets[i].zone_undo.push(before);
+                self.sheets[i].zone_redo.clear();
+                self.sheets[i].last_edit = None;
+                self.sheets[i].adj_gen += 1;
+            }
+        }
+        if let Some((g, k, pos)) = node_insert {
+            let a = &mut self.sheets[i].adj;
+            if g < a.dewarp_guides.len() && k <= a.dewarp_guides[g].len() && a.dewarp_guides[g].len() < 256 {
+                let before = ZoneSnap::of(a);
+                a.dewarp_guides[g].insert(k, pos);
+                self.sheets[i].zone_undo.push(before);
+                self.sheets[i].zone_redo.clear();
+                self.sheets[i].last_edit = None;
                 self.sheets[i].adj_gen += 1;
             }
         }
@@ -2404,29 +2594,17 @@ impl App {
     }
 }
 
-/// Hand-drawn zones and dewarp guides of one sheet, for Undo / Redo.
+/// All per-sheet adjustments at one moment, for Undo / Redo.
 #[derive(Clone, Default)]
-struct ZoneSnap {
-    erase: Vec<[f32; 4]>,
-    picture: Vec<[f32; 4]>,
-    guides: Vec<Vec<(f32, f32)>>,
-}
+struct ZoneSnap(SheetAdjust);
 
 impl ZoneSnap {
     fn of(a: &SheetAdjust) -> Self {
-        Self {
-            erase: a.erase_mm.clone(),
-            picture: a.picture_mm.clone(),
-            guides: a.dewarp_guides.clone(),
-        }
+        Self(a.clone())
     }
     /// Put this state into `a`, returning what was there.
     fn swap_into(self, a: &mut SheetAdjust) -> Self {
-        Self {
-            erase: std::mem::replace(&mut a.erase_mm, self.erase),
-            picture: std::mem::replace(&mut a.picture_mm, self.picture),
-            guides: std::mem::replace(&mut a.dewarp_guides, self.guides),
-        }
+        Self(std::mem::replace(a, self.0))
     }
 }
 

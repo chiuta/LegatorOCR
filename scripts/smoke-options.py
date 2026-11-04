@@ -23,6 +23,7 @@ CASES = {
  "normalize": ["--normalize"], "sharpen": ["--sharpen", "1"], "descreen": ["--descreen"],
  "despeckle": ["--despeckle-strength", "2"], "no-despeckle": ["--no-despeckle"], "no-deskew": ["--no-deskew"],
  "no-auto-orient": ["--no-auto-orient"], "max-skew": ["--max-skew", "5"], "jpeg": ["--format", "jpeg", "--jpeg-quality", "80", "--out-dir", "{d}/o"],
+"fit": ["--page-size", "a4", "--fit-width", "--fit-height"],
  "picture": ["--mode", "mixed", "--picture-sensitivity", "0.5"], "remove-lines": ["--remove-lines"],
  "show-through": ["--show-through"], "perspective": ["--perspective"], "uniform": ["--uniform-size"],
  "target-size": ["--target-size", "200"], "timings": ["--timings"], "explain": ["--explain"],

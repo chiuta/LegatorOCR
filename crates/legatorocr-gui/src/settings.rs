@@ -61,6 +61,8 @@ pub struct UiSettings {
     pub max_skew: f32,
     pub margin_mm: f32,
     pub page_size: PageSizeChoice,
+    pub fit_width: bool,
+    pub fit_height: bool,
     pub custom_w: f32,
     pub custom_h: f32,
     pub mode: ModeChoice,
@@ -123,6 +125,8 @@ impl Default for UiSettings {
             max_skew: 7.0,
             margin_mm: 5.0,
             page_size: PageSizeChoice::Free,
+            fit_width: false,
+            fit_height: false,
             custom_w: 148.0,
             custom_h: 210.0,
             mode: ModeChoice::Color,
@@ -187,6 +191,23 @@ pub struct SheetAdjust {
     pub dewarp_guides: Vec<Vec<(f32, f32)>>,
 }
 
+impl SheetAdjust {
+    /// Total turn of the sheet in degrees: quarter turns plus the manual skew.
+    pub fn total_turn(&self) -> f32 {
+        self.rotate_quarters as f32 * 90.0 + self.skew_deg.unwrap_or(0.0)
+    }
+
+    /// Turn the sheet by `step` degrees (e.g. ±45): the total is kept as whole quarter turns plus a
+    /// manual skew of at most 45°, which the pipeline accepts.
+    pub fn turn(&mut self, step: f32) {
+        let total = self.total_turn() + step;
+        let q = (total / 90.0).round();
+        self.rotate_quarters = (q as i32).rem_euclid(4) as u8;
+        let rest = total - q * 90.0;
+        self.skew_deg = Some(if rest.abs() < 0.01 { 0.0 } else { rest });
+    }
+}
+
 impl UiSettings {
     pub fn page_size_mm(&self) -> Option<(f32, f32)> {
         match self.page_size {
@@ -209,6 +230,8 @@ impl UiSettings {
             max_skew_deg: self.max_skew,
             margins_mm: [self.margin_mm; 4],
             page_size_mm: self.page_size_mm(),
+            fit_width: self.fit_width,
+            fit_height: self.fit_height,
             mode: match self.mode {
                 ModeChoice::Color => OutputMode::Color,
                 ModeChoice::Gray => OutputMode::Gray,
@@ -308,6 +331,8 @@ impl UiSettings {
                 }
             }
         };
+        self.fit_width = c.fit_width;
+        self.fit_height = c.fit_height;
         self.mode = match c.mode {
             OutputMode::Color => ModeChoice::Color,
             OutputMode::Gray => ModeChoice::Gray,
@@ -483,6 +508,7 @@ mod tests {
             mode: ModeChoice::Hybrid,
             threshold: legatorocr_core::Threshold::Nick,
             page_size: PageSizeChoice::Custom,
+            fit_width: true,
             custom_w: 123.0,
             custom_h: 234.0,
             align: (HAlign::Left, VAlign::Bottom),
@@ -638,6 +664,20 @@ mod tests {
         let d = s.to_core(&SheetAdjust::default());
         assert_eq!(d.split, SplitMode::Auto);
         assert_eq!(d.manual_skew_deg, None);
+    }
+
+    #[test]
+    fn steps_of_45_degrees_add_up() {
+        let mut a = SheetAdjust::default();
+        let mut total = 0.0f32;
+        for step in [45.0, 45.0, 45.0, -45.0, -45.0, 45.0, 45.0, 45.0, 45.0, -45.0] {
+            a.turn(step);
+            total += step;
+            let t = a.total_turn().rem_euclid(360.0);
+            assert!((t - total.rem_euclid(360.0)).abs() < 0.02, "after {total}: {t}");
+            assert!(a.skew_deg.unwrap().abs() <= 45.0 + 1e-3);
+            assert!(a.rotate_quarters < 4);
+        }
     }
 
     #[test]

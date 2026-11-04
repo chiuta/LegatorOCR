@@ -73,6 +73,10 @@ pub struct Settings {
     pub content_adjust_mm: [f32; 4],
     /// Fixed output page size (mm). Content is placed per `align`; grows if content is larger.
     pub page_size_mm: Option<(f32, f32)>,
+    /// With a fixed page size: scale the content up or down so it fills the page width (and/or
+    /// height), leaving only `FIT_MARGIN_PX` of paper at each side.
+    pub fit_width: bool,
+    pub fit_height: bool,
     pub align: (HAlign, VAlign),
     pub mode: OutputMode,
     /// Binarisation method for black & white / mixed / hybrid output.
@@ -142,6 +146,8 @@ impl Default for Settings {
             margins_mm: [5.0; 4],
             content_adjust_mm: [0.0; 4],
             page_size_mm: None,
+            fit_width: false,
+            fit_height: false,
             align: (HAlign::Center, VAlign::Center),
             mode: OutputMode::Color,
             threshold: Threshold::Sauvola,
@@ -829,7 +835,71 @@ fn scale_bw(b: &BitImage, nw: u32, nh: u32) -> BitImage {
     binarize::global(&g, 200)
 }
 
+/// Paper left at each side when content is fitted to the page width/height.
+pub const FIT_MARGIN_PX: u32 = 8;
+
+/// Scale the deskewed page so its content box fills the fixed page (see `Settings::fit_width`).
+/// Returns the page unchanged when nothing applies. The configured margins are replaced by
+/// `FIT_MARGIN_PX` on the fitted axes.
+fn fit_to_page(p: Prepared, s: &Settings) -> (Prepared, Option<Settings>) {
+    let (Some((pw, ph)), Some(r)) = (s.page_size_mm, p.content) else {
+        return (p, None);
+    };
+    if !(s.fit_width || s.fit_height) || r.w == 0 || r.h == 0 {
+        return (p, None);
+    }
+    let px = |mm: f32| ((mm as f64 / 25.4 * s.dpi as f64) - 0.01).ceil().max(0.0) as f32;
+    let m = 2.0 * FIT_MARGIN_PX as f32;
+    let kw = (px(pw) - m).max(1.0) / r.w as f32;
+    let kh = (px(ph) - m).max(1.0) / r.h as f32;
+    let k = match (s.fit_width, s.fit_height) {
+        (true, true) => kw.min(kh),
+        (true, false) => kw,
+        _ => kh,
+    }
+    .clamp(0.1, 8.0);
+    if (k - 1.0).abs() < 0.002 {
+        return (p, None);
+    }
+    let (nw, nh) = (
+        ((p.img.width() as f32 * k).round() as u32).max(1),
+        ((p.img.height() as f32 * k).round() as u32).max(1),
+    );
+    let img = imageops::resize(&p.img, nw, nh, imageops::FilterType::Triangle);
+    let sc = |v: u32| (v as f32 * k).round() as u32;
+    let content = Some(Rect {
+        x: sc(r.x),
+        y: sc(r.y),
+        w: sc(r.w).max(1),
+        h: sc(r.h).max(1),
+    });
+    let pictures = p.pictures.iter().map(|z| z.map(|v| v * k)).collect();
+    let mut s2 = s.clone();
+    // content already fills the fitted axis: only the 8 px margin remains around it
+    if s.fit_width {
+        s2.margins_mm[0] = 0.0;
+        s2.margins_mm[2] = 0.0;
+    }
+    if s.fit_height {
+        s2.margins_mm[1] = 0.0;
+        s2.margins_mm[3] = 0.0;
+    }
+    s2.fit_width = false;
+    s2.fit_height = false;
+    (
+        Prepared {
+            img,
+            content,
+            pictures,
+            ..p
+        },
+        Some(s2),
+    )
+}
+
 fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
+    let (p, fitted) = fit_to_page(p, s);
+    let s = fitted.as_ref().unwrap_or(s);
     let Prepared {
         img,
         bg,
@@ -1195,6 +1265,33 @@ mod tests {
     use image::{imageops, Rgb};
 
     const DPI: u32 = 300;
+
+    #[test]
+    fn fit_width_fills_the_page_with_an_8px_margin() {
+        let mut img = RgbImage::from_pixel(400, 400, Rgb([255, 255, 255]));
+        for y in 150..250 {
+            for x in 100..300 {
+                img.put_pixel(x, y, Rgb([0, 0, 0]));
+            }
+        }
+        let s = Settings {
+            dpi: 100,
+            page_size_mm: Some((254.0, 254.0)), // 1000 x 1000 px
+            fit_width: true,
+            ..Settings::default()
+        };
+        let p = Prepared {
+            img,
+            bg: Rgb([255, 255, 255]),
+            skew_deg: 0.0,
+            content: Some(Rect { x: 100, y: 150, w: 200, h: 100 }),
+            pictures: vec![],
+        };
+        let (q, s2) = fit_to_page(p, &s);
+        let r = q.content.unwrap();
+        assert_eq!(r.w, 984);
+        assert!(s2.is_some());
+    }
 
     #[test]
     fn blank_sheet_with_a_page_size_becomes_an_empty_page_of_that_size() {
@@ -1688,6 +1785,8 @@ mod tests {
                 max_skew_deg: rnd(20) as f32,
                 margins_mm: [rnd(30) as f32; 4],
                 page_size_mm: (rnd(2) == 0).then(|| (rnd(300) as f32, rnd(300) as f32)),
+                fit_width: rnd(2) == 0,
+                fit_height: rnd(2) == 0,
                 mode: [
                     OutputMode::Color,
                     OutputMode::Gray,

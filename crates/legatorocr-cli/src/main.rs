@@ -736,6 +736,14 @@ struct Cli {
     #[arg(long)]
     page_size: Option<String>,
 
+    /// With --page-size: scale the content to fill the page width (8 px of paper left each side).
+    #[arg(long)]
+    fit_width: bool,
+
+    /// With --page-size: scale the content to fill the page height (8 px of paper left each side).
+    #[arg(long)]
+    fit_height: bool,
+
     /// Sauvola sensitivity for black & white output.
     #[arg(long, default_value_t = 0.3)]
     sauvola_k: f32,
@@ -1696,6 +1704,8 @@ fn real_main() -> Result<()> {
         max_skew_deg: cli.max_skew,
         margins_mm: [cli.margin; 4],
         page_size_mm: cli.page_size.as_deref().map(parse_page_size).transpose()?,
+        fit_width: cli.fit_width,
+        fit_height: cli.fit_height,
         mode: match cli.mode {
             Mode::Color => OutputMode::Color,
             Mode::Gray => OutputMode::Gray,
