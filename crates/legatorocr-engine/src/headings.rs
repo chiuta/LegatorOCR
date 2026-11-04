@@ -19,6 +19,11 @@ pub fn enabled() -> bool {
 
 /// The heading of a page, if it has one.
 pub fn detect(words: &[Word], page_h: u32) -> Option<String> {
+    detect_sized(words, page_h).map(|d| d.0)
+}
+
+/// The heading and how many times taller its letters are than the page's typical word.
+pub fn detect_sized(words: &[Word], page_h: u32) -> Option<(String, f32)> {
     if words.len() < 4 || page_h == 0 {
         return None;
     }
@@ -28,7 +33,7 @@ pub fn detect(words: &[Word], page_h: u32) -> Option<String> {
     let mut lines: Vec<u32> = words.iter().map(|w| w.line).collect();
     lines.sort_unstable();
     lines.dedup();
-    let mut best: Option<(u32, String)> = None;
+    let mut best: Option<(u32, String, f32)> = None;
     for l in lines {
         let ws: Vec<&Word> = words.iter().filter(|w| w.line == l).collect();
         let y = ws.iter().map(|w| w.y).min()?;
@@ -47,10 +52,11 @@ pub fn detect(words: &[Word], page_h: u32) -> Option<String> {
             continue; // a lone number or ornament is not a heading
         }
         if best.as_ref().is_none_or(|b| y < b.0) {
-            best = Some((y, text.chars().take(120).collect()));
+            let tall_h = ws.iter().map(|w| w.h).max().unwrap_or(1) as f32;
+            best = Some((y, text.chars().take(120).collect(), tall_h / med as f32));
         }
     }
-    best.map(|b| b.1)
+    best.map(|b| (b.1, b.2))
 }
 
 #[cfg(test)]
@@ -71,6 +77,16 @@ mod tests {
         v.extend(body(8, 1));
         v.extend(body(8, 2));
         assert_eq!(detect(&v, 1600).as_deref(), Some("Capitolul întâi"));
+    }
+
+    #[test]
+    fn the_size_ratio_is_reported() {
+        let mut v = vec![w("Capitolul", 100, 100, 40, 0), w("întâi", 300, 100, 40, 0)];
+        v.extend(body(8, 1));
+        v.extend(body(8, 2));
+        let (t, r) = detect_sized(&v, 1600).unwrap();
+        assert_eq!(t, "Capitolul întâi");
+        assert!((r - 2.0).abs() < 0.01, "{r}");
     }
 
     #[test]

@@ -931,8 +931,8 @@ pub fn run_export(
                         }
                     }
                     if headings::enabled() {
-                        if let Some(t) = headings::detect(&words, pg.image.height()) {
-                            w.add_bookmark(&t);
+                        if let Some((t, size)) = headings::detect_sized(&words, pg.image.height()) {
+                            w.add_heading_bookmark(&t, size);
                         }
                     }
                     if p.bookmarks {

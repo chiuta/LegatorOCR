@@ -41,7 +41,8 @@ pub struct PdfWriter {
     compress: Compress,
     title: Option<String>,
     meta: Meta,
-    bookmarks: Vec<(String, usize)>,
+    /// (title, page index, heading size relative to body text; 0 = not a heading)
+    bookmarks: Vec<(String, usize, f32)>,
     labels: Vec<(usize, LabelStyle, String, u32)>,
     pdfa: bool,
     pdfa_part: u8,
@@ -145,7 +146,18 @@ impl PdfWriter {
     pub fn add_bookmark(&mut self, title: &str) {
         if self.bookmarks.len() < 5000 {
             self.bookmarks
-                .push((title.to_string(), self.page_ids.len()));
+                .push((title.to_string(), self.page_ids.len(), 0.0));
+        }
+    }
+
+    /// Outline entry for a detected heading whose letters are `size` times the body text's
+    /// height. When the document's headings differ clearly in size (largest at least 1.25 times
+    /// the smallest), the larger half become top-level entries and the smaller ones are nested
+    /// under the preceding top-level entry.
+    pub fn add_heading_bookmark(&mut self, title: &str, size: f32) {
+        if self.bookmarks.len() < 5000 {
+            self.bookmarks
+                .push((title.to_string(), self.page_ids.len(), size.max(0.01)));
         }
     }
 
@@ -634,40 +646,74 @@ impl PdfWriter {
             ),
         );
         let n_pages = self.page_ids.len();
-        let marks: Vec<(String, usize)> = self
+        let marks: Vec<(String, usize, f32)> = self
             .bookmarks
             .iter()
             .filter(|b| b.1 < n_pages)
             .cloned()
             .collect();
+        let levels = outline_levels(&marks);
         let mut cat_extra = String::new();
         if !marks.is_empty() {
             let root = self.alloc();
             let ids: Vec<u32> = marks.iter().map(|_| self.alloc()).collect();
+            // parent (index) of every entry, and the children of every entry
+            let mut parent: Vec<Option<usize>> = vec![None; marks.len()];
+            let mut kids: Vec<Vec<usize>> = vec![Vec::new(); marks.len()];
+            let mut tops: Vec<usize> = Vec::new();
+            let mut last_top: Option<usize> = None;
+            for k in 0..marks.len() {
+                match (levels[k], last_top) {
+                    (1, Some(t)) => {
+                        parent[k] = Some(t);
+                        kids[t].push(k);
+                    }
+                    _ => {
+                        tops.push(k);
+                        last_top = Some(k);
+                    }
+                }
+            }
             self.plain_obj(
                 root,
                 &format!(
                     "<< /Type /Outlines /First {} 0 R /Last {} 0 R /Count {} >>",
-                    ids[0],
-                    ids[ids.len() - 1],
-                    ids.len()
+                    ids[tops[0]],
+                    ids[tops[tops.len() - 1]],
+                    marks.len()
                 ),
             );
-            for (k, (t, pg)) in marks.iter().enumerate() {
-                let prev = if k > 0 {
-                    format!(" /Prev {} 0 R", ids[k - 1])
+            for (k, (t, pg, _)) in marks.iter().enumerate() {
+                let siblings: &Vec<usize> = match parent[k] {
+                    Some(p) => &kids[p],
+                    None => &tops,
+                };
+                let pos = siblings.iter().position(|&x| x == k).unwrap_or(0);
+                let prev = if pos > 0 {
+                    format!(" /Prev {} 0 R", ids[siblings[pos - 1]])
                 } else {
                     String::new()
                 };
-                let next = if k + 1 < ids.len() {
-                    format!(" /Next {} 0 R", ids[k + 1])
+                let next = if pos + 1 < siblings.len() {
+                    format!(" /Next {} 0 R", ids[siblings[pos + 1]])
                 } else {
                     String::new()
+                };
+                let par = parent[k].map_or(root, |p| ids[p]);
+                let children = if kids[k].is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " /First {} 0 R /Last {} 0 R /Count {}",
+                        ids[kids[k][0]],
+                        ids[kids[k][kids[k].len() - 1]],
+                        kids[k].len()
+                    )
                 };
                 self.plain_obj(
                     ids[k],
                     &format!(
-                        "<< /Title {} /Parent {root} 0 R{prev}{next} /Dest [{} 0 R /Fit] >>",
+                        "<< /Title {} /Parent {par} 0 R{prev}{next}{children} /Dest [{} 0 R /Fit] >>",
                         pdf_text_string(t),
                         self.page_ids[*pg]
                     ),
@@ -1398,6 +1444,19 @@ mod g4_roundtrip {
     }
 }
 
+/// Outline level (0 = top, 1 = nested) of every entry; see `add_heading_bookmark`.
+fn outline_levels(marks: &[(String, usize, f32)]) -> Vec<u8> {
+    let sizes: Vec<f32> = marks.iter().map(|m| m.2).filter(|&v| v > 0.0).collect();
+    let (lo, hi) = sizes
+        .iter()
+        .fold((f32::MAX, 0.0f32), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+    if sizes.is_empty() || hi < 1.25 * lo {
+        return vec![0; marks.len()];
+    }
+    let cut = (lo + hi) / 2.0;
+    marks.iter().map(|m| u8::from(m.2 > 0.0 && m.2 < cut)).collect()
+}
+
 #[cfg(test)]
 mod outline_tests {
     use super::*;
@@ -1412,6 +1471,31 @@ mod outline_tests {
             split_index: None,
             content_box: None,
             layers: None,
+        }
+    }
+
+    #[test]
+    fn headings_of_clearly_different_size_are_nested() {
+        let mut w = PdfWriter::new(Compress::Flate);
+        for (t, size) in [("Part one", 2.4f32), ("Section a", 1.5), ("Section b", 1.5), ("Part two", 2.4), ("Section c", 1.5)] {
+            w.add_heading_bookmark(t, size);
+            w.add_page(&pg(), &[]);
+        }
+        let pdf = w.finish();
+        let txt = String::from_utf8_lossy(&pdf).to_string();
+        // two top-level entries and five in all; each part lists its sections
+        assert!(txt.contains("/Type /Outlines") && txt.contains("/Count 5"), "{txt}");
+        assert_eq!(txt.matches("/Count 2").count(), 1, "first part has two sections");
+        assert_eq!(txt.matches("/Count 1 ").count() + txt.matches("/Count 1>>").count(), 1, "second part has one");
+        // similar sizes stay flat
+        assert_eq!(outline_levels(&[("a".into(), 0, 1.5), ("b".into(), 1, 1.6)]), vec![0, 0]);
+        assert_eq!(outline_levels(&[("a".into(), 0, 2.4), ("b".into(), 1, 1.5), ("c".into(), 2, 0.0)]), vec![0, 1, 0]);
+        if std::process::Command::new("qpdf").arg("--version").output().is_ok() {
+            let p = std::env::temp_dir().join(format!("lgr-nest-{}.pdf", std::process::id()));
+            std::fs::write(&p, &pdf).unwrap();
+            let o = std::process::Command::new("qpdf").arg("--check").arg(&p).output().unwrap();
+            let _ = std::fs::remove_file(&p);
+            assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
         }
     }
 
