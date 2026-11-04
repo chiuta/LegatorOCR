@@ -2410,6 +2410,13 @@ fn real_main() -> Result<()> {
         legatorocr_engine::djvu::set_thumbnails(cli.djvu_thumbnails);
         legatorocr_engine::djvu::begin();
     }
+    if cli.passages_jsonl.is_some() {
+        let ext_name = match cli.format {
+            Fmt::None => "png",
+            _ => ext,
+        };
+        legatorocr_engine::passages::begin(ext_name, cli.jpeg_quality, save_images.then(|| stems.clone()));
+    }
     let res = run_export(
         &job,
         &AtomicBool::new(false),
@@ -2453,13 +2460,6 @@ fn real_main() -> Result<()> {
                             .lock()
                             .unwrap()
                             .get_or_insert(format!("{}: {e}", path.display()));
-    if cli.passages_jsonl.is_some() {
-        let ext_name = match cli.format {
-            Fmt::None => "png",
-            _ => ext,
-        };
-        legatorocr_engine::passages::begin(ext_name, cli.jpeg_quality, save_images.then(|| stems.clone()));
-    }
                     }
                 }
             }
@@ -2728,13 +2728,13 @@ fn real_main() -> Result<()> {
             }
             None => eprintln!("--proof-sheet needs --ocr: no page was read, nothing written"),
         }
+    }
     if let Some(p) = &cli.passages_jsonl {
         let ps = legatorocr_engine::passages::finish(cli.clean_text);
         let title = cli.passages_title.clone();
         write_atomic(p, legatorocr_engine::passages::to_jsonl(&ps, title.as_deref()).as_bytes())?;
         eprintln!("wrote {} ({} passages)", p.display(), ps.len());
         written.push(p.clone());
-    }
     }
     if let Some(p) = &cli.doubtful_words {
         if let Some((tsv, n, total)) = legatorocr_engine::doubtful::finish() {

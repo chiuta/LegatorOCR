@@ -20,3 +20,23 @@ fn passages_jsonl_needs_ocr_and_is_a_known_option() {
     assert!(!dir.join("p.jsonl").exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Guards the wiring in `main.rs`/`engine`: the file must be written without `--page-labels`, even
+/// for a page with no text (an earlier merge left the begin/record/finish calls inside other blocks).
+#[test]
+fn passages_jsonl_is_written_without_page_labels() {
+    let dir = std::env::temp_dir().join(format!("lgr_passages_w_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    image::GrayImage::from_pixel(300, 300, image::Luma([255])).save(dir.join("a.png")).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_legatorocr"))
+        .current_dir(&dir)
+        .args(["a.png", "--dpi", "300", "--format", "none", "--ocr", "--engine", "native", "--pdf", "o.pdf", "--passages-jsonl", "p.jsonl"])
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    assert!(dir.join("p.jsonl").exists(), "{err}");
+    assert!(err.contains("passages)"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

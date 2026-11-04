@@ -989,13 +989,13 @@ pub fn run_export(
                         doubtful::record(base + i + 1, &lang, &words);
                     }
                 }
-                if pagenum::enabled() {
                 if passages::enabled() {
                     let lang = pagelang::for_page(base + i + 1)
                         .or_else(|| ocr_opts.map(|o| o.lang.clone()))
                         .unwrap_or_default();
                     passages::record(base + i, &chunk[i].path, res.pages, &pg, &words, &lang);
                 }
+                if pagenum::enabled() {
                     printed_nums.push(legatorocr_core::quality::detect_page_number(
                         &words,
                         pg.image.height(),
