@@ -15,6 +15,8 @@ struct Rec {
     w: u32,
     h: u32,
     thumb: Vec<u8>,
+    /// Boxes (x, y, w, h) of the words written to the text layer, in page pixels.
+    words: Vec<[u32; 4]>,
 }
 
 static RECS: Mutex<Vec<Rec>> = Mutex::new(Vec::new());
@@ -35,7 +37,7 @@ fn thumb(img: &image::DynamicImage) -> Vec<u8> {
 }
 
 /// Note a page that is being added to the PDF (in PDF order).
-pub fn record(pg: &Page) {
+pub fn record(pg: &Page, words: &[legatorocr_core::Word]) {
     if !enabled() {
         return;
     }
@@ -48,6 +50,7 @@ pub fn record(pg: &Page) {
         w: img.width(),
         h: img.height(),
         thumb: thumb(&img),
+        words: words.iter().map(|w| [w.x, w.y, w.w, w.h]).collect(),
     };
     if let Ok(mut v) = RECS.lock() {
         v.push(r);
@@ -85,6 +88,26 @@ fn verify(pdf: &[u8], recs: &[Rec]) -> (bool, Vec<String>) {
                     ok = false;
                     continue;
                 }
+                if !r.words.is_empty() {
+                    let (empty, found) = words_on_ink(&p.image.to_luma8(), &r.words);
+                    let text_words = doc.page_text(i).map_or(0, |t| t.split_whitespace().count());
+                    if text_words * 10 < r.words.len() * 9 {
+                        lines.push(format!(
+                            "page {}: text layer holds {text_words} word(s), {} were written",
+                            i + 1,
+                            r.words.len()
+                        ));
+                        ok = false;
+                    }
+                    if empty >= 3 && empty * 20 > found + empty {
+                        lines.push(format!(
+                            "page {}: {empty} of {} text-layer boxes lie on blank paper (the text layer does not match the picture)",
+                            i + 1,
+                            found + empty
+                        ));
+                        ok = false;
+                    }
+                }
                 let t = thumb(&p.image);
                 let d = t.iter().zip(&r.thumb).map(|(a, b)| (*a as f64 - *b as f64).abs()).sum::<f64>()
                     / t.len() as f64;
@@ -111,6 +134,34 @@ fn verify(pdf: &[u8], recs: &[Rec]) -> (bool, Vec<String>) {
     (ok, lines)
 }
 
+/// Count text-layer boxes with no ink under them (`.0`) and with ink (`.1`). A box is blank when
+/// its grey range is under 40 levels: recognised words always have dark strokes on light paper
+/// (or the reverse), so a box on flat paper means the layer is shifted or scaled.
+fn words_on_ink(img: &image::GrayImage, words: &[[u32; 4]]) -> (usize, usize) {
+    let (mut empty, mut found) = (0, 0);
+    for &[x, y, w, h] in words {
+        let (x1, y1) = ((x + w).min(img.width()), (y + h).min(img.height()));
+        if x >= x1 || y >= y1 {
+            empty += 1;
+            continue;
+        }
+        let (mut lo, mut hi) = (255u8, 0u8);
+        for yy in y..y1 {
+            for xx in x..x1 {
+                let v = img.get_pixel(xx, yy).0[0];
+                lo = lo.min(v);
+                hi = hi.max(v);
+            }
+        }
+        if hi.saturating_sub(lo) < 40 {
+            empty += 1;
+        } else {
+            found += 1;
+        }
+    }
+    (empty, found)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,7 +186,7 @@ mod tests {
 
     fn rec_of(p: &Page) -> Rec {
         let img = p.image.to_dynamic();
-        Rec { w: img.width(), h: img.height(), thumb: thumb(&img) }
+        Rec { w: img.width(), h: img.height(), thumb: thumb(&img), words: Vec::new() }
     }
 
     fn pdf_of(pages: &[Page]) -> Vec<u8> {
@@ -195,11 +246,24 @@ mod tests {
         let pdf = w.finish();
         let rec = |p: &Page| {
             let img = image::DynamicImage::ImageRgb8(p.layers.as_ref().unwrap().compose());
-            Rec { w: img.width(), h: img.height(), thumb: thumb(&img) }
+            Rec { w: img.width(), h: img.height(), thumb: thumb(&img), words: Vec::new() }
         };
         assert!(verify(&pdf, &[rec(&a), rec(&b)]).0);
         let (ok, lines) = verify(&pdf, &[rec(&b), rec(&a)]);
         assert!(!ok && lines.iter().any(|l| l.contains("differs")), "{lines:?}");
+    }
+
+    #[test]
+    fn boxes_on_blank_paper_are_counted() {
+        let mut img = image::GrayImage::from_pixel(200, 100, image::Luma([255]));
+        for x in 20..60 {
+            for y in 20..40 {
+                img.put_pixel(x, y, image::Luma([0]));
+            }
+        }
+        // one box on the ink, one beside it, one outside the page
+        let (empty, found) = words_on_ink(&img, &[[10, 15, 60, 30], [100, 20, 40, 20], [500, 5, 10, 10]]);
+        assert_eq!((empty, found), (2, 1));
     }
 
     trait ClonePage {

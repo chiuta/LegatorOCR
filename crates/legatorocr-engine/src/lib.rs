@@ -941,7 +941,7 @@ pub fn run_export(
                             last_src = Some(key);
                         }
                     }
-                    certify::record(&pg);
+                    certify::record(&pg, &words);
                     if formfields::enabled() {
                         let f = formfields::for_page(&pg);
                         res.form_fields += f.len();
