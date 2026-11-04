@@ -11,9 +11,11 @@ Full licence text: <https://creativecommons.org/licenses/by-sa/4.0/legalcode>.
 Changes made: only the 40 000 most frequent entries per language were kept, converted to lowercase,
 and entries containing characters other than letters were dropped. wordfreq's own data derives from
 public corpora (among them Wikipedia, subtitles, news, books, the web); see its README for the list.
+Its NOTICE also asks for credit to the authors of the SUBTLEX word-frequency lists (Brysbaert & New and the
+language-specific SUBTLEX projects) whose data it includes; that credit is given here.
 
 **The recogniser model is not covered by the switch below.** `crates/legatorocr-nocr/models/multi.lnm`
-(always compiled in) was trained on text sampled from the same wordfreq lists (`tools/ocr-train/synth.py`).
+(always compiled in) was trained on text sampled from the same wordfreq lists (`tools/ocr-train/synth.py`) and later fine-tuned on real scanned lines; see `docs/audit/assets-licences.md` (risk R1) for the open rights question.
 Whether trained weights count as an adaptation of that data under CC BY-SA is not settled by any court
 or by this project; it has not been decided here. If that matters for your distribution, ask a lawyer or
 retrain the model on text you are free to use (replace `synth.py`'s word source) before shipping.
