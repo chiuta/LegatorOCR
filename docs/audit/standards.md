@@ -11,7 +11,7 @@ COMPARISON / code say. Anything not opened is in the last section; nothing there
 | ALTO | 4.4 (validator); `schemaLocation` in `xmlout.rs` names `alto-4-2.xsd`, namespace `ns-v4#` | 4.4 is the latest official (Apr 2023); no 4.5 / 5.0 file in the schema repo (HTTP 404) | No. Cosmetic: our output points to the 4.2 schema file, same namespace (TODO 3) | loc.gov/standards/alto/ ; altoxml/schema README (raw) ; altoxml documentation wiki "Versions" |
 | PAGE XML (PRImA) | writes namespace 2019-07-15; validator rewrites it to 2024-07-15 | master `pagecontent.xsd` has `targetNamespace` ...`/pagecontent/2024-07-15` (read raw). The repo README of PAGE-XML still lists only 2019-07-15 | No (repo statement confirmed). We still emit the older namespace on purpose; consumers (OCR-D, Transkribus, eScriptorium) mostly read 2019 (not checked here) | raw PAGE-XML master `pagecontent/schema/pagecontent.xsd` |
 | OCFL | 1.1 (`ocfl-1.1`, validated by ocfl-py) | Zenodo record "Oxford Common File Layout - Specification": version 1.1.1, 2024-11-22. Whether 1.1.1 changes the object `conformance` string was NOT established (ocfl.io blocked); ocfl-py still validates our object as "OCFL v1.1" | Probably not (1.1.1 looks like a patch/editorial release); unverified | zenodo.org/records/7157195/latest |
-| MCP protocol | `2024-11-05` hard-coded in `mcp.rs` | Latest revision is **2026-07-28** (stable, released 2026-07-28). Previous: 2025-11-25. Changes below | **Yes, two or three revisions behind** | modelcontextprotocol.io/specification/2026-07-28/changelog ; github release tag 2026-07-28 |
+| MCP protocol | dual era 2024-11-05 + 2026-07-28 since 2026-11-04 (was 2024-11-05 only) | Latest revision is **2026-07-28** (stable, released 2026-07-28). Previous: 2025-11-25. Changes below | **Yes, two or three revisions behind** | modelcontextprotocol.io/specification/2026-07-28/changelog ; github release tag 2026-07-28 |
 | TEI P5 | "TEI P5", namespace `http://www.tei-c.org/ns/1.0` | Guidelines release 4.12.0 dated 2026-07-28 (dev branch VERSION 4.13.0a). Namespace unchanged | No. Our output is not schema-checked (RELAX NG could not be fetched: generated file, tei-c.org blocked from shell) | tei-c.org/guidelines/P5/ ; raw TEIC/TEI dev `P5/VERSION` |
 | PDF 2.0 / ISO 32000-2 | not implemented (writer stays inside PDF 1.4) | 2020 edition; Amendment 1 in publication | n/a | pdfa.org/iso-status/ |
 | PDF/A-1, -2, -3 | -1b / -2b (default) / -3b declared | ISO 19005-1 (2005), -2 (2011), -3 (2012): no revision in progress | No | pdfa.org/iso-status/ |
@@ -57,7 +57,7 @@ shows schema validity of the structure, not OCR quality.
 
 ## TODO (needs code; none done here, no rebuild allowed)
 
-1. **MCP 2026-07-28** (`mcp.rs`): add a dual-era mode like the SDKs do: keep `initialize` for legacy clients and add
+1. **MCP 2026-07-28 — DONE 2026-11-04** (see ROADMAP 7.1; original plan kept below): add a dual-era mode like the SDKs do: keep `initialize` for legacy clients and add
    `server/discover` (supported versions list, capabilities, serverInfo), accept `_meta`
    `io.modelcontextprotocol/protocolVersion` + `clientCapabilities` on each request, add `resultType:"complete"` to
    results, answer an unsupported version with -32022 (`UnsupportedProtocolVersion`, `data.supported` /

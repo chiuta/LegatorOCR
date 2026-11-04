@@ -1,5 +1,7 @@
 //! A Model Context Protocol server over stdio (roadmap 7.1): `legatorocr --mcp`. Newline-
-//! delimited JSON-RPC 2.0 as used by MCP's stdio transport (protocol version 2024-11-05).
+//! delimited JSON-RPC 2.0 as used by MCP's stdio transport. Dual era: the legacy revision 2024-11-05 (with
+//! `initialize`) and the stateless revision 2026-07-28 (per-request `_meta` version, `server/discover`,
+//! `resultType`, `ttlMs`/`cacheScope`, error -32022), chosen per request.
 //!
 //! Each tool runs this same program as a child process with a fixed argument list built from the
 //! tool's arguments (no shell, no free-form flags), so the server can do nothing the command line
@@ -364,6 +366,38 @@ fn error(id: &J, code: i64, msg: &str) -> String {
     .render()
 }
 
+const MODERN_VERSION: &str = "2026-07-28";
+const META_VERSION_KEY: &str = "io.modelcontextprotocol/protocolVersion";
+
+fn server_info() -> J {
+    J::Obj(vec![("name".into(), J::Str("legatorocr".into())), ("version".into(), J::Str(env!("CARGO_PKG_VERSION").into()))])
+}
+
+fn error_with_data(id: &J, code: i64, msg: &str, data: J) -> String {
+    J::Obj(vec![
+        ("jsonrpc".into(), J::Str("2.0".into())),
+        ("id".into(), id.clone()),
+        (
+            "error".into(),
+            J::Obj(vec![("code".into(), J::Num(code as f64)), ("message".into(), J::Str(msg.into())), ("data".into(), data)]),
+        ),
+    ])
+    .render()
+}
+
+/// Add the 2026-07-28 result fields (`resultType`, optional cache hints) to a result object.
+fn modernise(mut result: J, cache: bool) -> J {
+    if let J::Obj(v) = &mut result {
+        v.push(("resultType".into(), J::Str("complete".into())));
+        if cache {
+            v.push(("ttlMs".into(), J::Num(0.0)));
+            v.push(("cacheScope".into(), J::Str("public".into())));
+        }
+        v.push(("_meta".into(), J::Obj(vec![("io.modelcontextprotocol/serverInfo".into(), server_info())])));
+    }
+    result
+}
+
 /// Handle one request line; `None` for notifications.
 pub fn handle(line: &str, exe: &Path) -> Option<String> {
     let Some(req) = parse(line) else {
@@ -372,7 +406,32 @@ pub fn handle(line: &str, exe: &Path) -> Option<String> {
     let id = req.get("id").cloned();
     let method = req.get("method").and_then(J::str).unwrap_or("");
     let id = id?;
+    let requested = req.get("params").and_then(|p| p.get("_meta")).and_then(|m| m.get(META_VERSION_KEY)).and_then(J::str);
+    let modern = requested.is_some();
+    if let Some(v) = requested {
+        if v != MODERN_VERSION {
+            let data = J::Obj(vec![
+                ("supported".into(), J::Arr(vec![J::Str(MODERN_VERSION.into())])),
+                ("requested".into(), J::Str(v.into())),
+            ]);
+            return Some(error_with_data(&id, -32022, "Unsupported protocol version", data));
+        }
+    }
+    let wrap = |r: J, cache: bool| if modern { modernise(r, cache) } else { r };
     Some(match method {
+        "server/discover" => reply(
+            &id,
+            modernise(
+                J::Obj(vec![
+                    ("supportedVersions".into(), J::Arr(vec![J::Str(MODERN_VERSION.into())])),
+                    ("capabilities".into(), J::Obj(vec![("tools".into(), J::Obj(vec![]))])),
+                    ("serverInfo".into(), server_info()),
+                ]),
+                true,
+            ),
+        ),
+        "initialize" if modern => error(&id, -32601, "method not found: initialize is removed in 2026-07-28"),
+        "ping" if modern => error(&id, -32601, "method not found: ping is removed in 2026-07-28"),
         "initialize" => reply(
             &id,
             J::Obj(vec![
@@ -385,7 +444,7 @@ pub fn handle(line: &str, exe: &Path) -> Option<String> {
             ]),
         ),
         "ping" => reply(&id, J::Obj(vec![])),
-        "tools/list" => reply(&id, J::Obj(vec![("tools".into(), tools())])),
+        "tools/list" => reply(&id, wrap(J::Obj(vec![("tools".into(), tools())]), true)),
         "tools/call" => {
             let p = req.get("params").cloned().unwrap_or(J::Null);
             let name = p.get("name").and_then(J::str).unwrap_or("");
@@ -406,10 +465,13 @@ pub fn handle(line: &str, exe: &Path) -> Option<String> {
             };
             reply(
                 &id,
-                J::Obj(vec![
-                    ("content".into(), J::Arr(vec![J::Obj(vec![("type".into(), J::Str("text".into())), ("text".into(), J::Str(text))])])),
-                    ("isError".into(), J::Bool(is_err)),
-                ]),
+                wrap(
+                    J::Obj(vec![
+                        ("content".into(), J::Arr(vec![J::Obj(vec![("type".into(), J::Str("text".into())), ("text".into(), J::Str(text))])])),
+                        ("isError".into(), J::Bool(is_err)),
+                    ]),
+                    false,
+                ),
             )
         }
         _ => error(&id, -32601, "method not found"),
@@ -459,6 +521,27 @@ mod tests {
         // an invalid argument is reported as a tool error, not run
         let e = handle(r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"efactura","arguments":{"file":"--watch"}}}"#, exe).unwrap();
         assert!(e.contains("\"isError\":true") && e.contains("not an acceptable path"));
+    }
+
+    #[test]
+    fn modern_era_2026_07_28() {
+        let exe = Path::new("/nonexistent/legatorocr");
+        let m = r#""_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}"#;
+        let d = handle(&format!(r#"{{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{{{m}}}}}"#), exe).unwrap();
+        for k in ["supportedVersions", "2026-07-28", "capabilities", "resultType", "complete"] {
+            assert!(d.contains(k), "{k}: {d}");
+        }
+        // legacy clients can probe too
+        assert!(handle(r#"{"jsonrpc":"2.0","id":9,"method":"server/discover"}"#, exe).unwrap().contains("supportedVersions"));
+        let l = handle(&format!(r#"{{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{{{m}}}}}"#), exe).unwrap();
+        assert!(l.contains("\"resultType\":\"complete\"") && l.contains("ttlMs") && l.contains("cacheScope"), "{l}");
+        // the legacy answer stays untouched
+        let old = handle(r#"{"jsonrpc":"2.0","id":3,"method":"tools/list"}"#, exe).unwrap();
+        assert!(!old.contains("resultType") && !old.contains("ttlMs"));
+        // removed methods and unknown versions
+        assert!(handle(&format!(r#"{{"jsonrpc":"2.0","id":4,"method":"ping","params":{{{m}}}}}"#), exe).unwrap().contains("-32601"));
+        let bad = handle(r#"{"jsonrpc":"2.0","id":5,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2031-01-01"}}}"#, exe).unwrap();
+        assert!(bad.contains("-32022") && bad.contains("\"supported\":[\"2026-07-28\"]") && bad.contains("\"requested\":\"2031-01-01\""), "{bad}");
     }
 
     #[test]
