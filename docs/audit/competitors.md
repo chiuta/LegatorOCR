@@ -34,3 +34,17 @@ Scope: `COMPARISON.md`, `docs/ADVERSARIAL-ANALYSIS.md`. Method: live pages throu
 - Whether FanMode can use `ron` Tesseract data (README mentions only Arabic/English data), and its real output quality.
 
 Deleted afterwards: scratch downloads in the session scratchpad.
+
+## Added 2026-11-05 (live pages in a real browser; GitHub search by recent activity; nothing was run)
+
+| Tool | What the page says | Read |
+|---|---|---|
+| ScanTailor OCR (github.com/2ndmax/scantailor-ocr, scantailorocr.eu) | GPL-3, built on ScanTailor Advanced; built-in PDF export (lossless JBIG2 for B/W, layered for mixed, PDF/A-2b), Tesseract text layer, watched folder, `scantailor-ocr-cli`; Windows + Linux; UI English and German; 1.0.11 on 2026-11-01; 356 commits, 0 stars, 0 forks. Romanian OCR not confirmed. | **Direct competitor**: it does what COMPARISON.md called LegatorOCR's distinguishing chain, on a mature interactive base. |
+| EVB Viewer (github.com/evb0110/evb-viewer) | MIT; Rust cleanup engine (deskew, despeckle, binarise, crop, split), Tesseract OCR in 31 languages (English and Russian bundled), searchable PDF, DOCX, DjVu, annotations, local MCP server; macOS (Apple Silicon), Windows, Linux x64/ARM64, browser build; v0.1.502 on 2026-11-02; SHA256SUMS and provenance files. Romanian not named in the page text read. | Direct competitor with more platforms than LegatorOCR has verified. |
+| Aglaïa (github.com/yb85/aglaia) | Webcam/PDF book scanner, deskew + dewarp, searchable PDF; PolyForm Shield licence (not an OSI open-source licence); 0.1.0rc11 on 2026-10-28; "alpha, it will crash", tested mainly on macOS. | Overlaps on book scanning; different capture focus. |
+| ScanTailor PDF+ (github.com/Atelier-Recherche/scantailor-pdf-plus) | GPL-3 fork of ScanTailor Experimental; PDF import/export; Windows x64 zip; 1.2026.08.08 on 2026-08-20; OCR "out of scope". | PDF without OCR. |
+| NAPS2 | 8.6.0 on 2026-10-25. | Scanning + OCR; not a post-processor. |
+
+Not read, seen only in lists or search results: scantailor-deviant, mrcpdf / mrc-pdf-kompressor (MRC compression), scanbutler, ocrmypdf-rs (Rust crate), franken_ocr, hocr-files-template-repo, ScanPostProcess. Commercial book tools (BookDrive Editor Pro, Booksorber, LIMB, ScanGate LWF) come from an awesome-list; activity today not checked.
+
+Measured on 2026-11-05 on the 12 evaluation pages: OCRmyPDF 17.13.0 (Tesseract `ron` fast, PDF/A-2b, no unpaper/pngquant/JBIG2) CER 4.82 % GOOD8, 7.88 % ALL12, against 4.54 % / 7.81 % for LegatorOCR with the same Tesseract; PDFs 4.2-7.6 MB against 0.7-1.4 MB (not equal image quality); 3.3-7.7 s against 2.0-5.7 s (Tesseract) and 1.6-3.3 s (native) per page. Prices read from vendor pages: ABBYY FineReader PDF 99 EUR/yr Standard, 165 EUR/yr Corporate, 69 EUR/yr Mac (pdf.abbyy.com/pricing); Adobe Acrobat Pro 24.19 EUR/month, Standard 18.30 EUR/month incl. VAT, annual billed monthly (adobe.com/acrobat/pricing, Romania). IRIS lists Readiris 16 and its Readiris 17 page returned 404.

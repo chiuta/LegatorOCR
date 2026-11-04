@@ -1,5 +1,7 @@
 # LegatorOCR compared with the field (as of 2 November 2026; selected cells re-verified 4 November 2026)
 
+> **5 Nov update (supersedes the 'distinguishing chain' claims in section 6):** ScanTailor OCR (GPL-3, 1.0.11, 2026-11-01) and EVB Viewer (MIT, 0.1.502, 2026-11-02) also take scans through clean-up, OCR and a searchable PDF in one program, with a more mature interface; see `docs/audit/competitors.md`. Vendor prices are in euro (ABBYY 99 EUR/yr Standard; Acrobat Pro 24.19 EUR/month incl. VAT).
+>
 > Updated 4 Nov: for the harsher, claim-by-claim critique see `docs/ADVERSARIAL-ANALYSIS.md`. Re-verified against live sources on 2026-11-04 (details and "could not verify" list in `docs/audit/competitors.md`).
 >
 > **4 Nov conflict resolved:** the ScanTailor Advanced README (vigri and 4lex4 repos, read raw) says "scanning, optical character recognition, and assembling multi-page documents are out of scope", and no release note of v1.0.17-v1.2.1 mentions PDF export. Only the anonymous community site scantailor.net says "Export as high-contrast TIFF, PDF, or layers" in one step, while its own format list says "TIFF, JPEG, PNG" and its OCR advice is "import ScanTailor's TIFFs". So: **no native PDF export is documented by the project; the site's PDF line is unsupported.** Not tested by running the program.
