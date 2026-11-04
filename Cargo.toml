@@ -17,7 +17,7 @@ edition = "2021"
 rust-version = "1.95"
 license = "MIT"
 authors = ["Alexio <alexio@trom.tf>", "Alexandru Dumbravă"]
-repository = "https://github.com/chiuta/legatorocr"
+repository = "https://github.com/chiuta/LegatorOCR"
 
 [workspace.dependencies]
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff", "bmp"] }

@@ -241,8 +241,8 @@ No gate promises near-zero CER. Report CER with a confidence interval; zero erro
 ## Source of these additions
 
 Added on 2 November 2026 after reading Alexandru Dumbravă's portfolio and digitisation guide
-(<https://dumbravaalex.github.io/Portofoliu/>, 12 pages). His blog (competentedigitalizare.blogspot.com) could not be fetched from this
-environment, so nothing here is taken from it. Only the *workflow ideas* are used, never code of the tools he names.
+(<https://dumbravaalex.github.io/Portofoliu/>, 12 pages). His blog (<https://competentedigitalizare.blogspot.com/>, "HUB DIGITAL" workshop) could not be fetched in the first pass (2 Nov; re-checked and reachable on 4 Nov 2026, see docs/audit/links.md), so
+nothing here is taken from it. Only the *workflow ideas* are used, never code of the tools he names.
 
 What the guide recommends and where we stand:
 
