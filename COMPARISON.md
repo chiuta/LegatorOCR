@@ -1,5 +1,7 @@
 # LegatorOCR compared with the field (as of 2 November 2026)
 
+> Updated 4 Nov: for the harsher, claim-by-claim critique see `docs/ADVERSARIAL-ANALYSIS.md`. Known conflict not yet resolved here: scantailor.net says ScanTailor Advanced "vigri" can output PDF, while the table in §3 says images only.
+
 This file compares LegatorOCR with the scan post-processing tools (ScanTailor family), the commercial OCR/PDF suites and the
 open-source and cloud OCR engines. It was compiled on 2026-11-02 from vendor pages, release notes, package indexes and
 third-party articles; LegatorOCR's own claims come from tests run here.
@@ -77,7 +79,7 @@ Prices are list prices seen on 2026-11-02 mostly via aggregators (currency often
 | PDF/A | ✔ 1a–3u, PDF/UA | ? (third party: A-2b/3b) | ✔ A-1…A-4 | ? | ? | ? | ? | Mac ✔ | ✔ (Win) | ◐ A-2b, veraPDF on samples only, not a certification |
 | Compression | ✔ MRC + PreciseScan smoothing; JBIG2 as export format | ? | ✔ MRC, "8× smaller" (vendor) | ? | "compression" ? | ? | downsample only | ? | ? | ✔ G4, hybrid layers, JBIG2/JPEG2000 on input |
 | DOCX export | ✔ | ? | ? | ? | Word/Excel ✔ | ? | ? | ? | ? | ✔ with columns and tables (limits §7) |
-| hOCR / ALTO | not documented | ? | ? | ? | ? | ? | ? | ? | ? | hOCR ✔, ALTO ✘ |
+| hOCR / ALTO | not documented | ? | ? | ? | ? | ? | ? | ? | ? | hOCR ✔, ALTO 4.4 ✔ and PAGE ✔ (schema-validated, see ROADMAP 1.3) |
 | Batch / hot folder | Hot Folder (limits and edition ?); CLI saving needs an "Extended CLI" licence | Action Wizard incl. "Optimize Scanned Documents" | watched folder ✔ | Batch Manager ✔ | batch + watch folder | ? | multi-file OCR ✔ | Mac batch ✔ | batch ✔ | CLI + GUI batch |
 | Local / offline | local components; not explicitly stated | desktop ?; AI Assistant is cloud | ? | ✔ local | listed | OCR language files are downloaded on demand; empty list without internet | ? | ? | ? | ✔ |
 
@@ -141,7 +143,7 @@ record. LegatorOCR is young (0.2 pre-release), has a single author and no extern
 - PDF/A: output samples pass veraPDF PDF/A-2b in CI; that is not a certification of every output.
 - Windows, macOS and ARM64 builds come from CI. The CLI binary is smoke-tested there; the GUI was exercised by hand only
   on Linux x86-64 (under a virtual display).
-- Native OCR: real-page CER 17.5 % vs Tesseract 14.6 % on 12 pages; weaker on narrow gutters and noisy pages.
+- Native OCR: see ROADMAP 4.11/4.15/4.16 and `docs/ADVERSARIAL-ANALYSIS.md`: behind Tesseract on single-column pages (5.72 vs 4.54 % CER) and on the 1960 book page (recall 72.5 vs 91.2 %); the 17.5 vs 14.6 % figures in §2 used an older, flawed reference.
 - Dewarp corrects vertical bend only. Word export of complicated tables is heuristic.
 - Palette and high-throughput JPEG 2000 and JBIG2 Huffman refinement with empty symbols need an external renderer.
 - 7z was tested with real archives; RAR through a hand-built RAR4 archive and the 7z reader only, not with files made by
