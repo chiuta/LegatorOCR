@@ -16,8 +16,11 @@ def read(globs):
     return t
 docs = read(["README.md", "ROADMAP.md", "docs/**/*.md", "docs/**/*.html"])
 tests = read(["crates/**/tests/*.rs", "crates/**/src/**/*.rs", ".github/workflows/*.yml", "scripts/*.py", "scripts/*.sh", "web/*.js"])
+only_tests = read(["crates/**/tests/*.rs", ".github/workflows/*.yml", "scripts/*.py", "scripts/*.sh", "web/*.js"]).replace("\\\"", "\"")
 nodoc = [o for o in opts if o not in docs]
-notest = [o for o in opts if o not in tests.replace("\\\"", "\"") or tests.count(o) < 2]
+# used in a test file or script at least once; the sources count only when the option appears twice there
+# (once is just the definition)
+notest = [o for o in opts if o not in only_tests and tests.replace("\\\"", "\"").count(o) < 2]
 print(f"{len(opts)} options; without documentation: {len(nodoc)}; without a test or script use: {len(notest)}")
 for o in nodoc: print("  no doc :", o)
 for o in notest: print("  no test:", o)
