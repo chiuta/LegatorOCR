@@ -144,6 +144,119 @@ check(r3.returncode == 0 and b"engine-onnx" in r3.stdout, "--version")
 r4 = subprocess.run([sys.executable, str(engine), "stdin", "stdout", "tsv"], input=b"x", capture_output=True, env=env2)
 check(r4.returncode != 0 and b"LEGATOROCR_ONNX_REC" in r4.stderr, "missing model path gives a clear error")
 
+# ---------------------------------------------------------------------------------------------------
+# docTR family (ROADMAP 4.33), SYNTHETIC models again: plumbing, geometry, reading order. No accuracy claim.
+import importlib.util
+spec = importlib.util.spec_from_file_location("engine_onnx", str(engine))
+eo = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(eo)
+
+# unit: merging two overlapping piece readings, splitting of wide crops, recogniser input padding, letterbox
+check(eo.merge_pair("abcde", "cdefgh", 0.5) == "abcdefgh", "merge_pair joins overlapping readings: %r" % eo.merge_pair("abcde", "cdefgh", 0.5))
+check(eo.merge_pair("abcdi", "cdefgh", 0.5) == "abcdefgh", "merge_pair tolerates a cut-off outer letter")
+pcs, last = eo.split_pieces(Image.new("RGB", (400, 30)))
+check(len(pcs) >= 3 and all(p.size == (180, 30) for p in pcs) and 0.0 <= last < 1.0, "wide crop (13:1) is split into %d pieces of 6 x height" % len(pcs))
+check(len(eo.split_pieces(Image.new("RGB", (200, 30)))[0]) == 1, "a 6.7:1 crop is not split")
+ri = eo.rec_input(Image.new("RGB", (64, 32), (255, 255, 255)))
+padv = -eo.DOCTR_REC_MEAN[0] / eo.DOCTR_REC_STD[0]
+check(ri.shape == (3, 32, 128) and abs(ri[0, 5, 100] - padv) < 1e-4 and ri[0, 5, 10] > 1.0,
+      "recogniser input 3x32x128: image left, black padding right (normalised %.2f), white normalised %.2f" % (padv, ri[0, 5, 10]))
+ri2 = eo.rec_input(Image.new("RGB", (256, 32), (255, 255, 255)))
+check(abs(ri2[0, 5, 5] - ri[0, 5, 10]) < 1e-4 and abs(ri2[0, 20, 5] - padv) < 1e-4, "a 8:1 crop is scaled to width 128 (height 16) and padded at the bottom")
+lb, sc, pl, pt = eo.letterbox(Image.new("RGB", (400, 200), (255, 255, 255)), 64)
+check(lb.shape == (64, 64, 3) and pl == 0 and pt == 16 and abs(sc - 0.16) < 1e-9 and lb[0, 0, 0] == 0 and lb[32, 32, 0] == 255,
+      "letterbox: aspect kept, symmetric black padding (pad_top %d), scale %.2f" % (pt, sc))
+
+# unit: reading order. Two justified columns (4 lines x 6 words each) and one stray box across the gutter
+items = []
+for col, cx in enumerate((100, 700)):
+    for ln in range(4):
+        for wd in range(6):
+            items.append(((cx + wd * 60, 200 + ln * 60, cx + wd * 60 + 50, 240 + ln * 60), (col, ln, wd)))
+items.append(((450, 500, 760, 540), (1, 9, 9)))  # crosses the gutter, centre in the right column
+blocks = eo.xy_cut(items, 20.0)
+order_ = [it[1] for b in blocks for ln in eo.doctr_lines(b) for it in ln]
+cols = [p[0] for p in order_]
+check(cols == sorted(cols), "XY cut: the whole left column is read before the right one (stray box crossing the gutter tolerated)")
+check([p[:2] for p in order_[:24]] == [(0, l) for l in range(4) for _ in range(6)], "left column: lines top to bottom, words left to right within a line")
+single = [((10 + i * 60, 100, 60 + i * 60, 140), i) for i in range(5)] + [((10 + i * 60, 160, 60 + i * 60, 200), 5 + i) for i in range(5)]
+check([p for b in eo.xy_cut(single, 20.0) for ln in eo.doctr_lines(b) for _, p in ln] == list(range(10)), "single column: line by line")
+
+# e2e: a docTR-layout detector (sigmoid(6*(R-B-1.5)) on the normalised input: text = yellow on white, the black padding gives 0)
+DETS = {"mean": eo.DOCTR_DET_MEAN, "std": eo.DOCTR_DET_STD}
+xd = H.make_tensor_value_info("input", TP.FLOAT, ["b", 3, 1024, 1024])
+yd = H.make_tensor_value_info("logits", TP.FLOAT, ["b", 1, 1024, 1024])
+save([H.make_node("Slice", ["input", "s0", "e0", "ax"], ["r"]),
+      H.make_node("Slice", ["input", "s2", "e2", "ax"], ["bl"]),
+      H.make_node("Sub", ["r", "bl"], ["df"]),
+      H.make_node("Sub", ["df", "c"], ["df2"]),
+      H.make_node("Mul", ["df2", "k"], ["logits"])], [xd], [yd],
+     [NH.from_array(np.array([0], np.int64), "s0"), NH.from_array(np.array([1], np.int64), "e0"),
+      NH.from_array(np.array([2], np.int64), "s2"), NH.from_array(np.array([3], np.int64), "e2"),
+      NH.from_array(np.array([1], np.int64), "ax"),
+      NH.from_array(np.array(1.5, np.float32), "c"), NH.from_array(np.array(6.0, np.float32), "k")], "ddet.onnx")
+# recogniser: fixed output "Bună ăț" for every crop; vocabulary as ONE string, blank = last class
+VOC = "BunățĂ0"
+WORD = "Bună"
+TT = 32
+SEQ2 = list(WORD)
+steps = []
+for ch in SEQ2:
+    steps += [ch, None]
+steps = steps + [None] * (TT - len(steps))
+lg2 = np.full((1, TT, len(VOC) + 1), 0.0, np.float32)
+for t, ch in enumerate(steps):
+    lg2[0, t, len(VOC) if ch is None else VOC.index(ch)] = 12.0
+xr2 = H.make_tensor_value_info("input", TP.FLOAT, ["b", 3, 32, 128])
+yr2 = H.make_tensor_value_info("logits", TP.FLOAT, ["b", TT, len(VOC) + 1])
+save([H.make_node("ReduceSum", ["input", "axs"], ["s"], keepdims=0),
+      H.make_node("Mul", ["s", "zero"], ["s0"]),
+      H.make_node("Reshape", ["s0", "shp"], ["s1"]),
+      H.make_node("Add", ["lg", "s1"], ["logits"])], [xr2], [yr2],
+     [NH.from_array(np.array(0.0, np.float32), "zero"), NH.from_array(np.array([-1, 1, 1], np.int64), "shp"),
+      NH.from_array(np.array([1, 2, 3], np.int64), "axs"),
+      NH.from_array(lg2, "lg")], "drec.onnx")
+(d / "vocab.txt").write_text(VOC, encoding="utf-8")
+# page: white, 2 columns x 3 lines of 4 yellow word blocks each (so the order is only decidable with the column cut)
+W2, H2 = 1240, 1754
+pg = Image.new("RGB", (W2, H2), (255, 255, 255))
+dg = ImageDraw.Draw(pg)
+WB = []
+for ci, cx in enumerate((100, 700)):
+    for ln in range(3):
+        for wd in range(4):
+            b = (cx + wd * 130, 300 + ln * 90, cx + wd * 130 + 110, 300 + ln * 90 + 40)
+            WB.append((ci, ln, wd, b))
+            dg.rectangle([b[0], b[1], b[2] - 1, b[3] - 1], fill=(255, 255, 0))
+pg.save(d / "page2.png")
+envd = {k: v for k, v in os.environ.items() if not k.startswith("LEGATOROCR_ONNX")}
+envd.update(LEGATOROCR_ONNX_FAMILY="doctr", LEGATOROCR_ONNX_DET=str(d / "ddet.onnx"), LEGATOROCR_ONNX_REC=str(d / "drec.onnx"),
+            LEGATOROCR_ONNX_DICT=str(d / "vocab.txt"), LEGATOROCR_ONNX_UNCLIP="0")
+rd = subprocess.run([sys.executable, str(engine), "stdin", "stdout", "tsv"], input=(d / "page2.png").read_bytes(), capture_output=True, env=envd, timeout=300)
+check(rd.returncode == 0, "doctr family exit 0 (stderr: %s)" % rd.stderr.decode()[-300:])
+rowsd = [l.split("\t") for l in rd.stdout.decode("utf-8").splitlines()[1:]]
+check(len(rowsd) == len(WB) and all(x[11] == WORD for x in rowsd), "doctr: %d word blocks -> %d rows, text %r (blank = last class, non-ASCII ok)" % (len(WB), len(rowsd), WORD))
+if len(rowsd) == len(WB):
+    # reading order: column 0 (3 lines x 4 words) then column 1; line numbers 1..6; words left to right
+    exp = [b for (ci, ln, wd, b) in sorted(WB, key=lambda t: (t[0], t[1], t[2]))]
+    got = [tuple(int(v) for v in x[6:10]) for x in rowsd]
+    tol = 6
+    okpos = all(abs(g[0] - e[0]) <= tol and abs(g[1] - e[1]) <= tol and abs(g[0] + g[2] - e[2]) <= tol and abs(g[1] + g[3] - e[3]) <= tol for g, e in zip(got, exp))
+    check(okpos, "doctr: boxes (1024 letterbox mapped back to page pixels, unclip 0) in column-then-line reading order, within %d px" % tol)
+    check([int(x[4]) for x in rowsd] == [1] * 4 + [2] * 4 + [3] * 4 + [4] * 4 + [5] * 4 + [6] * 4, "doctr: line numbers group the words of one line")
+    check([int(x[5]) for x in rowsd[:4]] == [1, 2, 3, 4], "doctr: word numbers restart per line")
+# a vocabulary of the wrong size is a clear error, not garbage
+(d / "badvocab.txt").write_text("Bun", encoding="utf-8")
+rb = subprocess.run([sys.executable, str(engine), "stdin", "stdout", "tsv"], input=(d / "page2.png").read_bytes(), capture_output=True,
+                    env=dict(envd, LEGATOROCR_ONNX_DICT=str(d / "badvocab.txt")), timeout=300)
+check(rb.returncode == 3 and b"vocabulary" in rb.stderr, "doctr: wrong vocabulary size gives a clear error")
+# the flag works like the variable; an unknown family is refused; ppocr stays the default
+envn = {k: v for k, v in envd.items() if k != "LEGATOROCR_ONNX_FAMILY"}
+rf = subprocess.run([sys.executable, str(engine), "--onnx-family", "doctr", "stdin", "stdout", "tsv"], input=(d / "page2.png").read_bytes(), capture_output=True, env=envn, timeout=300)
+check(rf.returncode == 0 and rf.stdout == rd.stdout, "--onnx-family doctr gives the same as LEGATOROCR_ONNX_FAMILY=doctr")
+rx = subprocess.run([sys.executable, str(engine), "--onnx-family", "nope", "stdin", "stdout", "tsv"], input=b"x", capture_output=True, env=envn, timeout=60)
+check(rx.returncode == 2 and b"family" in rx.stderr, "unknown family is refused")
+
 # end to end through the CLI
 if len(sys.argv) > 1:
     exe = sys.argv[1]
@@ -161,5 +274,14 @@ if len(sys.argv) > 1:
             # the CLI crops the page to its content first, so absolute y moves; the distance between the lines must not
             check(abs((ys[1] - ys[0]) - (BLOCKS[1][1] - BLOCKS[0][1])) < 12,
                   "CLI: distance between lines %d vs %d in the source (coordinates survive the pipeline)" % (ys[1] - ys[0], BLOCKS[1][1] - BLOCKS[0][1]))
+if len(sys.argv) > 1:  # docTR family through the CLI: words and line structure arrive in the JSON
+    cmd2 = [sys.argv[1], str(d / "page2.png"), "--dpi", "150", "--ocr", "--lang", "ron", "--engine", "tesseract", "--tesseract", str(engine),
+            "--json", str(d / "o2.json"), "--no-deskew", "--no-auto-orient", "--split", "off", "--format", "none", "--out-dir", str(d / "out2")]
+    c2 = subprocess.run(cmd2, capture_output=True, text=True, env=envd, timeout=600)
+    check(c2.returncode == 0, "CLI with the doctr family exit 0 (%s)" % (c2.stderr or "")[-200:])
+    if c2.returncode == 0:
+        w2 = json.load(open(d / "o2.json"))["pages"][0]["words"]
+        check(len(w2) == len(WB) and all(w["text"] == WORD for w in w2) and len(set(w["line"] for w in w2)) == 6,
+              "CLI doctr: %d words in %d lines" % (len(w2), len(set(w["line"] for w in w2))))
 print("engine-onnx synthetic test: %s" % ("FAILED %d" % len(bad) if bad else "all ok (plumbing only, accuracy not measured)"))
 sys.exit(1 if bad else 0)
