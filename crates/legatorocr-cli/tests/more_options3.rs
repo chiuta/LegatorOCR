@@ -247,5 +247,19 @@ fn install_modules_prints_commands_and_runs_them_only_with_yes() {
     assert!(ran.contains("install qpdf"), "{ran}");
     assert!(t.contains("[FAILED]") && t.contains("mupdf-tools"), "{t}");
     assert_eq!(o.status.code(), Some(1));
+    // sealed mode: the same command installs nothing
+    std::fs::remove_file(&log).unwrap();
+    let o = run(&[
+        "--offline",
+        "--install-modules",
+        "qpdf",
+        "--yes",
+        "--package-manager",
+        "brew",
+    ]);
+    let t = String::from_utf8_lossy(&o.stdout);
+    assert!(!log.exists(), "brew was run in sealed mode");
+    assert!(t.contains("sealed mode") && t.contains("[FAILED]"), "{t}");
+    assert_eq!(o.status.code(), Some(1));
     let _ = std::fs::remove_dir_all(&dir);
 }

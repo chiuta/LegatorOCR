@@ -158,6 +158,7 @@ pub fn request(url: &str, digest: &[u8; 32]) -> Result<(Vec<u8>, Reply)> {
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         bail!("the time-stamp authority address must start with http:// or https://");
     }
+    crate::offline::refuse("a time-stamp request")?;
     let n = nonce();
     let req = build_request(digest, n);
     let tmp = std::env::temp_dir().join(format!("lgr_tsq_{}_{n}.tsq", std::process::id()));

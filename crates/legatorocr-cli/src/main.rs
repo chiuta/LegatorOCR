@@ -267,6 +267,19 @@ struct Cli {
     #[arg(long)]
     compare_text: bool,
 
+    /// Sealed mode: refuse the two features that use the network (--timestamp / time-stamp
+    /// requests and --install-modules). Also on when LEGATOROCR_OFFLINE=1. It is a refusal inside
+    /// this program, not a firewall: programs you point it at (Tesseract, an ONNX script) are
+    /// not restricted.
+    #[arg(long)]
+    offline: bool,
+
+    /// With --compare-text: also write FILE.html, the two texts merged word by word (words only in
+    /// the first struck out in red, words only in the second underlined in green). Works for two
+    /// editions of a book as well as for an OCR output against a corrected text.
+    #[arg(long, value_name = "FILE.html")]
+    diff_html: Option<PathBuf>,
+
     /// Show which of the eight interface languages (ro en fr it es pt de hu) have a
     /// recognition model installed, and how to get the missing ones; then exit.
     #[arg(long)]
@@ -1326,6 +1339,7 @@ fn watch_loop(cli: &Cli, dir: &std::path::Path) -> Result<()> {
 
 fn real_main() -> Result<()> {
     let mut cli = Cli::parse();
+    legatorocr_engine::offline::set(cli.offline);
     if cli.force_ocr {
         cli.ocr_mode = Some("force".into());
         cli.ocr = true;
@@ -1493,7 +1507,33 @@ fn real_main() -> Result<()> {
         let rd = |p: &PathBuf| {
             std::fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))
         };
-        let x = legatorocr_engine::eval::rates(&rd(r)?, &rd(h)?);
+        let (ta, tb) = (rd(r)?, rd(h)?);
+        if let Some(out) = &cli.diff_html {
+            let (wa, wb) = (
+                legatorocr_engine::textdiff::words(&ta),
+                legatorocr_engine::textdiff::words(&tb),
+            );
+            let ops = legatorocr_engine::textdiff::diff(&wa, &wb);
+            let name = |p: &PathBuf| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("?")
+                    .to_string()
+            };
+            write_atomic(
+                out,
+                legatorocr_engine::textdiff::html(&wa, &wb, &ops, &name(r), &name(h)).as_bytes(),
+            )?;
+            let sm = legatorocr_engine::textdiff::summary(&ops);
+            eprintln!(
+                "wrote {} ({} words alike, {} only in the first, {} only in the second)",
+                out.display(),
+                sm.same,
+                sm.only_a,
+                sm.only_b
+            );
+        }
+        let x = legatorocr_engine::eval::rates(&ta, &tb);
         println!(
             "CER {:.2}%  WER {:.2}%  (reference: {} characters, {} words)",
             x.cer * 100.0,

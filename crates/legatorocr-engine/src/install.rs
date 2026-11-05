@@ -384,6 +384,13 @@ pub fn run(steps: &[Step], on_start: &mut dyn FnMut(&str)) -> Vec<Outcome> {
         .iter()
         .map(|s| {
             let shown = s.display(sudo);
+            if let Err(e) = crate::offline::refuse("installing a module") {
+                return Outcome {
+                    command: shown,
+                    ok: false,
+                    detail: e.to_string(),
+                };
+            }
             on_start(&shown);
             let (prog, args): (String, Vec<String>) = if s.root && sudo {
                 let mut a = vec![s.program.clone()];
@@ -427,6 +434,13 @@ pub fn run_captured(steps: &[Step]) -> Vec<Outcome> {
         .iter()
         .map(|s| {
             let shown = s.display(sudo);
+            if let Err(e) = crate::offline::refuse("installing a module") {
+                return Outcome {
+                    command: shown,
+                    ok: false,
+                    detail: e.to_string(),
+                };
+            }
             if s.root && sudo {
                 return Outcome {
                     command: shown,
