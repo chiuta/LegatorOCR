@@ -35,7 +35,51 @@ enum View {
     Original,
     Processed,
     Both,
+    /// One picture with a movable divider: the original on one side, the processed page on the
+    /// other (each fitted to the same frame, so they do not overlap pixel for pixel: the processed
+    /// page is straightened and cropped).
+    Slider,
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Cmd {
+    AddImages,
+    AddFolder,
+    OpenProject,
+    SaveProject,
+    SaveProjectFolder,
+    ExportPdf,
+    ExportImages,
+    Modules,
+    FirstPage,
+    LastPage,
+    NextAttention,
+    OnlyAttention,
+    ViewBoth,
+    ViewOriginal,
+    ViewProcessed,
+    ViewSlider,
+}
+
+/// The command palette (Ctrl+K): every entry reuses the text of the menu or toolbar item.
+const CMDS: &[(Cmd, &str)] = &[
+    (Cmd::AddImages, "menu.add_images"),
+    (Cmd::AddFolder, "menu.add_folder"),
+    (Cmd::OpenProject, "menu.open_project"),
+    (Cmd::SaveProject, "menu.save_project"),
+    (Cmd::SaveProjectFolder, "menu.save_project_folder"),
+    (Cmd::ExportPdf, "menu.export_pdf"),
+    (Cmd::ExportImages, "menu.export_images"),
+    (Cmd::Modules, "menu.modules"),
+    (Cmd::FirstPage, "cmd.first_page"),
+    (Cmd::LastPage, "cmd.last_page"),
+    (Cmd::NextAttention, "cmd.next_attention"),
+    (Cmd::OnlyAttention, "cmd.only_attention"),
+    (Cmd::ViewBoth, "cmd.view_both"),
+    (Cmd::ViewOriginal, "cmd.view_original"),
+    (Cmd::ViewProcessed, "cmd.view_processed"),
+    (Cmd::ViewSlider, "cmd.view_slider"),
+];
 
 struct PageTex {
     tex: TextureHandle,
@@ -143,6 +187,13 @@ pub struct App {
     selected: Option<usize>,
     /// The selection was moved with the keyboard: scroll the list so the row is visible.
     scroll_to_selected: bool,
+    palette_open: bool,
+    palette_q: String,
+    palette_sel: usize,
+    /// The page list shows only the pages flagged for attention.
+    only_attention: bool,
+    /// Where the divider of the slider view is (0..1 of the frame width).
+    slider_frac: f32,
     next_id: u64,
     pv_tx: mpsc::Sender<PreviewResult>,
     pv_rx: mpsc::Receiver<PreviewResult>,
@@ -216,6 +267,11 @@ impl App {
             sheets: Vec::new(),
             selected: None,
             scroll_to_selected: false,
+            palette_open: false,
+            palette_q: String::new(),
+            palette_sel: 0,
+            only_attention: false,
+            slider_frac: 0.5,
             next_id: 1,
             pv_tx,
             pv_rx,
@@ -1345,15 +1401,7 @@ impl App {
         });
         ui.separator();
         let max_skew = self.s.max_skew;
-        let flagged: Vec<usize> = (0..self.sheets.len())
-            .filter(|&i| {
-                let key = self.key_of(&self.sheets[i]);
-                self.sheets[i].ready.as_ref().is_some_and(|r| {
-                    r.key == key
-                        && attention(r, max_skew, self.sheets[i].adj.skew_deg.is_some()).is_some()
-                })
-            })
-            .collect();
+        let flagged = self.flagged_sheets();
         if !flagged.is_empty() {
             ui.horizontal(|ui| {
                 ui.colored_label(
@@ -1369,6 +1417,8 @@ impl App {
                         .unwrap_or(flagged[0]);
                     self.selected = Some(nxt);
                 }
+                let lbl = self.tr("list.only_attention");
+                ui.checkbox(&mut self.only_attention, lbl);
             });
         }
         if self.sheets.is_empty() {
@@ -1379,6 +1429,9 @@ impl App {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for i in 0..self.sheets.len() {
+                    if self.only_attention && !flagged.contains(&i) && self.selected != Some(i) {
+                        continue;
+                    }
                     let key = self.key_of(&self.sheets[i]);
                     let s = &self.sheets[i];
                     let warn = s
@@ -1397,7 +1450,12 @@ impl App {
                     } else {
                         Color32::GRAY
                     };
-                    let label = format!("{:>3}  {}", i + 1, s.name);
+                    let edited = if s.adj != SheetAdjust::default() {
+                        " ✎"
+                    } else {
+                        ""
+                    };
+                    let label = format!("{:>3}  {}{}", i + 1, s.name, edited);
                     ui.horizontal(|ui| {
                         let (rect, _) =
                             ui.allocate_exact_size(Vec2::splat(10.0), egui::Sense::hover());
@@ -1420,6 +1478,205 @@ impl App {
             });
     }
 
+    /// Indices of the sheets whose processed preview looks suspicious (see [`attention`]).
+    fn flagged_sheets(&self) -> Vec<usize> {
+        let max_skew = self.s.max_skew;
+        (0..self.sheets.len())
+            .filter(|&i| {
+                let key = self.key_of(&self.sheets[i]);
+                self.sheets[i].ready.as_ref().is_some_and(|r| {
+                    r.key == key
+                        && attention(r, max_skew, self.sheets[i].adj.skew_deg.is_some()).is_some()
+                })
+            })
+            .collect()
+    }
+
+    /// Go to the next flagged sheet after the selected one (wrapping round).
+    fn next_attention(&mut self) {
+        let flagged = self.flagged_sheets();
+        if flagged.is_empty() {
+            return;
+        }
+        let cur = self.selected.unwrap_or(usize::MAX);
+        let nxt = flagged
+            .iter()
+            .copied()
+            .find(|&i| cur == usize::MAX || i > cur)
+            .unwrap_or(flagged[0]);
+        self.selected = Some(nxt);
+        self.sheets[nxt].failed = None;
+        self.scroll_to_selected = true;
+    }
+
+    fn run_cmd(&mut self, ctx: &egui::Context, c: Cmd) {
+        let idle = self.job.is_none() && !self.sheets.is_empty();
+        match c {
+            Cmd::AddImages => {
+                if let Some(f) = self.pick(|| {
+                    rfd::FileDialog::new()
+                        .add_filter("images, PDF, archives", &all_input_ext())
+                        .pick_files()
+                }) {
+                    self.add_files(&f);
+                }
+            }
+            Cmd::AddFolder => {
+                if let Some(d) = self.pick(|| rfd::FileDialog::new().pick_folder()) {
+                    self.add_files(&collect_images(&[d]));
+                }
+            }
+            Cmd::OpenProject => self.open_project(),
+            Cmd::SaveProject if !self.sheets.is_empty() => self.save_project(),
+            Cmd::SaveProjectFolder if !self.sheets.is_empty() => self.save_project_folder(),
+            Cmd::ExportPdf if idle => self.start_export(ctx, JobKind::Pdf),
+            Cmd::ExportImages if idle => self.start_export(ctx, JobKind::Images),
+            Cmd::Modules => self.modules.open(),
+            Cmd::FirstPage if !self.sheets.is_empty() => {
+                self.selected = Some(0);
+                self.scroll_to_selected = true;
+            }
+            Cmd::LastPage if !self.sheets.is_empty() => {
+                self.selected = Some(self.sheets.len() - 1);
+                self.scroll_to_selected = true;
+            }
+            Cmd::NextAttention => self.next_attention(),
+            Cmd::OnlyAttention => self.only_attention = !self.only_attention,
+            Cmd::ViewBoth => self.view = View::Both,
+            Cmd::ViewOriginal => self.view = View::Original,
+            Cmd::ViewProcessed => self.view = View::Processed,
+            Cmd::ViewSlider => self.view = View::Slider,
+            _ => {}
+        }
+    }
+
+    /// Ctrl+K: type a few letters of a command and press Enter.
+    fn palette(&mut self, ctx: &egui::Context) {
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::K)) {
+            self.palette_open = !self.palette_open;
+            self.palette_q.clear();
+            self.palette_sel = 0;
+        }
+        if !self.palette_open {
+            return;
+        }
+        let q = self.palette_q.to_lowercase();
+        let hits: Vec<(Cmd, &'static str)> = CMDS
+            .iter()
+            .map(|&(c, k)| (c, self.tr(k)))
+            .filter(|(_, label)| q.is_empty() || label.to_lowercase().contains(&q))
+            .collect();
+        let (up, down, enter, esc) = ctx.input_mut(|i| {
+            (
+                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
+            )
+        });
+        if hits.is_empty() {
+            self.palette_sel = 0;
+        } else {
+            if down {
+                self.palette_sel = (self.palette_sel + 1) % hits.len();
+            }
+            if up {
+                self.palette_sel = (self.palette_sel + hits.len() - 1) % hits.len();
+            }
+            self.palette_sel = self.palette_sel.min(hits.len() - 1);
+        }
+        let mut chosen: Option<Cmd> = None;
+        if enter && !hits.is_empty() {
+            chosen = Some(hits[self.palette_sel].0);
+        }
+        let title = self.tr("palette.title");
+        let none = self.tr("palette.none");
+        let hint = self.tr("palette.hint");
+        egui::Window::new(title)
+            .anchor(egui::Align2::CENTER_TOP, [0.0, 60.0])
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                let r = ui.add(
+                    egui::TextEdit::singleline(&mut self.palette_q)
+                        .hint_text(hint)
+                        .desired_width(360.0),
+                );
+                r.request_focus();
+                if r.changed() {
+                    self.palette_sel = 0;
+                }
+                if hits.is_empty() {
+                    ui.label(none);
+                }
+                for (n, (c, label)) in hits.iter().enumerate() {
+                    if ui.selectable_label(n == self.palette_sel, *label).clicked() {
+                        chosen = Some(*c);
+                    }
+                }
+            });
+        if esc {
+            self.palette_open = false;
+        }
+        if let Some(c) = chosen {
+            self.palette_open = false;
+            self.run_cmd(ctx, c);
+        }
+    }
+
+    /// The slider view: the original left of the divider, the processed first page right of it.
+    fn slider_view(ui: &mut egui::Ui, ready: &Ready, frac: &mut f32, before: &str, after: &str) {
+        let avail = ui.available_size();
+        let (rect, resp) = ui.allocate_exact_size(
+            Vec2::new(avail.x.max(50.0), (avail.y - 24.0).max(50.0)),
+            egui::Sense::click_and_drag(),
+        );
+        if let Some(pos) = resp.interact_pointer_pos() {
+            if resp.dragged() || resp.clicked() {
+                *frac = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+            }
+        }
+        let fit = |w: f32, h: f32| {
+            let k = (rect.width() / w).min(rect.height() / h);
+            egui::Rect::from_center_size(rect.center(), Vec2::new(w * k, h * k))
+        };
+        let x = rect.left() + rect.width() * *frac;
+        let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+        let (ow, oh) = (ready.original_size.0 as f32, ready.original_size.1 as f32);
+        let left = egui::Rect::from_min_max(rect.min, egui::pos2(x, rect.max.y));
+        ui.painter_at(left)
+            .image(ready.original.id(), fit(ow, oh), uv, Color32::WHITE);
+        if let Some(p) = ready.pages.first() {
+            let right = egui::Rect::from_min_max(egui::pos2(x, rect.min.y), rect.max);
+            ui.painter_at(right)
+                .image(p.tex.id(), fit(p.w as f32, p.h as f32), uv, Color32::WHITE);
+        }
+        let pt = ui.painter_at(rect);
+        pt.line_segment(
+            [egui::pos2(x, rect.min.y), egui::pos2(x, rect.max.y)],
+            egui::Stroke::new(2.0, Color32::from_rgb(40, 120, 220)),
+        );
+        pt.circle_filled(
+            egui::pos2(x, rect.center().y),
+            9.0,
+            Color32::from_rgb(40, 120, 220),
+        );
+        pt.text(
+            egui::pos2(rect.min.x + 6.0, rect.min.y + 4.0),
+            egui::Align2::LEFT_TOP,
+            before,
+            egui::FontId::proportional(13.0),
+            Color32::from_rgb(200, 60, 40),
+        );
+        pt.text(
+            egui::pos2(rect.max.x - 6.0, rect.min.y + 4.0),
+            egui::Align2::RIGHT_TOP,
+            after,
+            egui::FontId::proportional(13.0),
+            Color32::from_rgb(30, 130, 60),
+        );
+    }
+
     /// Keyboard: Up / Down (also PageUp / PageDown) go to the previous / next page, Home / End to
     /// the first / last. Not while a text box has the focus, and not with Ctrl / Alt / Shift held.
     fn page_keys(&mut self, ctx: &egui::Context) {
@@ -1429,6 +1686,7 @@ impl App {
         }
         let last = self.sheets.len() - 1;
         let cur = self.selected.unwrap_or(0).min(last);
+        let mut want_next = false;
         let target = ctx.input_mut(|inp| {
             if !inp.modifiers.is_none() {
                 return None;
@@ -1447,9 +1705,15 @@ impl App {
                 t = Some(0);
             } else if inp.consume_key(egui::Modifiers::NONE, Key::End) {
                 t = Some(last);
+            } else if inp.consume_key(egui::Modifiers::NONE, Key::N) {
+                want_next = true;
             }
             t
         });
+        if want_next {
+            self.next_attention();
+            return;
+        }
         if let Some(t) = target {
             if self.selected != Some(t) {
                 self.selected = Some(t);
@@ -2154,6 +2418,7 @@ impl App {
                 (View::Both, "view.both"),
                 (View::Original, "view.original"),
                 (View::Processed, "view.processed"),
+                (View::Slider, "view.slider"),
             ] {
                 ui.selectable_value(&mut self.view, v, tr(k));
             }
@@ -2483,6 +2748,16 @@ impl App {
             });
             return;
         };
+        if self.view == View::Slider {
+            Self::slider_view(
+                ui,
+                ready,
+                &mut self.slider_frac,
+                tr("view.original"),
+                tr("view.processed"),
+            );
+            return;
+        }
         let mut cells: Vec<Cell> = Vec::new();
         if self.view != View::Processed {
             cells.push((
@@ -3366,6 +3641,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.pump(&ctx);
+        self.palette(&ctx);
         self.page_keys(&ctx);
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));

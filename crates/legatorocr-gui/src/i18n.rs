@@ -71,6 +71,19 @@ const TABLE: &[(&str, [&str; 8])] = &[
     ("menu.export_images", ["Exportă imaginile…", "Export images…", "Exporter les images…", "Esporta immagini…", "Exportar imágenes…", "Exportar imagens…", "Bilder exportieren…", "Képek exportálása…"]),
     ("menu.quit", ["Ieșire", "Quit", "Quitter", "Esci", "Salir", "Sair", "Beenden", "Kilépés"]),
     ("menu.language", ["Limbă", "Language", "Langue", "Lingua", "Idioma", "Idioma", "Sprache", "Nyelv"]),
+    ("view.slider", ["Glisor", "Slider", "Curseur", "Cursore", "Deslizador", "Deslizador", "Schieberegler", "Csúszka"]),
+    ("palette.title", ["Comenzi", "Commands", "Commandes", "Comandi", "Comandos", "Comandos", "Befehle", "Parancsok"]),
+    ("palette.hint", ["scrie o comandă…", "type a command…", "tapez une commande…", "scrivi un comando…", "escribe un comando…", "escreva um comando…", "Befehl eingeben…", "írjon be egy parancsot…"]),
+    ("palette.none", ["Nicio comandă.", "No command.", "Aucune commande.", "Nessun comando.", "Ningún comando.", "Nenhum comando.", "Kein Befehl.", "Nincs parancs."]),
+    ("cmd.next_attention", ["Următoarea pagină marcată (N)", "Next flagged page (N)", "Page signalée suivante (N)", "Prossima pagina segnalata (N)", "Siguiente página marcada (N)", "Próxima página marcada (N)", "Nächste markierte Seite (N)", "Következő jelölt oldal (N)"]),
+    ("cmd.only_attention", ["Arată doar paginile marcate (comută)", "Show only flagged pages (toggle)", "Afficher seulement les pages signalées (bascule)", "Mostra solo le pagine segnalate (alterna)", "Mostrar solo las páginas marcadas (alternar)", "Mostrar só as páginas marcadas (alternar)", "Nur markierte Seiten zeigen (umschalten)", "Csak a jelölt oldalak (kapcsoló)"]),
+    ("cmd.view_both", ["Vedere: alăturat", "View: side by side", "Vue : côte à côte", "Vista: affiancata", "Vista: lado a lado", "Vista: lado a lado", "Ansicht: nebeneinander", "Nézet: egymás mellett"]),
+    ("cmd.view_original", ["Vedere: original", "View: original", "Vue : original", "Vista: originale", "Vista: original", "Vista: original", "Ansicht: Original", "Nézet: eredeti"]),
+    ("cmd.view_processed", ["Vedere: procesat", "View: processed", "Vue : traité", "Vista: elaborato", "Vista: procesado", "Vista: processado", "Ansicht: bearbeitet", "Nézet: feldolgozott"]),
+    ("cmd.view_slider", ["Vedere: glisor înainte/după", "View: before/after slider", "Vue : curseur avant/après", "Vista: cursore prima/dopo", "Vista: deslizador antes/después", "Vista: deslizador antes/depois", "Ansicht: Vorher/Nachher-Regler", "Nézet: előtte/utána csúszka"]),
+    ("cmd.first_page", ["Prima pagină", "First page", "Première page", "Prima pagina", "Primera página", "Primeira página", "Erste Seite", "Első oldal"]),
+    ("cmd.last_page", ["Ultima pagină", "Last page", "Dernière page", "Ultima pagina", "Última página", "Última página", "Letzte Seite", "Utolsó oldal"]),
+    ("list.only_attention", ["doar cele marcate", "only flagged", "seulement signalées", "solo segnalate", "solo marcadas", "só marcadas", "nur markierte", "csak jelöltek"]),
     ("menu.modules", ["Module opționale…", "Optional modules…", "Modules facultatifs…", "Moduli opzionali…", "Módulos opcionales…", "Módulos opcionais…", "Optionale Module…", "Választható modulok…"]),
     ("modules.title", ["Module opționale", "Optional modules", "Modules facultatifs", "Moduli opzionali", "Módulos opcionales", "Módulos opcionais", "Optionale Module", "Választható modulok"]),
     ("modules.intro", ["Nimic de aici nu e necesar: motorul OCR propriu e inclus. Modulele adaugă Tesseract cu cele 8 limbi, randări PDF suplimentare, qpdf și partea Python a punții ONNX.", "Nothing here is required: the built-in OCR engine is included. The modules add Tesseract with the 8 languages, extra PDF renderers, qpdf and the Python side of the ONNX bridge.", "Rien ici n'est obligatoire : le moteur OCR intégré est fourni. Les modules ajoutent Tesseract avec les 8 langues, des moteurs de rendu PDF, qpdf et la partie Python du pont ONNX.", "Niente qui è obbligatorio: il motore OCR integrato è incluso. I moduli aggiungono Tesseract con le 8 lingue, renderer PDF aggiuntivi, qpdf e la parte Python del ponte ONNX.", "Nada de esto es obligatorio: el motor OCR integrado ya viene incluido. Los módulos añaden Tesseract con los 8 idiomas, renderizadores PDF adicionales, qpdf y la parte Python del puente ONNX.", "Nada aqui é obrigatório: o motor OCR integrado já vem incluído. Os módulos acrescentam o Tesseract com os 8 idiomas, renderizadores de PDF adicionais, o qpdf e a parte Python da ponte ONNX.", "Nichts davon ist nötig: Die eingebaute OCR-Engine ist enthalten. Die Module ergänzen Tesseract mit den 8 Sprachen, weitere PDF-Renderer, qpdf und den Python-Teil der ONNX-Brücke.", "Semmi sem kötelező: a beépített OCR-motor része a programnak. A modulok a Tesseractot adják a 8 nyelvvel, további PDF-megjelenítőket, a qpdf-et és az ONNX-híd Python részét."]),
@@ -310,6 +323,7 @@ mod tests {
         const GROUPS: &[&str] = &[
             "about", "adj", "align", "btn", "drop", "list", "menu", "mode", "preview", "set",
             "size", "split", "status", "view", "zones", "box", "dropout", "err", "modules",
+            "palette", "cmd",
         ];
         let src = include_str!("app.rs");
         let mut checked = 0;
