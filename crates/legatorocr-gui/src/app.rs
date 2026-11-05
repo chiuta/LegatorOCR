@@ -141,6 +141,8 @@ pub struct App {
     settings_gen: u32,
     sheets: Vec<Sheet>,
     selected: Option<usize>,
+    /// The selection was moved with the keyboard: scroll the list so the row is visible.
+    scroll_to_selected: bool,
     next_id: u64,
     pv_tx: mpsc::Sender<PreviewResult>,
     pv_rx: mpsc::Receiver<PreviewResult>,
@@ -213,6 +215,7 @@ impl App {
             settings_gen: 1,
             sheets: Vec::new(),
             selected: None,
+            scroll_to_selected: false,
             next_id: 1,
             pv_tx,
             pv_rx,
@@ -1369,6 +1372,9 @@ impl App {
                         if let Some(w) = warn {
                             resp = resp.on_hover_text(self.tr(w));
                         }
+                        if self.scroll_to_selected && self.selected == Some(i) {
+                            resp.scroll_to_me(None);
+                        }
                         if resp.clicked() {
                             self.selected = Some(i);
                             // a failed preview (timeout, transient read error) is tried again
@@ -1378,6 +1384,46 @@ impl App {
                     });
                 }
             });
+    }
+
+    /// Keyboard: Up / Down (also PageUp / PageDown) go to the previous / next page, Home / End to
+    /// the first / last. Not while a text box has the focus, and not with Ctrl / Alt / Shift held.
+    fn page_keys(&mut self, ctx: &egui::Context) {
+        self.scroll_to_selected = false;
+        if self.sheets.is_empty() || ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        let last = self.sheets.len() - 1;
+        let cur = self.selected.unwrap_or(0).min(last);
+        let target = ctx.input_mut(|inp| {
+            if !inp.modifiers.is_none() {
+                return None;
+            }
+            use egui::Key;
+            let mut t = None;
+            if inp.consume_key(egui::Modifiers::NONE, Key::ArrowDown)
+                || inp.consume_key(egui::Modifiers::NONE, Key::PageDown)
+            {
+                t = Some((cur + 1).min(last));
+            } else if inp.consume_key(egui::Modifiers::NONE, Key::ArrowUp)
+                || inp.consume_key(egui::Modifiers::NONE, Key::PageUp)
+            {
+                t = Some(cur.saturating_sub(1));
+            } else if inp.consume_key(egui::Modifiers::NONE, Key::Home) {
+                t = Some(0);
+            } else if inp.consume_key(egui::Modifiers::NONE, Key::End) {
+                t = Some(last);
+            }
+            t
+        });
+        if let Some(t) = target {
+            if self.selected != Some(t) {
+                self.selected = Some(t);
+                // a failed preview is tried again when the page is selected again
+                self.sheets[t].failed = None;
+            }
+            self.scroll_to_selected = true;
+        }
     }
 
     fn settings_panel(&mut self, ui: &mut egui::Ui) {
@@ -3260,6 +3306,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.pump(&ctx);
+        self.page_keys(&ctx);
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
         egui::Panel::left("pages")
