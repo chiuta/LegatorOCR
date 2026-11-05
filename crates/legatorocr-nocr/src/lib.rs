@@ -164,6 +164,56 @@ struct Decoded {
     off_x: u32,
 }
 
+/// Average the network's probabilities over copies of the line shifted by a pixel or two. The copies
+/// have the same width, so the columns line up.
+fn forward_tta(model: &Model, data: &[f32], w: usize) -> (usize, Vec<f32>) {
+    let (t, mut lp) = model.forward(data, w);
+    let mode = std::env::var("LNTTA").unwrap_or_default();
+    if mode.is_empty() {
+        return (t, lp);
+    }
+    let mut variants: Vec<Vec<f32>> = Vec::new();
+    if mode.contains('v') {
+        for dy in [-1i32, 1] {
+            let mut v = vec![0.0f32; data.len()];
+            for y in 0..LINE_H as i32 {
+                let sy = (y + dy).clamp(0, LINE_H as i32 - 1) as usize;
+                v[y as usize * w..(y as usize + 1) * w].copy_from_slice(&data[sy * w..(sy + 1) * w]);
+            }
+            variants.push(v);
+        }
+    }
+    if mode.contains('h') {
+        for dx in [-2i32, 2] {
+            let mut v = vec![0.0f32; data.len()];
+            for y in 0..LINE_H {
+                for x in 0..w as i32 {
+                    let sx = x + dx;
+                    if sx >= 0 && (sx as usize) < w {
+                        v[y * w + x as usize] = data[y * w + sx as usize];
+                    }
+                }
+            }
+            variants.push(v);
+        }
+    }
+    let mut acc: Vec<f32> = lp.iter().map(|l| l.exp()).collect();
+    for v in &variants {
+        let (t2, l2) = model.forward(v, w);
+        if t2 != t {
+            return (t, lp);
+        }
+        for (a, l) in acc.iter_mut().zip(&l2) {
+            *a += l.exp();
+        }
+    }
+    let n = (variants.len() + 1) as f32;
+    for (o, a) in lp.iter_mut().zip(&acc) {
+        *o = (a / n).max(1e-30).ln();
+    }
+    (t, lp)
+}
+
 fn decode_line(
     gray: &GrayImage,
     ink: &BitImage,
@@ -173,7 +223,7 @@ fn decode_line(
     // a box that is mostly ink is light text on a dark panel: read it inverted
     let invert = ink_fraction(ink, ln) > 0.62;
     let li = layout::extract(gray, ln, LINE_H, invert)?;
-    let (t, lp) = model.forward(&li.data, li.w);
+    let (t, lp) = forward_tta(model, &li.data, li.w);
     Some(Decoded {
         glyphs: ctc::greedy(&lp, t, model.nc, &model.charset),
         scale: li.scale,
