@@ -23,6 +23,7 @@ fn passages_jsonl_needs_ocr_and_is_a_known_option() {
 
 /// Guards the wiring in `main.rs`/`engine`: the file must be written without `--page-labels`, even
 /// for a page with no text (an earlier merge left the begin/record/finish calls inside other blocks).
+#[cfg(feature = "builtin-model")]
 #[test]
 fn passages_jsonl_is_written_without_page_labels() {
     let dir = std::env::temp_dir().join(format!("lgr_passages_w_{}", std::process::id()));
