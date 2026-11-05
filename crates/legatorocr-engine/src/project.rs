@@ -35,6 +35,8 @@ pub struct SheetAdj {
     pub erase_mm: Vec<[f32; 4]>,
     /// Hand-drawn picture rectangles (x, y, w, h in mm of the loaded scan).
     pub picture_mm: Vec<[f32; 4]>,
+    /// Hand-drawn rectangles where the automatic picture detector is overruled (mm of the loaded scan).
+    pub no_picture_mm: Vec<[f32; 4]>,
     /// Hand-drawn dewarp guide lines: points as fractions (0–1) of the loaded scan.
     pub dewarp_guides: Vec<Vec<(f32, f32)>>,
     /// Working rectangle (x, y, w, h in mm of the loaded scan); outside it the sheet is blanked.
@@ -61,6 +63,7 @@ impl SheetAdj {
         s.content_adjust_mm = self.content_adjust_mm;
         s.sheet_erase_zones = self.erase_mm.clone();
         s.sheet_picture_zones = self.picture_mm.clone();
+        s.sheet_no_picture_zones = self.no_picture_mm.clone();
         s.sheet_dewarp_guides = self.dewarp_guides.clone();
         s.sheet_orient_locked = self.orient_locked;
         s.sheet_work_mm = self.work_mm.or(s.sheet_work_mm);
@@ -207,6 +210,11 @@ pub fn settings_to_pairs(s: &Settings) -> Vec<(&'static str, String)> {
             legatorocr_core::cleanup::zones_to_string(&s.picture_zones),
         ),
         (
+            "no_picture_zones",
+            legatorocr_core::cleanup::zones_to_string(&s.no_picture_zones),
+        ),
+        ("auto_pictures", s.auto_pictures.to_string()),
+        (
             "work_area",
             s.sheet_work_mm
                 .map_or(String::new(), |[x, y, w, h]| format!("{x},{y},{w},{h}")),
@@ -273,6 +281,10 @@ pub fn apply_pair(s: &mut Settings, k: &str, v: &str) -> Result<bool> {
         "picture_zones" => {
             s.picture_zones = legatorocr_core::cleanup::parse_zones(v).ok_or_else(bad)?
         }
+        "no_picture_zones" => {
+            s.no_picture_zones = legatorocr_core::cleanup::parse_zones(v).ok_or_else(bad)?
+        }
+        "auto_pictures" => s.auto_pictures = b(v).ok_or_else(bad)?,
         "work_area" => {
             s.sheet_work_mm = if v.is_empty() {
                 None
@@ -390,6 +402,12 @@ impl Project {
                     legatorocr_core::cleanup::zones_to_string(&a.picture_mm)
                 ));
             }
+            if !a.no_picture_mm.is_empty() {
+                out.push_str(&format!(
+                    "no-picture = {}\n",
+                    legatorocr_core::cleanup::zones_to_string(&a.no_picture_mm)
+                ));
+            }
             if !a.dewarp_guides.is_empty() {
                 out.push_str(&format!(
                     "guides = {}\n",
@@ -477,6 +495,10 @@ impl Project {
                     "picture" => {
                         adj.picture_mm = legatorocr_core::cleanup::parse_zones(v)
                             .ok_or_else(|| at(anyhow::anyhow!("invalid picture zones '{v}'")))?
+                    }
+                    "no-picture" => {
+                        adj.no_picture_mm = legatorocr_core::cleanup::parse_zones(v)
+                            .ok_or_else(|| at(anyhow::anyhow!("invalid no-picture zones '{v}'")))?
                     }
                     "guides" => {
                         adj.dewarp_guides = legatorocr_core::dewarp::parse_guides(v)
@@ -621,6 +643,7 @@ mod tests {
                 split_frac: Some(0.4375),
                 orient_locked: true,
                 picture_mm: vec![[50.0, 60.0, 70.5, 80.0]],
+                no_picture_mm: vec![[1.0, 2.0, 30.0, 40.5]],
                 dewarp_guides: vec![vec![(0.0, 0.25), (0.5, 0.3), (1.0, 0.25)]],
             },
         ));

@@ -18,6 +18,39 @@ pub struct Zone {
     pub rect: Rect,
 }
 
+/// Cut the rectangles `cut` out of `zones`: a zone that a rectangle crosses is replaced by the
+/// up to four pieces left around it. Pieces thinner than `min_side` pixels are dropped.
+pub fn subtract(zones: Vec<Zone>, cut: &[Rect], min_side: u32) -> Vec<Zone> {
+    let mut cur = zones;
+    for c in cut {
+        let mut next = Vec::new();
+        for z in cur {
+            let r = z.rect;
+            let (ix0, iy0) = (r.x.max(c.x), r.y.max(c.y));
+            let (ix1, iy1) = ((r.x + r.w).min(c.x + c.w), (r.y + r.h).min(c.y + c.h));
+            if ix0 >= ix1 || iy0 >= iy1 {
+                next.push(z);
+                continue;
+            }
+            let pieces = [
+                (r.x, r.y, r.w, iy0 - r.y),
+                (r.x, iy1, r.w, r.y + r.h - iy1),
+                (r.x, iy0, ix0 - r.x, iy1 - iy0),
+                (ix1, iy0, r.x + r.w - ix1, iy1 - iy0),
+            ];
+            for (x, y, w, h) in pieces {
+                if w >= min_side && h >= min_side {
+                    next.push(Zone {
+                        rect: Rect { x, y, w, h },
+                    });
+                }
+            }
+        }
+        cur = next;
+    }
+    cur
+}
+
 /// Find picture zones. `sensitivity` 0–1 (higher = more areas count as pictures).
 pub fn detect(gray: &GrayImage, dpi: u32, sensitivity: f32) -> Vec<Zone> {
     let (w, h) = (gray.width() as usize, gray.height() as usize);
@@ -240,6 +273,76 @@ mod tests {
             r.w < photo.w + 120 && r.h < photo.h + 120,
             "zone too large: {r:?}"
         );
+    }
+
+    #[test]
+    fn a_cut_leaves_the_pieces_around_it_and_drops_slivers() {
+        let z = |x, y, w, h| Zone {
+            rect: Rect { x, y, w, h },
+        };
+        // a hole in the middle: four pieces
+        let out = subtract(
+            vec![z(0, 0, 100, 100)],
+            &[Rect {
+                x: 40,
+                y: 40,
+                w: 20,
+                h: 20,
+            }],
+            5,
+        );
+        let mut got: Vec<_> = out
+            .iter()
+            .map(|z| (z.rect.x, z.rect.y, z.rect.w, z.rect.h))
+            .collect();
+        got.sort();
+        assert_eq!(
+            got,
+            vec![
+                (0, 0, 100, 40),
+                (0, 40, 40, 20),
+                (0, 60, 100, 40),
+                (60, 40, 40, 20)
+            ]
+        );
+        // a cut that misses leaves the zone as it was; one that covers it removes it
+        assert_eq!(
+            subtract(
+                vec![z(0, 0, 10, 10)],
+                &[Rect {
+                    x: 50,
+                    y: 50,
+                    w: 5,
+                    h: 5
+                }],
+                5
+            )
+            .len(),
+            1
+        );
+        assert!(subtract(
+            vec![z(10, 10, 20, 20)],
+            &[Rect {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 100
+            }],
+            5
+        )
+        .is_empty());
+        // a 3-pixel strip left over is too thin to keep
+        let out = subtract(
+            vec![z(0, 0, 100, 100)],
+            &[Rect {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 97,
+            }],
+            5,
+        );
+        assert!(out.is_empty());
     }
 
     #[test]

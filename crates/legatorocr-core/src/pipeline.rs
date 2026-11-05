@@ -115,6 +115,16 @@ pub struct Settings {
     /// Followed through those steps, so they stay on the picture. Not followed through
     /// perspective correction (then they are dropped) or dewarping (position approximate).
     pub sheet_picture_zones: Vec<[f32; 4]>,
+    /// Rectangles (mm, same frame as `picture_zones`) where the *automatic* picture detector
+    /// is overruled: whatever it found there is cut out of its zones, so that text or paper it
+    /// took for a picture goes back to the black-and-white layer. Hand-marked pictures win.
+    pub no_picture_zones: Vec<[f32; 4]>,
+    /// Like `no_picture_zones` but in millimetres of the *scanned sheet as loaded*, drawn with
+    /// the mouse and followed through rotation, splitting and deskew like `sheet_picture_zones`.
+    pub sheet_no_picture_zones: Vec<[f32; 4]>,
+    /// Look for pictures automatically in mixed / hybrid output (default). Off: only the
+    /// hand-marked picture zones are kept as colour.
+    pub auto_pictures: bool,
     /// Like `erase_zones` but in millimetres of the *scanned sheet as loaded* (before
     /// rotation and page splitting); drawn with the mouse in the GUI, stored per sheet.
     pub sheet_erase_zones: Vec<[f32; 4]>,
@@ -176,6 +186,9 @@ impl Default for Settings {
             erase_zones: Vec::new(),
             picture_zones: Vec::new(),
             sheet_picture_zones: Vec::new(),
+            no_picture_zones: Vec::new(),
+            sheet_no_picture_zones: Vec::new(),
+            auto_pictures: true,
             sheet_erase_zones: Vec::new(),
             sheet_work_mm: None,
             sheet_orient_locked: false,
@@ -400,6 +413,22 @@ impl Settings {
                 ]
             })
             .collect();
+        let clean = |v: &Vec<[f32; 4]>| -> Vec<[f32; 4]> {
+            v.iter()
+                .filter(|z| z.iter().all(|v| v.is_finite()) && z[2] > 0.0 && z[3] > 0.0)
+                .take(64)
+                .map(|z| {
+                    [
+                        z[0].clamp(-5000.0, 5000.0),
+                        z[1].clamp(-5000.0, 5000.0),
+                        z[2].min(5000.0),
+                        z[3].min(5000.0),
+                    ]
+                })
+                .collect()
+        };
+        s.no_picture_zones = clean(&s.no_picture_zones);
+        s.sheet_no_picture_zones = clean(&s.sheet_no_picture_zones);
         s.picture_zones = s
             .picture_zones
             .iter()
@@ -437,16 +466,17 @@ impl Settings {
 /// One page cut from a sheet: the image, which half it is, and the hand-marked picture zones
 /// (x, y, width, height in pixels of this image).
 type Guides = Vec<Vec<(f32, f32)>>;
-type SheetPart = (RgbImage, Option<u8>, Vec<[f32; 4]>, Guides);
+/// Zones carry a fifth number: 0 for a hand-marked picture, 1 for a "no automatic picture here" rectangle.
+type SheetPart = (RgbImage, Option<u8>, Vec<[f32; 5]>, Guides);
 
 /// Rotate a pixel rectangle together with an image of `w`×`h` by `turns` quarter turns
 /// clockwise; returns the new image size too.
-fn rot90_rects(rects: &mut [[f32; 4]], w: u32, h: u32, turns: u8) -> (u32, u32) {
+fn rot90_rects(rects: &mut [[f32; 5]], w: u32, h: u32, turns: u8) -> (u32, u32) {
     let (mut w, mut h) = (w, h);
     for _ in 0..turns % 4 {
         for r in rects.iter_mut() {
             // (x, y) -> (H - y, x) for a point, so a rectangle keeps its corner nearest the origin
-            *r = [h as f32 - r[1] - r[3], r[0], r[3], r[2]];
+            *r = [h as f32 - r[1] - r[3], r[0], r[3], r[2], r[4]];
         }
         std::mem::swap(&mut w, &mut h);
     }
@@ -470,10 +500,15 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
     let base = src.to_rgb8();
     let (w0, h0) = base.dimensions();
     let px = |mm: f32| mm / 25.4 * s.dpi as f32;
-    let mut zones: Vec<[f32; 4]> = s
+    let mut zones: Vec<[f32; 5]> = s
         .sheet_picture_zones
         .iter()
-        .map(|z| [px(z[0]), px(z[1]), px(z[2]), px(z[3])])
+        .map(|z| [px(z[0]), px(z[1]), px(z[2]), px(z[3]), 0.0])
+        .chain(
+            s.sheet_no_picture_zones
+                .iter()
+                .map(|z| [px(z[0]), px(z[1]), px(z[2]), px(z[3]), 1.0]),
+        )
         .collect();
     rot90_rects(&mut zones, w0, h0, s.rotate_quarters);
     // mouse-drawn dewarp guides: fractions of the sheet as loaded -> pixels, then followed
@@ -535,12 +570,12 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
             let top = imageops::crop_imm(&rgb, 0, 0, w, y).to_image();
             let bottom = imageops::crop_imm(&rgb, 0, y, w, h - y).to_image();
             let yf = y as f32;
-            let clip = |z: &[f32; 4], y0: f32, y1: f32| {
+            let clip = |z: &[f32; 5], y0: f32, y1: f32| {
                 let (a, b) = (z[1].max(y0), (z[1] + z[3]).min(y1));
-                (b > a).then_some([z[0], a - y0, z[2], b - a])
+                (b > a).then_some([z[0], a - y0, z[2], b - a, z[4]])
             };
-            let tz: Vec<[f32; 4]> = zones.iter().filter_map(|z| clip(z, 0.0, yf)).collect();
-            let bz: Vec<[f32; 4]> = zones.iter().filter_map(|z| clip(z, yf, h as f32)).collect();
+            let tz: Vec<[f32; 5]> = zones.iter().filter_map(|z| clip(z, 0.0, yf)).collect();
+            let bz: Vec<[f32; 5]> = zones.iter().filter_map(|z| clip(z, yf, h as f32)).collect();
             let part = |y0: f32, y1: f32| -> Guides {
                 guides
                     .iter()
@@ -594,9 +629,9 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
         Some(x) => {
             let l = imageops::crop_imm(&rgb, 0, 0, x, rgb.height()).to_image();
             let r = imageops::crop_imm(&rgb, x, 0, rgb.width() - x, rgb.height()).to_image();
-            let clip = |z: &[f32; 4], x0: f32, x1: f32| {
+            let clip = |z: &[f32; 5], x0: f32, x1: f32| {
                 let (a, b) = (z[0].max(x0), (z[0] + z[2]).min(x1));
-                (b > a).then_some([a - x0, z[1], b - a, z[3]])
+                (b > a).then_some([a - x0, z[1], b - a, z[3], z[4]])
             };
             let xf = x as f32;
             let lz = zones.iter().filter_map(|z| clip(z, 0.0, xf)).collect();
@@ -707,12 +742,14 @@ struct Prepared {
     content: Option<Rect>,
     /// Hand-marked picture zones (x, y, w, h) in `img` pixels: typed ones and mouse-drawn ones.
     pictures: Vec<[f32; 4]>,
+    /// Rectangles in `img` pixels where the automatic picture detector is overruled.
+    vetoes: Vec<[f32; 4]>,
 }
 
 fn prepare(
     mut img: RgbImage,
     s: &Settings,
-    mut pictures: Vec<[f32; 4]>,
+    mut pictures: Vec<[f32; 5]>,
     mut guides: Guides,
 ) -> Prepared {
     // --- clean-up: fixes that make every later stage's job easier ----------
@@ -805,7 +842,7 @@ fn prepare(
                 let x1 = pts.iter().map(|p| p.0).fold(f32::MIN, f32::max);
                 let y0 = pts.iter().map(|p| p.1).fold(f32::MAX, f32::min);
                 let y1 = pts.iter().map(|p| p.1).fold(f32::MIN, f32::max);
-                *z = [x0, y0, x1 - x0, y1 - y0];
+                *z = [x0, y0, x1 - x0, y1 - y0, z[4]];
             }
             for p in guides.iter_mut().flat_map(|g| g.iter_mut()) {
                 let (dx, dy) = (p.0 - cx, p.1 - cy);
@@ -882,17 +919,29 @@ fn prepare(
     });
     // typed zones are in millimetres of the deskewed page
     let mm_px = |mm: f32| mm / 25.4 * s.dpi as f32;
-    pictures.extend(
-        s.picture_zones
-            .iter()
-            .map(|z| [mm_px(z[0]), mm_px(z[1]), mm_px(z[2]), mm_px(z[3])]),
-    );
+    let (mut hand, mut vetoes) = (Vec::new(), Vec::new());
+    for z in &pictures {
+        let r = [z[0], z[1], z[2], z[3]];
+        if z[4] > 0.5 {
+            vetoes.push(r);
+        } else {
+            hand.push(r);
+        }
+    }
+    let typed = |v: &[[f32; 4]]| -> Vec<[f32; 4]> {
+        v.iter()
+            .map(|z| [mm_px(z[0]), mm_px(z[1]), mm_px(z[2]), mm_px(z[3])])
+            .collect()
+    };
+    hand.extend(typed(&s.picture_zones));
+    vetoes.extend(typed(&s.no_picture_zones));
     Prepared {
         img,
         bg,
         skew_deg,
         content,
-        pictures,
+        pictures: hand,
+        vetoes,
     }
 }
 
@@ -987,6 +1036,7 @@ fn fit_to_page(p: Prepared, s: &Settings) -> (Prepared, Option<Settings>) {
         h: sc(r.h).max(1),
     });
     let pictures = p.pictures.iter().map(|z| z.map(|v| v * k)).collect();
+    let vetoes = p.vetoes.iter().map(|z| z.map(|v| v * k)).collect();
     let mut s2 = s.clone();
     // content already fills the fitted axis: only the 8 px margin remains around it
     if s.fit_width {
@@ -1004,6 +1054,7 @@ fn fit_to_page(p: Prepared, s: &Settings) -> (Prepared, Option<Settings>) {
             img,
             content,
             pictures,
+            vetoes,
             ..p
         },
         Some(s2),
@@ -1019,6 +1070,7 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
         skew_deg,
         content,
         pictures,
+        vetoes,
     } = p;
     let blank = content.is_none();
     // Output resolution: only ever *down*-sampled.
@@ -1164,7 +1216,32 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
                 (PageImage::Bw(mask), None)
             } else {
                 let gray = transform::gray_of(&rgb);
-                let mut zones = pictures::detect(&gray, out_dpi, s.picture_sensitivity);
+                let mut zones = if s.auto_pictures {
+                    pictures::detect(&gray, out_dpi, s.picture_sensitivity)
+                } else {
+                    Vec::new()
+                };
+                // Rectangles that overrule the detector: cut out of what it found (hand-marked
+                // pictures, added next, are not touched).
+                let cut: Vec<Rect> = vetoes
+                    .iter()
+                    .filter_map(|z| {
+                        let to = |v: f32, o: i64| ((v - o as f32) * f).round() as i64;
+                        let x0 = to(z[0], lay.cx).max(0);
+                        let y0 = to(z[1], lay.cy).max(0);
+                        let x1 = to(z[0] + z[2], lay.cx).min(cw as i64);
+                        let y1 = to(z[1] + z[3], lay.cy).min(ch as i64);
+                        (x1 > x0 && y1 > y0).then_some(Rect {
+                            x: x0 as u32,
+                            y: y0 as u32,
+                            w: (x1 - x0) as u32,
+                            h: (y1 - y0) as u32,
+                        })
+                    })
+                    .collect();
+                if !cut.is_empty() {
+                    zones = pictures::subtract(zones, &cut, (out_dpi / 12).max(4));
+                }
                 // Hand-marked pictures: pixels of the deskewed page -> canvas pixels.
                 for z in &pictures {
                     let to = |v: f32, o: i64| ((v - o as f32) * f).round() as i64;
@@ -1406,6 +1483,7 @@ mod tests {
                 h: 100,
             }),
             pictures: vec![],
+            vetoes: vec![],
         };
         let (q, s2) = fit_to_page(p, &s);
         let r = q.content.unwrap();
@@ -1569,6 +1647,69 @@ mod tests {
             .as_ref()
             .expect("layers when a picture is forced");
         assert!(l.patches.len() > n0, "{} patches vs {n0}", l.patches.len());
+    }
+
+    #[test]
+    fn automatic_pictures_can_be_vetoed_or_switched_off_and_hand_marked_ones_stay() {
+        let g = text_page(1200, 900, 100, 1100);
+        let mut rgb = to_rgb(&g);
+        // a dark photo the automatic detector finds: x 200..700, y 600..900 px at 300 dpi
+        for y in 600..900u32 {
+            for x in 200..700u32 {
+                let v = if (x * 31 + y * 17) % 97 == 0 { 200 } else { 8 };
+                rgb.put_pixel(x, y, Rgb([v, v, v]));
+            }
+        }
+        let src = image::DynamicImage::ImageRgb8(rgb);
+        let base = Settings {
+            mode: OutputMode::Mixed,
+            dpi: 300,
+            deskew: false,
+            auto_orient: false,
+            ..Settings::default()
+        };
+        let patches = |s: &Settings| {
+            process_page(&src, s)[0]
+                .layers
+                .as_ref()
+                .map_or(0, |l| l.patches.len())
+        };
+        assert!(patches(&base) >= 1, "the photo must be found automatically");
+        // 300 dpi: 1 mm = 11.81 px. A page-frame veto over the whole photo (mm)
+        let veto = Settings {
+            no_picture_zones: vec![[10.0, 45.0, 55.0, 30.0]],
+            ..base.clone()
+        };
+        assert_eq!(patches(&veto), 0);
+        // the same drawn on the sheet as loaded
+        let sheet = Settings {
+            sheet_no_picture_zones: vec![[10.0, 45.0, 55.0, 30.0]],
+            ..base.clone()
+        };
+        assert_eq!(patches(&sheet), 0);
+        // a veto elsewhere changes nothing
+        let away = Settings {
+            no_picture_zones: vec![[100.0, 5.0, 20.0, 10.0]],
+            ..base.clone()
+        };
+        assert_eq!(patches(&away), patches(&base));
+        // detector off: nothing, until a picture is marked by hand
+        let off = Settings {
+            auto_pictures: false,
+            ..base.clone()
+        };
+        assert_eq!(patches(&off), 0);
+        let hand = Settings {
+            picture_zones: vec![[18.0, 52.0, 40.0, 20.0]],
+            ..off.clone()
+        };
+        assert_eq!(patches(&hand), 1);
+        // a hand-marked picture inside a veto is kept (the veto only overrules the detector)
+        let both = Settings {
+            no_picture_zones: vec![[10.0, 45.0, 55.0, 30.0]],
+            ..hand.clone()
+        };
+        assert_eq!(patches(&both), 1);
     }
 
     fn red_share(p: &Page) -> Option<f32> {
@@ -2095,6 +2236,9 @@ mod tests {
                 fingers: rnd(2) == 0,
                 remove_lines: rnd(2) == 0,
                 sheet_erase_zones: vec![],
+                no_picture_zones: vec![],
+                sheet_no_picture_zones: vec![],
+                auto_pictures: rnd(2) == 0,
                 sheet_dewarp_guides: if rnd(3) == 0 {
                     vec![(0..3)
                         .map(|k| (k as f32 / 2.0, rnd(100) as f32 / 50.0 - 0.5))

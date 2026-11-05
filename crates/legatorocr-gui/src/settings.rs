@@ -84,6 +84,10 @@ pub struct UiSettings {
     /// `x,y,w,h;…` in mm (see `legatorocr_core::cleanup::parse_zones`).
     pub erase: String,
     pub picture_zones: String,
+    /// `x,y,w,h;…` in mm: the automatic picture detector is overruled there.
+    pub no_picture_zones: String,
+    /// Find pictures automatically in mixed / hybrid output.
+    pub auto_pictures: bool,
     /// `x,y x,y;…` guide lines for dewarping (see `legatorocr_core::dewarp::parse_guides`).
     pub dewarp_guides: String,
     pub dropout: legatorocr_core::Dropout,
@@ -147,6 +151,8 @@ impl Default for UiSettings {
             erase: String::new(),
             dewarp_guides: String::new(),
             picture_zones: String::new(),
+            no_picture_zones: String::new(),
+            auto_pictures: true,
             dropout: legatorocr_core::Dropout::Off,
             despeckle_strength: 1.0,
             show_through: false,
@@ -187,6 +193,8 @@ pub struct SheetAdjust {
     /// Erase rectangles drawn on the original (x, y, w, h in mm).
     pub erase_mm: Vec<[f32; 4]>,
     pub picture_mm: Vec<[f32; 4]>,
+    /// Rectangles drawn on the original where the automatic picture detector is overruled (mm).
+    pub no_picture_mm: Vec<[f32; 4]>,
     /// Dewarp guide lines drawn on the original (fractions 0–1 of the scan).
     pub dewarp_guides: Vec<Vec<(f32, f32)>>,
     /// Working rectangle drawn on the original (x, y, w, h in mm); outside it the sheet is blanked.
@@ -251,6 +259,7 @@ impl UiSettings {
             content_adjust_mm: adj.content_adjust_mm,
             sheet_erase_zones: adj.erase_mm.clone(),
             sheet_picture_zones: adj.picture_mm.clone(),
+            sheet_no_picture_zones: adj.no_picture_mm.clone(),
             sheet_dewarp_guides: adj.dewarp_guides.clone(),
             sheet_orient_locked: adj.orient_locked,
             sheet_work_mm: adj.work_mm,
@@ -272,6 +281,9 @@ impl UiSettings {
             erase_zones: legatorocr_core::cleanup::parse_zones(&self.erase).unwrap_or_default(),
             picture_zones: legatorocr_core::cleanup::parse_zones(&self.picture_zones)
                 .unwrap_or_default(),
+            no_picture_zones: legatorocr_core::cleanup::parse_zones(&self.no_picture_zones)
+                .unwrap_or_default(),
+            auto_pictures: self.auto_pictures,
             dropout: self.dropout,
             despeckle_strength: self.despeckle_strength,
             show_through: self.show_through,
@@ -367,6 +379,8 @@ impl UiSettings {
         self.erase = legatorocr_core::cleanup::zones_to_string(&c.erase_zones);
         self.dewarp_guides = legatorocr_core::dewarp::guides_to_string(&c.dewarp_guides);
         self.picture_zones = legatorocr_core::cleanup::zones_to_string(&c.picture_zones);
+        self.no_picture_zones = legatorocr_core::cleanup::zones_to_string(&c.no_picture_zones);
+        self.auto_pictures = c.auto_pictures;
         self.dropout = c.dropout;
         self.despeckle_strength = c.despeckle_strength;
         self.show_through = c.show_through;

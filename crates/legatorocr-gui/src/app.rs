@@ -170,6 +170,8 @@ pub struct App {
     guide_live: Option<(usize, usize, (f32, f32))>,
     /// What the mouse draws when `draw_zones` is on: picture zones instead of erase zones.
     draw_pictures: bool,
+    /// With `draw_zones`: the rectangles drawn overrule the automatic picture detector.
+    draw_nopic: bool,
     /// With `draw_zones`: 1 = draw the working rectangle, 2 = drag the cut line of a two-page sheet.
     draw_extra: u8,
     /// Processed pages show the content box with draggable edges.
@@ -178,7 +180,7 @@ pub struct App {
     box_drag: Option<(usize, egui::Pos2)>,
     zone_drag: Option<egui::Pos2>,
     /// A corner of an existing erase/picture zone being dragged: (is picture zone, index, corner).
-    zone_resize: Option<(bool, usize, u8)>,
+    zone_resize: Option<(u8, usize, u8)>,
     shot: Option<Shot>,
     /// Test hook: run an export without a file dialog (env LEGATOROCR_GUI_AUTOEXPORT_PDF).
     auto_export: Option<(PathBuf, bool)>,
@@ -234,6 +236,7 @@ impl App {
             guide_path: Vec::new(),
             guide_live: None,
             draw_pictures: false,
+            draw_nopic: false,
             draw_extra: 0,
             edit_box: false,
             box_drag: None,
@@ -333,6 +336,7 @@ impl App {
                         content_adjust_mm: a.content_adjust_mm,
                         erase_mm: a.erase_mm.clone(),
                         picture_mm: a.picture_mm.clone(),
+                        no_picture_mm: a.no_picture_mm.clone(),
                         dewarp_guides: a.dewarp_guides.clone(),
                         orient_locked: a.orient_locked,
                         work_mm: a.work_mm,
@@ -420,6 +424,7 @@ impl App {
                         content_adjust_mm: a.content_adjust_mm,
                         erase_mm: a.erase_mm.clone(),
                         picture_mm: a.picture_mm.clone(),
+                        no_picture_mm: a.no_picture_mm.clone(),
                         dewarp_guides: a.dewarp_guides.clone(),
                         orient_locked: a.orient_locked,
                         work_mm: a.work_mm,
@@ -1751,6 +1756,24 @@ impl App {
                             ch |= ui.add(te).changed();
                         });
                         if matches!(self.s.mode, ModeChoice::Mixed | ModeChoice::Hybrid) {
+                            ch |= ui
+                                .checkbox(&mut self.s.auto_pictures, tr("set.auto_pictures"))
+                                .on_hover_text(tr("set.auto_pictures_hint"))
+                                .changed();
+                            ui.horizontal(|ui| {
+                                ui.label(tr("set.no_picture_zones"));
+                                let bad =
+                                    legatorocr_core::cleanup::parse_zones(&self.s.no_picture_zones)
+                                        .is_none();
+                                let mut te =
+                                    egui::TextEdit::singleline(&mut self.s.no_picture_zones)
+                                        .desired_width(120.0)
+                                        .hint_text("x,y,w,h;…");
+                                if bad {
+                                    te = te.text_color(egui::Color32::LIGHT_RED);
+                                }
+                                ch |= ui.add(te).changed();
+                            });
                             ui.horizontal(|ui| {
                                 ui.label(tr("set.picture_zones"));
                                 let bad =
@@ -2062,24 +2085,33 @@ impl App {
             ui.checkbox(&mut self.edit_box, tr("box.edit"))
                 .on_hover_text(tr("box.hint"));
             if self.draw_zones {
+                let plain = !self.draw_guide && !self.draw_pictures && !self.draw_nopic;
                 if ui
-                    .selectable_label(
-                        !self.draw_guide && !self.draw_pictures,
-                        tr("zones.kind_erase"),
-                    )
+                    .selectable_label(plain && self.draw_extra == 0, tr("zones.kind_erase"))
                     .clicked()
                 {
-                    (self.draw_guide, self.draw_pictures) = (false, false);
+                    (self.draw_guide, self.draw_pictures, self.draw_nopic) = (false, false, false);
                     self.draw_extra = 0;
                 }
                 if ui
                     .selectable_label(
-                        !self.draw_guide && self.draw_pictures,
+                        !self.draw_guide && self.draw_pictures && self.draw_extra == 0,
                         tr("zones.kind_picture"),
                     )
                     .clicked()
                 {
-                    (self.draw_guide, self.draw_pictures) = (false, true);
+                    (self.draw_guide, self.draw_pictures, self.draw_nopic) = (false, true, false);
+                    self.draw_extra = 0;
+                }
+                if ui
+                    .selectable_label(
+                        !self.draw_guide && self.draw_nopic && self.draw_extra == 0,
+                        tr("zones.kind_nopic"),
+                    )
+                    .on_hover_text(tr("zones.nopic_hint"))
+                    .clicked()
+                {
+                    (self.draw_guide, self.draw_pictures, self.draw_nopic) = (false, false, true);
                     self.draw_extra = 0;
                 }
                 if ui
@@ -2099,7 +2131,8 @@ impl App {
                         .clicked()
                     {
                         self.draw_extra = v;
-                        (self.draw_guide, self.draw_pictures) = (false, false);
+                        (self.draw_guide, self.draw_pictures, self.draw_nopic) =
+                            (false, false, false);
                     }
                 }
                 if self.draw_guide
@@ -2206,6 +2239,7 @@ impl App {
             if ui.button(tr("zones.clear")).clicked()
                 && !(adj.erase_mm.is_empty()
                     && adj.picture_mm.is_empty()
+                    && adj.no_picture_mm.is_empty()
                     && adj.dewarp_guides.is_empty())
             {
                 clear_zones = true;
@@ -2302,12 +2336,14 @@ impl App {
             if clear_zones
                 && !(sh.adj.erase_mm.is_empty()
                     && sh.adj.picture_mm.is_empty()
+                    && sh.adj.no_picture_mm.is_empty()
                     && sh.adj.dewarp_guides.is_empty())
             {
                 sh.zone_undo.push(ZoneSnap::of(&sh.adj));
                 sh.zone_redo.clear();
                 sh.adj.erase_mm.clear();
                 sh.adj.picture_mm.clear();
+                sh.adj.no_picture_mm.clear();
                 sh.adj.dewarp_guides.clear();
                 sh.adj_gen += 1;
             } else if undo_zone {
@@ -2389,7 +2425,9 @@ impl App {
         let mm_per_px = 25.4 / self.s.dpi.max(36) as f32;
         let zones: Vec<[f32; 4]> = sheet.adj.erase_mm.clone();
         let pic_zones: Vec<[f32; 4]> = sheet.adj.picture_mm.clone();
+        let nopic_zones: Vec<[f32; 4]> = sheet.adj.no_picture_mm.clone();
         let draw_pictures = self.draw_pictures;
+        let draw_nopic = self.draw_nopic;
         let draw_guide = self.draw_guide;
         let draw_work = self.draw_extra == 1;
         let draw_cut = self.draw_extra == 2;
@@ -2409,10 +2447,10 @@ impl App {
         let mut box_delta: Option<(usize, f32)> = None;
         let bdrag = &mut self.box_drag;
         let mut new_zone: Option<[f32; 4]> = None;
-        let mut remove_zone: Option<(bool, usize)> = None;
+        let mut remove_zone: Option<(u8, usize)> = None;
         let drag = &mut self.zone_drag;
         let resize = &mut self.zone_resize;
-        let mut edit_zone: Option<(bool, usize, [f32; 4])> = None;
+        let mut edit_zone: Option<(u8, usize, [f32; 4])> = None;
         let mut draw = |ui: &mut egui::Ui| {
             ui.horizontal_top(|ui| {
                 for (tex, caption, is_orig, boxinfo) in &cells {
@@ -2483,6 +2521,33 @@ impl App {
                                     0.0,
                                     egui::Stroke::new(1.5, Color32::from_rgb(50, 110, 230)),
                                     egui::StrokeKind::Inside,
+                                );
+                            }
+                            // "no automatic picture here": violet with a cross
+                            for z in &nopic_zones {
+                                let r = egui::Rect::from_two_pos(
+                                    to_screen(z[0], z[1]),
+                                    to_screen(z[0] + z[2], z[1] + z[3]),
+                                );
+                                let c = Color32::from_rgb(170, 70, 220);
+                                painter.rect_filled(
+                                    r,
+                                    0.0,
+                                    Color32::from_rgba_unmultiplied(170, 70, 220, 50),
+                                );
+                                painter.rect_stroke(
+                                    r,
+                                    0.0,
+                                    egui::Stroke::new(1.5, c),
+                                    egui::StrokeKind::Inside,
+                                );
+                                painter.line_segment(
+                                    [r.left_top(), r.right_bottom()],
+                                    egui::Stroke::new(1.0, c),
+                                );
+                                painter.line_segment(
+                                    [r.right_top(), r.left_bottom()],
+                                    egui::Stroke::new(1.0, c),
                                 );
                             }
                             // working rectangle: everything outside is blanked; shown by dimming it
@@ -2811,26 +2876,25 @@ impl App {
                                     if let Some(o) = *drag {
                                         let (ox, oy) = to_mm(o);
                                         let tol = 8.0 * mm_per_px / k.x.max(0.01);
-                                        *resize = pic_zones
-                                            .iter()
-                                            .enumerate()
-                                            .rev()
-                                            .find_map(|(k, z)| {
-                                                corner_hit(z, (ox, oy), tol).map(|c| (true, k, c))
+                                        let find = |list: &Vec<[f32; 4]>, kind: u8| {
+                                            list.iter().enumerate().rev().find_map(|(k, z)| {
+                                                corner_hit(z, (ox, oy), tol).map(|c| (kind, k, c))
                                             })
-                                            .or_else(|| {
-                                                zones.iter().enumerate().rev().find_map(|(k, z)| {
-                                                    corner_hit(z, (ox, oy), tol)
-                                                        .map(|c| (false, k, c))
-                                                })
-                                            });
+                                        };
+                                        *resize = find(&pic_zones, 1)
+                                            .or_else(|| find(&nopic_zones, 2))
+                                            .or_else(|| find(&zones, 0));
                                         if resize.is_some() {
                                             *drag = None;
                                         }
                                     }
                                 }
-                                if let Some((is_pic, k, c)) = *resize {
-                                    let list = if is_pic { &pic_zones } else { &zones };
+                                if let Some((kind, k, c)) = *resize {
+                                    let list = match kind {
+                                        1 => &pic_zones,
+                                        2 => &nopic_zones,
+                                        _ => &zones,
+                                    };
                                     if let (Some(z), Some(lp)) =
                                         (list.get(k), ui.input(|i| i.pointer.latest_pos()))
                                     {
@@ -2846,7 +2910,7 @@ impl App {
                                             egui::StrokeKind::Inside,
                                         );
                                         if resp.drag_stopped() {
-                                            edit_zone = Some((is_pic, k, nz));
+                                            edit_zone = Some((kind, k, nz));
                                             *resize = None;
                                         }
                                     } else {
@@ -2890,9 +2954,12 @@ impl App {
                                         remove_zone = pic_zones
                                             .iter()
                                             .rposition(hit)
-                                            .map(|k| (true, k))
+                                            .map(|k| (1u8, k))
                                             .or_else(|| {
-                                                zones.iter().rposition(hit).map(|k| (false, k))
+                                                nopic_zones.iter().rposition(hit).map(|k| (2u8, k))
+                                            })
+                                            .or_else(|| {
+                                                zones.iter().rposition(hit).map(|k| (0u8, k))
                                             });
                                     }
                                 }
@@ -3078,14 +3145,18 @@ impl App {
         }
         if let Some(z) = new_zone {
             let a = &mut self.sheets[i].adj;
-            let list = if draw_pictures {
+            let list = if draw_nopic {
+                &a.no_picture_mm
+            } else if draw_pictures {
                 &a.picture_mm
             } else {
                 &a.erase_mm
             };
             if list.len() < 64 {
                 let before = ZoneSnap::of(a);
-                if draw_pictures {
+                if draw_nopic {
+                    a.no_picture_mm.push(z);
+                } else if draw_pictures {
                     a.picture_mm.push(z);
                 } else {
                     a.erase_mm.push(z);
@@ -3114,13 +3185,13 @@ impl App {
             self.sheets[i].zone_redo.clear();
             self.sheets[i].adj_gen += 1;
         }
-        if let Some((is_pic, k, z)) = edit_zone {
+        if let Some((kind, k, z)) = edit_zone {
             let a = &mut self.sheets[i].adj;
             let before = ZoneSnap::of(a);
-            let list = if is_pic {
-                &mut a.picture_mm
-            } else {
-                &mut a.erase_mm
+            let list = match kind {
+                1 => &mut a.picture_mm,
+                2 => &mut a.no_picture_mm,
+                _ => &mut a.erase_mm,
             };
             if k < list.len() {
                 list[k] = z;
@@ -3129,13 +3200,13 @@ impl App {
                 self.sheets[i].adj_gen += 1;
             }
         }
-        if let Some((is_pic, k)) = remove_zone {
+        if let Some((kind, k)) = remove_zone {
             let a = &mut self.sheets[i].adj;
             let before = ZoneSnap::of(a);
-            if is_pic {
-                a.picture_mm.remove(k);
-            } else {
-                a.erase_mm.remove(k);
+            match kind {
+                1 => drop(a.picture_mm.remove(k)),
+                2 => drop(a.no_picture_mm.remove(k)),
+                _ => drop(a.erase_mm.remove(k)),
             }
             self.sheets[i].zone_undo.push(before);
             self.sheets[i].zone_redo.clear();

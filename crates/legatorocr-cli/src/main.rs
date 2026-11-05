@@ -976,6 +976,18 @@ struct Cli {
     #[arg(long, value_name = "X,Y,W,H")]
     picture_zone: Vec<String>,
 
+    /// Overrule the automatic picture detector inside this rectangle (mixed / hybrid output):
+    /// X,Y,WIDTH,HEIGHT in mm like --picture-zone (repeatable). What the detector found there is
+    /// cut out of its zones and goes back to the black-and-white layer; a rectangle given with
+    /// --picture-zone is not affected.
+    #[arg(long, value_name = "X,Y,W,H")]
+    no_picture_zone: Vec<String>,
+
+    /// Do not look for pictures automatically (mixed / hybrid output): only the rectangles
+    /// given with --picture-zone are kept as colour.
+    #[arg(long)]
+    no_auto_pictures: bool,
+
     /// Straighten a bent text line you point out: "X,Y X,Y …" with X and Y as fractions 0–1 of
     /// the deskewed page's width and height (at least two points; repeat for several lines).
     /// Replaces the automatic --dewarp estimate.
@@ -2094,6 +2106,14 @@ fn real_main() -> Result<()> {
         },
         sheet_dewarp_guides: Vec::new(),
         sheet_picture_zones: Vec::new(),
+        sheet_no_picture_zones: Vec::new(),
+        no_picture_zones: legatorocr_core::cleanup::parse_zones(&cli.no_picture_zone.join(";"))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--no-picture-zone needs X,Y,WIDTH,HEIGHT in mm (width and height > 0)"
+                )
+            })?,
+        auto_pictures: !cli.no_auto_pictures,
         dewarp_guides: legatorocr_core::dewarp::parse_guides(&cli.dewarp_guide.join(";"))
             .ok_or_else(|| {
                 anyhow::anyhow!(
