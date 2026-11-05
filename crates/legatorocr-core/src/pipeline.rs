@@ -118,6 +118,13 @@ pub struct Settings {
     /// Like `erase_zones` but in millimetres of the *scanned sheet as loaded* (before
     /// rotation and page splitting); drawn with the mouse in the GUI, stored per sheet.
     pub sheet_erase_zones: Vec<[f32; 4]>,
+    /// Working rectangle (x, y, w, h in mm of the sheet as loaded): everything outside it is
+    /// painted with the paper colour before anything is measured. Drawn in the GUI, stored per sheet.
+    pub sheet_work_mm: Option<[f32; 4]>,
+    /// Where to cut a two-page sheet: a fraction (0-1) of the loaded sheet's width, set by dragging
+    /// a line on the original. Used when splitting is on and the sheet is not turned a quarter
+    /// (0 or 180 degrees); otherwise the automatic or middle cut applies.
+    pub sheet_split_frac: Option<f32>,
     /// Drop one printed colour (form rules, stamps).
     pub dropout: Dropout,
     /// Despeckle strength 0.25–4 (1 = default speck size).
@@ -167,6 +174,8 @@ impl Default for Settings {
             picture_zones: Vec::new(),
             sheet_picture_zones: Vec::new(),
             sheet_erase_zones: Vec::new(),
+            sheet_work_mm: None,
+            sheet_split_frac: None,
             dropout: Dropout::Off,
             despeckle_strength: 1.0,
             show_through: false,
@@ -502,7 +511,16 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
 
     let mut cut_at = None;
     if s.split != SplitMode::Off {
+        // a line the user dragged on the original wins over the automatic cut (kept to 0/180 deg)
+        let manual = s.sheet_split_frac.filter(|f| f.is_finite() && *f > 0.0 && *f < 1.0).and_then(|f| {
+            match s.rotate_quarters % 4 {
+                0 => Some(f),
+                2 => Some(1.0 - f),
+                _ => None,
+            }
+        });
         let cut = match s.split {
+            _ if manual.is_some() => manual.map(|f| (f * rgb.width() as f32).round() as u32),
             SplitMode::Middle => {
                 (rgb.width() as f32 >= 1.15 * rgb.height() as f32).then_some(rgb.width() / 2)
             }
@@ -555,13 +573,46 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
 /// Run the whole pipeline on one scanned sheet. A two-page spread yields two pages.
 /// The sheet with its hand-drawn erase zones painted over (borrowed when there are none).
 fn erase_on_sheet<'a>(src: &'a DynamicImage, s: &Settings) -> std::borrow::Cow<'a, DynamicImage> {
-    if s.sheet_erase_zones.is_empty() {
+    if s.sheet_erase_zones.is_empty() && s.sheet_work_mm.is_none() {
         return std::borrow::Cow::Borrowed(src);
     }
     let mut rgb = src.to_rgb8();
     let paper = transform::estimate_background(&rgb);
-    cleanup::erase_zones(&mut rgb, s.dpi, &s.sheet_erase_zones, paper);
+    let mut zones = s.sheet_erase_zones.clone();
+    if let Some(w) = s.sheet_work_mm {
+        zones.extend(outside_work_area(w, rgb.width(), rgb.height(), s.dpi));
+    }
+    cleanup::erase_zones(&mut rgb, s.dpi, &zones, paper);
     std::borrow::Cow::Owned(DynamicImage::ImageRgb8(rgb))
+}
+
+/// The four strips of a `w` x `h` px sheet that lie outside the working rectangle `work`
+/// (x, y, w, h in mm), as erase zones in mm. A rectangle that does not overlap the sheet leaves the
+/// whole sheet erased, so a nonsensical one is ignored instead (no zones).
+fn outside_work_area(work: [f32; 4], w: u32, h: u32, dpi: u32) -> Vec<[f32; 4]> {
+    let mm = 25.4 / dpi.max(1) as f32;
+    let (sw, sh) = (w as f32 * mm, h as f32 * mm);
+    let x0 = work[0].clamp(0.0, sw);
+    let y0 = work[1].clamp(0.0, sh);
+    let x1 = (work[0] + work[2]).clamp(0.0, sw);
+    let y1 = (work[1] + work[3]).clamp(0.0, sh);
+    if !(work.iter().all(|v| v.is_finite())) || x1 - x0 < 1.0 || y1 - y0 < 1.0 {
+        return Vec::new();
+    }
+    let mut z = Vec::new();
+    if y0 > 0.0 {
+        z.push([0.0, 0.0, sw, y0]);
+    }
+    if y1 < sh {
+        z.push([0.0, y1, sw, sh - y1]);
+    }
+    if x0 > 0.0 {
+        z.push([0.0, y0, x0, y1 - y0]);
+    }
+    if x1 < sw {
+        z.push([x1, y0, sw - x1, y1 - y0]);
+    }
+    z
 }
 
 pub fn process_page(src: &DynamicImage, s: &Settings) -> Vec<Page> {
@@ -1469,6 +1520,64 @@ mod tests {
     }
 
     #[test]
+    fn a_dragged_cut_line_splits_the_sheet_where_it_was_put() {
+        // 2400 x 900 px sheet at 300 dpi; the cut is asked at 25 % of the width, not in the middle
+        let g = text_page(2400, 900, 100, 2300);
+        let src = image::DynamicImage::ImageRgb8(to_rgb(&g));
+        let mut s = Settings {
+            dpi: 300,
+            deskew: false,
+            auto_orient: false,
+            split: SplitMode::Middle,
+            sheet_split_frac: Some(0.25),
+            ..Settings::default()
+        };
+        let sizes = |s: &Settings| -> Vec<u32> {
+            split_sheet(&src, s).iter().map(|p| p.0.width()).collect()
+        };
+        assert_eq!(sizes(&s), vec![600, 1800]);
+        // turned half a turn, the line is measured from the other edge
+        s.rotate_quarters = 2;
+        assert_eq!(sizes(&s), vec![1800, 600]);
+        // splitting off: the line is not used
+        s.rotate_quarters = 0;
+        s.split = SplitMode::Off;
+        assert_eq!(sizes(&s), vec![2400]);
+        // a nonsense fraction falls back to the normal cut
+        s.split = SplitMode::Middle;
+        s.sheet_split_frac = Some(1.5);
+        assert_eq!(sizes(&s), vec![1200, 1200]);
+    }
+
+    #[test]
+    fn working_rectangle_blanks_everything_outside_it() {
+        let z = outside_work_area([10.0, 20.0, 50.0, 60.0], 600, 600, 300);
+        // sheet is 50.8 mm square: the rectangle reaches past the right and bottom edges
+        let area: f32 = z.iter().map(|r| r[2] * r[3]).sum();
+        let sheet = 50.8f32 * 50.8;
+        let inside = (50.8 - 10.0) * (50.8 - 20.0);
+        assert!((area - (sheet - inside)).abs() < 0.5, "{area} vs {}", sheet - inside);
+        // a rectangle with no overlap is ignored rather than erasing the whole sheet
+        assert!(outside_work_area([100.0, 100.0, 5.0, 5.0], 600, 600, 300).is_empty());
+        assert!(outside_work_area([f32::NAN, 0.0, 5.0, 5.0], 600, 600, 300).is_empty());
+        // end to end: ink outside the rectangle is gone, ink inside stays
+        let mut g = image::GrayImage::from_pixel(600, 600, image::Luma([255]));
+        for y in 100..140 {
+            for x in 50..150 {
+                g.put_pixel(x, y, image::Luma([0])); // outside (left of x = 10 mm = 118 px)
+            }
+            for x in 300..400 {
+                g.put_pixel(x, y, image::Luma([0])); // inside
+            }
+        }
+        let src = image::DynamicImage::ImageLuma8(g);
+        let s = Settings { dpi: 300, sheet_work_mm: Some([10.0, 5.0, 40.0, 40.0]), ..Settings::default() };
+        let out = erase_on_sheet(&src, &s).to_luma8();
+        assert_eq!(out.get_pixel(100, 120).0[0], 255, "ink outside is painted over");
+        assert_eq!(out.get_pixel(350, 120).0[0], 0, "ink inside stays");
+    }
+
+    #[test]
     fn mouse_drawn_zone_lands_on_the_right_half_of_a_split_spread() {
         let g = text_page(2400, 900, 100, 2300);
         let mut rgb = to_rgb(&g);
@@ -1853,6 +1962,12 @@ mod tests {
                 } else {
                     Vec::new()
                 },
+                sheet_work_mm: if rnd(4) == 0 {
+                    Some([rnd(100) as f32 - 20.0, rnd(100) as f32 - 20.0, rnd(300) as f32, rnd(300) as f32])
+                } else {
+                    None
+                },
+                sheet_split_frac: if rnd(4) == 0 { Some(rnd(120) as f32 / 100.0 - 0.1) } else { None },
                 sheet_picture_zones: if rnd(3) == 0 {
                     vec![[
                         rnd(300) as f32 - 50.0,

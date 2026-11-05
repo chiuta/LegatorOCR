@@ -82,6 +82,7 @@ These package names were checked on 2026-11-04 (`docs/audit/ocr-externals.md`): 
 The app also looks in the usual install folders (Homebrew `/opt/homebrew/bin`, `/usr/local/bin`,
 `C:\Program Files\Tesseract-OCR`), so a double-clicked app works without editing `PATH`.
 Without Tesseract the native engine is used (the OCR switch stays enabled).
+A build **without the compiled-in recogniser model** (for example while its licence is unresolved, `docs/audit/assets-licences.md`) is `cargo build --release --no-default-features --features lexicon` (add `--no-default-features` alone to leave out the word lists too); the whole test suite passes that way, `--doctor` then reports the native engine as missing, and OCR needs Tesseract or an external engine.
 `--auto-rotate` / the OSD checkbox additionally need `osd.traineddata` (part of the standard packages).
 
 ## Pipeline
@@ -106,6 +107,7 @@ Without Tesseract the native engine is used (the OCR switch stays enabled).
 | Separator sheets | `--split-on-barcode` (pages carrying a bar code, upright, turned 180° or sideways, read on the raw scan — Code 128, EAN-13, ITF, Code 39 —, start a new document named after the code → `book_001_ACT-17.pdf`), `--make-separator TEXT` prints such a sheet (A4 PNG) |
 | PDF navigation | `--bookmarks` (one outline entry per source file), `--front-matter N` (pages i, ii, iii … then 1, 2, 3 in PDF viewers) |
 | Erase zones | `--erase X,Y,W,H` (mm from the page's top-left, repeatable): painted with the paper colour before anything else is measured; `erase=` in `.lgr` projects; GUI text field |
+| Working area and cut line | `--work-area X,Y,W,H` (mm of the loaded scan): everything outside is painted with the paper colour before anything is measured; `--cut-at FRACTION` cuts a two-page sheet at that share of its width instead of the gutter or the middle (sheets not turned, or turned 180°). In the GUI both are drawn or dragged on the original ("Work area", "Cut line"); `work =` and `split-at =` in `.lgr` projects. Tested on synthetic sheets only |
 | Batch | `--skip-duplicates` (consecutive pages with a 96×128 thumbnail difference ≤ 2/255), `--split-on-blank` (blank pages separate documents → `name_001.pdf`, …), `--target-size MB` (JPEG quality chosen from a sample of pages so the PDF fits) |
 | OCR input | pages below 250 dpi are enlarged ×2–×4 (Catmull-Rom) before Tesseract; word boxes are mapped back |
 | Phone photos | `--perspective`: finds the page as the large bright quadrilateral (Otsu + extreme corners, with convexity/fill checks) and warps it with a homography; does nothing for upright or full-frame scans |

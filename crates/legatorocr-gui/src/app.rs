@@ -169,6 +169,8 @@ pub struct App {
     guide_live: Option<(usize, usize, (f32, f32))>,
     /// What the mouse draws when `draw_zones` is on: picture zones instead of erase zones.
     draw_pictures: bool,
+    /// With `draw_zones`: 1 = draw the working rectangle, 2 = drag the cut line of a two-page sheet.
+    draw_extra: u8,
     /// Processed pages show the content box with draggable edges.
     edit_box: bool,
     /// Edge being dragged: (0 left, 1 top, 2 right, 3 bottom, screen position at the start).
@@ -230,6 +232,7 @@ impl App {
             guide_path: Vec::new(),
             guide_live: None,
             draw_pictures: false,
+            draw_extra: 0,
             edit_box: false,
             box_drag: None,
             zone_drag: None,
@@ -316,6 +319,8 @@ impl App {
                         erase_mm: a.erase_mm.clone(),
                         picture_mm: a.picture_mm.clone(),
                         dewarp_guides: a.dewarp_guides.clone(),
+                        work_mm: a.work_mm,
+                        split_frac: a.split_frac,
                         ..Default::default()
                     },
                 )
@@ -398,6 +403,8 @@ impl App {
                         erase_mm: a.erase_mm.clone(),
                         picture_mm: a.picture_mm.clone(),
                         dewarp_guides: a.dewarp_guides.clone(),
+                        work_mm: a.work_mm,
+                        split_frac: a.split_frac,
                     };
                 }
                 self.settings_gen += 1;
@@ -1903,6 +1910,7 @@ impl App {
                     .clicked()
                 {
                     (self.draw_guide, self.draw_pictures) = (false, false);
+                    self.draw_extra = 0;
                 }
                 if ui
                     .selectable_label(
@@ -1912,9 +1920,28 @@ impl App {
                     .clicked()
                 {
                     (self.draw_guide, self.draw_pictures) = (false, true);
+                    self.draw_extra = 0;
                 }
-                ui.selectable_value(&mut self.draw_guide, true, tr("zones.kind_guide"))
-                    .on_hover_text(tr("zones.guide_hint"));
+                if ui
+                    .selectable_value(&mut self.draw_guide, true, tr("zones.kind_guide"))
+                    .on_hover_text(tr("zones.guide_hint"))
+                    .clicked()
+                {
+                    self.draw_extra = 0;
+                }
+                for (v, k, h) in [
+                    (1u8, "zones.kind_work", "zones.work_hint"),
+                    (2u8, "zones.kind_cut", "zones.cut_hint"),
+                ] {
+                    if ui
+                        .selectable_label(self.draw_extra == v, tr(k))
+                        .on_hover_text(tr(h))
+                        .clicked()
+                    {
+                        self.draw_extra = v;
+                        (self.draw_guide, self.draw_pictures) = (false, false);
+                    }
+                }
                 if self.draw_guide
                     && ui
                         .button(tr("zones.guide_grid"))
@@ -2201,6 +2228,12 @@ impl App {
         let pic_zones: Vec<[f32; 4]> = sheet.adj.picture_mm.clone();
         let draw_pictures = self.draw_pictures;
         let draw_guide = self.draw_guide;
+        let draw_work = self.draw_extra == 1;
+        let draw_cut = self.draw_extra == 2;
+        let work_now: Option<[f32; 4]> = sheet.adj.work_mm;
+        let cut_now: Option<f32> = sheet.adj.split_frac;
+        let mut new_work: Option<Option<[f32; 4]>> = None;
+        let mut new_cut: Option<Option<f32>> = None;
         let guide_list: Vec<Vec<(f32, f32)>> = sheet.adj.dewarp_guides.clone();
         let mut new_guide: Option<Vec<(f32, f32)>> = None;
         let mut remove_guide: Option<usize> = None;
@@ -2288,6 +2321,90 @@ impl App {
                                     egui::Stroke::new(1.5, Color32::from_rgb(50, 110, 230)),
                                     egui::StrokeKind::Inside,
                                 );
+                            }
+                            // working rectangle: everything outside is blanked; shown by dimming it
+                            if let Some(w) = work_now {
+                                let r = egui::Rect::from_two_pos(
+                                    to_screen(w[0], w[1]),
+                                    to_screen(w[0] + w[2], w[1] + w[3]),
+                                )
+                                .intersect(rect);
+                                let dim = Color32::from_rgba_unmultiplied(0, 0, 0, 80);
+                                painter.rect_filled(egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, r.min.y)), 0.0, dim);
+                                painter.rect_filled(egui::Rect::from_min_max(egui::pos2(rect.min.x, r.max.y), rect.max), 0.0, dim);
+                                painter.rect_filled(egui::Rect::from_min_max(egui::pos2(rect.min.x, r.min.y), egui::pos2(r.min.x, r.max.y)), 0.0, dim);
+                                painter.rect_filled(egui::Rect::from_min_max(egui::pos2(r.max.x, r.min.y), egui::pos2(rect.max.x, r.max.y)), 0.0, dim);
+                                painter.rect_stroke(
+                                    r,
+                                    0.0,
+                                    egui::Stroke::new(2.0, Color32::from_rgb(40, 170, 80)),
+                                    egui::StrokeKind::Inside,
+                                );
+                            }
+                            // cut line of a two-page sheet
+                            if let Some(f) = cut_now {
+                                let x = rect.min.x + f * rect.width();
+                                painter.line_segment(
+                                    [egui::pos2(x, rect.min.y), egui::pos2(x, rect.max.y)],
+                                    egui::Stroke::new(2.0, Color32::from_rgb(255, 140, 0)),
+                                );
+                            }
+                            if draw_zones && draw_work {
+                                if resp.drag_started() {
+                                    *drag = ui
+                                        .input(|i| i.pointer.press_origin())
+                                        .or_else(|| resp.interact_pointer_pos());
+                                }
+                                if !ui.input(|i| i.pointer.any_down()) && !resp.drag_stopped() {
+                                    *drag = None;
+                                }
+                                if let (Some(a), Some(b)) =
+                                    (*drag, ui.input(|i| i.pointer.latest_pos()))
+                                {
+                                    let r = egui::Rect::from_two_pos(a, b).intersect(rect);
+                                    painter.rect_stroke(
+                                        r,
+                                        0.0,
+                                        egui::Stroke::new(1.5, Color32::from_rgb(40, 170, 80)),
+                                        egui::StrokeKind::Inside,
+                                    );
+                                    if resp.drag_stopped() {
+                                        let (x0, y0) = to_mm(r.min);
+                                        let (x1, y1) = to_mm(r.max);
+                                        if x1 - x0 > 5.0 && y1 - y0 > 5.0 {
+                                            new_work = Some(Some([x0, y0, x1 - x0, y1 - y0]));
+                                        }
+                                        *drag = None;
+                                    }
+                                }
+                                if resp.secondary_clicked() {
+                                    new_work = Some(None);
+                                }
+                            } else if draw_zones && draw_cut {
+                                if resp.clicked() || resp.dragged() {
+                                    if let Some(p) = resp.interact_pointer_pos() {
+                                        let f = ((p.x - rect.min.x) / rect.width().max(1.0)).clamp(0.02, 0.98);
+                                        if resp.dragged() {
+                                            let x = rect.min.x + f * rect.width();
+                                            painter.line_segment(
+                                                [egui::pos2(x, rect.min.y), egui::pos2(x, rect.max.y)],
+                                                egui::Stroke::new(2.0, Color32::from_rgb(255, 140, 0)),
+                                            );
+                                        }
+                                        if resp.drag_stopped() || resp.clicked() {
+                                            new_cut = Some(Some(f));
+                                        }
+                                    }
+                                }
+                                if resp.drag_stopped() {
+                                    if let Some(p) = ui.input(|i| i.pointer.latest_pos()) {
+                                        let f = ((p.x - rect.min.x) / rect.width().max(1.0)).clamp(0.02, 0.98);
+                                        new_cut = Some(Some(f));
+                                    }
+                                }
+                                if resp.secondary_clicked() {
+                                    new_cut = Some(None);
+                                }
                             }
                             for (gi, g) in guide_list.iter().enumerate() {
                                 let pts: Vec<egui::Pos2> = g
@@ -2479,7 +2596,7 @@ impl App {
                                         }
                                     }
                                 }
-                            } else if draw_zones {
+                            } else if draw_zones && !draw_work && !draw_cut {
                                 if resp.drag_started() {
                                     // egui reports the start only after the pointer has moved a
                                     // little: the rectangle begins where the button went down
@@ -2766,6 +2883,25 @@ impl App {
                 self.sheets[i].zone_redo.clear();
                 self.sheets[i].adj_gen += 1;
             }
+        }
+        if let Some(w) = new_work {
+            let before = ZoneSnap::of(&self.sheets[i].adj);
+            self.sheets[i].adj.work_mm = w;
+            self.sheets[i].zone_undo.push(before);
+            self.sheets[i].zone_redo.clear();
+            self.sheets[i].adj_gen += 1;
+        }
+        if let Some(c) = new_cut {
+            let before = ZoneSnap::of(&self.sheets[i].adj);
+            let adj = &mut self.sheets[i].adj;
+            adj.split_frac = c;
+            // a cut line does nothing while splitting is off: turn it on for this sheet
+            if c.is_some() && matches!(adj.split, Some(SplitChoice::Off)) {
+                adj.split = Some(SplitChoice::Middle);
+            }
+            self.sheets[i].zone_undo.push(before);
+            self.sheets[i].zone_redo.clear();
+            self.sheets[i].adj_gen += 1;
         }
         if let Some((is_pic, k, z)) = edit_zone {
             let a = &mut self.sheets[i].adj;

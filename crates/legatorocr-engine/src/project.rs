@@ -37,6 +37,10 @@ pub struct SheetAdj {
     pub picture_mm: Vec<[f32; 4]>,
     /// Hand-drawn dewarp guide lines: points as fractions (0–1) of the loaded scan.
     pub dewarp_guides: Vec<Vec<(f32, f32)>>,
+    /// Working rectangle (x, y, w, h in mm of the loaded scan); outside it the sheet is blanked.
+    pub work_mm: Option<[f32; 4]>,
+    /// Cut line of a two-page sheet as a fraction (0-1) of the loaded width.
+    pub split_frac: Option<f32>,
 }
 
 impl SheetAdj {
@@ -56,6 +60,8 @@ impl SheetAdj {
         s.sheet_erase_zones = self.erase_mm.clone();
         s.sheet_picture_zones = self.picture_mm.clone();
         s.sheet_dewarp_guides = self.dewarp_guides.clone();
+        s.sheet_work_mm = self.work_mm.or(s.sheet_work_mm);
+        s.sheet_split_frac = self.split_frac.or(s.sheet_split_frac);
         s
     }
 }
@@ -357,6 +363,15 @@ impl Project {
                     legatorocr_core::cleanup::zones_to_string(&a.erase_mm)
                 ));
             }
+            if let Some(w) = a.work_mm {
+                out.push_str(&format!(
+                    "work = {}\n",
+                    legatorocr_core::cleanup::zones_to_string(&[w])
+                ));
+            }
+            if let Some(f) = a.split_frac {
+                out.push_str(&format!("split-at = {f}\n"));
+            }
         }
         out
     }
@@ -426,6 +441,20 @@ impl Project {
                     "erase" => {
                         adj.erase_mm = legatorocr_core::cleanup::parse_zones(v)
                             .ok_or_else(|| at(anyhow::anyhow!("invalid erase zones '{v}'")))?
+                    }
+                    "work" => {
+                        let z = legatorocr_core::cleanup::parse_zones(v)
+                            .filter(|z| z.len() == 1)
+                            .ok_or_else(|| at(anyhow::anyhow!("invalid work area '{v}'")))?;
+                        adj.work_mm = Some(z[0]);
+                    }
+                    "split-at" => {
+                        let f: f32 = v
+                            .parse()
+                            .ok()
+                            .filter(|f: &f32| f.is_finite() && *f > 0.0 && *f < 1.0)
+                            .ok_or_else(|| at(anyhow::anyhow!("invalid split-at '{v}' (a fraction between 0 and 1)")))?;
+                        adj.split_frac = Some(f);
                     }
                     "adjust" => {
                         adj.content_adjust_mm =
@@ -532,6 +561,8 @@ mod tests {
                 skew_deg: Some(-1.25),
                 content_adjust_mm: [0.0, 1.0, 2.0, -3.0],
                 erase_mm: vec![[10.0, 20.5, 30.0, 40.0], [0.0, 0.0, 5.0, 5.0]],
+                work_mm: Some([5.0, 6.0, 100.0, 120.5]),
+                split_frac: Some(0.4375),
                 picture_mm: vec![[50.0, 60.0, 70.5, 80.0]],
                 dewarp_guides: vec![vec![(0.0, 0.25), (0.5, 0.3), (1.0, 0.25)]],
             },

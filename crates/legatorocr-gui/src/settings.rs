@@ -189,6 +189,10 @@ pub struct SheetAdjust {
     pub picture_mm: Vec<[f32; 4]>,
     /// Dewarp guide lines drawn on the original (fractions 0–1 of the scan).
     pub dewarp_guides: Vec<Vec<(f32, f32)>>,
+    /// Working rectangle drawn on the original (x, y, w, h in mm); outside it the sheet is blanked.
+    pub work_mm: Option<[f32; 4]>,
+    /// Cut line of a two-page sheet, as a fraction (0-1) of the original's width.
+    pub split_frac: Option<f32>,
 }
 
 impl SheetAdjust {
@@ -246,6 +250,8 @@ impl UiSettings {
             sheet_erase_zones: adj.erase_mm.clone(),
             sheet_picture_zones: adj.picture_mm.clone(),
             sheet_dewarp_guides: adj.dewarp_guides.clone(),
+            sheet_work_mm: adj.work_mm,
+            sheet_split_frac: adj.split_frac,
             align: self.align,
             threshold: self.threshold,
             normalize_bg: self.normalize_bg,

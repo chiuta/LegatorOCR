@@ -882,6 +882,17 @@ struct Cli {
     #[arg(long, value_name = "X,Y,W,H")]
     erase: Vec<String>,
 
+    /// Working rectangle X,Y,WIDTH,HEIGHT in mm from the top-left of the loaded scan: everything
+    /// outside it is painted with the paper colour before anything is measured (borders, a neighbouring
+    /// page, a table edge).
+    #[arg(long, value_name = "X,Y,W,H")]
+    work_area: Option<String>,
+
+    /// Cut a two-page sheet at this fraction (0-1) of its width instead of the automatic gutter or the
+    /// middle (needs splitting on; not used for sheets turned a quarter).
+    #[arg(long, value_name = "FRACTION")]
+    cut_at: Option<f32>,
+
     /// Photographs from a phone have no usable resolution: assume each shot is framed on a page
     /// of this size (`A4`, `A5`, `B5`, `Letter`, … or `WIDTHxHEIGHT` in mm) and derive the dpi
     /// from it. Only used for images without a resolution in their header and without --dpi.
@@ -1894,6 +1905,22 @@ fn real_main() -> Result<()> {
         fingers: cli.fingers,
         remove_lines: cli.remove_lines,
         sheet_erase_zones: Vec::new(),
+        sheet_work_mm: match cli.work_area.as_deref() {
+            None => None,
+            Some(v) => Some(
+                legatorocr_core::cleanup::parse_zones(v)
+                    .filter(|z| z.len() == 1)
+                    .map(|z| z[0])
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("--work-area needs X,Y,WIDTH,HEIGHT in mm (width and height > 0)")
+                    })?,
+            ),
+        },
+        sheet_split_frac: match cli.cut_at {
+            None => None,
+            Some(f) if f.is_finite() && f > 0.0 && f < 1.0 => Some(f),
+            Some(_) => anyhow::bail!("--cut-at needs a fraction between 0 and 1, e.g. 0.45"),
+        },
         sheet_dewarp_guides: Vec::new(),
         sheet_picture_zones: Vec::new(),
         dewarp_guides: legatorocr_core::dewarp::parse_guides(&cli.dewarp_guide.join(";"))
@@ -1950,6 +1977,8 @@ fn real_main() -> Result<()> {
             "--punch-holes",
             "--remove-lines",
             "--erase",
+            "--work-area",
+            "--cut-at",
             "--picture-zone",
         ];
         let given: Vec<String> = std::env::args()

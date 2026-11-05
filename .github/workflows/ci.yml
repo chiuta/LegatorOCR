@@ -26,6 +26,9 @@ jobs:
         run: cargo build --locked --workspace --all-targets
       - name: Test
         run: cargo test --locked --workspace
+      - name: Build and test without the compiled-in OCR model
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo test --locked --workspace --no-default-features --features lexicon
       - name: Every option used in docs/tasks exists
         if: matrix.os == 'ubuntu-latest'
         run: python3 scripts/check-docs.py target/debug/legatorocr
