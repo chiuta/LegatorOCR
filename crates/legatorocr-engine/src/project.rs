@@ -206,6 +206,15 @@ pub fn settings_to_pairs(s: &Settings) -> Vec<(&'static str, String)> {
             "picture_zones",
             legatorocr_core::cleanup::zones_to_string(&s.picture_zones),
         ),
+        (
+            "work_area",
+            s.sheet_work_mm
+                .map_or(String::new(), |[x, y, w, h]| format!("{x},{y},{w},{h}")),
+        ),
+        (
+            "cut_at",
+            s.sheet_split_frac.map_or(String::new(), |f| f.to_string()),
+        ),
         ("dropout", s.dropout.name().into()),
         ("despeckle_strength", s.despeckle_strength.to_string()),
         ("show_through", s.show_through.to_string()),
@@ -263,6 +272,33 @@ pub fn apply_pair(s: &mut Settings, k: &str, v: &str) -> Result<bool> {
         "erase" => s.erase_zones = legatorocr_core::cleanup::parse_zones(v).ok_or_else(bad)?,
         "picture_zones" => {
             s.picture_zones = legatorocr_core::cleanup::parse_zones(v).ok_or_else(bad)?
+        }
+        "work_area" => {
+            s.sheet_work_mm = if v.is_empty() {
+                None
+            } else {
+                let n: Vec<f32> = v
+                    .split(',')
+                    .map(|t| t.trim().parse::<f32>())
+                    .collect::<Result<_, _>>()
+                    .map_err(|_| bad())?;
+                match n[..] {
+                    [x, y, w, h] if w > 0.0 && h > 0.0 => Some([x, y, w, h]),
+                    _ => return Err(bad()),
+                }
+            }
+        }
+        "cut_at" => {
+            s.sheet_split_frac = if v.is_empty() {
+                None
+            } else {
+                let f: f32 = v.parse().map_err(|_| bad())?;
+                if f > 0.0 && f < 1.0 {
+                    Some(f)
+                } else {
+                    return Err(bad());
+                }
+            }
         }
         "dropout" => s.dropout = legatorocr_core::Dropout::from_name(v).ok_or_else(bad)?,
         "despeckle_strength" => s.despeckle_strength = v.parse().map_err(|_| bad())?,
@@ -588,6 +624,23 @@ mod tests {
         assert!(q.settings.dewarp);
         assert_eq!(q.settings.margins_mm, [1.0, 2.0, 3.0, 4.5]);
         assert_eq!(q.get("pdf_quality"), Some("70"));
+    }
+
+    #[test]
+    fn global_work_area_and_cut_line_survive_save_and_load() {
+        let mut p = Project::default();
+        p.settings.sheet_work_mm = Some([5.0, 6.0, 80.5, 60.0]);
+        p.settings.sheet_split_frac = Some(0.4);
+        let q = Project::parse(&p.to_text(None), None).unwrap();
+        assert_eq!(q.settings.sheet_work_mm, Some([5.0, 6.0, 80.5, 60.0]));
+        assert_eq!(q.settings.sheet_split_frac, Some(0.4));
+        // Empty values mean "not set" (what the GUI writes, since it keeps these per sheet).
+        let r = Project::parse(&Project::default().to_text(None), None).unwrap();
+        assert_eq!(r.settings.sheet_work_mm, None);
+        assert_eq!(r.settings.sheet_split_frac, None);
+        // Nonsense is refused rather than silently ignored.
+        let bad = p.to_text(None).replace("cut_at = 0.4", "cut_at = 7");
+        assert!(Project::parse(&bad, None).is_err());
     }
 
     #[test]
