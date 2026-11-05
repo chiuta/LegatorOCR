@@ -193,6 +193,12 @@ struct Cli {
     #[arg(long)]
     docx: Option<PathBuf>,
 
+    /// Also write the recognised text as a reflowable EPUB 3 book (needs --ocr): headings become
+    /// the table of contents, every scanned page leaves a page-break marker (page-list), tables
+    /// stay tables. For screen readers, e-readers and audiobook tools. Not checked with EPUBCheck.
+    #[arg(long)]
+    epub: Option<PathBuf>,
+
     /// Also write the recognised text as TEI P5 XML: a page break per scanned page, paragraphs,
     /// tables, columns (needs --ocr). Page structure only; no headings, notes or index markup.
     #[arg(long)]
@@ -1385,6 +1391,7 @@ fn real_main() -> Result<()> {
             &mut cli.page_xml,
             &mut cli.json,
             &mut cli.docx,
+            &mut cli.epub,
             &mut cli.tei,
             &mut cli.package,
         ] {
@@ -1450,6 +1457,7 @@ fn real_main() -> Result<()> {
             &cli.page_xml,
             &cli.json,
             &cli.docx,
+            &cli.epub,
             &cli.package,
         ]
         .iter()
@@ -2250,6 +2258,7 @@ fn real_main() -> Result<()> {
         || cli.alto.is_some()
         || cli.page_xml.is_some()
         || cli.docx.is_some()
+        || cli.epub.is_some()
         || cli.tei.is_some()
         || cli.json.is_some()
         || cli.passages_jsonl.is_some()
@@ -2265,6 +2274,7 @@ fn real_main() -> Result<()> {
         .chain(cli.alto.iter())
         .chain(cli.json.iter())
         .chain(cli.docx.iter())
+        .chain(cli.epub.iter())
         .chain(cli.tei.iter())
         .chain(cli.passages_jsonl.iter())
     {
@@ -2280,6 +2290,7 @@ fn real_main() -> Result<()> {
         && cli.json.is_none()
         && cli.fff_out.is_none()
         && cli.docx.is_none()
+        && cli.epub.is_none()
         && cli.tei.is_none()
         && cli.passages_jsonl.is_none()
         && cli.report.is_none()
@@ -2500,6 +2511,7 @@ fn real_main() -> Result<()> {
             &cli.passages_jsonl,
             &cli.fff_out,
             &cli.docx,
+            &cli.epub,
             &cli.multitiff,
             &cli.package,
             &cli.report,
@@ -2813,6 +2825,7 @@ fn real_main() -> Result<()> {
             &mut cli.page_xml,
             &mut cli.json,
             &mut cli.docx,
+            &mut cli.epub,
             &mut cli.tei,
             &mut cli.package,
         ] {
@@ -3072,6 +3085,26 @@ fn real_main() -> Result<()> {
             res.page_xml.len(),
             dir.display()
         );
+    }
+    if let (Some(p), Some(b)) = (&cli.epub, &res.docx_blocks) {
+        let title = p
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("LegatorOCR");
+        let lang = cli.lang.split(['+', ',']).next().unwrap_or("ro");
+        let lang = match lang {
+            "ron" => "ro",
+            "eng" => "en",
+            "deu" => "de",
+            "fra" => "fr",
+            "hun" => "hu",
+            "spa" => "es",
+            "ita" => "it",
+            o => o,
+        };
+        write_atomic(p, &legatorocr_engine::epub::from_blocks(b, title, lang))?;
+        eprintln!("wrote {}", p.display());
+        written.push(p.clone());
     }
     if let (Some(p), Some(t)) = (&cli.docx, res.paragraph_text.as_ref().or(res.text.as_ref())) {
         let pages: Vec<String> = t
