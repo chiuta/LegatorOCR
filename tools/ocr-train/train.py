@@ -57,7 +57,7 @@ def load_real(path=None, held=False):
         png, lab = ln.rstrip("\n").split("\t", 1)
         mt = re.match(r"p(\d+)-", os.path.basename(png))  # only the OCR_rev_06 pages (pN-...) have a validation split
         pg = int(mt.group(1)) if mt else -1
-        is_held = pg in REAL_HELD or re.match(r"[be]-\d+", os.path.basename(png)) and re.match(r"[be]-\d+", os.path.basename(png)).group(0) in HELD_PAGES
+        is_held = pg in REAL_HELD or re.match(r"[a-z]-\d+", os.path.basename(png)) and re.match(r"[a-z]-\d+", os.path.basename(png)).group(0) in HELD_PAGES
         if bool(is_held) != held:
             continue
         out.append((np.asarray(Image.open(png).convert("L")), lab))

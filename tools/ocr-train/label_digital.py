@@ -1,15 +1,17 @@
 """Label dumped lines of a digital PDF with its exact text layer (words and spaces from the PDF).
-Usage: label_digital.py LINES_DIR OUT.tsv PDF_B PDF_E   (stems b-NN / e-NN = page NN of PDF_B / PDF_E)"""
+Usage: label_digital.py LINES_DIR OUT.tsv PDF_B PDF_E   (stems b-NN / e-NN = page NN of PDF_B / PDF_E)
+   or:  label_digital.py LINES_DIR OUT.tsv k=PDF [k=PDF ...]   (stem k-NN = page NN of that PDF)"""
 import json, glob, os, re, sys
 from rapidfuzz.distance import Levenshtein as L
 from real_labels import fragments, MAXDIFF
 from charset import CHARSET
 import xml.etree.ElementTree as ET, subprocess
-pdfs = {"b": sys.argv[3], "e": sys.argv[4]}
+pdfs = dict(a.split("=", 1) for a in sys.argv[3:]) if "=" in sys.argv[3] else {"b": sys.argv[3], "e": sys.argv[4]}
 cs = set(CHARSET); kept = tot = 0
 def words(pdf, n):
     import real_labels as R
     out = subprocess.run(["pdftotext","-bbox","-f",str(n),"-l",str(n),pdf,"-"],capture_output=True,text=True,check=True).stdout
+    out = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]","",out)
     out = re.sub(r"<!DOCTYPE[^>]*>","",out).replace(' xmlns="http://www.w3.org/1999/xhtml"',"")
     r = []
     for w in ET.fromstring(out).iter("word"):
