@@ -72,6 +72,7 @@ pub mod tei;
 pub mod textcheck;
 pub mod tsa;
 pub mod verifier;
+pub mod verifypack;
 pub mod watch;
 pub mod zipcrypt;
 pub mod zipmini;
@@ -1016,6 +1017,9 @@ pub fn run_export(
                 }
                 if proofsheet::enabled() {
                     proofsheet::record(base + i + 1, &pg, &words);
+                }
+                if verifypack::enabled() {
+                    verifypack::record(base + i + 1, &pg, &words);
                 }
                 if doubtful::enabled() {
                     if let Some(o) = ocr_opts {

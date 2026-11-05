@@ -579,6 +579,21 @@ struct Cli {
     #[arg(long, value_name = "FILE.html")]
     proof_sheet: Option<PathBuf>,
 
+    /// With --ocr: write FILE.html, one offline page with a card for each word the engine was
+    /// unsure of (picture of the word + its reading): Enter confirms or saves what you typed,
+    /// arrows move, Ctrl+R reads the word aloud with the browser's voice. "Export" saves a JSON
+    /// that tools/ocr-train/import_verify.py turns into labelled training lines.
+    #[arg(long, value_name = "FILE.html")]
+    verify_pack: Option<PathBuf>,
+
+    /// With --verify-pack: words under this confidence (0-100) get a card.
+    #[arg(long, default_value_t = 70.0)]
+    verify_conf: f32,
+
+    /// With --verify-pack: at most this many cards per page (least confident first).
+    #[arg(long, default_value_t = 80)]
+    verify_per_page: usize,
+
     /// Confidence limit for --doubtful-words (0-100).
     #[arg(long, value_name = "CONF", default_value_t = 85.0)]
     doubtful_conf: f32,
@@ -2747,6 +2762,9 @@ fn real_main() -> Result<()> {
     if cli.proof_sheet.is_some() {
         legatorocr_engine::proofsheet::begin();
     }
+    if cli.verify_pack.is_some() {
+        legatorocr_engine::verifypack::begin(cli.verify_conf, cli.verify_per_page);
+    }
     if cli.djvu.is_some() {
         legatorocr_engine::djvu::set_thumbnails(cli.djvu_thumbnails);
         legatorocr_engine::djvu::begin();
@@ -3135,6 +3153,23 @@ fn real_main() -> Result<()> {
                 written.push(p.clone());
             }
             None => eprintln!("--proof-sheet needs --ocr: no page was read, nothing written"),
+        }
+    }
+    if let Some(p) = &cli.verify_pack {
+        let title = p
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Verificare");
+        match legatorocr_engine::verifypack::finish(title) {
+            Some(h) => {
+                write_atomic(p, h.as_bytes())?;
+                eprintln!("wrote {}", p.display());
+                written.push(p.clone());
+            }
+            None => eprintln!(
+                "--verify-pack: no word under confidence {} (or no --ocr), nothing written",
+                cli.verify_conf
+            ),
         }
     }
     if let Some(p) = &cli.passages_jsonl {

@@ -93,7 +93,7 @@ fn render(pages: &[PageRec], title: &str) -> String {
                 base64(&p.jpeg)
             ));
         }
-        s.push_str("</div><div><textarea class=\"pg\" spellcheck=\"false\">");
+        s.push_str("</div><div><button onclick=\"sp(this)\" title=\"citește pagina cu vocea browserului\">🔊 Citește</button> <button onclick=\"speechSynthesis.cancel()\">⏹</button><textarea class=\"pg\" spellcheck=\"false\">");
         s.push_str(&esc(&p.text));
         s.push_str("</textarea>");
         if !p.doubtful.is_empty() {
@@ -106,7 +106,7 @@ fn render(pages: &[PageRec], title: &str) -> String {
         }
         s.push_str("</div></section>");
     }
-    s.push_str("<script>const T=[...document.querySelectorAll('textarea.pg')];function n(){document.getElementById('c').textContent=T.length+' pages'}n();function save(){const b=new Blob([T.map(t=>t.value.replace(/\\s+$/,'')).join('\\n\\f\\n')+'\\n'],{type:'text/plain;charset=utf-8'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='reference.txt';a.click()}</script></body></html>");
+    s.push_str("<script>function sp(b){try{speechSynthesis.cancel();const t=b.parentNode.querySelector('textarea').value.split(/(?<=[.!?\\n])\\s+/);t.forEach(x=>{if(x.trim()){const u=new SpeechSynthesisUtterance(x);u.lang='ro-RO';speechSynthesis.speak(u)}})}catch(e){}}const T=[...document.querySelectorAll('textarea.pg')];function n(){document.getElementById('c').textContent=T.length+' pages'}n();function save(){const b=new Blob([T.map(t=>t.value.replace(/\\s+$/,'')).join('\\n\\f\\n')+'\\n'],{type:'text/plain;charset=utf-8'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='reference.txt';a.click()}</script></body></html>");
     s
 }
 
