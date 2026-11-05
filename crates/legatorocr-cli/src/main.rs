@@ -3217,13 +3217,9 @@ fn real_main() -> Result<()> {
             None => eprintln!("--proof-sheet needs --ocr: no page was read, nothing written"),
         }
     }
-    if cli.vectorize.is_some() {
+    if let Some(dir) = &cli.vectorize {
         let f = legatorocr_engine::vectorize::finish();
-        eprintln!(
-            "wrote {} SVG file(s) to {}",
-            f.len(),
-            cli.vectorize.as_ref().unwrap().display()
-        );
+        eprintln!("wrote {} SVG file(s) to {}", f.len(), dir.display());
         written.extend(f);
     }
     if let Some(p) = &cli.verify_pack {

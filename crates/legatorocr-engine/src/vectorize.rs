@@ -24,8 +24,8 @@ pub fn otsu(g: &GrayImage) -> u8 {
         .map(|(i, &c)| i as f64 * c as f64)
         .sum();
     let (mut wb, mut sb, mut best, mut thr) = (0u64, 0f64, -1f64, 128u8);
-    for t in 0..256 {
-        wb += h[t];
+    for (t, &ht) in h.iter().enumerate() {
+        wb += ht;
         if wb == 0 {
             continue;
         }
@@ -33,7 +33,7 @@ pub fn otsu(g: &GrayImage) -> u8 {
         if wf == 0 {
             break;
         }
-        sb += t as f64 * h[t] as f64;
+        sb += t as f64 * ht as f64;
         let (mb, mf) = (sb / wb as f64, (sum - sb) / wf as f64);
         let v = wb as f64 * wf as f64 * (mb - mf) * (mb - mf);
         if v > best {
@@ -376,7 +376,7 @@ mod tests {
     fn otsu_splits_a_two_level_image() {
         let img = raster(20, 20, &|x, _| x < 5);
         let t = otsu(&img);
-        assert!(t < 255 && t >= 0);
+        assert!(t < 255);
         assert_eq!(img.pixels().filter(|p| p[0] <= t).count(), 100);
     }
 }
