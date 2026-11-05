@@ -2643,6 +2643,13 @@ fn real_main() -> Result<()> {
         }
         let pats = legatorocr_engine::redact::compile(&cli.redact, &cli.redact_regex)?;
         legatorocr_engine::redact::set(pats);
+        let mut labels: Vec<String> = cli
+            .redact
+            .iter()
+            .map(|n| format!("preset {}", n.trim()))
+            .collect();
+        labels.extend(cli.redact_regex.iter().map(|r| format!("regex {r:?}")));
+        legatorocr_engine::redact::set_labels(labels);
     }
     if cli.bookmarks_headings && !cli.ocr {
         bail!("--bookmarks-headings reads the recognised text; add --ocr");
@@ -2937,6 +2944,9 @@ fn real_main() -> Result<()> {
     }
     let mut written: Vec<PathBuf> = Vec::new();
     let saved_images = saved_images.into_inner().unwrap();
+    if let Some(r) = legatorocr_engine::redact::report() {
+        eprint!("{r}");
+    }
     if let (Some(pdf_path), true) = (&cli.pdf, !res.docs.is_empty()) {
         let stem = pdf_path
             .file_stem()

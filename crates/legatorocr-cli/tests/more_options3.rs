@@ -97,6 +97,27 @@ fn redact_regex_removes_the_matching_text() {
 }
 
 #[test]
+fn redact_reports_what_each_pattern_covered_and_warns_when_one_matched_nothing() {
+    let d = setup("redactrep");
+    let o = ocr(
+        &d,
+        &[
+            "--redact-regex",
+            r"ion@\S+",
+            "--redact-regex",
+            "zzzqqq",
+            "--txt",
+            "r.txt",
+        ],
+    );
+    assert!(o.status.success(), "{}", text(&o));
+    let t = text(&o);
+    assert!(t.contains("redaction:") && t.contains("1 covered"), "{t}");
+    assert!(t.contains("matched nothing"), "{t}");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
 fn passages_title_is_used_in_the_cite_string() {
     let d = setup("passages");
     let o = ocr(

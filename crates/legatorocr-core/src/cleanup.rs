@@ -297,16 +297,16 @@ pub fn descreen(img: &mut RgbImage, dpi: u32) -> usize {
 // connected components
 
 #[derive(Debug, Clone, Copy)]
-struct Comp {
-    x0: u32,
-    y0: u32,
-    x1: u32, // inclusive
-    y1: u32,
-    area: u32,
+pub(crate) struct Comp {
+    pub(crate) x0: u32,
+    pub(crate) y0: u32,
+    pub(crate) x1: u32, // inclusive
+    pub(crate) y1: u32,
+    pub(crate) area: u32,
 }
 
 /// 8-connected labelling of a `w×h` mask. Labels start at 1 (0 = background).
-fn label(mask: &[u8], w: usize, h: usize) -> (Vec<u32>, Vec<Comp>) {
+pub(crate) fn label(mask: &[u8], w: usize, h: usize) -> (Vec<u32>, Vec<Comp>) {
     let mut lab = vec![0u32; w * h];
     let mut comps: Vec<Comp> = Vec::new();
     let mut stack: Vec<usize> = Vec::new();

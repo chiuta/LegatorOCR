@@ -67,6 +67,34 @@ pub fn without_long_runs(ink: &BitImage, max_run: usize) -> BitImage {
     out
 }
 
+/// Copy of `ink` holding only components that can be letters: not hairline specks, not
+/// pieces bigger than a few millimetres (pictures, ornaments, frames, rules). Returns the copy
+/// and how many components it holds.
+fn letters_only(ink: &BitImage, dpi: u32) -> (BitImage, usize) {
+    let (w, h) = (ink.w as usize, ink.h as usize);
+    let (comps_lab, comps) = crate::cleanup::label(&ink.data, w, h);
+    let max_side = (dpi as f64 * 0.30) as u32; // 7.6 mm
+    let min_side = (dpi as f64 / 40.0).max(3.0) as u32; // 0.6 mm
+    let keep: Vec<bool> = comps
+        .iter()
+        .map(|c| {
+            let (cw, ch) = (c.x1 - c.x0 + 1, c.y1 - c.y0 + 1);
+            let long = cw.max(ch);
+            let fill = c.area as f64 / (cw as f64 * ch as f64);
+            // a solid blob at least 3 mm both ways is a spot or a block, not a stroke
+            let blob = fill > 0.92 && cw.min(ch) as f64 > dpi as f64 * 0.12;
+            long >= min_side && long <= max_side && !blob
+        })
+        .collect();
+    let mut out = BitImage::new(ink.w, ink.h);
+    for (i, &l) in comps_lab.iter().enumerate() {
+        if l != 0 && keep[l as usize - 1] {
+            out.data[i] = 1;
+        }
+    }
+    (out, keep.iter().filter(|k| **k).count())
+}
+
 /// `true` when text lines run vertically (page lies on its side).
 /// Cannot distinguish 90° from 270° or detect 180° (use OCR/OSD for that).
 pub fn needs_quarter_turn(ink: &BitImage, dpi: u32) -> bool {
@@ -74,8 +102,15 @@ pub fn needs_quarter_turn(ink: &BitImage, dpi: u32) -> bool {
         return false;
     }
     let cleaned = without_long_runs(ink, (dpi as usize * 3 / 4).max(40));
-    let ink = &cleaned;
-    if ink.count_ink() < 500 {
+    if cleaned.count_ink() < 500 {
+        return false;
+    }
+    // Only letter-sized pieces may vote: a photograph or an ornament has big pieces and
+    // regular stripes that look like text lines in one direction, and a caption of a few
+    // words is not enough to tell the direction of a page.
+    let (letters, n_letters) = letters_only(&cleaned, dpi);
+    let ink = &letters;
+    if n_letters < MIN_LETTERS {
         return false;
     }
     let (w, h) = (ink.w as usize, ink.h as usize);
@@ -92,23 +127,16 @@ pub fn needs_quarter_turn(ink: &BitImage, dpi: u32) -> bool {
     // Normalise by length so landscape/portrait shape does not bias the test.
     let er = band_energy(&rows, dpi) / (w as f64 * w as f64);
     let ec = band_energy(&cols, dpi) / (h as f64 * h as f64);
-    // Besides beating the rows, the columns must show real line structure: pages that are
-    // mostly photograph with a caption have weak band energy on both axes and are left alone
-    // (measured on 76 + 498 book pages: upright text pages score ec/er ≤ 0.9, the same pages
-    // turned on their side 2.5–17 with ec ≥ 7e-4; a photo page scored 4 with ec 5e-4).
-    // Weak evidence (columns only slightly stronger than rows, energy near the floor) is what a
-    // picture with vertical ornaments produces: measured on an ornament photo page, ec 7.9e-4,
-    // ratio 2.8 (turned wrongly by 90 degrees); real sideways text pages are far from both
-    // limits (ratio 33 on a text page turned by 90 degrees). Such borderline pages are left as
-    // they are; orientation by OCR (OSD) still sees them.
-    let strong = ec > STRONG_BAND_ENERGY || ec > MIN_RATIO_WEAK * er;
-    ec > 2.0 * er && ec > MIN_BAND_ENERGY && strong
+    ec > MIN_RATIO * er && ec > MIN_BAND_ENERGY
 }
 
-/// Above this column energy the ratio to the rows alone decides.
-const STRONG_BAND_ENERGY: f64 = 2e-3;
-/// Below it, the columns must beat the rows by at least this factor.
-const MIN_RATIO_WEAK: f64 = 4.0;
+/// Fewest letter-sized pieces a page needs before its direction is judged at all.
+const MIN_LETTERS: usize = 100;
+
+/// How much stronger than the rows the columns must be. Real sideways text pages measured
+/// 3.9 to 30 (98 book pages, 5 pages of a picture book at the right and at a wrong dpi);
+/// the one picture page that got past the letter filter scored 2.0.
+const MIN_RATIO: f64 = 3.0;
 
 /// Smallest normalised band energy that counts as text lines.
 const MIN_BAND_ENERGY: f64 = 6e-4;
@@ -163,6 +191,41 @@ mod tests {
             }
         }
         assert!(needs_quarter_turn(&side, 150));
+    }
+
+    #[test]
+    fn a_few_words_are_not_enough_to_turn_a_page() {
+        // a caption of a few vertical lines (page lies sideways, but only 40 letters)
+        let mut b = BitImage::new(800, 600);
+        for col in 0..3u32 {
+            for k in 0..14u32 {
+                for dx in 0..5u32 {
+                    for dy in 0..9u32 {
+                        b.data[((100 + k * 14 + dy) * 800 + 300 + col * 22 + dx) as usize] = 1;
+                    }
+                }
+            }
+        }
+        assert!(!needs_quarter_turn(&b, 150));
+    }
+
+    #[test]
+    fn pieces_larger_than_letters_do_not_vote() {
+        let mut b = BitImage::new(900, 900);
+        // ornaments: tall blocks 20 mm at 150 dpi (118 px), regular like stripes
+        for col in 0..10u32 {
+            for y in 118..826u32 {
+                for dx in 0..16u32 {
+                    if (y / 118) % 2 == 0 {
+                        b.data[(y * 900 + 80 + col * 80 + dx) as usize] = 1;
+                    }
+                }
+            }
+        }
+        let (l, n) = letters_only(&b, 150);
+        assert_eq!(n, 0);
+        assert_eq!(l.count_ink(), 0);
+        assert!(!needs_quarter_turn(&b, 150));
     }
 
     #[test]
