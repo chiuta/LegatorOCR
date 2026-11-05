@@ -197,11 +197,11 @@ fn tessdata_directory_without_the_language_makes_ocr_fail() {
 #[test]
 fn install_modules_prints_commands_and_runs_them_only_with_yes() {
     use std::os::unix::fs::PermissionsExt;
-    // a fake apt-get first on PATH: records what it was asked and fails for one package
+    // a fake brew first (no sudo involved, so the test does not depend on who runs it) on PATH: records what it was asked and fails for one package
     let dir = std::env::temp_dir().join(format!("lor-inst-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let log = dir.join("log.txt");
-    let fake = dir.join("apt-get");
+    let fake = dir.join("brew");
     std::fs::write(
         &fake,
         format!(
@@ -244,7 +244,7 @@ fn install_modules_prints_commands_and_runs_them_only_with_yes() {
     ]);
     let t = String::from_utf8_lossy(&o.stdout);
     let ran = std::fs::read_to_string(&log).unwrap();
-    assert!(ran.contains("install -y qpdf"), "{ran}");
+    assert!(ran.contains("install qpdf"), "{ran}");
     assert!(t.contains("[FAILED]") && t.contains("mupdf-tools"), "{t}");
     assert_eq!(o.status.code(), Some(1));
     let _ = std::fs::remove_dir_all(&dir);
