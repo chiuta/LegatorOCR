@@ -20,8 +20,9 @@ anyhow.workspace = true
 rayon.workspace = true
 
 [features]
-default = ["lexicon"]
+default = ["lexicon", "builtin-model"]
 lexicon = ["legatorocr-engine/lexicon"]
+builtin-model = ["legatorocr-engine/builtin-model"]
 
 [dev-dependencies]
 wat = "1"

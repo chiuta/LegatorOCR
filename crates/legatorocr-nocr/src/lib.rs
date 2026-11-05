@@ -45,8 +45,15 @@ pub fn embedded_model() -> Option<&'static Model> {
                 return Some(m);
             }
         }
-        const BYTES: &[u8] = include_bytes!("../models/multi.lnm");
-        Model::from_bytes(BYTES).ok()
+        #[cfg(feature = "builtin-model")]
+        {
+            const BYTES: &[u8] = include_bytes!("../models/multi.lnm");
+            Model::from_bytes(BYTES).ok()
+        }
+        #[cfg(not(feature = "builtin-model"))]
+        {
+            None
+        }
     })
     .as_ref()
 }

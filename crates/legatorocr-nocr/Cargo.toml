@@ -15,6 +15,9 @@ thiserror.workspace = true
 flate2 = { workspace = true, optional = true }
 
 [features]
-default = ["lexicon"]
+default = ["lexicon", "builtin-model"]
 # the CC BY-SA word lists (crates/legatorocr-nocr/lexicons); without them no error repair happens
 lexicon = ["dep:flate2"]
+# the recogniser model crates/legatorocr-nocr/models/multi.lnm compiled into the program; without it the
+# native engine reports itself unavailable (Tesseract and external engines are unaffected)
+builtin-model = []

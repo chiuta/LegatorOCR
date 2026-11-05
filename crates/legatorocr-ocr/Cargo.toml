@@ -14,5 +14,6 @@ image.workspace = true
 thiserror.workspace = true
 
 [features]
-default = ["lexicon"]
+default = ["lexicon", "builtin-model"]
 lexicon = ["legatorocr-nocr/lexicon"]
+builtin-model = ["legatorocr-nocr/builtin-model"]

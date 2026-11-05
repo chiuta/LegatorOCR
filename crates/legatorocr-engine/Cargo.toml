@@ -24,8 +24,9 @@ djvu-rs = "0.44"
 wasmi = "2.0.0"
 
 [features]
-default = ["lexicon"]
+default = ["lexicon", "builtin-model"]
 lexicon = ["legatorocr-ocr/lexicon", "legatorocr-nocr/lexicon"]
+builtin-model = ["legatorocr-ocr/builtin-model", "legatorocr-nocr/builtin-model"]
 
 [dev-dependencies]
 wat = "1"

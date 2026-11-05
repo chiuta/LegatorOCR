@@ -1,4 +1,5 @@
 //! Adversarial inputs: the engine must never panic and never return nonsense geometry.
+#![cfg(feature = "builtin-model")]
 use legatorocr_core::{BitImage, PageImage};
 use legatorocr_nocr::{recognize, Model, NativeOptions};
 

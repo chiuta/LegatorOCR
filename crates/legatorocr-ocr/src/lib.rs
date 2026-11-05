@@ -1319,6 +1319,7 @@ mod engine_choice_tests {
         }
     }
 
+    #[cfg(feature = "builtin-model")]
     #[test]
     fn auto_falls_back_to_native_when_tesseract_is_missing() {
         assert!(native_available());
@@ -1354,6 +1355,7 @@ mod engine_choice_tests {
         assert_eq!(list_languages(&o).unwrap().len(), 8);
     }
 
+    #[cfg(feature = "builtin-model")]
     #[test]
     fn native_recognition_runs_through_the_public_api() {
         let mut o = missing_tesseract("eng");
