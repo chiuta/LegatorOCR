@@ -73,6 +73,7 @@ pub mod tei;
 pub mod textcheck;
 pub mod textdiff;
 pub mod tsa;
+pub mod vectorize;
 pub mod verifier;
 pub mod verifypack;
 pub mod watch;
@@ -1022,6 +1023,9 @@ pub fn run_export(
                 }
                 if verifypack::enabled() {
                     verifypack::record(base + i + 1, &pg, &words);
+                }
+                if vectorize::enabled() {
+                    vectorize::record(base + i + 1, &pg)?;
                 }
                 if doubtful::enabled() {
                     if let Some(o) = ocr_opts {

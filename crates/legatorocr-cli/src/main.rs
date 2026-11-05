@@ -267,6 +267,21 @@ struct Cli {
     #[arg(long)]
     compare_text: bool,
 
+    /// Also write every processed page as an SVG outline drawing into DIR (`page_001.svg`, ...):
+    /// black-and-white (Otsu), ink/paper borders followed pixel edge by pixel edge, simplified
+    /// to within --vectorize-tolerance pixels. For ornaments and technical drawings that are to
+    /// be cut or redrawn. Polylines only: no curve fitting, no symmetry correction.
+    #[arg(long, value_name = "DIR")]
+    vectorize: Option<PathBuf>,
+
+    /// With --vectorize: simplification tolerance in pixels.
+    #[arg(long, default_value_t = 0.5)]
+    vectorize_tolerance: f64,
+
+    /// With --vectorize: outlines smaller than this many square pixels are dropped as specks.
+    #[arg(long, default_value_t = 12.0)]
+    vectorize_min_area: f64,
+
     /// Sealed mode: refuse the two features that use the network (--timestamp / time-stamp
     /// requests and --install-modules). Also on when LEGATOROCR_OFFLINE=1. It is a refusal inside
     /// this program, not a firewall: programs you point it at (Tesseract, an ONNX script) are
@@ -2805,6 +2820,13 @@ fn real_main() -> Result<()> {
     if cli.verify_pack.is_some() {
         legatorocr_engine::verifypack::begin(cli.verify_conf, cli.verify_per_page);
     }
+    if let Some(d) = &cli.vectorize {
+        legatorocr_engine::vectorize::begin(
+            d.clone(),
+            cli.vectorize_tolerance,
+            cli.vectorize_min_area,
+        );
+    }
     if cli.djvu.is_some() {
         legatorocr_engine::djvu::set_thumbnails(cli.djvu_thumbnails);
         legatorocr_engine::djvu::begin();
@@ -3194,6 +3216,15 @@ fn real_main() -> Result<()> {
             }
             None => eprintln!("--proof-sheet needs --ocr: no page was read, nothing written"),
         }
+    }
+    if cli.vectorize.is_some() {
+        let f = legatorocr_engine::vectorize::finish();
+        eprintln!(
+            "wrote {} SVG file(s) to {}",
+            f.len(),
+            cli.vectorize.as_ref().unwrap().display()
+        );
+        written.extend(f);
     }
     if let Some(p) = &cli.verify_pack {
         let title = p
