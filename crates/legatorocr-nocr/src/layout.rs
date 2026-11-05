@@ -381,6 +381,7 @@ fn remove_rules(ink: &mut BitImage, gray: &mut GrayImage, med: u32) {
 
 struct Prof<'a> {
     ink: &'a BitImage,
+    med: u32,
 }
 
 impl Prof<'_> {
@@ -409,6 +410,50 @@ impl Prof<'_> {
             }
         }
         v
+    }
+    /// Does a line of text cross the strip `xs..xs+len` of region `r`?
+    fn crossed(&self, r: (u32, u32, u32, u32), xs: u32, len: u32, min_run: u32) -> bool {
+        !self.crossings(r, xs, len, min_run).is_empty()
+    }
+    /// Row ranges (start, end exclusive, absolute) of the runs of at least `min_run` rows in which
+    /// the ink is in several pieces along the row: letters of a line of text, not dust or a smudge.
+    fn crossings(
+        &self,
+        r: (u32, u32, u32, u32),
+        xs: u32,
+        len: u32,
+        min_run: u32,
+    ) -> Vec<(u32, u32)> {
+        let mut out = Vec::new();
+        let mut start: Option<u32> = None;
+        let need = (len / self.med.max(1)).clamp(2, 3);
+        for y in r.1..=r.3 {
+            let ink = y < r.3 && {
+                let s = y as usize * self.ink.w as usize + xs as usize;
+                // separate pieces of ink along the row: letters, where dust is a single speck
+                let row = &self.ink.data[s..s + len as usize];
+                let mut pieces = 0u32;
+                let mut prev = 0u8;
+                for &b in row {
+                    if b != 0 && prev == 0 {
+                        pieces += 1;
+                    }
+                    prev = b;
+                }
+                pieces >= need
+            };
+            match (ink, start) {
+                (true, None) => start = Some(y),
+                (false, Some(a)) => {
+                    if y - a >= min_run {
+                        out.push((a, y));
+                    }
+                    start = None;
+                }
+                _ => {}
+            }
+        }
+        out
     }
     /// Shrink a region to its ink bounding box.
     fn trim(&self, r: (u32, u32, u32, u32)) -> Option<(u32, u32, u32, u32)> {
@@ -483,7 +528,7 @@ fn widest(g: &[(usize, usize)]) -> Option<(usize, usize)> {
 /// Find the text lines of a page in reading order.
 pub fn find_lines(ink: &BitImage, med_h: u32) -> Vec<Line> {
     let med = med_h.max(6);
-    let p = Prof { ink };
+    let p = Prof { ink, med };
     let mut out = Vec::new();
     cut(&p, (0, 0, ink.w, ink.h), med, 0, &mut out);
     attach_floating_marks(&mut out, med);
@@ -666,7 +711,71 @@ fn cut(p: &Prof, r: Region, med: u32, depth: u32, out: &mut Vec<Line>) {
     // a gutter is at least 1.8 line heights wide; a narrower one (tightly set columns, 0.9 to
     // 1.8) counts only in a tall block with real text on both sides, where a river of white
     // between the words of a justified paragraph is unlikely to run all the way down
-    let vg = widest(&gaps(&cols, noise_c)).filter(|&(s, l)| {
+    let mut vgaps = gaps(&cols, noise_c);
+    // Columns with a heading or a footer line running across the gutter: cut the lines that cross
+    // it off first (at the blank bands around them), then read the rest column by column.
+    if h > med * 3 {
+        let wide = |l: usize| l as u32 * 10 >= med * 18;
+        if let Some((s, l)) = widest(&vgaps).filter(|&(_, l)| wide(l)) {
+            let runs = p.crossings(
+                r,
+                x0 + (s + l / 4) as u32,
+                (l / 2).max(1) as u32,
+                (med / 2).max(4),
+            );
+            let rows_cross: u32 = runs.iter().map(|&(a, b)| b - a).sum();
+            if !runs.is_empty() && rows_cross * 6 <= h {
+                let bands: Vec<(u32, u32)> = hgaps
+                    .iter()
+                    .map(|&(s, l)| (y0 + s as u32, y0 + (s + l) as u32))
+                    .collect();
+                let mut cuts: Vec<u32> = Vec::new();
+                let mut ok = true;
+                for &(a, b) in &runs {
+                    // a blank band right above the crossing line and right below it
+                    let up = bands
+                        .iter()
+                        .rev()
+                        .find(|&&(_, e)| e <= a)
+                        .map(|&(bs, be)| (bs + be) / 2);
+                    let dn = bands
+                        .iter()
+                        .find(|&&(bs, _)| bs >= b)
+                        .map(|&(bs, be)| (bs + be) / 2);
+                    if a > y0 + med && up.is_none() {
+                        ok = false;
+                    }
+                    if b + med < y1 && dn.is_none() {
+                        ok = false;
+                    }
+                    cuts.extend(up);
+                    cuts.extend(dn);
+                }
+                cuts.sort_unstable();
+                cuts.dedup();
+                if ok && !cuts.is_empty() {
+                    let mut start = y0;
+                    for c in cuts {
+                        cut(p, (x0, start, x1, c), med, depth + 1, out);
+                        start = c;
+                    }
+                    cut(p, (x0, start, x1, y1), med, depth + 1, out);
+                    return;
+                }
+            }
+        }
+    }
+    // a line of text that crosses a candidate gutter (the tolerance above is taller than a line on
+    // a whole page) makes it no gutter
+    vgaps.retain(|&(s, l)| {
+        !p.crossed(
+            r,
+            x0 + (s + l / 4) as u32,
+            (l / 2).max(1) as u32,
+            (med / 2).max(4),
+        )
+    });
+    let vg = widest(&vgaps).filter(|&(s, l)| {
         let l32 = l as u32;
         l32 * 10 >= med * 18
             || (l32 * 10 >= med * 9
@@ -677,8 +786,12 @@ fn cut(p: &Prof, r: Region, med: u32, depth: u32, out: &mut Vec<Line>) {
     let hg = widest(&hgaps);
     // a whitespace column running through several lines is a gutter: read it column by column
     // unless a blank row band is clearly bigger (a heading above two columns)
+    // Blocks of text laid out in rows of columns (stanzas side by side, a table of paragraphs): two
+    // or more blank bands of 4+ letter heights across the whole region cannot come from columns of
+    // running text, whose paragraph breaks do not line up. Read such a region row by row.
+    let rows_of_columns = hgaps.iter().filter(|&&(_, l)| l as u32 >= med * 4).count() >= 2;
     if let (Some((vs, vl)), true) = (vg, h > med * 3) {
-        if hg.is_none_or(|(_, hl)| vl * 2 >= hl) {
+        if !rows_of_columns && hg.is_none_or(|(_, hl)| vl * 2 >= hl) {
             let xs = x0 + vs as u32;
             cut(p, (x0, y0, xs, y1), med, depth + 1, out);
             cut(p, (xs + vl as u32, y0, x1, y1), med, depth + 1, out);
@@ -982,7 +1095,7 @@ pub fn split_long(ink: &BitImage, line: &Line, max_w: u32) -> Vec<Line> {
     if line.w <= max_src || max_src < 64 {
         return vec![line.clone()];
     }
-    let p = Prof { ink };
+    let p = Prof { ink, med: 1 };
     let cols = p.cols((line.x, line.y, line.x + line.w, line.y + line.h));
     let mut out = Vec::new();
     let mut start = 0usize;

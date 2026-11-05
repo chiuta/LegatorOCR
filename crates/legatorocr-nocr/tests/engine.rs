@@ -466,3 +466,68 @@ fn tilted_lines_are_levelled_and_boxes_map_back() {
     );
     assert_eq!(flat.skew, 0.0);
 }
+
+/// Paint a band of text-like ink (broken into letter-sized pieces).
+fn paint(b: &mut BitImage, x0: u32, x1: u32, y0: u32) {
+    for yy in y0..y0 + 20 {
+        for x in x0..x1 {
+            if (x / 5) % 3 != 0 {
+                b.set(x, yy, true);
+            }
+        }
+    }
+}
+
+#[test]
+fn heading_over_the_gutter_does_not_glue_the_columns() {
+    // a heading line crosses the gutter, below it four lines in each of two columns whose rows
+    // line up: columns are read one after the other, the heading first and whole
+    let mut b = BitImage::new(900, 700);
+    paint(&mut b, 40, 860, 20);
+    for y in [150u32, 190, 230, 270] {
+        paint(&mut b, 40, 400, y);
+        paint(&mut b, 500, 860, y);
+    }
+    let lines = layout::find_lines(&b, 20);
+    assert_eq!(lines.len(), 9, "{lines:?}");
+    assert!(lines[0].w > 700, "heading stays whole: {lines:?}");
+    // left column top to bottom, then the right column
+    let order: Vec<(u32, u32)> = lines[1..].iter().map(|l| (l.x / 400, l.y)).collect();
+    assert_eq!(
+        order,
+        [
+            (0, 150),
+            (0, 190),
+            (0, 230),
+            (0, 270),
+            (1, 150),
+            (1, 190),
+            (1, 230),
+            (1, 270)
+        ]
+    );
+}
+
+#[test]
+fn stanzas_side_by_side_are_read_row_by_row() {
+    // three rows of two stanzas separated by wide blank bands: left stanza, right stanza, next row
+    let mut b = BitImage::new(900, 900);
+    for base in [20u32, 300, 580] {
+        for k in 0..3u32 {
+            paint(&mut b, 40, 400, base + k * 40);
+            paint(&mut b, 500, 860, base + k * 40);
+        }
+    }
+    let lines = layout::find_lines(&b, 20);
+    assert_eq!(lines.len(), 18, "{lines:?}");
+    let order: Vec<(u32, u32)> = lines.iter().map(|l| (l.x / 400, l.y / 280)).collect();
+    let mut want = Vec::new();
+    for row in [0u32, 1, 2] {
+        for col in 0..2u32 {
+            for _ in 0..3 {
+                want.push((col, row));
+            }
+        }
+    }
+    assert_eq!(order, want);
+}

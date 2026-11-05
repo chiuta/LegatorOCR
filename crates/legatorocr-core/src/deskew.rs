@@ -131,7 +131,10 @@ fn profile_skew(ink: &BitImage, max_deg: f32) -> Option<(f32, f64, f64)> {
     let med = all[all.len() / 2].max(1.0);
     let c = coarse
         .iter()
-        .fold((0.0f32, f64::MIN), |b, &(a, s)| if s > b.1 { (a, s) } else { b })
+        .fold(
+            (0.0f32, f64::MIN),
+            |b, &(a, s)| if s > b.1 { (a, s) } else { b },
+        )
         .0;
     let (f, best) = search(c - 0.5, c + 0.5, 0.05);
     let (f, best) = {
