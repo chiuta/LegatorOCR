@@ -35,6 +35,8 @@ fn contains(hay: &[u8], needle: &[u8]) -> bool {
     hay.windows(needle.len()).any(|w| w == needle)
 }
 
+// needs an OCR engine: the built-in one, or Tesseract on PATH
+#[cfg(feature = "builtin-model")]
 #[test]
 fn ocr_languages_lists_the_interface_languages() {
     let d = tmp("langs");
