@@ -269,6 +269,19 @@ impl App {
         app
     }
 
+    /// Runs a file dialog. A dialog that comes back empty within a moment cannot have been
+    /// answered by a person: the system has no dialog provider, so say that instead of doing
+    /// nothing (dragging files into the window and the command line still work).
+    fn pick<T>(&mut self, open: impl FnOnce() -> Option<T>) -> Option<T> {
+        let started = std::time::Instant::now();
+        let r = open();
+        if r.is_none() && started.elapsed() < std::time::Duration::from_millis(400) {
+            let m = self.tr("status.no_dialog").to_string();
+            self.say(m, true);
+        }
+        r
+    }
+
     fn tr(&self, key: &'static str) -> &'static str {
         t(self.lang, key)
     }
@@ -330,11 +343,12 @@ impl App {
     }
 
     fn save_project(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("LegatorOCR", &["lgr"])
-            .set_file_name("project.lgr")
-            .save_file()
-        else {
+        let Some(path) = self.pick(|| {
+            rfd::FileDialog::new()
+                .add_filter("LegatorOCR", &["lgr"])
+                .set_file_name("project.lgr")
+                .save_file()
+        }) else {
             return;
         };
         let sheets = self.project_sheets();
@@ -357,10 +371,11 @@ impl App {
     }
 
     fn open_project(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("LegatorOCR", &["lgr"])
-            .pick_file()
-        else {
+        let Some(path) = self.pick(|| {
+            rfd::FileDialog::new()
+                .add_filter("LegatorOCR", &["lgr"])
+                .pick_file()
+        }) else {
             return;
         };
         match legatorocr_engine::project::Project::load(&path) {
@@ -788,13 +803,13 @@ impl App {
         if self.job.is_some() || self.sheets.is_empty() {
             return;
         }
-        let target = match kind {
+        let target = self.pick(|| match kind {
             JobKind::Pdf => rfd::FileDialog::new()
                 .add_filter("PDF", &["pdf"])
                 .set_file_name("LegatorOCR.pdf")
                 .save_file(),
             JobKind::Images => rfd::FileDialog::new().pick_folder(),
-        };
+        });
         let Some(target) = target else { return };
         self.launch_export(ctx, kind, target);
     }
@@ -1003,16 +1018,17 @@ impl App {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button(self.tr("menu.file"), |ui| {
                 if ui.button(self.tr("menu.add_images")).clicked() {
-                    if let Some(f) = rfd::FileDialog::new()
-                        .add_filter("images, PDF, archives", &all_input_ext())
-                        .pick_files()
-                    {
+                    if let Some(f) = self.pick(|| {
+                        rfd::FileDialog::new()
+                            .add_filter("images, PDF, archives", &all_input_ext())
+                            .pick_files()
+                    }) {
                         self.add_files(&f);
                     }
                     ui.close();
                 }
                 if ui.button(self.tr("menu.add_folder")).clicked() {
-                    if let Some(d) = rfd::FileDialog::new().pick_folder() {
+                    if let Some(d) = self.pick(|| rfd::FileDialog::new().pick_folder()) {
                         self.add_files(&collect_images(&[d]));
                     }
                     ui.close();
@@ -1097,10 +1113,11 @@ impl App {
         ui.heading(self.tr("list.title"));
         ui.horizontal_wrapped(|ui| {
             if ui.button(self.tr("btn.add")).clicked() {
-                if let Some(f) = rfd::FileDialog::new()
-                    .add_filter("images, PDF, archives", &all_input_ext())
-                    .pick_files()
-                {
+                if let Some(f) = self.pick(|| {
+                    rfd::FileDialog::new()
+                        .add_filter("images, PDF, archives", &all_input_ext())
+                        .pick_files()
+                }) {
                     self.add_files(&f);
                 }
             }
@@ -1878,10 +1895,11 @@ impl App {
                     ))
                     .clicked()
                 {
-                    if let Some(f) = rfd::FileDialog::new()
-                        .add_filter("images, PDF, archives", &all_input_ext())
-                        .pick_files()
-                    {
+                    if let Some(f) = self.pick(|| {
+                        rfd::FileDialog::new()
+                            .add_filter("images, PDF, archives", &all_input_ext())
+                            .pick_files()
+                    }) {
                         picked = f;
                     }
                 }

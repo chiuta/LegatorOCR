@@ -125,8 +125,8 @@ pub struct Settings {
     /// check nor Tesseract's OSD may turn it again.
     pub sheet_orient_locked: bool,
     /// Where to cut a two-page sheet: a fraction (0-1) of the loaded sheet's width, set by dragging
-    /// a line on the original. Used when splitting is on and the sheet is not turned a quarter
-    /// (0 or 180 degrees); otherwise the automatic or middle cut applies.
+    /// a line on the original. Used when splitting is on, at any rotation (on a sheet turned by
+    /// 90 or 270 degrees the two pages lie one above the other).
     pub sheet_split_frac: Option<f32>,
     /// Drop one printed colour (form rules, stamps).
     pub dropout: Dropout,
@@ -513,9 +513,58 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
         }
     }
 
+    // a sheet turned by 90 or 270 degrees: the line the user dragged on the original (vertical
+    // there) is a horizontal line on the turned sheet, and the two pages lie one above the other.
+    // The page that was on the left of the original comes first.
+    if s.split != SplitMode::Off && !s.rotate_quarters.is_multiple_of(2) {
+        let cut_y = s
+            .sheet_split_frac
+            .filter(|f| f.is_finite() && *f > 0.0 && *f < 1.0)
+            .map(|f| {
+                let h = rgb.height() as f32;
+                let fy = if s.rotate_quarters % 4 == 1 {
+                    f
+                } else {
+                    1.0 - f
+                };
+                (fy * h).round() as u32
+            })
+            .filter(|&y| y > 0 && y < rgb.height());
+        if let Some(y) = cut_y {
+            let (w, h) = (rgb.width(), rgb.height());
+            let top = imageops::crop_imm(&rgb, 0, 0, w, y).to_image();
+            let bottom = imageops::crop_imm(&rgb, 0, y, w, h - y).to_image();
+            let yf = y as f32;
+            let clip = |z: &[f32; 4], y0: f32, y1: f32| {
+                let (a, b) = (z[1].max(y0), (z[1] + z[3]).min(y1));
+                (b > a).then_some([z[0], a - y0, z[2], b - a])
+            };
+            let tz: Vec<[f32; 4]> = zones.iter().filter_map(|z| clip(z, 0.0, yf)).collect();
+            let bz: Vec<[f32; 4]> = zones.iter().filter_map(|z| clip(z, yf, h as f32)).collect();
+            let part = |y0: f32, y1: f32| -> Guides {
+                guides
+                    .iter()
+                    .map(|g| {
+                        g.iter()
+                            .filter(|p| p.1 >= y0 && p.1 < y1)
+                            .map(|p| (p.0, p.1 - y0))
+                            .collect::<Vec<_>>()
+                    })
+                    .filter(|g| g.len() >= 2)
+                    .collect()
+            };
+            let (tg, bg) = (part(0.0, yf), part(yf, h as f32));
+            return if s.rotate_quarters % 4 == 1 {
+                vec![(top, Some(0), tz, tg), (bottom, Some(1), bz, bg)]
+            } else {
+                vec![(bottom, Some(0), bz, bg), (top, Some(1), tz, tg)]
+            };
+        }
+    }
+
     let mut cut_at = None;
     if s.split != SplitMode::Off {
-        // a line the user dragged on the original wins over the automatic cut (kept to 0/180 deg)
+        // a line the user dragged on the original wins over the automatic cut (also on sheets turned by a quarter: the cut is then horizontal)
         let manual = s
             .sheet_split_frac
             .filter(|f| f.is_finite() && *f > 0.0 && *f < 1.0)
@@ -1602,6 +1651,30 @@ mod tests {
         s.split = SplitMode::Middle;
         s.sheet_split_frac = Some(1.5);
         assert_eq!(sizes(&s), vec![1200, 1200]);
+    }
+
+    #[test]
+    fn a_dragged_cut_line_also_works_on_a_sheet_turned_by_a_quarter() {
+        // the same 25 % cut on a sheet turned by 90 or 270 degrees: the pages lie one above the
+        // other, the page that was on the left of the original (25 % of its width) comes first
+        let g = text_page(2400, 900, 100, 2300);
+        let src = image::DynamicImage::ImageRgb8(to_rgb(&g));
+        for quarters in [1u8, 3u8] {
+            let s = Settings {
+                dpi: 300,
+                deskew: false,
+                auto_orient: false,
+                split: SplitMode::Middle,
+                sheet_split_frac: Some(0.25),
+                rotate_quarters: quarters,
+                ..Settings::default()
+            };
+            let parts = split_sheet(&src, &s);
+            let dims: Vec<(u32, u32)> = parts.iter().map(|p| p.0.dimensions()).collect();
+            assert_eq!(dims, vec![(900, 600), (900, 1800)], "quarters {quarters}");
+            assert_eq!(parts[0].1, Some(0));
+            assert_eq!(parts[1].1, Some(1));
+        }
     }
 
     #[test]
