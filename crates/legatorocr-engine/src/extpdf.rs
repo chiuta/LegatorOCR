@@ -127,6 +127,12 @@ pub fn page_count(path: &Path) -> Option<u32> {
 
 /// Rasterise page `page` (1-based) at [`DPI`].
 pub fn rasterize(path: &Path, page: u32) -> Result<DynamicImage> {
+    // mutool draws the last page for a page number past the end (and exits 0): check the count first
+    if let Some(n) = page_count(path) {
+        if page > n {
+            bail!("the PDF has {n} page(s), page {page} was requested");
+        }
+    }
     let safe = crate::files::safe_path(path);
     let path = safe.as_path();
     // unique per call (pid + counter + time): two PDFs rasterised at once must never share a folder
