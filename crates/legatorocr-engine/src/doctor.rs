@@ -105,7 +105,27 @@ pub fn run(tesseract: &Path) -> Vec<Check> {
         &["--version"],
         "optional: page counts of damaged or encrypted PDFs",
     ));
+    v.push(onnx_bridge());
     v
+}
+
+/// Python with onnxruntime, numpy and Pillow: what `scripts/engine-onnx.py` needs.
+fn onnx_bridge() -> Check {
+    let py = if cfg!(windows) { "py" } else { "python3" };
+    let ok = std::process::Command::new(py)
+        .args(["-c", "import onnxruntime, numpy, PIL"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    Check {
+        name: "onnx bridge (python)".into(),
+        ok,
+        detail: if ok { "onnxruntime, numpy, Pillow".into() } else { "not found".into() },
+        hint: "optional: only for an ONNX model as the OCR engine (scripts/engine-onnx.py); the models themselves are a separate download".into(),
+    }
 }
 
 /// Plain-text report; the last line summarises how many optional helpers are missing.
@@ -120,7 +140,7 @@ pub fn render(checks: &[Check]) -> String {
     }
     let miss = checks.iter().filter(|c| !c.ok).count();
     out.push_str(&format!(
-        "{} check(s) ok, {} missing. Missing helpers are optional unless a hint says otherwise.\n",
+        "{} check(s) ok, {} missing. Missing helpers are optional unless a hint says otherwise; `--install-modules` installs them.\n",
         checks.len() - miss,
         miss
     ));

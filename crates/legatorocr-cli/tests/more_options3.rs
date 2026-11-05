@@ -192,3 +192,60 @@ fn tessdata_directory_without_the_language_makes_ocr_fail() {
     assert!(!d.join("n.txt").exists(), "{t}");
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[cfg(unix)]
+#[test]
+fn install_modules_prints_commands_and_runs_them_only_with_yes() {
+    use std::os::unix::fs::PermissionsExt;
+    // a fake apt-get first on PATH: records what it was asked and fails for one package
+    let dir = std::env::temp_dir().join(format!("lor-inst-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let log = dir.join("log.txt");
+    let fake = dir.join("apt-get");
+    std::fs::write(
+        &fake,
+        format!(
+            "#!/bin/sh\necho \"$@\" >> {}\necho \"$@\" | grep -q mupdf && exit 100\nexit 0\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let run = |args: &[&str]| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_legatorocr"))
+            .args(args)
+            .env("PATH", &path)
+            .output()
+            .unwrap()
+    };
+    // dry run: commands shown, nothing executed
+    let o = run(&["--install-modules", "qpdf", "--package-manager", "apt"]);
+    let t = String::from_utf8_lossy(&o.stdout);
+    assert!(o.status.success());
+    assert!(
+        t.contains("apt-get install -y qpdf") && t.contains("Nothing was run"),
+        "{t}"
+    );
+    assert!(!log.exists());
+    // --yes alone is refused (it belongs to --install-modules)
+    assert!(!run(&["--yes"]).status.success());
+    // with --yes: runs, a failing package is reported, the later step still runs, exit 1
+    let o = run(&[
+        "--install-modules",
+        "renderers,qpdf",
+        "--yes",
+        "--package-manager",
+        "apt",
+    ]);
+    let t = String::from_utf8_lossy(&o.stdout);
+    let ran = std::fs::read_to_string(&log).unwrap();
+    assert!(ran.contains("install -y qpdf"), "{ran}");
+    assert!(t.contains("[FAILED]") && t.contains("mupdf-tools"), "{t}");
+    assert_eq!(o.status.code(), Some(1));
+    let _ = std::fs::remove_dir_all(&dir);
+}

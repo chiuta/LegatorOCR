@@ -34,6 +34,7 @@ pub mod files;
 pub mod formfields;
 pub mod fuzzy;
 pub mod headings;
+pub mod install;
 pub mod integrity;
 pub mod iso;
 pub mod isolate;

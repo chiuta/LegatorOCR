@@ -161,6 +161,7 @@ pub struct App {
     preview_started: Option<std::time::Instant>,
     ocr_info: String,
     show_about: bool,
+    modules: ModulesWindow,
     draw_zones: bool,
     /// With `draw_zones`: the mouse draws dewarp guide lines (freehand along a bent text line).
     draw_guide: bool,
@@ -227,6 +228,7 @@ impl App {
             preview_started: None,
             ocr_info: String::new(),
             show_about: false,
+            modules: ModulesWindow::default(),
             draw_zones: false,
             draw_guide: false,
             guide_path: Vec::new(),
@@ -1065,6 +1067,11 @@ impl App {
                     ui.close();
                 }
                 ui.separator();
+                if ui.button(self.tr("menu.modules")).clicked() {
+                    self.modules.open();
+                    ui.close();
+                }
+                ui.separator();
                 if ui.button(self.tr("menu.quit")).clicked() {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
@@ -1081,6 +1088,132 @@ impl App {
                 self.show_about = true;
             }
         });
+    }
+
+    /// "Optional modules" window: what is missing, the commands that install it, and a button
+    /// that runs them when no administrator rights are needed.
+    fn modules_window(&mut self, ctx: &egui::Context) {
+        use legatorocr_engine::install as inst;
+        if !self.modules.show {
+            return;
+        }
+        if let Some(rx) = &self.modules.probe_rx {
+            if let Ok(info) = rx.try_recv() {
+                self.modules.info = Some(info);
+                self.modules.probe_rx = None;
+            }
+        }
+        if let Some(rx) = &self.modules.run_rx {
+            if let Ok(out) = rx.try_recv() {
+                let keep = out;
+                self.modules.run_rx = None;
+                self.modules.open(); // look again at what is installed now
+                self.modules.outcomes = keep;
+            }
+        }
+        if self.modules.probe_rx.is_some() || self.modules.run_rx.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        }
+        let mut open = true;
+        let mut start_run = false;
+        let mut copy: Option<String> = None;
+        let sudo = inst::needs_sudo();
+        let running = self.modules.run_rx.is_some();
+        egui::Window::new(self.tr("modules.title"))
+            .open(&mut open)
+            .collapsible(false)
+            .default_width(560.0)
+            .show(ctx, |ui| {
+                ui.label(self.tr("modules.intro"));
+                ui.separator();
+                match &self.modules.info {
+                    None => {
+                        ui.label(self.tr(if running {
+                            "modules.running"
+                        } else {
+                            "modules.checking"
+                        }));
+                    }
+                    Some(info) if info.missing.is_empty() => {
+                        ui.label(self.tr("modules.none_missing"));
+                    }
+                    Some(info) => {
+                        let names: Vec<&str> = info.missing.iter().map(|m| m.name()).collect();
+                        ui.label(format!(
+                            "{} {}",
+                            self.tr("modules.missing"),
+                            names.join(", ")
+                        ));
+                        if info.manager.is_none() {
+                            ui.label(self.tr("modules.no_manager"));
+                        } else {
+                            ui.label(self.tr("modules.commands"));
+                            let text: Vec<String> =
+                                info.steps.iter().map(|s| s.display(sudo)).collect();
+                            let mut shown = text.join("\n");
+                            ui.add(
+                                egui::TextEdit::multiline(&mut shown)
+                                    .font(egui::TextStyle::Monospace)
+                                    .desired_rows(4)
+                                    .desired_width(f32::INFINITY),
+                            );
+                            let needs_terminal = info.steps.iter().any(|s| s.root) && sudo;
+                            if needs_terminal {
+                                ui.label(self.tr("modules.needs_terminal"));
+                            }
+                            ui.horizontal(|ui| {
+                                if ui.button(self.tr("modules.copy")).clicked() {
+                                    copy = Some(text.join("\n"));
+                                }
+                                if ui
+                                    .add_enabled(
+                                        !needs_terminal && !running,
+                                        egui::Button::new(self.tr("modules.run")),
+                                    )
+                                    .clicked()
+                                {
+                                    start_run = true;
+                                }
+                            });
+                        }
+                    }
+                }
+                if running {
+                    ui.label(self.tr("modules.running"));
+                }
+                if !self.modules.outcomes.is_empty() {
+                    ui.separator();
+                    if self.modules.outcomes.iter().all(|o| o.ok) {
+                        ui.label(self.tr("modules.done"));
+                    } else {
+                        ui.label(self.tr("modules.failed"));
+                        for o in self.modules.outcomes.iter().filter(|o| !o.ok) {
+                            ui.label(
+                                RichText::new(format!("{} — {}", o.command, o.detail))
+                                    .monospace()
+                                    .small(),
+                            );
+                        }
+                    }
+                }
+            });
+        if let Some(t) = copy {
+            ctx.copy_text(t);
+        }
+        if start_run {
+            if let Some(info) = &self.modules.info {
+                let steps = info.steps.clone();
+                let (tx, rx) = mpsc::channel();
+                self.modules.run_rx = Some(rx);
+                self.modules.outcomes.clear();
+                std::thread::spawn(move || {
+                    let _ = tx.send(inst::run_captured(&steps));
+                });
+            }
+        }
+        if !open {
+            self.modules.show = false;
+        }
     }
 
     fn status_bar(&mut self, ui: &mut egui::Ui) {
@@ -3083,6 +3216,7 @@ impl eframe::App for App {
                     ui.label(RichText::new(self.tr("drop.hint")).size(28.0).strong());
                 });
         }
+        self.modules_window(&ctx);
         if self.show_about {
             let mut open = true;
             egui::Window::new(self.tr("menu.about"))
@@ -3105,6 +3239,45 @@ impl eframe::App for App {
                 });
             self.show_about = open;
         }
+    }
+}
+
+/// What the "Optional modules" window knows: which modules the doctor reports missing and
+/// the commands for this system's package manager.
+struct ModulesInfo {
+    manager: Option<legatorocr_engine::install::Manager>,
+    missing: Vec<legatorocr_engine::install::Module>,
+    steps: Vec<legatorocr_engine::install::Step>,
+}
+
+#[derive(Default)]
+struct ModulesWindow {
+    show: bool,
+    info: Option<ModulesInfo>,
+    probe_rx: Option<mpsc::Receiver<ModulesInfo>>,
+    run_rx: Option<mpsc::Receiver<Vec<legatorocr_engine::install::Outcome>>>,
+    outcomes: Vec<legatorocr_engine::install::Outcome>,
+}
+
+impl ModulesWindow {
+    /// Show the window and look (in a thread: the doctor starts a few programs) at what is missing.
+    fn open(&mut self) {
+        use legatorocr_engine::install as inst;
+        self.show = true;
+        self.info = None;
+        let (tx, rx) = mpsc::channel();
+        self.probe_rx = Some(rx);
+        std::thread::spawn(move || {
+            let checks = legatorocr_engine::doctor::run(std::path::Path::new("tesseract"));
+            let missing = inst::missing_modules(&checks);
+            let manager = inst::detect();
+            let steps = manager.map(|m| inst::plan(&missing, m)).unwrap_or_default();
+            let _ = tx.send(ModulesInfo {
+                manager,
+                missing,
+                steps,
+            });
+        });
     }
 }
 

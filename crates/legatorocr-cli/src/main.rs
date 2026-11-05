@@ -44,7 +44,7 @@ enum Fmt {
 #[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "watch", "verify_bag", "verify_ocfl", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "decode_worker", "fuse_frames", "verify_document", "integrity_hints", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "extract_project", "search_preset", "search_help"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "install_modules", "watch", "verify_bag", "verify_ocfl", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "decode_worker", "fuse_frames", "verify_document", "integrity_hints", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "extract_project", "search_preset", "search_help"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -270,6 +270,23 @@ struct Cli {
     /// Ghostscript, qpdf) are installed and what a missing one costs; then exit.
     #[arg(long)]
     doctor: bool,
+
+    /// Install the optional helpers with this system's package manager (apt, dnf, pacman,
+    /// Homebrew or winget): `all` (default), `missing` (only what --doctor reports), or a
+    /// list such as `tesseract,renderers,qpdf,onnx`. Tesseract comes with all eight interface
+    /// languages. Without --yes it only prints the commands; then exit.
+    #[arg(long, value_name = "MODULES", num_args = 0..=1, default_missing_value = "all")]
+    install_modules: Option<String>,
+
+    /// Run the commands of --install-modules instead of only printing them (sudo is added
+    /// when you are not root and asks for your password itself).
+    #[arg(long, requires = "install_modules")]
+    yes: bool,
+
+    /// Package manager for --install-modules when it is not detected: apt, dnf, pacman, brew
+    /// or winget.
+    #[arg(long, value_name = "NAME", requires = "install_modules")]
+    package_manager: Option<String>,
 
     /// List PDFs among the inputs that contain JavaScript, launch actions, embedded files,
     /// actions on open, form submission or rich media; then exit. A static look at the
@@ -1890,6 +1907,14 @@ fn real_main() -> Result<()> {
         }
         std::process::exit(1);
     }
+    if let Some(list) = &cli.install_modules {
+        return install_modules(
+            list,
+            cli.yes,
+            cli.package_manager.as_deref(),
+            &cli.tesseract,
+        );
+    }
     if cli.doctor {
         let checks = legatorocr_engine::doctor::run(&cli.tesseract);
         print!("{}", legatorocr_engine::doctor::render(&checks));
@@ -3383,6 +3408,68 @@ fn parse_align(s: &str) -> Result<(HAlign, VAlign)> {
         }
     }
     Ok((h, v))
+}
+
+/// `--install-modules`: print (or, with `--yes`, run) the commands that install the optional
+/// helpers, then show the doctor report again.
+fn install_modules(list: &str, yes: bool, manager: Option<&str>, tesseract: &Path) -> Result<()> {
+    use legatorocr_engine::install as inst;
+    let manager = match manager {
+        Some(n) => inst::Manager::parse(n).with_context(|| {
+            format!("unknown package manager '{n}' (apt, dnf, pacman, brew, winget)")
+        })?,
+        None => inst::detect().context(
+            "no supported package manager found (apt, dnf, pacman, brew, winget); \
+             name one with --package-manager, or install the helpers by hand: see --doctor",
+        )?,
+    };
+    let modules = match inst::parse_modules(list)? {
+        Some(m) => m,
+        None => inst::missing_modules(&legatorocr_engine::doctor::run(tesseract)),
+    };
+    if modules.is_empty() {
+        println!("Nothing to install: every optional helper is already present.");
+        return Ok(());
+    }
+    let steps = inst::plan(&modules, manager);
+    let sudo = inst::needs_sudo();
+    println!(
+        "Modules: {}  (package manager: {})",
+        modules
+            .iter()
+            .map(|m| m.name())
+            .collect::<Vec<_>>()
+            .join(", "),
+        manager.name()
+    );
+    if !yes {
+        for s in &steps {
+            println!("  {}", s.display(sudo));
+        }
+        println!("Nothing was run. Add --yes to run these commands.");
+        return Ok(());
+    }
+    let outcomes = inst::run(&steps, &mut |c| println!("\n$ {c}"));
+    println!();
+    for o in &outcomes {
+        println!(
+            "[{}] {}  ({})",
+            if o.ok { "ok    " } else { "FAILED" },
+            o.command,
+            o.detail
+        );
+    }
+    let failed = outcomes.iter().filter(|o| !o.ok).count();
+    println!("\nAfter the install:");
+    print!(
+        "{}",
+        legatorocr_engine::doctor::render(&legatorocr_engine::doctor::run(tesseract))
+    );
+    if failed > 0 {
+        eprintln!("{failed} command(s) failed; the others were still run. A failed package name is usually a distribution that names it differently.");
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
