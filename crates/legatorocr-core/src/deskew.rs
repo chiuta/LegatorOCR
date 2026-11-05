@@ -116,17 +116,23 @@ fn profile_skew(ink: &BitImage, max_deg: f32) -> Option<(f32, f64, f64)> {
         }
         best
     };
-    let mut all = Vec::new();
+    // The coarse sweep is the same 0.5-degree grid for the median and for the first search:
+    // score it once (same angles, same arithmetic, so the same numbers as scoring it twice).
+    let mut coarse: Vec<(f32, f64)> = Vec::new();
     {
         let mut a = -max_deg;
         while a <= max_deg + 1e-6 {
-            all.push(score(a));
+            coarse.push((a, score(a)));
             a += 0.5;
         }
     }
+    let mut all: Vec<f64> = coarse.iter().map(|c| c.1).collect();
     all.sort_by(|a, b| a.total_cmp(b));
     let med = all[all.len() / 2].max(1.0);
-    let (c, _) = search(-max_deg, max_deg, 0.5);
+    let c = coarse
+        .iter()
+        .fold((0.0f32, f64::MIN), |b, &(a, s)| if s > b.1 { (a, s) } else { b })
+        .0;
     let (f, best) = search(c - 0.5, c + 0.5, 0.05);
     let (f, best) = {
         let (g, s) = search(f - 0.05, f + 0.05, 0.01);
