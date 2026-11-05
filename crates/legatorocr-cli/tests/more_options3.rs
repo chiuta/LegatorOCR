@@ -224,11 +224,11 @@ fn install_modules_prints_commands_and_runs_them_only_with_yes() {
             .unwrap()
     };
     // dry run: commands shown, nothing executed
-    let o = run(&["--install-modules", "qpdf", "--package-manager", "apt"]);
+    let o = run(&["--install-modules", "qpdf", "--package-manager", "brew"]);
     let t = String::from_utf8_lossy(&o.stdout);
     assert!(o.status.success());
     assert!(
-        t.contains("apt-get install -y qpdf") && t.contains("Nothing was run"),
+        t.contains("brew install qpdf") && t.contains("Nothing was run"),
         "{t}"
     );
     assert!(!log.exists());
@@ -240,7 +240,7 @@ fn install_modules_prints_commands_and_runs_them_only_with_yes() {
         "renderers,qpdf",
         "--yes",
         "--package-manager",
-        "apt",
+        "brew",
     ]);
     let t = String::from_utf8_lossy(&o.stdout);
     let ran = std::fs::read_to_string(&log).unwrap();
