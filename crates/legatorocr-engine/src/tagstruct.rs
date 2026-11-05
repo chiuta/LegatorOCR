@@ -54,19 +54,41 @@ pub fn plan(words: &[Word], page_h: u32) -> Vec<StructPara> {
     let head = crate::headings::detect_line(words, page_h);
     let mut out = Vec::new();
     for (a, b) in ranges {
-        let Some((_, line, ratio)) = head.as_ref().filter(|h| words[a..b].iter().any(|w| w.line == h.1)) else {
-            out.push(StructPara { kind: StructKind::Para, first: a, end: b });
+        let Some((_, line, ratio)) = head
+            .as_ref()
+            .filter(|h| words[a..b].iter().any(|w| w.line == h.1))
+        else {
+            out.push(StructPara {
+                kind: StructKind::Para,
+                first: a,
+                end: b,
+            });
             continue;
         };
         // split the paragraph around the heading line
-        let s = a + words[a..b].iter().position(|w| w.line == *line).unwrap_or(0);
+        let s = a + words[a..b]
+            .iter()
+            .position(|w| w.line == *line)
+            .unwrap_or(0);
         let e = s + words[s..b].iter().take_while(|w| w.line == *line).count();
         if s > a {
-            out.push(StructPara { kind: StructKind::Para, first: a, end: s });
+            out.push(StructPara {
+                kind: StructKind::Para,
+                first: a,
+                end: s,
+            });
         }
-        out.push(StructPara { kind: StructKind::Heading(heading_level(*ratio)), first: s, end: e });
+        out.push(StructPara {
+            kind: StructKind::Heading(heading_level(*ratio)),
+            first: s,
+            end: e,
+        });
         if e < b {
-            out.push(StructPara { kind: StructKind::Para, first: e, end: b });
+            out.push(StructPara {
+                kind: StructKind::Para,
+                first: e,
+                end: b,
+            });
         }
     }
     out
@@ -77,7 +99,15 @@ mod tests {
     use super::*;
 
     fn w(t: &str, x: u32, y: u32, h: u32, line: u32) -> Word {
-        Word { text: t.into(), x, y, w: 40, h, conf: 90.0, line }
+        Word {
+            text: t.into(),
+            x,
+            y,
+            w: 40,
+            h,
+            conf: 90.0,
+            line,
+        }
     }
 
     /// Heading line, then a 3-line paragraph, a gap, a 2-line paragraph (synthetic).
@@ -96,14 +126,21 @@ mod tests {
         let v = page();
         let p = plan(&v, 1600);
         let kinds: Vec<_> = p.iter().map(|s| s.kind).collect();
-        assert_eq!(kinds, vec![StructKind::Heading(1), StructKind::Para, StructKind::Para]);
+        assert_eq!(
+            kinds,
+            vec![StructKind::Heading(1), StructKind::Para, StructKind::Para]
+        );
         // contiguous, ordered, covering every word
         assert_eq!(p[0].first, 0);
         for k in 1..p.len() {
             assert_eq!(p[k].first, p[k - 1].end);
         }
         assert_eq!(p.last().unwrap().end, v.len());
-        assert_eq!(p[1].end - p[1].first, 24, "three lines in the first paragraph");
+        assert_eq!(
+            p[1].end - p[1].first,
+            24,
+            "three lines in the first paragraph"
+        );
     }
 
     #[test]
@@ -115,6 +152,9 @@ mod tests {
 
     #[test]
     fn levels_follow_the_size_ratio() {
-        assert_eq!((heading_level(2.4), heading_level(1.8), heading_level(1.45)), (1, 2, 3));
+        assert_eq!(
+            (heading_level(2.4), heading_level(1.8), heading_level(1.45)),
+            (1, 2, 3)
+        );
     }
 }

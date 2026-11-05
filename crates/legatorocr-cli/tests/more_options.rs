@@ -24,11 +24,19 @@ fn tmp(name: &str) -> PathBuf {
 }
 
 fn run(dir: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_legatorocr")).current_dir(dir).args(args).output().unwrap()
+    Command::new(env!("CARGO_BIN_EXE_legatorocr"))
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .unwrap()
 }
 
 fn text(o: &Output) -> String {
-    format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr))
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&o.stdout),
+        String::from_utf8_lossy(&o.stderr)
+    )
 }
 
 fn contains(hay: &[u8], needle: &[u8]) -> bool {
@@ -50,29 +58,82 @@ fn ocr_languages_lists_the_interface_languages() {
 #[test]
 fn front_matter_writes_roman_page_labels_then_restarts() {
     let d = tmp("front");
-    let o = run(&d, &["a.png", "b.png", "c.png", "--dpi", "300", "--format", "none", "--pdf", "f.pdf", "--front-matter", "2"]);
+    let o = run(
+        &d,
+        &[
+            "a.png",
+            "b.png",
+            "c.png",
+            "--dpi",
+            "300",
+            "--format",
+            "none",
+            "--pdf",
+            "f.pdf",
+            "--front-matter",
+            "2",
+        ],
+    );
     assert!(o.status.success(), "{}", text(&o));
     let pdf = std::fs::read(d.join("f.pdf")).unwrap();
     assert!(contains(&pdf, b"/S /r"), "no lower-case roman label");
-    assert!(contains(&pdf, b"/S /D"), "no decimal label for the pages after the front matter");
+    assert!(
+        contains(&pdf, b"/S /D"),
+        "no decimal label for the pages after the front matter"
+    );
     let _ = std::fs::remove_dir_all(&d);
 }
 
 #[test]
 fn fit_width_fills_an_a5_page() {
     let d = tmp("fit");
-    let o = run(&d, &["a.png", "--dpi", "300", "--format", "none", "--page-size", "a5", "--fit-width", "--pdf", "g.pdf"]);
+    let o = run(
+        &d,
+        &[
+            "a.png",
+            "--dpi",
+            "300",
+            "--format",
+            "none",
+            "--page-size",
+            "a5",
+            "--fit-width",
+            "--pdf",
+            "g.pdf",
+        ],
+    );
     assert!(o.status.success(), "{}", text(&o));
     let pdf = String::from_utf8_lossy(&std::fs::read(d.join("g.pdf")).unwrap()).into_owned();
     // only the width is pinned: A5 is 419.53 pt wide and the writer rounds to the pixel grid at 300 dpi
-    assert!(pdf.contains("/MediaBox [0 0 419.760"), "{}", pdf.lines().find(|l| l.contains("MediaBox")).unwrap_or("no MediaBox"));
+    assert!(
+        pdf.contains("/MediaBox [0 0 419.760"),
+        "{}",
+        pdf.lines()
+            .find(|l| l.contains("MediaBox"))
+            .unwrap_or("no MediaBox")
+    );
     let _ = std::fs::remove_dir_all(&d);
 }
 
 #[test]
 fn ocfl_id_lands_in_the_inventory() {
     let d = tmp("ocfl");
-    let o = run(&d, &["a.png", "--dpi", "300", "--format", "none", "--pdf", "h.pdf", "--ocfl", "obj", "--ocfl-id", "urn:test:42"]);
+    let o = run(
+        &d,
+        &[
+            "a.png",
+            "--dpi",
+            "300",
+            "--format",
+            "none",
+            "--pdf",
+            "h.pdf",
+            "--ocfl",
+            "obj",
+            "--ocfl-id",
+            "urn:test:42",
+        ],
+    );
     assert!(o.status.success(), "{}", text(&o));
     let inv = std::fs::read_to_string(d.join("obj/v1/inventory.json")).unwrap();
     assert!(inv.contains("urn:test:42"), "{inv}");
@@ -82,12 +143,26 @@ fn ocfl_id_lands_in_the_inventory() {
 #[test]
 fn verify_bag_accepts_an_intact_bag_and_rejects_a_changed_one() {
     let d = tmp("bag");
-    let o = run(&d, &["a.png", "--dpi", "300", "--format", "none", "--pdf", "i.pdf", "--bagit", "bag"]);
+    let o = run(
+        &d,
+        &[
+            "a.png", "--dpi", "300", "--format", "none", "--pdf", "i.pdf", "--bagit", "bag",
+        ],
+    );
     assert!(o.status.success(), "{}", text(&o));
     let ok = run(&d, &["--verify-bag", "bag"]);
-    assert!(ok.status.success() && text(&ok).contains("intact"), "{}", text(&ok));
+    assert!(
+        ok.status.success() && text(&ok).contains("intact"),
+        "{}",
+        text(&ok)
+    );
     let data = d.join("bag/data");
-    let f = std::fs::read_dir(&data).unwrap().next().unwrap().unwrap().path();
+    let f = std::fs::read_dir(&data)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
     let mut bytes = std::fs::read(&f).unwrap();
     bytes.push(b'!');
     std::fs::write(&f, bytes).unwrap();
@@ -99,7 +174,12 @@ fn verify_bag_accepts_an_intact_bag_and_rejects_a_changed_one() {
 #[test]
 fn scan_active_finds_nothing_in_a_plain_pdf() {
     let d = tmp("active");
-    let o = run(&d, &["a.png", "--dpi", "300", "--format", "none", "--pdf", "p.pdf"]);
+    let o = run(
+        &d,
+        &[
+            "a.png", "--dpi", "300", "--format", "none", "--pdf", "p.pdf",
+        ],
+    );
     assert!(o.status.success(), "{}", text(&o));
     let s = run(&d, &["--scan-active", "p.pdf"]);
     assert!(s.status.success(), "{}", text(&s));
@@ -113,16 +193,29 @@ fn backup_copies_checks_and_can_mark_read_only() {
     std::fs::create_dir_all(d.join("src")).unwrap();
     std::fs::create_dir_all(d.join("bk")).unwrap();
     std::fs::write(d.join("src/x.txt"), "hi").unwrap();
-    let o = run(&d, &["--backup-from", "src", "--backup-to", "bk", "--backup-read-only"]);
+    let o = run(
+        &d,
+        &[
+            "--backup-from",
+            "src",
+            "--backup-to",
+            "bk",
+            "--backup-read-only",
+        ],
+    );
     assert!(o.status.success(), "{}", text(&o));
     assert_eq!(std::fs::read_to_string(d.join("bk/x.txt")).unwrap(), "hi");
     assert!(d.join("bk/SHA256SUMS.txt").exists());
-    assert!(std::fs::metadata(d.join("bk/x.txt")).unwrap().permissions().readonly());
+    assert!(std::fs::metadata(d.join("bk/x.txt"))
+        .unwrap()
+        .permissions()
+        .readonly());
     // make the tree removable again
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(d.join("bk/x.txt"), std::fs::Permissions::from_mode(0o644));
+        let _ =
+            std::fs::set_permissions(d.join("bk/x.txt"), std::fs::Permissions::from_mode(0o644));
     }
     #[cfg(not(unix))]
     {
@@ -137,11 +230,31 @@ fn backup_copies_checks_and_can_mark_read_only() {
 #[test]
 fn fit_height_fills_an_a5_page() {
     let d = tmp("fith");
-    let o = run(&d, &["a.png", "--dpi", "300", "--format", "none", "--page-size", "a5", "--fit-height", "--pdf", "g.pdf"]);
+    let o = run(
+        &d,
+        &[
+            "a.png",
+            "--dpi",
+            "300",
+            "--format",
+            "none",
+            "--page-size",
+            "a5",
+            "--fit-height",
+            "--pdf",
+            "g.pdf",
+        ],
+    );
     assert!(o.status.success(), "{}", text(&o));
     let pdf = String::from_utf8_lossy(&std::fs::read(d.join("g.pdf")).unwrap()).into_owned();
     // only the height is pinned: A5 is 595.28 pt tall; the writer rounds to the pixel grid at 300 dpi
-    assert!(pdf.contains(" 595.440]"), "{}", pdf.lines().find(|l| l.contains("MediaBox")).unwrap_or("no MediaBox"));
+    assert!(
+        pdf.contains(" 595.440]"),
+        "{}",
+        pdf.lines()
+            .find(|l| l.contains("MediaBox"))
+            .unwrap_or("no MediaBox")
+    );
     let _ = std::fs::remove_dir_all(&d);
 }
 
@@ -169,17 +282,53 @@ fn report_outliers_names_the_odd_page_out_of_seven() {
     assert!(o.status.success(), "{t}");
     assert!(t.contains("p7.png") && !t.contains("p1.png"), "{t}");
     // and four pages are too few to judge
-    let few = run(&d, &["p1.png", "p2.png", "p3.png", "p7.png", "--dpi", "300", "--report-outliers"]);
-    assert!(text(&few).contains("no outlier pages among 4"), "{}", text(&few));
+    let few = run(
+        &d,
+        &[
+            "p1.png",
+            "p2.png",
+            "p3.png",
+            "p7.png",
+            "--dpi",
+            "300",
+            "--report-outliers",
+        ],
+    );
+    assert!(
+        text(&few).contains("no outlier pages among 4"),
+        "{}",
+        text(&few)
+    );
     let _ = std::fs::remove_dir_all(&d);
 }
 
 #[test]
 fn auto_levels_turns_paper_white_and_ink_black() {
     let d = tmp("levels");
-    let o = run(&d, &["a.png", "--dpi", "300", "--split", "off", "--mode", "gray", "--auto-levels", "--format", "png", "-o", "out"]);
+    let o = run(
+        &d,
+        &[
+            "a.png",
+            "--dpi",
+            "300",
+            "--split",
+            "off",
+            "--mode",
+            "gray",
+            "--auto-levels",
+            "--format",
+            "png",
+            "-o",
+            "out",
+        ],
+    );
     assert!(o.status.success(), "{}", text(&o));
-    let f = std::fs::read_dir(d.join("out")).unwrap().next().unwrap().unwrap().path();
+    let f = std::fs::read_dir(d.join("out"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
     let img = image::open(f).unwrap().to_luma8();
     let min = img.pixels().map(|p| p.0[0]).min().unwrap();
     let max = img.pixels().map(|p| p.0[0]).max().unwrap();

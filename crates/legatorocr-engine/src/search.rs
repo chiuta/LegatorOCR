@@ -169,9 +169,15 @@ impl Matcher {
             bail!("the search text is empty");
         }
         if o.old_orthography && !o.regex {
-            let plain = SearchOptions { old_orthography: false, ..o.clone() };
+            let plain = SearchOptions {
+                old_orthography: false,
+                ..o.clone()
+            };
             let modern = Matcher::new(&legatorocr_core::text::old_ro_to_modern(q), &plain)?;
-            return Ok(Matcher::Old(Box::new(Matcher::new(q, &plain)?), Box::new(modern)));
+            return Ok(Matcher::Old(
+                Box::new(Matcher::new(q, &plain)?),
+                Box::new(modern),
+            ));
         }
         if o.query {
             let parsed = crate::fuzzy::parse_query(q).map_err(|e| anyhow::anyhow!("query: {e}"))?;
@@ -767,9 +773,13 @@ mod tests {
             "Ruloul este din pînză și lemn\nNoi sînt\nCîte rîuri\nLa Brașov sunt pânze\nîn\nciti",
         )
         .unwrap();
-        let on = SearchOptions { old_orthography: true, ..SearchOptions::default() };
+        let on = SearchOptions {
+            old_orthography: true,
+            ..SearchOptions::default()
+        };
         let off = SearchOptions::default();
-        let lines = |q: &str, o: &SearchOptions| run(&d, q, o).0.iter().map(|h| h.line).collect::<Vec<_>>();
+        let lines =
+            |q: &str, o: &SearchOptions| run(&d, q, o).0.iter().map(|h| h.line).collect::<Vec<_>>();
         // modern query, old text
         assert_eq!(lines("pânză", &off), Vec::<usize>::new());
         assert_eq!(lines("pânză", &on), vec![1]);
@@ -782,7 +792,11 @@ mod tests {
         // a query with a word-initial î still finds it
         assert_eq!(lines("în", &on).last(), Some(&5));
         // boolean, wildcard and NEAR queries too
-        let q = SearchOptions { query: true, old_orthography: true, ..SearchOptions::default() };
+        let q = SearchOptions {
+            query: true,
+            old_orthography: true,
+            ..SearchOptions::default()
+        };
         assert_eq!(lines("pânză AND lemn", &q), vec![1]);
         assert_eq!(lines("râuri", &q), vec![3]);
         assert_eq!(lines("cât*", &on), vec![3]);

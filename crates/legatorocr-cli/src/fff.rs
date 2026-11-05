@@ -36,7 +36,12 @@ pub fn iso_utc(secs: u64) -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
-    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.000Z", rem / 3600, rem % 3600 / 60, rem % 60)
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.000Z",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
 }
 
 pub struct DocMeta<'a> {
@@ -60,7 +65,13 @@ pub fn document_ocr(m: &DocMeta, now_secs: u64) -> String {
         .text
         .split('\x0c')
         .enumerate()
-        .map(|(i, t)| format!("{{\"n\":{},\"text\":{}}}", i + 1, jstr(t.trim_matches('\n'))))
+        .map(|(i, t)| {
+            format!(
+                "{{\"n\":{},\"text\":{}}}",
+                i + 1,
+                jstr(t.trim_matches('\n'))
+            )
+        })
         .collect();
     let mut p = format!(
         "{{\"title\":{},\"lang\":{},\"file\":{},\"sha256\":{},\"engine\":{},\"pages\":[{}]",
@@ -100,7 +111,17 @@ mod tests {
     }
     #[test]
     fn envelope_has_pages_and_hash() {
-        let m = DocMeta { title: "T", author: "A. Popescu", year: "1999", lang: "ro", file: "s.png", sha256: "ab", text: "unu\n\x0cdoi", engine: "legatorocr", version: "0.2" };
+        let m = DocMeta {
+            title: "T",
+            author: "A. Popescu",
+            year: "1999",
+            lang: "ro",
+            file: "s.png",
+            sha256: "ab",
+            text: "unu\n\x0cdoi",
+            engine: "legatorocr",
+            version: "0.2",
+        };
         let e = document_ocr(&m, 0);
         assert!(e.contains("\"type\":\"document/ocr\""));
         assert!(e.contains("{\"n\":1,\"text\":\"unu\"},{\"n\":2,\"text\":\"doi\"}"));

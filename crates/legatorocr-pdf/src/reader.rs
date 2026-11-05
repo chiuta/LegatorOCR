@@ -1192,13 +1192,21 @@ impl PdfDoc {
         };
         let mut out = Vec::new();
         for n in nums {
-            let Some(Val::Dict(d)) = self.get(n) else { continue };
+            let Some(Val::Dict(d)) = self.get(n) else {
+                continue;
+            };
             if d.get("Type").and_then(|t| t.name()) != Some("Filespec") {
                 continue;
             }
-            let Some(ef) = d.get("EF").and_then(|v| self.dict_of(v)) else { continue };
-            let Some(f) = ef.get("F").or_else(|| ef.get("UF")) else { continue };
-            let Val::Stream(sd, s, e) = self.resolve(f) else { continue };
+            let Some(ef) = d.get("EF").and_then(|v| self.dict_of(v)) else {
+                continue;
+            };
+            let Some(f) = ef.get("F").or_else(|| ef.get("UF")) else {
+                continue;
+            };
+            let Val::Stream(sd, s, e) = self.resolve(f) else {
+                continue;
+            };
             let name = ["UF", "F"]
                 .iter()
                 .find_map(|k| match d.get(*k).map(|v| self.resolve(v)) {

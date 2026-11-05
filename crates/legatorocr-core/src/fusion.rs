@@ -41,7 +41,8 @@ fn msd(a: &GrayImage, b: &GrayImage, dx: i32, dy: i32, step: u32) -> Option<f64>
     while y < y1 {
         let mut x = x0;
         while x < x1 {
-            let d = a.get_pixel(x as u32, y as u32)[0] as f64 - b.get_pixel((x - dx) as u32, (y - dy) as u32)[0] as f64;
+            let d = a.get_pixel(x as u32, y as u32)[0] as f64
+                - b.get_pixel((x - dx) as u32, (y - dy) as u32)[0] as f64;
             s += d * d;
             n += 1;
             x += step as i32;
@@ -145,7 +146,9 @@ mod tests {
 
     /// Deterministic pseudo-random in [0,1).
     fn rnd(state: &mut u64) -> f64 {
-        *state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         ((*state >> 33) as f64) / (1u64 << 31) as f64
     }
 
@@ -153,8 +156,14 @@ mod tests {
         let mut im = RgbImage::from_pixel(240, 320, image::Rgb([235, 232, 225]));
         let mut s = 7u64;
         for _ in 0..140 {
-            let (x, y) = ((rnd(&mut s) * 200.0) as u32 + 10, (rnd(&mut s) * 290.0) as u32 + 10);
-            let (w, h) = ((rnd(&mut s) * 14.0) as u32 + 3, (rnd(&mut s) * 5.0) as u32 + 2);
+            let (x, y) = (
+                (rnd(&mut s) * 200.0) as u32 + 10,
+                (rnd(&mut s) * 290.0) as u32 + 10,
+            );
+            let (w, h) = (
+                (rnd(&mut s) * 14.0) as u32 + 3,
+                (rnd(&mut s) * 5.0) as u32 + 2,
+            );
             for yy in y..(y + h).min(320) {
                 for xx in x..(x + w).min(240) {
                     im.put_pixel(xx, yy, image::Rgb([30, 30, 35]));
@@ -170,24 +179,43 @@ mod tests {
         let mut o = RgbImage::new(w, h);
         for y in 0..h as i32 {
             for x in 0..w as i32 {
-                let (sx, sy) = ((x - dx).clamp(0, w as i32 - 1), (y - dy).clamp(0, h as i32 - 1));
+                let (sx, sy) = (
+                    (x - dx).clamp(0, w as i32 - 1),
+                    (y - dy).clamp(0, h as i32 - 1),
+                );
                 let p = base.get_pixel(sx as u32, sy as u32);
                 let n = (rnd(&mut s) + rnd(&mut s) + rnd(&mut s) - 1.5) * 2.0 * sigma;
-                o.put_pixel(x as u32, y as u32, image::Rgb([0, 1, 2].map(|c| (p[c] as f64 + n).clamp(0.0, 255.0) as u8)));
+                o.put_pixel(
+                    x as u32,
+                    y as u32,
+                    image::Rgb([0, 1, 2].map(|c| (p[c] as f64 + n).clamp(0.0, 255.0) as u8)),
+                );
             }
         }
         o
     }
 
     fn mse(a: &RgbImage, b: &RgbImage) -> f64 {
-        a.pixels().zip(b.pixels()).map(|(p, q)| (0..3).map(|c| (p[c] as f64 - q[c] as f64).powi(2)).sum::<f64>()).sum::<f64>() / (a.width() * a.height() * 3) as f64
+        a.pixels()
+            .zip(b.pixels())
+            .map(|(p, q)| {
+                (0..3)
+                    .map(|c| (p[c] as f64 - q[c] as f64).powi(2))
+                    .sum::<f64>()
+            })
+            .sum::<f64>()
+            / (a.width() * a.height() * 3) as f64
     }
 
     #[test]
     fn shifts_are_found_and_noise_drops() {
         let truth = page();
         let shifts = [(0, 0), (5, -3), (-7, 4), (2, 6), (-4, -5)];
-        let frames: Vec<RgbImage> = shifts.iter().enumerate().map(|(i, &(dx, dy))| noisy(&truth, dx, dy, 100 + i as u64, 30.0)).collect();
+        let frames: Vec<RgbImage> = shifts
+            .iter()
+            .enumerate()
+            .map(|(i, &(dx, dy))| noisy(&truth, dx, dy, 100 + i as u64, 30.0))
+            .collect();
         let fused = fuse(&frames, 12, 1500.0).unwrap();
         for (i, &(dx, dy)) in shifts.iter().enumerate() {
             // frame i is the reference moved by (dx, dy); aligning it back needs the opposite shift
@@ -195,9 +223,15 @@ mod tests {
         }
         // compare in the area every frame covers
         let crop = |im: &RgbImage| image::imageops::crop_imm(im, 12, 12, 216, 296).to_image();
-        let (single, many) = (mse(&crop(&frames[0]), &crop(&truth)), mse(&crop(&fused.image), &crop(&truth)));
+        let (single, many) = (
+            mse(&crop(&frames[0]), &crop(&truth)),
+            mse(&crop(&fused.image), &crop(&truth)),
+        );
         eprintln!("MSE vs truth: one frame {single:.1}, fused {many:.1}");
-        assert!(many < single * 0.7, "fusion should cut the noise: {single} -> {many}");
+        assert!(
+            many < single * 0.7,
+            "fusion should cut the noise: {single} -> {many}"
+        );
     }
 
     #[test]

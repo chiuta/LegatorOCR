@@ -516,13 +516,14 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
     let mut cut_at = None;
     if s.split != SplitMode::Off {
         // a line the user dragged on the original wins over the automatic cut (kept to 0/180 deg)
-        let manual = s.sheet_split_frac.filter(|f| f.is_finite() && *f > 0.0 && *f < 1.0).and_then(|f| {
-            match s.rotate_quarters % 4 {
+        let manual = s
+            .sheet_split_frac
+            .filter(|f| f.is_finite() && *f > 0.0 && *f < 1.0)
+            .and_then(|f| match s.rotate_quarters % 4 {
                 0 => Some(f),
                 2 => Some(1.0 - f),
                 _ => None,
-            }
-        });
+            });
         let cut = match s.split {
             _ if manual.is_some() => manual.map(|f| (f * rgb.width() as f32).round() as u32),
             SplitMode::Middle => {
@@ -694,7 +695,9 @@ fn prepare(
         let paper = transform::estimate_background(&img);
         cleanup::remove_fingers(&mut img, s.dpi, paper);
     }
-    let bg = crate::stage("clean-up/background", || transform::estimate_background(&img));
+    let bg = crate::stage("clean-up/background", || {
+        transform::estimate_background(&img)
+    });
     let mut skew_deg = 0.0;
 
     // --- deskew ---------------------------------------------------------
@@ -707,7 +710,9 @@ fn prepare(
             // (a mounted photo on a straight page came out rotated by 4°). Judge the skew
             // from what is left outside the picture zones.
             let f = a.factor.max(1);
-            for z in crate::stage("deskew/pictures", || pictures::detect(&gray, s.dpi, s.picture_sensitivity)) {
+            for z in crate::stage("deskew/pictures", || {
+                pictures::detect(&gray, s.dpi, s.picture_sensitivity)
+            }) {
                 let pad = (z.rect.w.min(z.rect.h) / 25).max(f);
                 let x0 = z.rect.x.saturating_sub(pad) / f;
                 let y0 = z.rect.y.saturating_sub(pad) / f;
@@ -719,7 +724,9 @@ fn prepare(
                     }
                 }
             }
-            crate::stage("deskew/detect", || deskew::detect_skew(&a.ink, s.max_skew_deg))
+            crate::stage("deskew/detect", || {
+                deskew::detect_skew(&a.ink, s.max_skew_deg)
+            })
         }
         None => None,
     };
@@ -1039,7 +1046,9 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
     );
     let mask: Option<BitImage> = wants_mask.then(|| {
         let g = transform::gray_of(&img);
-        let mut bw = crate::stage("output/binarize", || binarize::threshold(&g, s.threshold, (s.dpi / 3) | 1, s.sauvola_k));
+        let mut bw = crate::stage("output/binarize", || {
+            binarize::threshold(&g, s.threshold, (s.dpi / 3) | 1, s.sauvola_k)
+        });
         if s.despeckle {
             let min_px =
                 ((s.dpi as f32 / 300.0).powi(2) * 6.0 * s.despeckle_strength).round() as u32;
@@ -1341,7 +1350,12 @@ mod tests {
             img,
             bg: Rgb([255, 255, 255]),
             skew_deg: 0.0,
-            content: Some(Rect { x: 100, y: 150, w: 200, h: 100 }),
+            content: Some(Rect {
+                x: 100,
+                y: 150,
+                w: 200,
+                h: 100,
+            }),
             pictures: vec![],
         };
         let (q, s2) = fit_to_page(p, &s);
@@ -1362,8 +1376,14 @@ mod tests {
             ..Settings::default()
         };
         let upright = &process_page(&src, &base)[0];
-        assert!(upright.image.height() > upright.image.width(), "left alone it stays portrait");
-        let turned = Settings { rotate_quarters: 1, ..base };
+        assert!(
+            upright.image.height() > upright.image.width(),
+            "left alone it stays portrait"
+        );
+        let turned = Settings {
+            rotate_quarters: 1,
+            ..base
+        };
         let p = &process_page(&src, &turned)[0];
         assert!(
             p.image.width() > p.image.height(),
@@ -1386,11 +1406,22 @@ mod tests {
             ..Settings::default()
         };
         let auto = &process_page(&src, &base)[0];
-        assert!(auto.image.width() > auto.image.height(), "auto-orient turned it to landscape");
+        assert!(
+            auto.image.width() > auto.image.height(),
+            "auto-orient turned it to landscape"
+        );
         // ...but once the user has set the rotation (even to 0) it is left exactly as asked
-        let locked = Settings { sheet_orient_locked: true, ..base };
+        let locked = Settings {
+            sheet_orient_locked: true,
+            ..base
+        };
         let p = &process_page(&src, &locked)[0];
-        assert!(p.image.height() > p.image.width(), "locked at 0: {}x{}", p.image.width(), p.image.height());
+        assert!(
+            p.image.height() > p.image.width(),
+            "locked at 0: {}x{}",
+            p.image.width(),
+            p.image.height()
+        );
     }
 
     #[test]
@@ -1580,7 +1611,11 @@ mod tests {
         let area: f32 = z.iter().map(|r| r[2] * r[3]).sum();
         let sheet = 50.8f32 * 50.8;
         let inside = (50.8 - 10.0) * (50.8 - 20.0);
-        assert!((area - (sheet - inside)).abs() < 0.5, "{area} vs {}", sheet - inside);
+        assert!(
+            (area - (sheet - inside)).abs() < 0.5,
+            "{area} vs {}",
+            sheet - inside
+        );
         // a rectangle with no overlap is ignored rather than erasing the whole sheet
         assert!(outside_work_area([100.0, 100.0, 5.0, 5.0], 600, 600, 300).is_empty());
         assert!(outside_work_area([f32::NAN, 0.0, 5.0, 5.0], 600, 600, 300).is_empty());
@@ -1595,9 +1630,17 @@ mod tests {
             }
         }
         let src = image::DynamicImage::ImageLuma8(g);
-        let s = Settings { dpi: 300, sheet_work_mm: Some([10.0, 5.0, 40.0, 40.0]), ..Settings::default() };
+        let s = Settings {
+            dpi: 300,
+            sheet_work_mm: Some([10.0, 5.0, 40.0, 40.0]),
+            ..Settings::default()
+        };
         let out = erase_on_sheet(&src, &s).to_luma8();
-        assert_eq!(out.get_pixel(100, 120).0[0], 255, "ink outside is painted over");
+        assert_eq!(
+            out.get_pixel(100, 120).0[0],
+            255,
+            "ink outside is painted over"
+        );
         assert_eq!(out.get_pixel(350, 120).0[0], 0, "ink inside stays");
     }
 
@@ -1988,11 +2031,20 @@ mod tests {
                 },
                 sheet_orient_locked: rnd(5) == 0,
                 sheet_work_mm: if rnd(4) == 0 {
-                    Some([rnd(100) as f32 - 20.0, rnd(100) as f32 - 20.0, rnd(300) as f32, rnd(300) as f32])
+                    Some([
+                        rnd(100) as f32 - 20.0,
+                        rnd(100) as f32 - 20.0,
+                        rnd(300) as f32,
+                        rnd(300) as f32,
+                    ])
                 } else {
                     None
                 },
-                sheet_split_frac: if rnd(4) == 0 { Some(rnd(120) as f32 / 100.0 - 0.1) } else { None },
+                sheet_split_frac: if rnd(4) == 0 {
+                    Some(rnd(120) as f32 / 100.0 - 0.1)
+                } else {
+                    None
+                },
                 sheet_picture_zones: if rnd(3) == 0 {
                     vec![[
                         rnd(300) as f32 - 50.0,

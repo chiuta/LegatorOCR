@@ -12,62 +12,62 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 pub mod altbin;
-pub mod autoretry;
+pub mod archive;
 pub mod audit;
-pub mod djvu;
-pub mod doubtful;
-pub mod ocfl;
-pub mod proofsheet;
-pub mod isolate;
-pub mod mrz;
-pub mod plugin;
-pub mod embedproject;
-pub mod reprocess;
-pub mod scantailor;
+pub mod autoretry;
+pub mod backup;
 pub mod bagit;
 pub mod burst;
 pub mod catalog;
 pub mod certify;
 pub mod checksums;
+pub mod djvu;
 pub mod doctor;
-pub mod explain;
-pub mod formfields;
 pub mod docx;
+pub mod doubtful;
+pub mod efactura;
+pub mod embedproject;
 pub mod eval;
+pub mod explain;
 pub mod extpdf;
 pub mod files;
+pub mod formfields;
 pub mod fuzzy;
+pub mod headings;
 pub mod integrity;
 pub mod iso;
+pub mod isolate;
+pub mod mcp;
+pub mod memcap;
+pub mod merkle;
+pub mod mrz;
 pub mod naming;
+pub mod ocfl;
+pub mod ocrcache;
 pub mod package;
+pub mod pagelang;
+pub mod pagenum;
+pub mod passages;
+pub mod pdftools;
+pub mod plugin;
 pub mod profile;
 pub mod profiles;
 pub mod project;
-pub mod headings;
-pub mod tagstruct;
-pub mod merkle;
-pub mod ocrcache;
-pub mod pagelang;
-pub mod archive;
-pub mod backup;
-pub mod efactura;
-pub mod mcp;
-pub mod memcap;
-pub mod pdftools;
-pub mod pagenum;
-pub mod redact;
-pub mod passages;
+pub mod proofsheet;
 pub mod provenance;
 pub mod qa;
-pub mod textcheck;
+pub mod redact;
 pub mod report;
-pub mod ropost;
+pub mod reprocess;
 pub mod rights;
+pub mod ropost;
+pub mod scantailor;
 pub mod search;
-pub mod tables;
-pub mod tei;
 pub mod sign;
+pub mod tables;
+pub mod tagstruct;
+pub mod tei;
+pub mod textcheck;
 pub mod tsa;
 pub mod verifier;
 pub mod watch;
@@ -77,8 +77,8 @@ pub use legatorocr_ocr as ocr;
 
 pub use legatorocr_pdf::g4;
 pub use legatorocr_pdf::LabelStyle;
-pub use legatorocr_pdf::{DEFAULT_PDFA_PART, DEFAULT_TAGGED, DEFAULT_TAGGED_STRUCT};
 pub use legatorocr_pdf::Meta as PdfMeta;
+pub use legatorocr_pdf::{DEFAULT_PDFA_PART, DEFAULT_TAGGED, DEFAULT_TAGGED_STRUCT};
 
 #[derive(Debug, Clone)]
 pub struct PdfExport {
@@ -614,8 +614,7 @@ pub fn load_image(path: &Path) -> Result<DynamicImage> {
         load_image_direct(path)?
     };
     match plugin::current() {
-        Some(p) => plugin::run(&p, &img)
-            .with_context(|| format!("plugin on {}", path.display())),
+        Some(p) => plugin::run(&p, &img).with_context(|| format!("plugin on {}", path.display())),
         None => Ok(img),
     }
 }
@@ -763,7 +762,12 @@ pub fn run_export(
     let done = AtomicUsize::new(0);
     let batch = memcap::batch_size(
         rayon::current_num_threads().max(2),
-        memcap::largest(&job.sheets.iter().map(|s| s.path.clone()).collect::<Vec<_>>()),
+        memcap::largest(
+            &job.sheets
+                .iter()
+                .map(|s| s.path.clone())
+                .collect::<Vec<_>>(),
+        ),
     );
     let mut res = ExportResult::default();
     // with keep_going a page whose OCR fails is kept (without text layer) and reported, instead of
@@ -808,7 +812,15 @@ pub fn run_export(
                     .enumerate()
                 {
                     let dropped = job.skip_blank && pg.blank && !job.split_on_blank;
-                    explain::record(base + i, seq, &sheet.path, &pg, &settings, quarters_before, !dropped);
+                    explain::record(
+                        base + i,
+                        seq,
+                        &sheet.path,
+                        &pg,
+                        &settings,
+                        quarters_before,
+                        !dropped,
+                    );
                     // with split_on_blank a blank sheet is a separator: it must reach the splitter
                     if dropped {
                         skipped += 1;
@@ -828,9 +840,8 @@ pub fn run_export(
                                 }
                                 None => o,
                             };
-                            match profile::time("ocr", || {
-                                ocrcache::recognize(&pg.image, pg.dpi, o)
-                            }) {
+                            match profile::time("ocr", || ocrcache::recognize(&pg.image, pg.dpi, o))
+                            {
                                 Ok(w) => w,
                                 Err(e) if job.keep_going => {
                                     ocr_warnings.lock().unwrap().push((
@@ -848,18 +859,29 @@ pub fn run_export(
                         None => Vec::new(),
                     };
                     let (pg, words) = match ocr_opts {
-                        Some(o) if altbin::enabled() => altbin::choose(pg, words, &img, &settings, seq, |p| {
-                            profile::time("ocr", || ocrcache::recognize(&p.image, p.dpi, o))
-                        }),
+                        Some(o) if altbin::enabled() => {
+                            altbin::choose(pg, words, &img, &settings, seq, |p| {
+                                profile::time("ocr", || ocrcache::recognize(&p.image, p.dpi, o))
+                            })
+                        }
                         _ => (pg, words),
                     };
                     let (pg, words) = match ocr_opts {
                         Some(o) if autoretry::enabled() => {
-                            let lang = pagelang::for_page(base + i + 1).unwrap_or_else(|| o.lang.clone());
+                            let lang =
+                                pagelang::for_page(base + i + 1).unwrap_or_else(|| o.lang.clone());
                             let o = OcrOptions { lang, ..o.clone() };
-                            let r = autoretry::refine(base + i, seq, pg, words, &img, &settings, |p, d| {
-                                profile::time("ocr", || ocrcache::recognize(&p.image, d, &o))
-                            });
+                            let r = autoretry::refine(
+                                base + i,
+                                seq,
+                                pg,
+                                words,
+                                &img,
+                                &settings,
+                                |p, d| {
+                                    profile::time("ocr", || ocrcache::recognize(&p.image, d, &o))
+                                },
+                            );
                             if let Some(n) = autoretry::note(base + i, seq) {
                                 explain::append(base + i, seq, &n);
                             }
@@ -995,7 +1017,8 @@ pub fn run_export(
                 }
                 if doubtful::enabled() {
                     if let Some(o) = ocr_opts {
-                        let lang = pagelang::for_page(base + i + 1).unwrap_or_else(|| o.lang.clone());
+                        let lang =
+                            pagelang::for_page(base + i + 1).unwrap_or_else(|| o.lang.clone());
                         doubtful::record(base + i + 1, &lang, &words);
                     }
                 }

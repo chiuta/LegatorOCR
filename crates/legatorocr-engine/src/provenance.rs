@@ -49,14 +49,20 @@ pub fn build(inputs: &[PathBuf], args: &[String], when: u64) -> String {
         if !seen.insert(base.clone()) {
             continue;
         }
-        let name = base.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = base
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let hash = crate::checksums::file_hash(&base).ok();
         files.push(match hash {
             Some(h) => format!("{{\"name\":\"{}\",\"sha256\":\"{h}\"}}", esc(&name)),
             None => format!("{{\"name\":\"{}\"}}", esc(&name)),
         });
     }
-    let opts: Vec<String> = clean_args(args).iter().map(|a| format!("\"{}\"", esc(a))).collect();
+    let opts: Vec<String> = clean_args(args)
+        .iter()
+        .map(|a| format!("\"{}\"", esc(a)))
+        .collect();
     format!(
         "{{\"software\":\"LegatorOCR {}\",\"unix_time\":{when},\"inputs\":[{}],\"options\":[{}]}}",
         env!("CARGO_PKG_VERSION"),
@@ -71,16 +77,27 @@ mod tests {
 
     #[test]
     fn passwords_are_dropped_and_hashes_recorded() {
-        let a: Vec<String> = ["x.png", "--pdf-password", "secret", "--ocr", "--package-password-file=/p", "--lang", "ron"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let a: Vec<String> = [
+            "x.png",
+            "--pdf-password",
+            "secret",
+            "--ocr",
+            "--package-password-file=/p",
+            "--lang",
+            "ron",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         let c = clean_args(&a);
         assert_eq!(c, vec!["x.png", "--ocr", "--lang", "ron"]);
         let f = std::env::temp_dir().join(format!("lgr_prov_{}.txt", std::process::id()));
         std::fs::write(&f, "abc").unwrap();
         let j = build(&[f.clone(), f.clone()], &a, 123);
-        assert!(j.contains("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"), "{j}");
+        assert!(
+            j.contains("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
+            "{j}"
+        );
         assert_eq!(j.matches("sha256").count(), 1, "same file listed once");
         assert!(!j.contains("secret") && j.contains("\"unix_time\":123"));
         let _ = std::fs::remove_file(f);

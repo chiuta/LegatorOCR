@@ -1156,13 +1156,10 @@ impl App {
         let flagged: Vec<usize> = (0..self.sheets.len())
             .filter(|&i| {
                 let key = self.key_of(&self.sheets[i]);
-                self.sheets[i]
-                    .ready
-                    .as_ref()
-                    .is_some_and(|r| {
-                        r.key == key
-                            && attention(r, max_skew, self.sheets[i].adj.skew_deg.is_some()).is_some()
-                    })
+                self.sheets[i].ready.as_ref().is_some_and(|r| {
+                    r.key == key
+                        && attention(r, max_skew, self.sheets[i].adj.skew_deg.is_some()).is_some()
+                })
             })
             .collect();
         if !flagged.is_empty() {
@@ -1237,14 +1234,20 @@ impl App {
         ui.horizontal(|ui| {
             ui.heading(tr("set.title"));
             if ui
-                .add_enabled(!self.settings_undo.is_empty(), egui::Button::new(tr("zones.undo")))
+                .add_enabled(
+                    !self.settings_undo.is_empty(),
+                    egui::Button::new(tr("zones.undo")),
+                )
                 .on_hover_text(tr("set.undo_tip"))
                 .clicked()
             {
                 swap = Some(true);
             }
             if ui
-                .add_enabled(!self.settings_redo.is_empty(), egui::Button::new(tr("zones.redo")))
+                .add_enabled(
+                    !self.settings_redo.is_empty(),
+                    egui::Button::new(tr("zones.redo")),
+                )
                 .on_hover_text(tr("set.redo_tip"))
                 .clicked()
             {
@@ -1329,8 +1332,7 @@ impl App {
                             }))
                             .changed();
                         ui.horizontal(|ui| {
-                            ui.label(tr("set.split"))
-                                .on_hover_text(tr("set.split_tip"));
+                            ui.label(tr("set.split")).on_hover_text(tr("set.split_tip"));
                             egui::ComboBox::from_id_salt("split")
                                 .selected_text(split_name(lang, self.s.split))
                                 .show_ui(ui, |ui| {
@@ -1839,10 +1841,13 @@ impl App {
                 ch = true;
             }
         } else if ch {
-            let fresh = self.settings_edit.is_none_or(|t| t.elapsed().as_secs_f32() > 1.0);
+            let fresh = self
+                .settings_edit
+                .is_none_or(|t| t.elapsed().as_secs_f32() > 1.0);
             if fresh {
                 self.settings_undo.push(settings_before);
-                self.settings_undo.drain(..self.settings_undo.len().saturating_sub(100));
+                self.settings_undo
+                    .drain(..self.settings_undo.len().saturating_sub(100));
                 self.settings_redo.clear();
             }
             self.settings_edit = Some(std::time::Instant::now());
@@ -1868,7 +1873,9 @@ impl App {
                 }
                 ui.add_space(14.0);
                 if ui
-                    .add(egui::Button::new(RichText::new(tr("welcome.add")).size(18.0)))
+                    .add(egui::Button::new(
+                        RichText::new(tr("welcome.add")).size(18.0),
+                    ))
                     .clicked()
                 {
                     if let Some(f) = rfd::FileDialog::new()
@@ -2335,10 +2342,38 @@ impl App {
                                 )
                                 .intersect(rect);
                                 let dim = Color32::from_rgba_unmultiplied(0, 0, 0, 80);
-                                painter.rect_filled(egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, r.min.y)), 0.0, dim);
-                                painter.rect_filled(egui::Rect::from_min_max(egui::pos2(rect.min.x, r.max.y), rect.max), 0.0, dim);
-                                painter.rect_filled(egui::Rect::from_min_max(egui::pos2(rect.min.x, r.min.y), egui::pos2(r.min.x, r.max.y)), 0.0, dim);
-                                painter.rect_filled(egui::Rect::from_min_max(egui::pos2(r.max.x, r.min.y), egui::pos2(rect.max.x, r.max.y)), 0.0, dim);
+                                painter.rect_filled(
+                                    egui::Rect::from_min_max(
+                                        rect.min,
+                                        egui::pos2(rect.max.x, r.min.y),
+                                    ),
+                                    0.0,
+                                    dim,
+                                );
+                                painter.rect_filled(
+                                    egui::Rect::from_min_max(
+                                        egui::pos2(rect.min.x, r.max.y),
+                                        rect.max,
+                                    ),
+                                    0.0,
+                                    dim,
+                                );
+                                painter.rect_filled(
+                                    egui::Rect::from_min_max(
+                                        egui::pos2(rect.min.x, r.min.y),
+                                        egui::pos2(r.min.x, r.max.y),
+                                    ),
+                                    0.0,
+                                    dim,
+                                );
+                                painter.rect_filled(
+                                    egui::Rect::from_min_max(
+                                        egui::pos2(r.max.x, r.min.y),
+                                        egui::pos2(rect.max.x, r.max.y),
+                                    ),
+                                    0.0,
+                                    dim,
+                                );
                                 painter.rect_stroke(
                                     r,
                                     0.0,
@@ -2388,12 +2423,19 @@ impl App {
                             } else if draw_zones && draw_cut {
                                 if resp.clicked() || resp.dragged() {
                                     if let Some(p) = resp.interact_pointer_pos() {
-                                        let f = ((p.x - rect.min.x) / rect.width().max(1.0)).clamp(0.02, 0.98);
+                                        let f = ((p.x - rect.min.x) / rect.width().max(1.0))
+                                            .clamp(0.02, 0.98);
                                         if resp.dragged() {
                                             let x = rect.min.x + f * rect.width();
                                             painter.line_segment(
-                                                [egui::pos2(x, rect.min.y), egui::pos2(x, rect.max.y)],
-                                                egui::Stroke::new(2.0, Color32::from_rgb(255, 140, 0)),
+                                                [
+                                                    egui::pos2(x, rect.min.y),
+                                                    egui::pos2(x, rect.max.y),
+                                                ],
+                                                egui::Stroke::new(
+                                                    2.0,
+                                                    Color32::from_rgb(255, 140, 0),
+                                                ),
                                             );
                                         }
                                         if resp.drag_stopped() || resp.clicked() {
@@ -2403,7 +2445,8 @@ impl App {
                                 }
                                 if resp.drag_stopped() {
                                     if let Some(p) = ui.input(|i| i.pointer.latest_pos()) {
-                                        let f = ((p.x - rect.min.x) / rect.width().max(1.0)).clamp(0.02, 0.98);
+                                        let f = ((p.x - rect.min.x) / rect.width().max(1.0))
+                                            .clamp(0.02, 0.98);
                                         new_cut = Some(Some(f));
                                     }
                                 }
@@ -2450,8 +2493,10 @@ impl App {
                                 };
                                 let from_scr = |p: egui::Pos2| {
                                     (
-                                        ((p.x - rect.min.x) / rect.width().max(1.0)).clamp(0.0, 1.0),
-                                        ((p.y - rect.min.y) / rect.height().max(1.0)).clamp(0.0, 1.0),
+                                        ((p.x - rect.min.x) / rect.width().max(1.0))
+                                            .clamp(0.0, 1.0),
+                                        ((p.y - rect.min.y) / rect.height().max(1.0))
+                                            .clamp(0.0, 1.0),
                                     )
                                 };
                                 // the node under the pointer (within 10 screen pixels)
@@ -2496,7 +2541,8 @@ impl App {
                                             node_remove = Some((g, k));
                                         } else {
                                             // a new node on the nearest segment
-                                            let mut best: Option<(usize, usize, f32, egui::Pos2)> = None;
+                                            let mut best: Option<(usize, usize, f32, egui::Pos2)> =
+                                                None;
                                             for (gi, g) in guide_list.iter().enumerate() {
                                                 for (ki, w) in g.windows(2).enumerate() {
                                                     let (a, b) = (to_scr(w[0]), to_scr(w[1]));
@@ -2618,10 +2664,13 @@ impl App {
                                             .iter()
                                             .enumerate()
                                             .rev()
-                                            .find_map(|(k, z)| corner_hit(z, (ox, oy), tol).map(|c| (true, k, c)))
+                                            .find_map(|(k, z)| {
+                                                corner_hit(z, (ox, oy), tol).map(|c| (true, k, c))
+                                            })
                                             .or_else(|| {
                                                 zones.iter().enumerate().rev().find_map(|(k, z)| {
-                                                    corner_hit(z, (ox, oy), tol).map(|c| (false, k, c))
+                                                    corner_hit(z, (ox, oy), tol)
+                                                        .map(|c| (false, k, c))
                                                 })
                                             });
                                         if resize.is_some() {
@@ -2840,7 +2889,10 @@ impl App {
         }
         if let Some((g, k)) = node_remove {
             let a = &mut self.sheets[i].adj;
-            if g < a.dewarp_guides.len() && a.dewarp_guides[g].len() > 2 && k < a.dewarp_guides[g].len() {
+            if g < a.dewarp_guides.len()
+                && a.dewarp_guides[g].len() > 2
+                && k < a.dewarp_guides[g].len()
+            {
                 let before = ZoneSnap::of(a);
                 a.dewarp_guides[g].remove(k);
                 self.sheets[i].zone_undo.push(before);
@@ -2851,7 +2903,10 @@ impl App {
         }
         if let Some((g, k, pos)) = node_insert {
             let a = &mut self.sheets[i].adj;
-            if g < a.dewarp_guides.len() && k <= a.dewarp_guides[g].len() && a.dewarp_guides[g].len() < 256 {
+            if g < a.dewarp_guides.len()
+                && k <= a.dewarp_guides[g].len()
+                && a.dewarp_guides[g].len() < 256
+            {
                 let before = ZoneSnap::of(a);
                 a.dewarp_guides[g].insert(k, pos);
                 self.sheets[i].zone_undo.push(before);
@@ -2911,7 +2966,11 @@ impl App {
         if let Some((is_pic, k, z)) = edit_zone {
             let a = &mut self.sheets[i].adj;
             let before = ZoneSnap::of(a);
-            let list = if is_pic { &mut a.picture_mm } else { &mut a.erase_mm };
+            let list = if is_pic {
+                &mut a.picture_mm
+            } else {
+                &mut a.erase_mm
+            };
             if k < list.len() {
                 list[k] = z;
                 self.sheets[i].zone_undo.push(before);
@@ -3057,7 +3116,12 @@ fn move_corner(z: &[f32; 4], corner: u8, p: (f32, f32)) -> [f32; 4] {
     );
     let (x0, x1) = (p.0.min(fx), p.0.max(fx));
     let (y0, y1) = (p.1.min(fy), p.1.max(fy));
-    [x0.max(0.0), y0.max(0.0), (x1 - x0).max(0.5), (y1 - y0).max(0.5)]
+    [
+        x0.max(0.0),
+        y0.max(0.0),
+        (x1 - x0).max(0.5),
+        (y1 - y0).max(0.5),
+    ]
 }
 
 #[cfg(test)]

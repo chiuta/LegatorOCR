@@ -26,15 +26,30 @@ fn civil(when: u64) -> String {
 fn tag_manifest(dir: &Path, names: &[&str]) -> Result<String> {
     let mut s = String::new();
     for n in names {
-        s.push_str(&format!("{}  {n}\n", crate::checksums::file_hash(&dir.join(n))?));
+        s.push_str(&format!(
+            "{}  {n}\n",
+            crate::checksums::file_hash(&dir.join(n))?
+        ));
     }
     Ok(s)
 }
 
 /// Build a bag at `dest` (which must not exist or must be empty) from `files`.
-pub fn write(dest: &Path, files: &[PathBuf], when: u64, description: Option<&str>) -> Result<Summary> {
-    if dest.exists() && std::fs::read_dir(dest).map(|mut d| d.next().is_some()).unwrap_or(true) {
-        bail!("{} exists and is not empty; a bag is written into a new folder", dest.display());
+pub fn write(
+    dest: &Path,
+    files: &[PathBuf],
+    when: u64,
+    description: Option<&str>,
+) -> Result<Summary> {
+    if dest.exists()
+        && std::fs::read_dir(dest)
+            .map(|mut d| d.next().is_some())
+            .unwrap_or(true)
+    {
+        bail!(
+            "{} exists and is not empty; a bag is written into a new folder",
+            dest.display()
+        );
     }
     let data = dest.join("data");
     std::fs::create_dir_all(&data).with_context(|| format!("{}: cannot create", data.display()))?;
@@ -52,9 +67,15 @@ pub fn write(dest: &Path, files: &[PathBuf], when: u64, description: Option<&str
         let target = data.join(name);
         std::fs::copy(f, &target).with_context(|| format!("copying {}", f.display()))?;
         bytes += std::fs::metadata(&target)?.len();
-        manifest.push_str(&format!("{}  data/{name}\n", crate::checksums::file_hash(&target)?));
+        manifest.push_str(&format!(
+            "{}  data/{name}\n",
+            crate::checksums::file_hash(&target)?
+        ));
     }
-    std::fs::write(dest.join("bagit.txt"), "BagIt-Version: 1.0\nTag-File-Character-Encoding: UTF-8\n")?;
+    std::fs::write(
+        dest.join("bagit.txt"),
+        "BagIt-Version: 1.0\nTag-File-Character-Encoding: UTF-8\n",
+    )?;
     std::fs::write(dest.join("manifest-sha256.txt"), &manifest)?;
     let mut info = format!(
         "Bagging-Date: {}\nBag-Software-Agent: LegatorOCR {}\nPayload-Oxum: {}.{}\n",
@@ -69,7 +90,10 @@ pub fn write(dest: &Path, files: &[PathBuf], when: u64, description: Option<&str
     std::fs::write(dest.join("bag-info.txt"), info)?;
     let tags = tag_manifest(dest, &["bagit.txt", "bag-info.txt", "manifest-sha256.txt"])?;
     std::fs::write(dest.join("tagmanifest-sha256.txt"), tags)?;
-    Ok(Summary { files: files.len(), bytes })
+    Ok(Summary {
+        files: files.len(),
+        bytes,
+    })
 }
 
 fn check_manifest(dir: &Path, manifest: &str, problems: &mut Vec<String>) -> usize {
@@ -97,7 +121,8 @@ fn check_manifest(dir: &Path, manifest: &str, problems: &mut Vec<String>) -> usi
 /// the manifest does not list.
 pub fn verify(dir: &Path) -> Result<Vec<String>> {
     let mut problems = Vec::new();
-    let v = std::fs::read_to_string(dir.join("bagit.txt")).context("not a bag: bagit.txt is missing")?;
+    let v = std::fs::read_to_string(dir.join("bagit.txt"))
+        .context("not a bag: bagit.txt is missing")?;
     if !v.starts_with("BagIt-Version:") {
         problems.push("bagit.txt is not a BagIt declaration".into());
     }
@@ -113,7 +138,10 @@ pub fn verify(dir: &Path) -> Result<Vec<String>> {
         .map(|d| d.flatten().filter(|e| e.path().is_file()).count())
         .unwrap_or(0);
     if on_disk > listed {
-        problems.push(format!("data/ holds {} file(s) the manifest does not list", on_disk - listed));
+        problems.push(format!(
+            "data/ holds {} file(s) the manifest does not list",
+            on_disk - listed
+        ));
     }
     Ok(problems)
 }
@@ -134,17 +162,30 @@ mod tests {
         let bag = root.join("bag");
         let s = write(&bag, &[a.clone(), b.clone()], 1_793_541_789, Some("test")).unwrap();
         assert_eq!((s.files, s.bytes), (2, 17));
-        assert!(std::fs::read_to_string(bag.join("bag-info.txt")).unwrap().contains("Bagging-Date: 2026-11-01"));
-        assert!(std::fs::read_to_string(bag.join("bag-info.txt")).unwrap().contains("Payload-Oxum: 17.2"));
+        assert!(std::fs::read_to_string(bag.join("bag-info.txt"))
+            .unwrap()
+            .contains("Bagging-Date: 2026-11-01"));
+        assert!(std::fs::read_to_string(bag.join("bag-info.txt"))
+            .unwrap()
+            .contains("Payload-Oxum: 17.2"));
         assert!(verify(&bag).unwrap().is_empty());
-        assert!(write(&bag, std::slice::from_ref(&a), 0, None).is_err(), "no writing into a used folder");
+        assert!(
+            write(&bag, std::slice::from_ref(&a), 0, None).is_err(),
+            "no writing into a used folder"
+        );
         std::fs::write(bag.join("data/b.txt"), "TEXT").unwrap();
         std::fs::write(bag.join("data/extra.txt"), "x").unwrap();
         let p = verify(&bag).unwrap();
-        assert!(p.iter().any(|x| x.contains("b.txt: content changed")), "{p:?}");
+        assert!(
+            p.iter().any(|x| x.contains("b.txt: content changed")),
+            "{p:?}"
+        );
         assert!(p.iter().any(|x| x.contains("does not list")), "{p:?}");
         std::fs::remove_file(bag.join("data/a.pdf")).unwrap();
-        assert!(verify(&bag).unwrap().iter().any(|x| x.contains("a.pdf: missing")));
+        assert!(verify(&bag)
+            .unwrap()
+            .iter()
+            .any(|x| x.contains("a.pdf: missing")));
         let _ = std::fs::remove_dir_all(&root);
     }
 }

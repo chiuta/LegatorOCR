@@ -21,14 +21,21 @@ pub fn qr_codes(g: &GrayImage) -> Vec<String> {
 
 /// Decoded QR payloads with their bounding boxes (x0, y0, x1, y1).
 pub fn qr_read(g: &GrayImage) -> Vec<(String, (i32, i32, i32, i32))> {
-    let mut p = rqrr::PreparedImage::prepare_from_greyscale(g.width() as usize, g.height() as usize, |x, y| g.get_pixel(x as u32, y as u32)[0]);
+    let mut p = rqrr::PreparedImage::prepare_from_greyscale(
+        g.width() as usize,
+        g.height() as usize,
+        |x, y| g.get_pixel(x as u32, y as u32)[0],
+    );
     p.detect_grids()
         .into_iter()
         .filter_map(|grid| {
             let (_, text) = grid.decode().ok()?;
             let xs = grid.bounds.iter().map(|b| b.x);
             let ys = grid.bounds.iter().map(|b| b.y);
-            Some((text, (xs.clone().min()?, ys.clone().min()?, xs.max()?, ys.max()?)))
+            Some((
+                text,
+                (xs.clone().min()?, ys.clone().min()?, xs.max()?, ys.max()?),
+            ))
         })
         .collect()
 }
@@ -141,7 +148,12 @@ pub fn copy_move(g: &GrayImage, min_blocks: usize, min_dist: i32) -> Vec<CopyMov
             let y0 = v.iter().map(|p| p.1).min().unwrap();
             let x1 = v.iter().map(|p| p.0).max().unwrap() + BLOCK;
             let y1 = v.iter().map(|p| p.1).max().unwrap() + BLOCK;
-            CopyMove { dx, dy, blocks: v.len(), bbox: (x0, y0, x1, y1) }
+            CopyMove {
+                dx,
+                dy,
+                blocks: v.len(),
+                bbox: (x0, y0, x1, y1),
+            }
         })
         .collect();
     out.sort_by_key(|c| std::cmp::Reverse(c.blocks));
@@ -157,7 +169,9 @@ mod tests {
         let mut s = seed;
         let mut g = GrayImage::new(w, h);
         for p in g.pixels_mut() {
-            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             p[0] = (s >> 56) as u8;
         }
         g
@@ -166,7 +180,10 @@ mod tests {
     #[test]
     fn copied_patch_is_found_and_plain_noise_is_not() {
         let mut g = texture(300, 200, 1);
-        assert!(copy_move(&g, 15, 24).is_empty(), "independent noise has no copy");
+        assert!(
+            copy_move(&g, 15, 24).is_empty(),
+            "independent noise has no copy"
+        );
         // copy a 64×48 patch from (20,20) to (180,100)
         for j in 0..48 {
             for i in 0..64 {
@@ -182,8 +199,13 @@ mod tests {
     #[test]
     fn qr_code_is_read_and_noise_is_not() {
         // fixture made with python-qrcode: https://example.org/verifica/ABC-123 on a grey page
-        let img = image::load_from_memory(include_bytes!("../tests/data/qr.png")).unwrap().to_luma8();
-        assert_eq!(qr_codes(&img), vec!["https://example.org/verifica/ABC-123".to_string()]);
+        let img = image::load_from_memory(include_bytes!("../tests/data/qr.png"))
+            .unwrap()
+            .to_luma8();
+        assert_eq!(
+            qr_codes(&img),
+            vec!["https://example.org/verifica/ABC-123".to_string()]
+        );
         assert!(qr_codes(&texture(120, 120, 3)).is_empty());
     }
 }
@@ -238,17 +260,25 @@ pub fn round_marks(g: &GrayImage, dpi: u32, min_coverage: f32) -> Vec<RoundMark>
             }
         }
     }
-    let at = |x: i32, y: i32| x >= 0 && y >= 0 && (x as u32) < w && (y as u32) < h && ink[(y as u32 * w + x as u32) as usize];
+    let at = |x: i32, y: i32| {
+        x >= 0
+            && y >= 0
+            && (x as u32) < w
+            && (y as u32) < h
+            && ink[(y as u32 * w + x as u32) as usize]
+    };
     // 75 dpi: 1 mm = 2.95 px
     let (r_min, r_max) = (18i32, 54i32);
     let mut found: Vec<RoundMark> = Vec::new();
     let mut r = r_min;
     while r <= r_max {
         let n = ((2.0 * std::f32::consts::PI * r as f32) as usize).clamp(48, 360);
-        let dirs: Vec<(f32, f32)> = (0..n).map(|k| {
-            let a = k as f32 / n as f32 * std::f32::consts::TAU;
-            (a.cos(), a.sin())
-        }).collect();
+        let dirs: Vec<(f32, f32)> = (0..n)
+            .map(|k| {
+                let a = k as f32 / n as f32 * std::f32::consts::TAU;
+                (a.cos(), a.sin())
+            })
+            .collect();
         let mut cy = r;
         while cy < h as i32 - r {
             let mut cx = r;
@@ -262,7 +292,9 @@ pub fn round_marks(g: &GrayImage, dpi: u32, min_coverage: f32) -> Vec<RoundMark>
                         let (x, y) = (cx as f32 + c * r as f32, cy as f32 + s * r as f32);
                         let (xi, yi) = (x.round() as i32, y.round() as i32);
                         // ink on the circle itself or one pixel to either side along the radius
-                        let on = at(xi, yi) || at((x + c).round() as i32, (y + s).round() as i32) || at((x - c).round() as i32, (y - s).round() as i32);
+                        let on = at(xi, yi)
+                            || at((x + c).round() as i32, (y + s).round() as i32)
+                            || at((x - c).round() as i32, (y - s).round() as i32);
                         hit[k] = on;
                         cnt += on as usize;
                     }
@@ -271,13 +303,23 @@ pub fn round_marks(g: &GrayImage, dpi: u32, min_coverage: f32) -> Vec<RoundMark>
                     // dark band or dense text has ink on both sides
                     let side = |off: f32| {
                         let k = dirs.iter().filter(|(c, s)| {
-                            let (x, y) = (cx as f32 + c * (r as f32 + off), cy as f32 + s * (r as f32 + off));
+                            let (x, y) = (
+                                cx as f32 + c * (r as f32 + off),
+                                cy as f32 + s * (r as f32 + off),
+                            );
                             at(x.round() as i32, y.round() as i32)
                         });
                         k.count() as f32 / n as f32
                     };
-                    let (inside, outside) = if cov >= min_coverage { (side(-3.0), side(3.0)) } else { (1.0, 1.0) };
-                    if cov >= min_coverage && inside.min(outside) <= 0.3 && inside.max(outside) <= 0.5 {
+                    let (inside, outside) = if cov >= min_coverage {
+                        (side(-3.0), side(3.0))
+                    } else {
+                        (1.0, 1.0)
+                    };
+                    if cov >= min_coverage
+                        && inside.min(outside) <= 0.3
+                        && inside.max(outside) <= 0.5
+                    {
                         // longest gap (circular)
                         let (mut best, mut run) = (0usize, 0usize);
                         for k in 0..2 * n {
@@ -289,7 +331,12 @@ pub fn round_marks(g: &GrayImage, dpi: u32, min_coverage: f32) -> Vec<RoundMark>
                             }
                         }
                         if best * 4 <= n {
-                            found.push(RoundMark { cx: cx as u32 * f, cy: cy as u32 * f, radius: r as u32 * f, coverage: cov });
+                            found.push(RoundMark {
+                                cx: cx as u32 * f,
+                                cy: cy as u32 * f,
+                                radius: r as u32 * f,
+                                coverage: cov,
+                            });
                         }
                     }
                 }
@@ -303,7 +350,12 @@ pub fn round_marks(g: &GrayImage, dpi: u32, min_coverage: f32) -> Vec<RoundMark>
     found.sort_by(|a, b| b.coverage.total_cmp(&a.coverage));
     let mut kept: Vec<RoundMark> = Vec::new();
     for m in found {
-        let d = |k: &RoundMark| (((k.cx as f32 - m.cx as f32).powi(2) + (k.cy as f32 - m.cy as f32).powi(2)).sqrt(), (k.radius as f32 - m.radius as f32).abs());
+        let d = |k: &RoundMark| {
+            (
+                ((k.cx as f32 - m.cx as f32).powi(2) + (k.cy as f32 - m.cy as f32).powi(2)).sqrt(),
+                (k.radius as f32 - m.radius as f32).abs(),
+            )
+        };
         if !kept.iter().any(|k| {
             let (dc, dr) = d(k);
             dc < (k.radius.max(m.radius) as f32) * 0.6 && dr < k.radius.max(m.radius) as f32 * 0.5
@@ -362,7 +414,12 @@ mod round_tests {
         ring(&mut st, 700.0, 900.0, 170.0, 4.0, 110); // faded ink: lighter than text
         ring(&mut st, 700.0, 900.0, 140.0, 2.5, 110);
         let marks = round_marks(&st, 300, 0.85);
-        assert!(marks.iter().any(|m| m.cx.abs_diff(700) < 20 && m.cy.abs_diff(900) < 20 && m.radius.abs_diff(170) < 20), "{marks:?}");
+        assert!(
+            marks.iter().any(|m| m.cx.abs_diff(700) < 20
+                && m.cy.abs_diff(900) < 20
+                && m.radius.abs_diff(170) < 20),
+            "{marks:?}"
+        );
     }
 }
 
@@ -383,7 +440,9 @@ pub struct DoubleQuant {
 }
 
 const ZIGZAG: [usize; 64] = [
-    0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
+    0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20,
+    13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59,
+    52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
 ];
 
 /// Luma quantisation table (natural order) of a JPEG file.
@@ -412,7 +471,11 @@ fn jpeg_luma_table(b: &[u8]) -> Option<[u16; 64]> {
                 if id == 0 {
                     let mut t = [0u16; 64];
                     for k in 0..64 {
-                        t[ZIGZAG[k]] = if prec == 0 { b[p + k] as u16 } else { ((b[p + 2 * k] as u16) << 8) | b[p + 2 * k + 1] as u16 };
+                        t[ZIGZAG[k]] = if prec == 0 {
+                            b[p + k] as u16
+                        } else {
+                            ((b[p + 2 * k] as u16) << 8) | b[p + 2 * k + 1] as u16
+                        };
                     }
                     return Some(t);
                 }
@@ -436,7 +499,9 @@ pub fn jpeg_double_quant(bytes: &[u8]) -> Option<DoubleQuant> {
         return None;
     }
     let q = jpeg_luma_table(bytes)?;
-    let g = image::load_from_memory_with_format(bytes, image::ImageFormat::Jpeg).ok()?.to_luma8();
+    let g = image::load_from_memory_with_format(bytes, image::ImageFormat::Jpeg)
+        .ok()?
+        .to_luma8();
     let (bw, bh) = (g.width() / 8, g.height() / 8);
     if bw < 8 || bh < 8 {
         return None;
@@ -484,14 +549,20 @@ pub fn jpeg_double_quant(bytes: &[u8]) -> Option<DoubleQuant> {
         // an ordinary histogram is not.
         let mut score = 0f64;
         for side in [1i32, -1] {
-            let ks: Vec<i32> = (2..=14).filter(|k| h[(side * k + K) as usize] >= 30).collect();
+            let ks: Vec<i32> = (2..=14)
+                .filter(|k| h[(side * k + K) as usize] >= 30)
+                .collect();
             if ks.len() < 8 {
                 continue;
             }
-            let ys: Vec<f64> = ks.iter().map(|k| (h[(side * k + K) as usize] as f64).ln()).collect();
+            let ys: Vec<f64> = ks
+                .iter()
+                .map(|k| (h[(side * k + K) as usize] as f64).ln())
+                .collect();
             // least-squares quadratic
             let n = ks.len();
-            let (mut sx, mut sx2, mut sx3, mut sx4, mut sy, mut sxy, mut sx2y) = (0f64, 0f64, 0f64, 0f64, 0f64, 0f64, 0f64);
+            let (mut sx, mut sx2, mut sx3, mut sx4, mut sy, mut sxy, mut sx2y) =
+                (0f64, 0f64, 0f64, 0f64, 0f64, 0f64, 0f64);
             for (k, y) in ks.iter().zip(&ys) {
                 let x = *k as f64 / 14.0;
                 sx += x;
@@ -505,7 +576,11 @@ pub fn jpeg_double_quant(bytes: &[u8]) -> Option<DoubleQuant> {
             // normal equations for y = c0 + c1 x + c2 x^2
             let m = [[n as f64, sx, sx2], [sx, sx2, sx3], [sx2, sx3, sx4]];
             let rhs = [sy, sxy, sx2y];
-            let det = |m: &[[f64; 3]; 3]| m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+            let det = |m: &[[f64; 3]; 3]| {
+                m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+                    - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+                    + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+            };
             let d = det(&m);
             if d.abs() < 1e-12 {
                 continue;
@@ -518,10 +593,14 @@ pub fn jpeg_double_quant(bytes: &[u8]) -> Option<DoubleQuant> {
                 }
                 c[j] = det(&mj) / d;
             }
-            let res: Vec<f64> = ks.iter().zip(&ys).map(|(k, y)| {
-                let x = *k as f64 / 14.0;
-                y - (c[0] + c[1] * x + c[2] * x * x)
-            }).collect();
+            let res: Vec<f64> = ks
+                .iter()
+                .zip(&ys)
+                .map(|(k, y)| {
+                    let x = *k as f64 / 14.0;
+                    y - (c[0] + c[1] * x + c[2] * x * x)
+                })
+                .collect();
             let mut powers = Vec::new();
             for step in 1..=40 {
                 let f = step as f64 / 40.0 * 0.5; // cycles per bin, up to 0.5
@@ -544,7 +623,12 @@ pub fn jpeg_double_quant(bytes: &[u8]) -> Option<DoubleQuant> {
         spikiness[mi] = score;
     }
     let score = spikiness.iter().sum::<f64>() / 5.0;
-    Some(DoubleQuant { score, likely_double: score > DOUBLE_QUANT_THRESHOLD, spikiness, steps: modes.map(|(u, v)| q[v * 8 + u]) })
+    Some(DoubleQuant {
+        score,
+        likely_double: score > DOUBLE_QUANT_THRESHOLD,
+        spikiness,
+        steps: modes.map(|(u, v)| q[v * 8 + u]),
+    })
 }
 
 #[cfg(test)]
@@ -559,14 +643,25 @@ mod double_quant_tests {
         image::GrayImage::from_fn(1024, 1024, |x, y| {
             s = s.wrapping_mul(1664525).wrapping_add(1013904223);
             let n = ((s >> 24) as f32 - 128.0) * 0.25;
-            let base = if (x / 13 + y / 11) % 2 == 0 { 70.0 } else { 175.0 };
+            let base = if (x / 13 + y / 11) % 2 == 0 {
+                70.0
+            } else {
+                175.0
+            };
             let v = base + 30.0 * ((x as f32 * 0.21).sin() + (y as f32 * 0.13).cos()) + n;
             image::Luma([v.clamp(0.0, 255.0) as u8])
         })
     }
     fn save(g: &image::GrayImage, q: u8) -> Vec<u8> {
         let mut b = Vec::new();
-        JpegEncoder::new_with_quality(&mut b, q).encode(g.as_raw(), g.width(), g.height(), image::ExtendedColorType::L8).unwrap();
+        JpegEncoder::new_with_quality(&mut b, q)
+            .encode(
+                g.as_raw(),
+                g.width(),
+                g.height(),
+                image::ExtendedColorType::L8,
+            )
+            .unwrap();
         b
     }
 
@@ -576,9 +671,17 @@ mod double_quant_tests {
         let single = save(&g, 90);
         let first = image::load_from_memory(&save(&g, 55)).unwrap().to_luma8();
         let double = save(&first, 90);
-        let (s, d) = (jpeg_double_quant(&single).unwrap(), jpeg_double_quant(&double).unwrap());
+        let (s, d) = (
+            jpeg_double_quant(&single).unwrap(),
+            jpeg_double_quant(&double).unwrap(),
+        );
         eprintln!("single {:.2} double {:.2}", s.score, d.score);
-        assert!(d.score > s.score * 2.0, "single {} double {}", s.score, d.score);
+        assert!(
+            d.score > s.score * 2.0,
+            "single {} double {}",
+            s.score,
+            d.score
+        );
         assert!(jpeg_double_quant(b"not a jpeg").is_none());
     }
 }

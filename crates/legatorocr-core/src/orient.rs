@@ -96,8 +96,19 @@ pub fn needs_quarter_turn(ink: &BitImage, dpi: u32) -> bool {
     // mostly photograph with a caption have weak band energy on both axes and are left alone
     // (measured on 76 + 498 book pages: upright text pages score ec/er ≤ 0.9, the same pages
     // turned on their side 2.5–17 with ec ≥ 7e-4; a photo page scored 4 with ec 5e-4).
-    ec > 2.0 * er && ec > MIN_BAND_ENERGY
+    // Weak evidence (columns only slightly stronger than rows, energy near the floor) is what a
+    // picture with vertical ornaments produces: measured on an ornament photo page, ec 7.9e-4,
+    // ratio 2.8 (turned wrongly by 90 degrees); real sideways text pages are far from both
+    // limits (ratio 33 on a text page turned by 90 degrees). Such borderline pages are left as
+    // they are; orientation by OCR (OSD) still sees them.
+    let strong = ec > STRONG_BAND_ENERGY || ec > MIN_RATIO_WEAK * er;
+    ec > 2.0 * er && ec > MIN_BAND_ENERGY && strong
 }
+
+/// Above this column energy the ratio to the rows alone decides.
+const STRONG_BAND_ENERGY: f64 = 2e-3;
+/// Below it, the columns must beat the rows by at least this factor.
+const MIN_RATIO_WEAK: f64 = 4.0;
 
 /// Smallest normalised band energy that counts as text lines.
 const MIN_BAND_ENERGY: f64 = 6e-4;
@@ -138,6 +149,20 @@ mod tests {
     fn solid_scanner_edge_bars_do_not_turn_the_page_on_its_side() {
         assert!(!needs_quarter_turn(&page(false, 0.0), 150));
         assert!(!needs_quarter_turn(&page(true, 0.0), 150));
+    }
+
+    #[test]
+    fn page_turned_on_its_side_is_still_detected_with_strong_evidence() {
+        // text page rotated by 90 degrees: columns carry all the line structure
+        let up = page(false, 0.0);
+        let (w, h) = (up.w as usize, up.h as usize);
+        let mut side = BitImage::new(up.h, up.w);
+        for y in 0..h {
+            for x in 0..w {
+                side.data[x * h + (h - 1 - y)] = up.data[y * w + x];
+            }
+        }
+        assert!(needs_quarter_turn(&side, 150));
     }
 
     #[test]

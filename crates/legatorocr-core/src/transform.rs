@@ -374,11 +374,17 @@ mod gray_tests {
             v = v.wrapping_mul(1664525).wrapping_add(1013904223);
             *p = image::Rgb([(v >> 8) as u8, (v >> 16) as u8, (v >> 24) as u8]);
         }
-        assert_eq!(gray_of(&im).as_raw(), image::imageops::grayscale(&im).as_raw());
+        assert_eq!(
+            gray_of(&im).as_raw(),
+            image::imageops::grayscale(&im).as_raw()
+        );
         // every grey level and the extremes
         for g in [0u8, 1, 127, 128, 254, 255] {
             let one = image::RgbImage::from_pixel(1, 1, image::Rgb([g, g, g]));
-            assert_eq!(gray_of(&one).as_raw(), image::imageops::grayscale(&one).as_raw());
+            assert_eq!(
+                gray_of(&one).as_raw(),
+                image::imageops::grayscale(&one).as_raw()
+            );
         }
     }
 }

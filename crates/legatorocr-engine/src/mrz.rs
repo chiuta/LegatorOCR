@@ -74,7 +74,12 @@ fn to_letters(s: &str) -> String {
 }
 
 fn clean(line: &str) -> String {
-    line.trim().chars().filter(|c| !c.is_whitespace()).map(|c| c.to_ascii_uppercase()).map(|c| if c == '«' { '<' } else { c }).collect()
+    line.trim()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .map(|c| c.to_ascii_uppercase())
+        .map(|c| if c == '«' { '<' } else { c })
+        .collect()
 }
 
 fn name_parts(field: &str) -> (String, String) {
@@ -104,14 +109,28 @@ fn td3(a: &str, b: &str) -> Mrz {
     }
     // personal number: the check digit may be '<' when the field is empty
     let pn = &b[28..42];
-    if !(pn.bytes().all(|c| c == b'<') && matches!(b.as_bytes()[42], b'<' | b'0') || digit_ok(pn, b.as_bytes()[42])) {
+    if !(pn.bytes().all(|c| c == b'<') && matches!(b.as_bytes()[42], b'<' | b'0')
+        || digit_ok(pn, b.as_bytes()[42]))
+    {
         failed.push("personal number");
     }
     let comp = format!("{}{}{}", &b[0..10], &b[13..20], &b[21..43]);
     if !digit_ok(&comp, b.as_bytes()[43]) {
         failed.push("composite");
     }
-    Mrz { format: "TD3", doc_type: a[0..2].replace('<', ""), country: to_letters(&a[2..5]), surname, given, number: num.trim_end_matches('<').to_string(), nationality: to_letters(&b[10..13]), birth, sex: b[20..21].replace('<', ""), expiry, failed }
+    Mrz {
+        format: "TD3",
+        doc_type: a[0..2].replace('<', ""),
+        country: to_letters(&a[2..5]),
+        surname,
+        given,
+        number: num.trim_end_matches('<').to_string(),
+        nationality: to_letters(&b[10..13]),
+        birth,
+        sex: b[20..21].replace('<', ""),
+        expiry,
+        failed,
+    }
 }
 
 fn td2(a: &str, b: &str) -> Mrz {
@@ -132,7 +151,19 @@ fn td2(a: &str, b: &str) -> Mrz {
     if !digit_ok(&comp, b.as_bytes()[35]) {
         failed.push("composite");
     }
-    Mrz { format: "TD2", doc_type: a[0..2].replace('<', ""), country: to_letters(&a[2..5]), surname, given, number: num.trim_end_matches('<').to_string(), nationality: to_letters(&b[10..13]), birth, sex: b[20..21].replace('<', ""), expiry, failed }
+    Mrz {
+        format: "TD2",
+        doc_type: a[0..2].replace('<', ""),
+        country: to_letters(&a[2..5]),
+        surname,
+        given,
+        number: num.trim_end_matches('<').to_string(),
+        nationality: to_letters(&b[10..13]),
+        birth,
+        sex: b[20..21].replace('<', ""),
+        expiry,
+        failed,
+    }
 }
 
 fn td1(a: &str, b: &str, c: &str) -> Mrz {
@@ -153,7 +184,19 @@ fn td1(a: &str, b: &str, c: &str) -> Mrz {
     if !digit_ok(&comp, b.as_bytes()[29]) {
         failed.push("composite");
     }
-    Mrz { format: "TD1", doc_type: a[0..2].replace('<', ""), country: to_letters(&a[2..5]), surname, given, number: num.trim_end_matches('<').to_string(), nationality: to_letters(&b[15..18]), birth, sex: b[7..8].replace('<', ""), expiry, failed }
+    Mrz {
+        format: "TD1",
+        doc_type: a[0..2].replace('<', ""),
+        country: to_letters(&a[2..5]),
+        surname,
+        given,
+        number: num.trim_end_matches('<').to_string(),
+        nationality: to_letters(&b[15..18]),
+        birth,
+        sex: b[7..8].replace('<', ""),
+        expiry,
+        failed,
+    }
 }
 
 /// Every MRZ found in `text` (lines are matched after removing blanks).
@@ -162,13 +205,26 @@ pub fn find(text: &str) -> Vec<Mrz> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < lines.len() {
-        if i + 2 < lines.len() && plausible(&lines[i], 30) && plausible(&lines[i + 1], 30) && plausible(&lines[i + 2], 30) && lines[i].starts_with(['I', 'A', 'C']) {
+        if i + 2 < lines.len()
+            && plausible(&lines[i], 30)
+            && plausible(&lines[i + 1], 30)
+            && plausible(&lines[i + 2], 30)
+            && lines[i].starts_with(['I', 'A', 'C'])
+        {
             out.push(td1(&lines[i], &lines[i + 1], &lines[i + 2]));
             i += 3;
-        } else if i + 1 < lines.len() && plausible(&lines[i], 44) && plausible(&lines[i + 1], 44) && lines[i].starts_with('P') {
+        } else if i + 1 < lines.len()
+            && plausible(&lines[i], 44)
+            && plausible(&lines[i + 1], 44)
+            && lines[i].starts_with('P')
+        {
             out.push(td3(&lines[i], &lines[i + 1]));
             i += 2;
-        } else if i + 1 < lines.len() && plausible(&lines[i], 36) && plausible(&lines[i + 1], 36) && lines[i].starts_with(['I', 'A', 'C', 'P']) {
+        } else if i + 1 < lines.len()
+            && plausible(&lines[i], 36)
+            && plausible(&lines[i + 1], 36)
+            && lines[i].starts_with(['I', 'A', 'C', 'P'])
+        {
             out.push(td2(&lines[i], &lines[i + 1]));
             i += 2;
         } else {
@@ -200,8 +256,19 @@ mod tests {
         let m = find(&text);
         assert_eq!(m.len(), 1);
         let m = &m[0];
-        assert_eq!((m.format, m.surname.as_str(), m.given.as_str()), ("TD3", "ERIKSSON", "ANNA MARIA"));
-        assert_eq!((m.number.as_str(), m.birth.as_str(), m.expiry.as_str(), m.country.as_str()), ("L898902C3", "740812", "120415", "UTO"));
+        assert_eq!(
+            (m.format, m.surname.as_str(), m.given.as_str()),
+            ("TD3", "ERIKSSON", "ANNA MARIA")
+        );
+        assert_eq!(
+            (
+                m.number.as_str(),
+                m.birth.as_str(),
+                m.expiry.as_str(),
+                m.country.as_str()
+            ),
+            ("L898902C3", "740812", "120415", "UTO")
+        );
         assert!(m.failed.is_empty(), "{:?}", m.failed);
     }
 
@@ -211,7 +278,10 @@ mod tests {
         let b = "L898902C36UTO74O8122F12O4159ZE184226B<<<<<10";
         assert!(find(&format!("{A}\n{b}"))[0].failed.is_empty());
         let bad = "L898903C36UTO7408122F1204159ZE184226B<<<<<10";
-        assert_eq!(find(&format!("{A}\n{bad}"))[0].failed, vec!["document number", "composite"]);
+        assert_eq!(
+            find(&format!("{A}\n{bad}"))[0].failed,
+            vec!["document number", "composite"]
+        );
         // a zero for the letter O in the nationality code is repaired
         let zero = "L898902C36UT07408122F1204159ZE184226B<<<<<10";
         assert_eq!(find(&format!("{A}\n{zero}"))[0].nationality, "UTO");

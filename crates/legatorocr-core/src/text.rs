@@ -162,11 +162,20 @@ mod tests {
 
     #[test]
     fn old_spelling_becomes_modern() {
-        assert_eq!(old_ro_to_modern("pînză cînd rîu mîner cît"), "pânză când râu mâner cât");
-        assert_eq!(old_ro_to_modern("sînt sîntem sînteți Sînt"), "sunt suntem sunteți Sunt");
+        assert_eq!(
+            old_ro_to_modern("pînză cînd rîu mîner cît"),
+            "pânză când râu mâner cât"
+        );
+        assert_eq!(
+            old_ro_to_modern("sînt sîntem sînteți Sînt"),
+            "sunt suntem sunteți Sunt"
+        );
         assert_eq!(old_ro_to_modern("SÎNT MÎNER"), "SUNT MÂNER");
         // î at the start or end of a word stays
-        assert_eq!(old_ro_to_modern("înainte a coborî în"), "înainte a coborî în");
+        assert_eq!(
+            old_ro_to_modern("înainte a coborî în"),
+            "înainte a coborî în"
+        );
         // modern text is unchanged
         let m = "Țesăturile sunt făcute în județul Argeș, pânză și mână";
         assert_eq!(old_ro_to_modern(m), m);

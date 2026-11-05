@@ -32,11 +32,20 @@ impl Plan {
 fn stamps(plan: &Plan, i: usize, total: usize) -> Vec<Stamp> {
     let mut v = Vec::new();
     if let Some(w) = &plan.watermark {
-        v.push(Stamp { text: w.clone(), size: 72.0, anchor: Anchor::Center, gray: 0.6, angle: 45.0, opacity: 0.3 });
+        v.push(Stamp {
+            text: w.clone(),
+            size: 72.0,
+            anchor: Anchor::Center,
+            gray: 0.6,
+            angle: 45.0,
+            opacity: 0.3,
+        });
     }
     if let Some(f) = &plan.number_format {
         v.push(Stamp {
-            text: f.replace("{n}", &(i + 1).to_string()).replace("{total}", &total.to_string()),
+            text: f
+                .replace("{n}", &(i + 1).to_string())
+                .replace("{total}", &total.to_string()),
             size: 10.0,
             anchor: Anchor::BottomCenter,
             gray: 0.0,
@@ -48,7 +57,12 @@ fn stamps(plan: &Plan, i: usize, total: usize) -> Vec<Stamp> {
 }
 
 /// Run the plan; returns the files written.
-pub fn run(inputs: &[PathBuf], out_dir: &Path, merged_name: Option<&Path>, plan: &Plan) -> Result<Vec<PathBuf>> {
+pub fn run(
+    inputs: &[PathBuf],
+    out_dir: &Path,
+    merged_name: Option<&Path>,
+    plan: &Plan,
+) -> Result<Vec<PathBuf>> {
     if let Some(0) = plan.split_every {
         bail!("--split-pdf-every needs a number above 0");
     }
@@ -81,7 +95,10 @@ pub fn run(inputs: &[PathBuf], out_dir: &Path, merged_name: Option<&Path>, plan:
         jobs.push((stem, parts));
     } else {
         for (i, (p, d)) in docs.iter().enumerate() {
-            let stem = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "out".into());
+            let stem = p
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "out".into());
             jobs.push((stem, vec![(i, pick(d)?)]));
         }
     }
@@ -89,7 +106,10 @@ pub fn run(inputs: &[PathBuf], out_dir: &Path, merged_name: Option<&Path>, plan:
     let mut written = Vec::new();
     for (stem, parts) in jobs {
         // flat list of (doc, page)
-        let flat: Vec<(usize, usize)> = parts.iter().flat_map(|(d, v)| v.iter().map(move |&p| (*d, p))).collect();
+        let flat: Vec<(usize, usize)> = parts
+            .iter()
+            .flat_map(|(d, v)| v.iter().map(move |&p| (*d, p)))
+            .collect();
         let chunks: Vec<&[(usize, usize)]> = match plan.split_every {
             Some(n) => flat.chunks(n).collect(),
             None => vec![&flat[..]],
@@ -104,15 +124,26 @@ pub fn run(inputs: &[PathBuf], out_dir: &Path, merged_name: Option<&Path>, plan:
                     _ => grouped.push((d, vec![p])),
                 }
             }
-            let refs: Vec<(&PdfDoc, Vec<usize>)> = grouped.iter().map(|(d, v)| (&docs[*d].1, v.clone())).collect();
-            let bytes = assemble(&refs, &|i, t| stamps(plan, i, t)).map_err(|e| anyhow::anyhow!(e.0))?;
-            let name = if many { format!("{stem}_{:03}.pdf", ci + 1) } else { format!("{stem}.pdf") };
+            let refs: Vec<(&PdfDoc, Vec<usize>)> = grouped
+                .iter()
+                .map(|(d, v)| (&docs[*d].1, v.clone()))
+                .collect();
+            let bytes =
+                assemble(&refs, &|i, t| stamps(plan, i, t)).map_err(|e| anyhow::anyhow!(e.0))?;
+            let name = if many {
+                format!("{stem}_{:03}.pdf", ci + 1)
+            } else {
+                format!("{stem}.pdf")
+            };
             let path = match (merged_name, plan.merge, many) {
                 (Some(p), true, false) => p.to_path_buf(),
                 _ => out_dir.join(name),
             };
             if inputs.iter().any(|i| i == &path) {
-                bail!("{} would overwrite an input; choose another output folder", path.display());
+                bail!(
+                    "{} would overwrite an input; choose another output folder",
+                    path.display()
+                );
             }
             std::fs::write(&path, bytes)?;
             written.push(path);
@@ -128,8 +159,19 @@ mod tests {
     #[test]
     fn plan_flags() {
         assert!(!Plan::default().active());
-        assert!(Plan { watermark: Some("x".into()), ..Plan::default() }.active());
-        let s = stamps(&Plan { number_format: Some("{n}/{total}".into()), ..Plan::default() }, 2, 9);
+        assert!(Plan {
+            watermark: Some("x".into()),
+            ..Plan::default()
+        }
+        .active());
+        let s = stamps(
+            &Plan {
+                number_format: Some("{n}/{total}".into()),
+                ..Plan::default()
+            },
+            2,
+            9,
+        );
         assert_eq!(s[0].text, "3/9");
     }
 }

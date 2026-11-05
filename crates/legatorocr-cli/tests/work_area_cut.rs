@@ -43,25 +43,64 @@ fn work_area_blanks_the_stray_block_and_cut_at_moves_the_cut() {
     sheet(&dir);
     // without the rectangle the block is part of the left page's content
     let out = run(&dir, &["--split", "middle", "-o", "plain"]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let plain = image::open(dir.join("plain/s_L.png")).unwrap().to_luma8();
     let dark = |im: &image::GrayImage| im.pixels().filter(|p| p.0[0] < 60).count();
     // with a rectangle 8-63 mm wide (94-744 px) the block is outside it and is gone
-    let out = run(&dir, &["--split", "middle", "--work-area", "8,0,55,76", "-o", "clean"]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let out = run(
+        &dir,
+        &[
+            "--split",
+            "middle",
+            "--work-area",
+            "8,0,55,76",
+            "-o",
+            "clean",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let clean = image::open(dir.join("clean/s_L.png")).unwrap().to_luma8();
-    assert!(dark(&clean) < dark(&plain), "{} !< {}", dark(&clean), dark(&plain));
+    assert!(
+        dark(&clean) < dark(&plain),
+        "{} !< {}",
+        dark(&clean),
+        dark(&plain)
+    );
     // cut at 40 % (720 px) instead of the middle (900 px): the left page gets narrower
     let out = run(&dir, &["--split", "middle", "--cut-at", "0.4", "-o", "cut"]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let cut = image::open(dir.join("cut/s_L.png")).unwrap().to_luma8();
-    assert!(cut.width() < plain.width(), "{} !< {}", cut.width(), plain.width());
+    assert!(
+        cut.width() < plain.width(),
+        "{} !< {}",
+        cut.width(),
+        plain.width()
+    );
     // bad values are refused with a message
-    for bad in [&["--cut-at", "2"][..], &["--work-area", "1,2,3"][..], &["--work-area", "0,0,0,5"][..]] {
+    for bad in [
+        &["--cut-at", "2"][..],
+        &["--work-area", "1,2,3"][..],
+        &["--work-area", "0,0,0,5"][..],
+    ] {
         let out = run(&dir, bad);
         assert!(!out.status.success());
         let err = String::from_utf8_lossy(&out.stderr);
-        assert!(err.contains("--cut-at") || err.contains("--work-area"), "{err}");
+        assert!(
+            err.contains("--cut-at") || err.contains("--work-area"),
+            "{err}"
+        );
     }
     let _ = std::fs::remove_dir_all(&dir);
 }

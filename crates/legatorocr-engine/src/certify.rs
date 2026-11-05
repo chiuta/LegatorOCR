@@ -33,7 +33,9 @@ pub fn enabled() -> bool {
 }
 
 fn thumb(img: &image::DynamicImage) -> Vec<u8> {
-    img.resize_exact(96, 128, FilterType::Triangle).to_luma8().into_raw()
+    img.resize_exact(96, 128, FilterType::Triangle)
+        .to_luma8()
+        .into_raw()
 }
 
 /// Note a page that is being added to the PDF (in PDF order).
@@ -59,14 +61,22 @@ pub fn record(pg: &Page, words: &[legatorocr_core::Word]) {
 
 /// Outcome of the check: whether every page passed, and the lines to print.
 pub fn check(pdf: &[u8]) -> (bool, Vec<String>) {
-    let recs = RECS.lock().map(|mut r| std::mem::take(&mut *r)).unwrap_or_default();
+    let recs = RECS
+        .lock()
+        .map(|mut r| std::mem::take(&mut *r))
+        .unwrap_or_default();
     verify(pdf, &recs)
 }
 
 fn verify(pdf: &[u8], recs: &[Rec]) -> (bool, Vec<String>) {
     let doc = match legatorocr_pdf::reader::PdfDoc::open(pdf.to_vec()) {
         Ok(d) => d,
-        Err(e) => return (false, vec![format!("certificate: the PDF could not be read back ({e})")]),
+        Err(e) => {
+            return (
+                false,
+                vec![format!("certificate: the PDF could not be read back ({e})")],
+            )
+        }
     };
     let mut lines = Vec::new();
     let mut ok = true;
@@ -84,7 +94,12 @@ fn verify(pdf: &[u8], recs: &[Rec]) -> (bool, Vec<String>) {
             Ok(p) => {
                 let (w, h) = (p.image.width(), p.image.height());
                 if (w, h) != (r.w, r.h) {
-                    lines.push(format!("page {}: size {}×{} written, {w}×{h} read back", i + 1, r.w, r.h));
+                    lines.push(format!(
+                        "page {}: size {}×{} written, {w}×{h} read back",
+                        i + 1,
+                        r.w,
+                        r.h
+                    ));
                     ok = false;
                     continue;
                 }
@@ -106,12 +121,15 @@ fn verify(pdf: &[u8], recs: &[Rec]) -> (bool, Vec<String>) {
         format!(
             "certificate: {} page(s) read back; worst thumbnail difference {worst:.2}/255; {}",
             recs.len(),
-            if ok { "all pages match" } else { "PROBLEMS FOUND" }
+            if ok {
+                "all pages match"
+            } else {
+                "PROBLEMS FOUND"
+            }
         ),
     );
     (ok, lines)
 }
-
 
 /// What the read-back of one page showed (see [`check_page`]).
 #[derive(Debug, Clone, Default)]
@@ -128,7 +146,10 @@ pub struct PageCheck {
 }
 
 fn check_page(back: &image::DynamicImage, text: Option<&str>, r: &Rec) -> PageCheck {
-    let mut c = PageCheck { text_frac: 1.0, ..Default::default() };
+    let mut c = PageCheck {
+        text_frac: 1.0,
+        ..Default::default()
+    };
     if !r.words.is_empty() {
         let (empty, found) = words_on_ink(&back.to_luma8(), &r.words);
         let text_words = text.map_or(0, |t| t.split_whitespace().count());
@@ -136,7 +157,10 @@ fn check_page(back: &image::DynamicImage, text: Option<&str>, r: &Rec) -> PageCh
         c.empty = empty;
         c.found = found;
         if text_words * 10 < r.words.len() * 9 {
-            c.problems.push(format!("text layer holds {text_words} word(s), {} were written", r.words.len()));
+            c.problems.push(format!(
+                "text layer holds {text_words} word(s), {} were written",
+                r.words.len()
+            ));
         }
         if empty >= 3 && empty * 20 > found + empty {
             c.problems.push(format!(
@@ -146,8 +170,12 @@ fn check_page(back: &image::DynamicImage, text: Option<&str>, r: &Rec) -> PageCh
         }
     }
     let t = thumb(back);
-    c.thumb_diff =
-        t.iter().zip(&r.thumb).map(|(a, b)| (*a as f64 - *b as f64).abs()).sum::<f64>() / t.len() as f64;
+    c.thumb_diff = t
+        .iter()
+        .zip(&r.thumb)
+        .map(|(a, b)| (*a as f64 - *b as f64).abs())
+        .sum::<f64>()
+        / t.len() as f64;
     if c.thumb_diff > 6.0 {
         c.problems.push(format!(
             "picture differs from the source page (mean difference {:.1}/255)",
@@ -232,7 +260,12 @@ mod tests {
 
     fn rec_of(p: &Page) -> Rec {
         let img = p.image.to_dynamic();
-        Rec { w: img.width(), h: img.height(), thumb: thumb(&img), words: Vec::new() }
+        Rec {
+            w: img.width(),
+            h: img.height(),
+            thumb: thumb(&img),
+            words: Vec::new(),
+        }
     }
 
     fn pdf_of(pages: &[Page]) -> Vec<u8> {
@@ -254,7 +287,10 @@ mod tests {
         // swapped pages
         let swapped = [rec_of(&b), rec_of(&a)];
         let (ok, lines) = verify(&pdf, &swapped);
-        assert!(!ok && lines.iter().any(|l| l.contains("differs")), "{lines:?}");
+        assert!(
+            !ok && lines.iter().any(|l| l.contains("differs")),
+            "{lines:?}"
+        );
         // different size
         let other = [rec_of(&page(90, 140, 240)), rec_of(&b)];
         assert!(verify(&pdf, &other).1.iter().any(|l| l.contains("size")));
@@ -292,11 +328,19 @@ mod tests {
         let pdf = w.finish();
         let rec = |p: &Page| {
             let img = image::DynamicImage::ImageRgb8(p.layers.as_ref().unwrap().compose());
-            Rec { w: img.width(), h: img.height(), thumb: thumb(&img), words: Vec::new() }
+            Rec {
+                w: img.width(),
+                h: img.height(),
+                thumb: thumb(&img),
+                words: Vec::new(),
+            }
         };
         assert!(verify(&pdf, &[rec(&a), rec(&b)]).0);
         let (ok, lines) = verify(&pdf, &[rec(&b), rec(&a)]);
-        assert!(!ok && lines.iter().any(|l| l.contains("differs")), "{lines:?}");
+        assert!(
+            !ok && lines.iter().any(|l| l.contains("differs")),
+            "{lines:?}"
+        );
     }
 
     #[test]
@@ -308,7 +352,10 @@ mod tests {
             }
         }
         // one box on the ink, one beside it, one outside the page
-        let (empty, found) = words_on_ink(&img, &[[10, 15, 60, 30], [100, 20, 40, 20], [500, 5, 10, 10]]);
+        let (empty, found) = words_on_ink(
+            &img,
+            &[[10, 15, 60, 30], [100, 20, 40, 20], [500, 5, 10, 10]],
+        );
         assert_eq!((empty, found), (2, 1));
     }
 

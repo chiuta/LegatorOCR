@@ -589,12 +589,7 @@ fn recognize_raw(page: &PageImage, dpi: u32, o: &OcrOptions) -> Result<Vec<Word>
 /// digits wide) is read again as one line of digits. Only a clean 1-4 digit result with
 /// confidence >= 50 is added, so dust and drawings are not turned into numbers. Coordinates are
 /// those of `img`; at most 12 blobs per page are tried.
-fn rescue_page_numbers(
-    img: &image::DynamicImage,
-    dpi: u32,
-    o: &OcrOptions,
-    words: &mut Vec<Word>,
-) {
+fn rescue_page_numbers(img: &image::DynamicImage, dpi: u32, o: &OcrOptions, words: &mut Vec<Word>) {
     let g = img.to_luma8();
     let (w, h) = g.dimensions();
     if w < 64 || h < 64 {
@@ -606,9 +601,9 @@ fn rescue_page_numbers(
     let med = hs.get(hs.len() / 2).copied().unwrap_or(h / 40).max(8);
     let pad = (med / 3).max(4);
     let covered = |x: u32, y: u32| {
-        words
-            .iter()
-            .any(|k| x + pad >= k.x && x <= k.x + k.w + pad && y + pad >= k.y && y <= k.y + k.h + pad)
+        words.iter().any(|k| {
+            x + pad >= k.x && x <= k.x + k.w + pad && y + pad >= k.y && y <= k.y + k.h + pad
+        })
     };
     // grid of cells of `pad` px that hold uncovered dark ink, grouped by 8-neighbour contact
     let edge = (w / 50).max(3);
@@ -701,14 +696,19 @@ fn rescue_page_numbers(
             cmd.args(["--dpi", &dpi.to_string()]);
         }
         cmd.args(["-c", "tessedit_char_whitelist=0123456789", "tsv"]);
-        let Ok(out) = run_stdin(cmd, png) else { continue };
+        let Ok(out) = run_stdin(cmd, png) else {
+            continue;
+        };
         if !out.status.success() {
             continue;
         }
         for mut c in parse_tsv(&String::from_utf8_lossy(&out.stdout), 50.0) {
             // the digits Tesseract placed must themselves be line-sized, not a speck
             let sized = c.h * 2 >= med && c.h <= med * 2 + 2 * pad;
-            if sized && (1..=4).contains(&c.text.len()) && c.text.chars().all(|d| d.is_ascii_digit()) {
+            if sized
+                && (1..=4).contains(&c.text.len())
+                && c.text.chars().all(|d| d.is_ascii_digit())
+            {
                 c.x += cx0;
                 c.y += cy0;
                 found.push(c);
@@ -861,7 +861,8 @@ pub fn paragraph_boxes(words: &[Word]) -> Vec<ParagraphBox> {
     let starts = paragraph_starts(&lines);
     let mut out: Vec<ParagraphBox> = Vec::new();
     let mut cur: Option<(ParagraphBox, f64, usize, Vec<String>)> = None;
-    let flush = |c: Option<(ParagraphBox, f64, usize, Vec<String>)>, out: &mut Vec<ParagraphBox>| {
+    let flush = |c: Option<(ParagraphBox, f64, usize, Vec<String>)>,
+                 out: &mut Vec<ParagraphBox>| {
         if let Some((mut p, sum, n, ls)) = c {
             p.text = ls.join("\n");
             p.mean_conf = (n > 0).then(|| (sum / n as f64) as f32);
@@ -876,7 +877,11 @@ pub fn paragraph_boxes(words: &[Word]) -> Vec<ParagraphBox> {
             flush(c, &mut out);
         }
         let ws = &words[l.first..l.end];
-        let line = ws.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ");
+        let line = ws
+            .iter()
+            .map(|w| w.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
         let (s, n) = ws
             .iter()
             .filter(|w| w.conf >= 0.0)
@@ -893,7 +898,14 @@ pub fn paragraph_boxes(words: &[Word]) -> Vec<ParagraphBox> {
             }
             None => {
                 cur = Some((
-                    ParagraphBox { text: String::new(), x0: l.x0, y0: l.y0, x1: l.x1, y1: l.y1, mean_conf: None },
+                    ParagraphBox {
+                        text: String::new(),
+                        x0: l.x0,
+                        y0: l.y0,
+                        x1: l.x1,
+                        y1: l.y1,
+                        mean_conf: None,
+                    },
                     s,
                     n,
                     vec![line],
@@ -1167,9 +1179,18 @@ mod tests {
     use super::*;
     #[test]
     fn paragraph_boxes_match_paragraph_text_and_enclose_words() {
-        let w = |t: &str, x: u32, y: u32, line: u32, conf: f32| Word { text: t.into(), x, y, w: 40, h: 20, conf, line };
+        let w = |t: &str, x: u32, y: u32, line: u32, conf: f32| Word {
+            text: t.into(),
+            x,
+            y,
+            w: 40,
+            h: 20,
+            conf,
+            line,
+        };
         let words = vec![
-            w("one", 10, 10, 0, 90.0), w("a", 60, 10, 0, 70.0),
+            w("one", 10, 10, 0, 90.0),
+            w("a", 60, 10, 0, 70.0),
             w("two", 10, 32, 1, 80.0),
             w("four", 12, 200, 2, -1.0), // big gap: new paragraph, unknown confidence
         ];
@@ -1179,7 +1200,11 @@ mod tests {
         assert_eq!((ps[0].x0, ps[0].y0, ps[0].x1, ps[0].y1), (10, 10, 100, 52));
         assert!((ps[0].mean_conf.unwrap() - 80.0).abs() < 1e-3);
         assert_eq!(ps[1].mean_conf, None);
-        let joined = ps.iter().map(|p| p.text.as_str()).collect::<Vec<_>>().join("\n\n");
+        let joined = ps
+            .iter()
+            .map(|p| p.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
         assert_eq!(joined, words_to_paragraphs(&words));
     }
 
@@ -1364,18 +1389,29 @@ mod engine_choice_tests {
         assert!(recognize(&blank, 300, &o).unwrap().is_empty());
     }
 }
-    #[test]
-    fn modern_spelling_option_rewrites_romanian_words_only() {
-        let w = |t: &str| Word { text: t.into(), x: 0, y: 0, w: 1, h: 1, conf: 90.0, line: 0 };
-        let mk = |lang: &str, on: bool| OcrOptions { lang: lang.into(), modern_spelling: on, ..OcrOptions::default() };
-        let mut v = vec![w("sînt"), w("pînză")];
-        apply_modern_spelling(&mut v, &mk("ro+en", true));
-        assert_eq!((v[0].text.as_str(), v[1].text.as_str()), ("sunt", "pânză"));
-        let mut v = vec![w("sînt")];
-        apply_modern_spelling(&mut v, &mk("ron", false));
-        assert_eq!(v[0].text, "sînt");
-        let mut v = vec![w("mîine")];
-        apply_modern_spelling(&mut v, &mk("fra", true));
-        assert_eq!(v[0].text, "mîine"); // not Romanian: untouched
-    }
-
+#[test]
+fn modern_spelling_option_rewrites_romanian_words_only() {
+    let w = |t: &str| Word {
+        text: t.into(),
+        x: 0,
+        y: 0,
+        w: 1,
+        h: 1,
+        conf: 90.0,
+        line: 0,
+    };
+    let mk = |lang: &str, on: bool| OcrOptions {
+        lang: lang.into(),
+        modern_spelling: on,
+        ..OcrOptions::default()
+    };
+    let mut v = vec![w("sînt"), w("pînză")];
+    apply_modern_spelling(&mut v, &mk("ro+en", true));
+    assert_eq!((v[0].text.as_str(), v[1].text.as_str()), ("sunt", "pânză"));
+    let mut v = vec![w("sînt")];
+    apply_modern_spelling(&mut v, &mk("ron", false));
+    assert_eq!(v[0].text, "sînt");
+    let mut v = vec![w("mîine")];
+    apply_modern_spelling(&mut v, &mk("fra", true));
+    assert_eq!(v[0].text, "mîine"); // not Romanian: untouched
+}
