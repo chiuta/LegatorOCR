@@ -174,6 +174,8 @@ pub struct App {
     /// Edge being dragged: (0 left, 1 top, 2 right, 3 bottom, screen position at the start).
     box_drag: Option<(usize, egui::Pos2)>,
     zone_drag: Option<egui::Pos2>,
+    /// A corner of an existing erase/picture zone being dragged: (is picture zone, index, corner).
+    zone_resize: Option<(bool, usize, u8)>,
     shot: Option<Shot>,
     /// Test hook: run an export without a file dialog (env LEGATOROCR_GUI_AUTOEXPORT_PDF).
     auto_export: Option<(PathBuf, bool)>,
@@ -231,6 +233,7 @@ impl App {
             edit_box: false,
             box_drag: None,
             zone_drag: None,
+            zone_resize: None,
             auto_export: std::env::var_os("LEGATOROCR_GUI_AUTOEXPORT_PDF")
                 .map(|p| (PathBuf::from(p), false)),
             adjust_test: std::env::var_os("LEGATOROCR_GUI_TEST_ADJUST").map(|_| false),
@@ -1527,22 +1530,6 @@ impl App {
                             }
                             ch |= ui.add(te).changed();
                         });
-                        ui.horizontal(|ui| {
-                            ui.label(tr("set.output_dpi"));
-                            ch |= ui
-                                .add(
-                                    egui::DragValue::new(&mut self.s.output_dpi)
-                                        .range(0..=2400)
-                                        .custom_formatter(|v, _| {
-                                            if v < 36.0 {
-                                                "—".into()
-                                            } else {
-                                                format!("{v:.0}")
-                                            }
-                                        }),
-                                )
-                                .changed();
-                        });
                     });
                 egui::CollapsingHeader::new(tr("set.cleanup"))
                     .default_open(false)
@@ -1650,6 +1637,22 @@ impl App {
                                 .changed();
                         });
                         ui.label(RichText::new(tr("set.quality_hint")).small().weak());
+                        ui.horizontal(|ui| {
+                            ui.label(tr("set.output_dpi"));
+                            ch |= ui
+                                .add(
+                                    egui::DragValue::new(&mut self.s.output_dpi)
+                                        .range(0..=2400)
+                                        .custom_formatter(|v, _| {
+                                            if v < 36.0 {
+                                                "—".into()
+                                            } else {
+                                                format!("{v:.0}")
+                                            }
+                                        }),
+                                )
+                                .changed();
+                        });
                         self.config_dirty |= ui
                             .checkbox(&mut self.s.skip_blank, tr("set.skip_blank"))
                             .changed();
@@ -1921,10 +1924,10 @@ impl App {
                     make_grid = true;
                 }
             }
-            ui.add_enabled(
-                !self.fit,
-                egui::Slider::new(&mut self.zoom, 0.2..=4.0).suffix("×"),
-            );
+            // the zoom slider only means something when "fit" is off; shown greyed it looked like a stuck control
+            if !self.fit {
+                ui.add(egui::Slider::new(&mut self.zoom, 0.2..=4.0).suffix("×"));
+            }
         });
         // --- per-sheet adjustments
         let mut adj_changed = false;
@@ -2059,14 +2062,21 @@ impl App {
             self.sheets[i].adj_gen += 1;
         }
         if make_grid {
-            // a regular grid of draggable points: 5 lines of 7 points over the page
+            // a regular grid of draggable points: 5 lines of 7 points over the page. Lines that
+            // are already there are not added again (a second click used to double the grid).
             let adj = &mut self.sheets[i].adj;
-            if adj.dewarp_guides.len() + 5 <= 64 {
-                for r in 0..5 {
+            let grid: Vec<Vec<(f32, f32)>> = (0..5)
+                .map(|r| {
                     let y = 0.15 + 0.175 * r as f32;
-                    adj.dewarp_guides
-                        .push((0..7).map(|c| (0.06 + 0.88 * c as f32 / 6.0, y)).collect());
-                }
+                    (0..7).map(|c| (0.06 + 0.88 * c as f32 / 6.0, y)).collect()
+                })
+                .collect();
+            let missing: Vec<_> = grid
+                .into_iter()
+                .filter(|g| !adj.dewarp_guides.contains(g))
+                .collect();
+            if !missing.is_empty() && adj.dewarp_guides.len() + missing.len() <= 64 {
+                adj.dewarp_guides.extend(missing);
                 self.sheets[i].adj_gen += 1;
             }
         }
@@ -2205,6 +2215,8 @@ impl App {
         let mut new_zone: Option<[f32; 4]> = None;
         let mut remove_zone: Option<(bool, usize)> = None;
         let drag = &mut self.zone_drag;
+        let resize = &mut self.zone_resize;
+        let mut edit_zone: Option<(bool, usize, [f32; 4])> = None;
         let mut draw = |ui: &mut egui::Ui| {
             ui.horizontal_top(|ui| {
                 for (tex, caption, is_orig, boxinfo) in &cells {
@@ -2474,9 +2486,54 @@ impl App {
                                     *drag = ui
                                         .input(|i| i.pointer.press_origin())
                                         .or_else(|| resp.interact_pointer_pos());
+                                    // pressing on a corner of an existing zone grabs that corner
+                                    // instead of starting a new rectangle
+                                    *resize = None;
+                                    if let Some(o) = *drag {
+                                        let (ox, oy) = to_mm(o);
+                                        let tol = 8.0 * mm_per_px / k.x.max(0.01);
+                                        *resize = pic_zones
+                                            .iter()
+                                            .enumerate()
+                                            .rev()
+                                            .find_map(|(k, z)| corner_hit(z, (ox, oy), tol).map(|c| (true, k, c)))
+                                            .or_else(|| {
+                                                zones.iter().enumerate().rev().find_map(|(k, z)| {
+                                                    corner_hit(z, (ox, oy), tol).map(|c| (false, k, c))
+                                                })
+                                            });
+                                        if resize.is_some() {
+                                            *drag = None;
+                                        }
+                                    }
+                                }
+                                if let Some((is_pic, k, c)) = *resize {
+                                    let list = if is_pic { &pic_zones } else { &zones };
+                                    if let (Some(z), Some(lp)) =
+                                        (list.get(k), ui.input(|i| i.pointer.latest_pos()))
+                                    {
+                                        let (mx, my) = to_mm(lp.clamp(rect.min, rect.max));
+                                        let nz = move_corner(z, c, (mx, my));
+                                        painter.rect_stroke(
+                                            egui::Rect::from_two_pos(
+                                                to_screen(nz[0], nz[1]),
+                                                to_screen(nz[0] + nz[2], nz[1] + nz[3]),
+                                            ),
+                                            0.0,
+                                            egui::Stroke::new(1.5, Color32::from_rgb(255, 160, 0)),
+                                            egui::StrokeKind::Inside,
+                                        );
+                                        if resp.drag_stopped() {
+                                            edit_zone = Some((is_pic, k, nz));
+                                            *resize = None;
+                                        }
+                                    } else {
+                                        *resize = None;
+                                    }
                                 }
                                 if !ui.input(|i| i.pointer.any_down()) && !resp.drag_stopped() {
                                     *drag = None;
+                                    *resize = None;
                                 }
                                 if let (Some(a), Some(b)) =
                                     (*drag, ui.input(|i| i.pointer.latest_pos()))
@@ -2710,6 +2767,17 @@ impl App {
                 self.sheets[i].adj_gen += 1;
             }
         }
+        if let Some((is_pic, k, z)) = edit_zone {
+            let a = &mut self.sheets[i].adj;
+            let before = ZoneSnap::of(a);
+            let list = if is_pic { &mut a.picture_mm } else { &mut a.erase_mm };
+            if k < list.len() {
+                list[k] = z;
+                self.sheets[i].zone_undo.push(before);
+                self.sheets[i].zone_redo.clear();
+                self.sheets[i].adj_gen += 1;
+            }
+        }
         if let Some((is_pic, k)) = remove_zone {
             let a = &mut self.sheets[i].adj;
             let before = ZoneSnap::of(a);
@@ -2822,8 +2890,51 @@ impl eframe::App for App {
     }
 }
 
+/// Which corner of zone `z` (x, y, w, h in mm) lies within `tol` mm of `p`: 0 top-left, 1 top-right,
+/// 2 bottom-left, 3 bottom-right.
+fn corner_hit(z: &[f32; 4], p: (f32, f32), tol: f32) -> Option<u8> {
+    let cs = [
+        (z[0], z[1]),
+        (z[0] + z[2], z[1]),
+        (z[0], z[1] + z[3]),
+        (z[0] + z[2], z[1] + z[3]),
+    ];
+    cs.iter()
+        .enumerate()
+        .map(|(c, q)| (c as u8, ((q.0 - p.0).powi(2) + (q.1 - p.1).powi(2)).sqrt()))
+        .filter(|(_, d)| *d <= tol)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(c, _)| c)
+}
+
+/// The zone after dragging `corner` to `p`; the opposite corner stays where it is, and the zone
+/// keeps at least 0.5 mm in each direction (it flips instead of turning inside out).
+fn move_corner(z: &[f32; 4], corner: u8, p: (f32, f32)) -> [f32; 4] {
+    let (fx, fy) = (
+        if corner & 1 == 0 { z[0] + z[2] } else { z[0] },
+        if corner & 2 == 0 { z[1] + z[3] } else { z[1] },
+    );
+    let (x0, x1) = (p.0.min(fx), p.0.max(fx));
+    let (y0, y1) = (p.1.min(fy), p.1.max(fy));
+    [x0.max(0.0), y0.max(0.0), (x1 - x0).max(0.5), (y1 - y0).max(0.5)]
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn zone_corners_are_found_and_moved() {
+        let z = [10.0, 20.0, 30.0, 40.0];
+        assert_eq!(corner_hit(&z, (10.5, 20.2), 2.0), Some(0));
+        assert_eq!(corner_hit(&z, (40.0, 60.0), 2.0), Some(3));
+        assert_eq!(corner_hit(&z, (25.0, 40.0), 2.0), None);
+        // dragging the bottom-right corner keeps the top-left corner
+        assert_eq!(move_corner(&z, 3, (50.0, 70.0)), [10.0, 20.0, 40.0, 50.0]);
+        // dragging the top-left corner keeps the bottom-right corner (40, 60)
+        assert_eq!(move_corner(&z, 0, (5.0, 15.0)), [5.0, 15.0, 35.0, 45.0]);
+        // dragged past the opposite corner: the zone flips
+        assert_eq!(move_corner(&z, 0, (50.0, 80.0)), [40.0, 60.0, 10.0, 20.0]);
+    }
+
     use super::*;
     use legatorocr_engine::files::{is_image, natural_cmp};
     use std::cmp::Ordering as Ord_;
