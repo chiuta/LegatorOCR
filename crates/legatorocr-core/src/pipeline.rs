@@ -121,6 +121,9 @@ pub struct Settings {
     /// Working rectangle (x, y, w, h in mm of the sheet as loaded): everything outside it is
     /// painted with the paper colour before anything is measured. Drawn in the GUI, stored per sheet.
     pub sheet_work_mm: Option<[f32; 4]>,
+    /// The user turned this sheet by hand (even back to 0 degrees): neither the built-in sideways
+    /// check nor Tesseract's OSD may turn it again.
+    pub sheet_orient_locked: bool,
     /// Where to cut a two-page sheet: a fraction (0-1) of the loaded sheet's width, set by dragging
     /// a line on the original. Used when splitting is on and the sheet is not turned a quarter
     /// (0 or 180 degrees); otherwise the automatic or middle cut applies.
@@ -175,6 +178,7 @@ impl Default for Settings {
             sheet_picture_zones: Vec::new(),
             sheet_erase_zones: Vec::new(),
             sheet_work_mm: None,
+            sheet_orient_locked: false,
             sheet_split_frac: None,
             dropout: Dropout::Off,
             despeckle_strength: 1.0,
@@ -500,7 +504,7 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
 
     // a sheet the user turned by hand is not turned again: the automatic check would take the
     // sideways result for a mistake and add a second quarter turn (90 + 90 = upside down)
-    if s.auto_orient && s.rotate_quarters.is_multiple_of(4) {
+    if s.auto_orient && s.rotate_quarters.is_multiple_of(4) && !s.sheet_orient_locked {
         let a = analyse(&transform::gray_of(&rgb), s.dpi);
         if orient::needs_quarter_turn(&a.ink, a.dpi) {
             rot90_rects(&mut zones, rgb.width(), rgb.height(), 1);
@@ -1370,6 +1374,26 @@ mod tests {
     }
 
     #[test]
+    fn a_sheet_turned_by_hand_back_to_zero_is_not_turned_by_auto_orient() {
+        // text lines running vertically: auto-orient turns this sheet by itself...
+        let sideways = imageops::rotate90(&text_page(800, 600, 60, 740));
+        let src = image::DynamicImage::ImageRgb8(to_rgb(&sideways));
+        let base = Settings {
+            dpi: 150,
+            deskew: false,
+            split: SplitMode::Off,
+            auto_orient: true,
+            ..Settings::default()
+        };
+        let auto = &process_page(&src, &base)[0];
+        assert!(auto.image.width() > auto.image.height(), "auto-orient turned it to landscape");
+        // ...but once the user has set the rotation (even to 0) it is left exactly as asked
+        let locked = Settings { sheet_orient_locked: true, ..base };
+        let p = &process_page(&src, &locked)[0];
+        assert!(p.image.height() > p.image.width(), "locked at 0: {}x{}", p.image.width(), p.image.height());
+    }
+
+    #[test]
     fn blank_sheet_with_a_page_size_becomes_an_empty_page_of_that_size() {
         let blank = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
             900,
@@ -1962,6 +1986,7 @@ mod tests {
                 } else {
                     Vec::new()
                 },
+                sheet_orient_locked: rnd(5) == 0,
                 sheet_work_mm: if rnd(4) == 0 {
                     Some([rnd(100) as f32 - 20.0, rnd(100) as f32 - 20.0, rnd(300) as f32, rnd(300) as f32])
                 } else {

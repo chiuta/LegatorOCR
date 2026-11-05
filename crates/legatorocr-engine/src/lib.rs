@@ -666,6 +666,11 @@ pub fn orient_with_osd(
 ) -> (DynamicImage, Settings) {
     let mut s = settings.clone();
     let Some(o) = osd else { return (img, s) };
+    // a sheet turned by hand keeps the user's turn: stacking an automatic one on top of it made a
+    // 90 degree click land on 180 (and a way back to 0 impossible)
+    if s.sheet_orient_locked || !s.rotate_quarters.is_multiple_of(4) {
+        return (img, s);
+    }
     match legatorocr_ocr::detect_rotation(&img, o) {
         Ok(Some(deg)) => {
             s.auto_orient = false;

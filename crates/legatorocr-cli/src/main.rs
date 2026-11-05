@@ -1905,6 +1905,7 @@ fn real_main() -> Result<()> {
         fingers: cli.fingers,
         remove_lines: cli.remove_lines,
         sheet_erase_zones: Vec::new(),
+        sheet_orient_locked: false,
         sheet_work_mm: match cli.work_area.as_deref() {
             None => None,
             Some(v) => Some(

@@ -319,6 +319,7 @@ impl App {
                         erase_mm: a.erase_mm.clone(),
                         picture_mm: a.picture_mm.clone(),
                         dewarp_guides: a.dewarp_guides.clone(),
+                        orient_locked: a.orient_locked,
                         work_mm: a.work_mm,
                         split_frac: a.split_frac,
                         ..Default::default()
@@ -403,6 +404,7 @@ impl App {
                         erase_mm: a.erase_mm.clone(),
                         picture_mm: a.picture_mm.clone(),
                         dewarp_guides: a.dewarp_guides.clone(),
+                        orient_locked: a.orient_locked,
                         work_mm: a.work_mm,
                         split_frac: a.split_frac,
                     };
@@ -1975,16 +1977,19 @@ impl App {
             let adj = &mut self.sheets[i].adj;
             if ui.button(tr("adj.rot_left")).clicked() {
                 adj.rotate_quarters = (adj.rotate_quarters + 3) % 4;
+                adj.orient_locked = true;
                 adj_changed = true;
             }
             if ui.button(tr("adj.rot_right")).clicked() {
                 adj.rotate_quarters = (adj.rotate_quarters + 1) % 4;
+                adj.orient_locked = true;
                 adj_changed = true;
             }
             // 45° steps: quarter turns plus the manual skew together make the total angle
             for (label, step) in [("-45°", -45.0f32), ("+45°", 45.0)] {
                 if ui.button(label).clicked() {
                     adj.turn(step);
+                    adj.orient_locked = true;
                     adj_changed = true;
                 }
             }

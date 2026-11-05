@@ -41,6 +41,8 @@ pub struct SheetAdj {
     pub work_mm: Option<[f32; 4]>,
     /// Cut line of a two-page sheet as a fraction (0-1) of the loaded width.
     pub split_frac: Option<f32>,
+    /// Turned by hand: no automatic orientation for this sheet (`orient-locked = 1`).
+    pub orient_locked: bool,
 }
 
 impl SheetAdj {
@@ -60,6 +62,7 @@ impl SheetAdj {
         s.sheet_erase_zones = self.erase_mm.clone();
         s.sheet_picture_zones = self.picture_mm.clone();
         s.sheet_dewarp_guides = self.dewarp_guides.clone();
+        s.sheet_orient_locked = self.orient_locked;
         s.sheet_work_mm = self.work_mm.or(s.sheet_work_mm);
         s.sheet_split_frac = self.split_frac.or(s.sheet_split_frac);
         s
@@ -369,6 +372,9 @@ impl Project {
                     legatorocr_core::cleanup::zones_to_string(&[w])
                 ));
             }
+            if a.orient_locked {
+                out.push_str("orient-locked = 1\n");
+            }
             if let Some(f) = a.split_frac {
                 out.push_str(&format!("split-at = {f}\n"));
             }
@@ -448,6 +454,7 @@ impl Project {
                             .ok_or_else(|| at(anyhow::anyhow!("invalid work area '{v}'")))?;
                         adj.work_mm = Some(z[0]);
                     }
+                    "orient-locked" => adj.orient_locked = matches!(v, "1" | "true" | "yes"),
                     "split-at" => {
                         let f: f32 = v
                             .parse()
@@ -563,6 +570,7 @@ mod tests {
                 erase_mm: vec![[10.0, 20.5, 30.0, 40.0], [0.0, 0.0, 5.0, 5.0]],
                 work_mm: Some([5.0, 6.0, 100.0, 120.5]),
                 split_frac: Some(0.4375),
+                orient_locked: true,
                 picture_mm: vec![[50.0, 60.0, 70.5, 80.0]],
                 dewarp_guides: vec![vec![(0.0, 0.25), (0.5, 0.3), (1.0, 0.25)]],
             },
