@@ -340,6 +340,7 @@ impl App {
                         erase_mm: a.erase_mm.clone(),
                         picture_mm: a.picture_mm.clone(),
                         no_picture_mm: a.no_picture_mm.clone(),
+                        mode: a.mode.map(ModeChoice::to_core),
                         dewarp_guides: a.dewarp_guides.clone(),
                         orient_locked: a.orient_locked,
                         work_mm: a.work_mm,
@@ -373,6 +374,27 @@ impl App {
             }
             Ok(()) => self.say(
                 format!("{}: {}", self.tr("status.project_saved"), path.display()),
+                false,
+            ),
+            Err(e) => self.say(format!("{}: {e:#}", self.tr("status.error")), true),
+        }
+    }
+
+    /// Save the project into a folder of the user's choice together with copies of the scans
+    /// (`project.lgr` + `images/`), so the whole folder can be moved or opened elsewhere.
+    fn save_project_folder(&mut self) {
+        let Some(folder) = self.pick(|| rfd::FileDialog::new().pick_folder()) else {
+            return;
+        };
+        let sheets = self.project_sheets();
+        match self.s.to_project(sheets).save_to_folder(&folder) {
+            Ok((file, n)) => self.say(
+                format!(
+                    "{}: {} — {n} {}",
+                    self.tr("status.project_folder_saved"),
+                    file.display(),
+                    self.tr("status.files_copied"),
+                ),
                 false,
             ),
             Err(e) => self.say(format!("{}: {e:#}", self.tr("status.error")), true),
@@ -428,6 +450,7 @@ impl App {
                         erase_mm: a.erase_mm.clone(),
                         picture_mm: a.picture_mm.clone(),
                         no_picture_mm: a.no_picture_mm.clone(),
+                        mode: a.mode.map(ModeChoice::from_core),
                         dewarp_guides: a.dewarp_guides.clone(),
                         orient_locked: a.orient_locked,
                         work_mm: a.work_mm,
@@ -1075,6 +1098,17 @@ impl App {
                     ui.close();
                 }
                 ui.separator();
+                if ui
+                    .add_enabled(
+                        !self.sheets.is_empty(),
+                        egui::Button::new(self.tr("menu.save_project_folder")),
+                    )
+                    .on_hover_text(self.tr("menu.save_project_folder_tip"))
+                    .clicked()
+                {
+                    self.save_project_folder();
+                    ui.close();
+                }
                 if ui.button(self.tr("menu.modules")).clicked() {
                     self.modules.open();
                     ui.close();
@@ -2252,6 +2286,32 @@ impl App {
                         adj_changed |= ui
                             .selectable_value(&mut adj.split, Some(c), tr(n))
                             .changed();
+                    }
+                });
+            ui.separator();
+            // output mode of this page only (one page in colour, the next in grey, ...)
+            let mode_label = match adj.mode {
+                None => tr("adj.split_default"),
+                Some(ModeChoice::Color) => tr("mode.color"),
+                Some(ModeChoice::Gray) => tr("mode.gray"),
+                Some(ModeChoice::Bw) => tr("mode.bw"),
+                Some(ModeChoice::Mixed) => tr("mode.mixed"),
+                Some(ModeChoice::Hybrid) => tr("mode.hybrid"),
+            };
+            egui::ComboBox::from_id_salt("adj_mode")
+                .selected_text(format!("{} - {mode_label}", tr("adj.mode_page")))
+                .show_ui(ui, |ui| {
+                    adj_changed |= ui
+                        .selectable_value(&mut adj.mode, None, tr("adj.split_default"))
+                        .changed();
+                    for (c, n) in [
+                        (ModeChoice::Color, "mode.color"),
+                        (ModeChoice::Gray, "mode.gray"),
+                        (ModeChoice::Bw, "mode.bw"),
+                        (ModeChoice::Mixed, "mode.mixed"),
+                        (ModeChoice::Hybrid, "mode.hybrid"),
+                    ] {
+                        adj_changed |= ui.selectable_value(&mut adj.mode, Some(c), tr(n)).changed();
                     }
                 });
             ui.separator();

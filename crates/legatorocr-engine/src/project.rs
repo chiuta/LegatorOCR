@@ -37,6 +37,8 @@ pub struct SheetAdj {
     pub picture_mm: Vec<[f32; 4]>,
     /// Hand-drawn rectangles where the automatic picture detector is overruled (mm of the loaded scan).
     pub no_picture_mm: Vec<[f32; 4]>,
+    /// Output mode of this sheet only (colour, grey, black and white, mixed, hybrid); `None` follows the global one.
+    pub mode: Option<OutputMode>,
     /// Hand-drawn dewarp guide lines: points as fractions (0–1) of the loaded scan.
     pub dewarp_guides: Vec<Vec<(f32, f32)>>,
     /// Working rectangle (x, y, w, h in mm of the loaded scan); outside it the sheet is blanked.
@@ -64,6 +66,9 @@ impl SheetAdj {
         s.sheet_erase_zones = self.erase_mm.clone();
         s.sheet_picture_zones = self.picture_mm.clone();
         s.sheet_no_picture_zones = self.no_picture_mm.clone();
+        if let Some(m) = self.mode {
+            s.mode = m;
+        }
         s.sheet_dewarp_guides = self.dewarp_guides.clone();
         s.sheet_orient_locked = self.orient_locked;
         s.sheet_work_mm = self.work_mm.or(s.sheet_work_mm);
@@ -402,6 +407,9 @@ impl Project {
                     legatorocr_core::cleanup::zones_to_string(&a.picture_mm)
                 ));
             }
+            if let Some(m) = a.mode {
+                out.push_str(&format!("mode = {}\n", mode_name(m)));
+            }
             if !a.no_picture_mm.is_empty() {
                 out.push_str(&format!(
                     "no-picture = {}\n",
@@ -496,6 +504,12 @@ impl Project {
                         adj.picture_mm = legatorocr_core::cleanup::parse_zones(v)
                             .ok_or_else(|| at(anyhow::anyhow!("invalid picture zones '{v}'")))?
                     }
+                    "mode" => {
+                        adj.mode = Some(
+                            parse_mode(v)
+                                .ok_or_else(|| at(anyhow::anyhow!("invalid mode '{v}'")))?,
+                        )
+                    }
                     "no-picture" => {
                         adj.no_picture_mm = legatorocr_core::cleanup::parse_zones(v)
                             .ok_or_else(|| at(anyhow::anyhow!("invalid no-picture zones '{v}'")))?
@@ -567,6 +581,55 @@ impl Project {
 
     pub fn save(&self, path: &Path) -> Result<()> {
         crate::write_atomic(path, self.to_text(path.parent()).as_bytes())
+    }
+
+    /// Save into a folder of the user's choice as a self-contained project: the source files are
+    /// copied into `FOLDER/images/` (a PDF once, however many of its pages are used) and the
+    /// project `FOLDER/project.lgr` points at the copies with relative paths, so the whole
+    /// folder can be moved, zipped or opened on another computer. Nothing outside the folder is
+    /// changed. Returns the project file and how many files were copied.
+    pub fn save_to_folder(&self, folder: &Path) -> Result<(PathBuf, usize)> {
+        let img_dir = folder.join("images");
+        std::fs::create_dir_all(&img_dir)
+            .with_context(|| format!("creating {}", img_dir.display()))?;
+        let mut copied: std::collections::HashMap<PathBuf, PathBuf> =
+            std::collections::HashMap::new();
+        let mut moved = self.clone();
+        let mut n = 0usize;
+        for (path, _) in moved.sheets.iter_mut() {
+            // a page of a PDF is `book.pdf#9`: the file is the part before `#`
+            let text = path.to_string_lossy().into_owned();
+            let (file, suffix) = match text.rsplit_once('#') {
+                Some((f, n)) if n.chars().all(|c| c.is_ascii_digit()) && !n.is_empty() => {
+                    (PathBuf::from(f), format!("#{n}"))
+                }
+                _ => (path.clone(), String::new()),
+            };
+            let dest = match copied.get(&file) {
+                Some(d) => d.clone(),
+                None => {
+                    let name = file
+                        .file_name()
+                        .map(|f| f.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "scan".into());
+                    let dest = img_dir.join(format!("{:04}-{name}", copied.len() + 1));
+                    let same = std::fs::metadata(&dest).ok().map(|m| m.len())
+                        == std::fs::metadata(&file).ok().map(|m| m.len());
+                    if !(dest.exists() && same) {
+                        std::fs::copy(&file, &dest).with_context(|| {
+                            format!("copying {} to {}", file.display(), dest.display())
+                        })?;
+                        n += 1;
+                    }
+                    copied.insert(file.clone(), dest.clone());
+                    dest
+                }
+            };
+            *path = PathBuf::from(format!("{}{suffix}", dest.display()));
+        }
+        let project = folder.join("project.lgr");
+        moved.save(&project)?;
+        Ok((project, n))
     }
 
     pub fn get(&self, key: &str) -> Option<&str> {
@@ -644,6 +707,7 @@ mod tests {
                 orient_locked: true,
                 picture_mm: vec![[50.0, 60.0, 70.5, 80.0]],
                 no_picture_mm: vec![[1.0, 2.0, 30.0, 40.5]],
+                mode: Some(OutputMode::Gray),
                 dewarp_guides: vec![vec![(0.0, 0.25), (0.5, 0.3), (1.0, 0.25)]],
             },
         ));
@@ -738,5 +802,53 @@ mod tests {
             Project::parse(&format!("{HEADER}\ndpi = 999999\nsensitivity = 9\n"), None).unwrap();
         assert_eq!(q.settings.dpi, 2400);
         assert!(q.settings.sauvola_k <= 1.0);
+    }
+
+    #[test]
+    fn a_project_saved_to_a_folder_is_self_contained() {
+        let d = std::env::temp_dir().join(format!("lgr-proj-folder-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let src = d.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("a.png"), b"AAAA").unwrap();
+        std::fs::write(src.join("book.pdf"), b"%PDF-fake").unwrap();
+        let mut p = Project::default();
+        p.settings.mode = OutputMode::Mixed;
+        p.sheets.push((
+            src.join("a.png"),
+            SheetAdj {
+                mode: Some(OutputMode::Gray),
+                ..SheetAdj::default()
+            },
+        ));
+        p.sheets.push((
+            PathBuf::from(format!("{}#1", src.join("book.pdf").display())),
+            SheetAdj::default(),
+        ));
+        p.sheets.push((
+            PathBuf::from(format!("{}#2", src.join("book.pdf").display())),
+            SheetAdj::default(),
+        ));
+        let out = d.join("my project");
+        let (file, n) = p.save_to_folder(&out).unwrap();
+        assert_eq!(n, 2, "the PDF is copied once");
+        assert_eq!(file, out.join("project.lgr"));
+        let q = Project::load(&file).unwrap();
+        assert_eq!(q.settings.mode, OutputMode::Mixed);
+        assert_eq!(q.sheets.len(), 3);
+        assert_eq!(q.sheets[0].1.mode, Some(OutputMode::Gray));
+        assert_eq!(q.sheets[1].1.mode, None);
+        assert!(q.sheets[0].0.starts_with(out.join("images")));
+        assert_eq!(std::fs::read(&q.sheets[0].0).unwrap(), b"AAAA");
+        let pdf1 = q.sheets[1].0.to_string_lossy().into_owned();
+        assert!(pdf1.ends_with("book.pdf#1"), "{pdf1}");
+        assert!(q.sheets[2].0.to_string_lossy().ends_with("book.pdf#2"));
+        // the originals stay where they were; saving again copies nothing new
+        assert!(src.join("a.png").exists());
+        assert_eq!(p.save_to_folder(&out).unwrap().1, 0);
+        // a missing source is an error, not a silent hole in the project
+        p.sheets.push((d.join("gone.png"), SheetAdj::default()));
+        assert!(p.save_to_folder(&d.join("other")).is_err());
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

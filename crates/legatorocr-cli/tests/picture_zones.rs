@@ -120,3 +120,54 @@ fn a_bad_no_picture_zone_is_refused() {
     assert!(!o.status.success());
     assert!(String::from_utf8_lossy(&o.stderr).contains("--no-picture-zone"));
 }
+
+#[test]
+fn a_page_can_have_its_own_output_mode_in_a_project() {
+    let d: PathBuf = std::env::temp_dir().join(format!("lgr_pm_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    let mut im = image::RgbImage::from_pixel(600, 800, image::Rgb([240, 240, 235]));
+    for y in 200..500u32 {
+        for x in 150..450u32 {
+            im.put_pixel(x, y, image::Rgb([200, 30, 30]));
+        }
+    }
+    im.save(d.join("a.png")).unwrap();
+    im.save(d.join("b.png")).unwrap();
+    // global colour; the second page asks for grey
+    std::fs::write(
+        d.join("p.lgr"),
+        "legatorocr-project 1\ndpi = 150\nmode = color\n\n[sheet]\npath = a.png\n\n[sheet]\npath = b.png\nmode = gray\n",
+    )
+    .unwrap();
+    let out = d.join("out");
+    let o = Command::new(env!("CARGO_BIN_EXE_legatorocr"))
+        .current_dir(&d)
+        .args([
+            "--project",
+            "p.lgr",
+            "--no-auto-orient",
+            "-o",
+            &out.display().to_string(),
+        ])
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let mut files: Vec<_> = std::fs::read_dir(&out)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    files.sort();
+    assert_eq!(files.len(), 2, "{files:?}");
+    let coloured = |f: &PathBuf| {
+        image::open(f)
+            .unwrap()
+            .to_rgb8()
+            .pixels()
+            .filter(|p| p[0] as i32 - p[2] as i32 > 60)
+            .count()
+    };
+    assert!(coloured(&files[0]) > 10_000, "page 1 stays in colour");
+    assert_eq!(coloured(&files[1]), 0, "page 2 is grey");
+    let _ = std::fs::remove_dir_all(&d);
+}

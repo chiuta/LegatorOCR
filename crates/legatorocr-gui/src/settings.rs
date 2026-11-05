@@ -50,6 +50,27 @@ pub enum ModeChoice {
     Hybrid,
 }
 
+impl ModeChoice {
+    pub fn to_core(self) -> OutputMode {
+        match self {
+            ModeChoice::Color => OutputMode::Color,
+            ModeChoice::Gray => OutputMode::Gray,
+            ModeChoice::Bw => OutputMode::BlackWhite,
+            ModeChoice::Mixed => OutputMode::Mixed,
+            ModeChoice::Hybrid => OutputMode::Hybrid,
+        }
+    }
+    pub fn from_core(m: OutputMode) -> ModeChoice {
+        match m {
+            OutputMode::Color => ModeChoice::Color,
+            OutputMode::Gray => ModeChoice::Gray,
+            OutputMode::BlackWhite => ModeChoice::Bw,
+            OutputMode::Mixed => ModeChoice::Mixed,
+            OutputMode::Hybrid => ModeChoice::Hybrid,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct UiSettings {
     pub dpi: u32,
@@ -195,6 +216,8 @@ pub struct SheetAdjust {
     pub picture_mm: Vec<[f32; 4]>,
     /// Rectangles drawn on the original where the automatic picture detector is overruled (mm).
     pub no_picture_mm: Vec<[f32; 4]>,
+    /// Output mode of this page only; `None` follows the general setting.
+    pub mode: Option<ModeChoice>,
     /// Dewarp guide lines drawn on the original (fractions 0–1 of the scan).
     pub dewarp_guides: Vec<Vec<(f32, f32)>>,
     /// Working rectangle drawn on the original (x, y, w, h in mm); outside it the sheet is blanked.
@@ -246,13 +269,7 @@ impl UiSettings {
             page_size_mm: self.page_size_mm(),
             fit_width: self.fit_width,
             fit_height: self.fit_height,
-            mode: match self.mode {
-                ModeChoice::Color => OutputMode::Color,
-                ModeChoice::Gray => OutputMode::Gray,
-                ModeChoice::Bw => OutputMode::BlackWhite,
-                ModeChoice::Mixed => OutputMode::Mixed,
-                ModeChoice::Hybrid => OutputMode::Hybrid,
-            },
+            mode: adj.mode.unwrap_or(self.mode).to_core(),
             sauvola_k: self.sauvola_k,
             despeckle: self.despeckle,
             dewarp: self.dewarp,
