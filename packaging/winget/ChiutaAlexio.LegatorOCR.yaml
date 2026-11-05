@@ -1,13 +1,13 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.singleton.1.12.0.schema.json
 # winget singleton manifest (schema 1.12.0 is the current one; learn.microsoft.com, read 2026-11-04).
 # The zip has ONE top-level folder named after the asset, hence the RelativeFilePath prefix (checked on the
-# published v0.2.0-pre.21 asset: downloaded, SHA-256 recomputed, zip listing read, 2026-11-05).
-# No stable v0.2.0 release exists yet (only -pre.N): this manifest points at pre-release 0.2.0-pre.21. For a stable
+# published v0.2.0-pre.22 asset: downloaded, SHA-256 recomputed, zip listing read, 2026-11-05).
+# No stable v0.2.0 release exists yet (only -pre.N): this manifest points at pre-release 0.2.0-pre.22. For a stable
 # release change PackageVersion, the folder name, InstallerUrl and InstallerSha256.
 # winget-pkgs may ask for the three-file form (version + locale + installer) instead of a singleton.
 # Not submitted to microsoft/winget-pkgs yet and not run through `winget validate` or an install on Windows.
 PackageIdentifier: ChiutaAlexio.LegatorOCR
-PackageVersion: 0.2.0-pre.21
+PackageVersion: 0.2.0-pre.22
 PackageLocale: en-US
 Publisher: Alexandru-Ionuț Chiuță
 PackageName: LegatorOCR
@@ -18,9 +18,9 @@ Installers:
     InstallerType: zip
     NestedInstallerType: portable
     NestedInstallerFiles:
-      - RelativeFilePath: LegatorOCR-0.2.0-pre.21-x86_64-pc-windows-msvc\legatorocr.exe
+      - RelativeFilePath: LegatorOCR-0.2.0-pre.22-x86_64-pc-windows-msvc\legatorocr.exe
         PortableCommandAlias: legatorocr
-    InstallerUrl: https://github.com/chiuta/LegatorOCR/releases/download/v0.2.0-pre.21/LegatorOCR-0.2.0-pre.21-x86_64-pc-windows-msvc.zip
-    InstallerSha256: 123628526d90b6c754eb1853a4e4b2a2fe2c60f7a96589b813a1d500c08c3a89
+    InstallerUrl: https://github.com/chiuta/LegatorOCR/releases/download/v0.2.0-pre.22/LegatorOCR-0.2.0-pre.22-x86_64-pc-windows-msvc.zip
+    InstallerSha256: 685649a2aa927f89acb881b2182c7110983c5864f6fa4e68c20574732af69fbb
 ManifestType: singleton
 ManifestVersion: 1.12.0
