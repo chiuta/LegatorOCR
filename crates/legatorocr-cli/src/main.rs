@@ -2537,7 +2537,7 @@ fn real_main() -> Result<()> {
         let n = inputs.len();
         let mut order: Vec<usize> = (0..n).collect();
         if cli.duplex_adf {
-            if n % 2 != 0 {
+            if !n.is_multiple_of(2) {
                 bail!("--duplex-adf needs an even number of pages (fronts, then backs); got {n}");
             }
             order = page_order::duplex_adf(n);
@@ -2548,7 +2548,7 @@ fn real_main() -> Result<()> {
         if let Some(r) = &cli.pages {
             let keep =
                 page_order::parse_range(r, n).map_err(|e| anyhow::anyhow!("--pages: {e}"))?;
-            order = order.into_iter().filter(|i| keep.contains(i)).collect();
+            order.retain(|i| keep.contains(i));
             if order.is_empty() {
                 bail!("--pages {r}: no page left (there are {n})");
             }
