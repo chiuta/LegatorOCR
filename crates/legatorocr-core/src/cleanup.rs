@@ -1336,3 +1336,90 @@ mod tests {
         assert!(invert_if_negative(&mut neg));
     }
 }
+
+#[cfg(test)]
+mod degenerate_tests {
+    use super::*;
+    use image::{Rgb, RgbImage};
+
+    fn fill(w: u32, h: u32, c: [u8; 3]) -> RgbImage {
+        RgbImage::from_pixel(w, h, Rgb(c))
+    }
+
+    fn noise(w: u32, h: u32) -> RgbImage {
+        let mut s = 12345u32;
+        RgbImage::from_fn(w, h, |_, _| {
+            s = s.wrapping_mul(1664525).wrapping_add(1013904223);
+            let v = (s >> 24) as u8;
+            Rgb([v, v ^ 0x55, v.wrapping_add(90)])
+        })
+    }
+
+    #[test]
+    fn trim_and_fingers_survive_degenerate_images() {
+        let paper = Rgb([240, 240, 235]);
+        let mut cases: Vec<RgbImage> = vec![
+            fill(1, 1, [255, 255, 255]),
+            fill(1, 500, [255, 255, 255]),
+            fill(500, 1, [0, 0, 0]),
+            fill(2, 2, [10, 10, 10]),
+            fill(300, 400, [255, 255, 255]),
+            fill(300, 400, [0, 0, 0]),
+            fill(300, 400, [200, 120, 90]),
+            noise(300, 400),
+            noise(37, 11),
+        ];
+        let mut half = fill(300, 400, [255, 255, 255]);
+        for y in 0..400 {
+            for x in 0..150 {
+                half.put_pixel(x, y, Rgb([0, 0, 0]));
+            }
+        }
+        cases.push(half);
+        for (i, c) in cases.iter().enumerate() {
+            for dpi in [30u32, 75, 150, 300, 600] {
+                let mut a = c.clone();
+                let _ = trim_to_paper(&mut a, dpi, paper);
+                assert_eq!((a.width(), a.height()), (c.width(), c.height()), "case {i}");
+                let mut b = c.clone();
+                let _ = remove_fingers(&mut b, dpi, paper);
+                assert_eq!((b.width(), b.height()), (c.width(), c.height()), "case {i}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_all_black_or_all_white_image_is_never_painted_over() {
+        let paper = Rgb([240, 240, 235]);
+        let mut w = fill(300, 400, [255, 255, 255]);
+        let before = w.clone();
+        let _ = trim_to_paper(&mut w, 300, paper);
+        assert_eq!(w, before, "a plain white page must stay as it is");
+    }
+}
+
+#[cfg(test)]
+mod big_image_tests {
+    use super::*;
+    use image::{Rgb, RgbImage};
+
+    #[test]
+    fn a_6000_by_8000_page_is_trimmed_in_reasonable_time() {
+        let mut img = RgbImage::from_pixel(6000, 8000, Rgb([240, 240, 235]));
+        for y in (500..7500).step_by(120) {
+            for x in 800..5200 {
+                if (x / 9) % 2 == 0 {
+                    for dy in 0..30 {
+                        img.put_pixel(x, y + dy, Rgb([20, 20, 20]));
+                    }
+                }
+            }
+        }
+        let t = std::time::Instant::now();
+        let _ = trim_to_paper(&mut img, 600, Rgb([240, 240, 235]));
+        let _ = remove_fingers(&mut img, 600, Rgb([240, 240, 235]));
+        let dt = t.elapsed().as_secs_f32();
+        eprintln!("big image: {dt:.2}s");
+        assert!(dt < 30.0, "too slow: {dt}s");
+    }
+}

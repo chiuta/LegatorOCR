@@ -31,14 +31,16 @@ pub fn parse(src: &str) -> Result<Vec<(String, String)>, String> {
 }
 
 pub fn set_rules(rules: Vec<(String, String)>) {
-    *RULES.lock().unwrap() = rules
+    // An empty left side would match everywhere (and index out of range): drop it.
+    *RULES.lock().unwrap_or_else(|e| e.into_inner()) = rules
         .into_iter()
+        .filter(|(a, _)| !a.is_empty())
         .map(|(a, b)| (a.chars().collect(), b))
         .collect();
 }
 
 pub fn enabled() -> bool {
-    !RULES.lock().unwrap().is_empty()
+    !RULES.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
 }
 
 fn wordish(c: char) -> bool {
@@ -47,7 +49,7 @@ fn wordish(c: char) -> bool {
 
 /// Apply every rule; returns the new text and how many replacements were made.
 pub fn apply(text: &str) -> (String, usize) {
-    let rules = RULES.lock().unwrap();
+    let rules = RULES.lock().unwrap_or_else(|e| e.into_inner());
     let mut cur: Vec<char> = text.chars().collect();
     let mut n = 0;
     for (from, to) in rules.iter() {
@@ -76,9 +78,12 @@ pub fn apply(text: &str) -> (String, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The rules are global: tests that set them must not run at the same time.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn whole_words_only_and_in_order() {
+        let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         assert!(parse("a b").is_err());
         let r = parse("# c\n\nIon => Ioan\nteh => the\n").unwrap();
         assert_eq!(r.len(), 2);
@@ -88,5 +93,23 @@ mod tests {
         assert_eq!(n, 3);
         set_rules(vec![]);
         assert!(!enabled());
+    }
+
+    #[test]
+    fn hostile_rules_never_panic() {
+        let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        // CRLF, BOM, `=>` on the right, empty right side, empty left side set directly.
+        let r = parse("\u{feff}a => b\r\nx=>y=>z\r\nq =>\r\n").unwrap();
+        assert_eq!(r[1], ("x".into(), "y=>z".into()));
+        assert_eq!(r[2], ("q".into(), String::new()));
+        assert!(parse("=> b").is_err());
+        let mut rules = r;
+        rules.push((String::new(), "!".into()));
+        set_rules(rules);
+        let (t, n) = apply("a x q é");
+        assert_eq!(t, "b y=>z  é");
+        assert_eq!(n, 3);
+        assert_eq!(apply("").1, 0);
+        set_rules(vec![]);
     }
 }

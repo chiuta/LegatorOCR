@@ -2040,9 +2040,9 @@ where
     let m = (pg.dpi / 8).max(8);
     let x0 = cx.saturating_sub(m);
     let y0 = cy.saturating_sub(m);
-    let x1 = (cx + cw + m).min(pw);
-    let y1 = (cy + ch + m).min(ph);
-    if x1 <= x0 + 16 || y1 <= y0 + 16 {
+    let x1 = cx.saturating_add(cw).saturating_add(m).min(pw);
+    let y1 = cy.saturating_add(ch).saturating_add(m).min(ph);
+    if x1 <= x0.saturating_add(16) || y1 <= y0.saturating_add(16) {
         return words;
     }
     let cropped = match &pg.image {
