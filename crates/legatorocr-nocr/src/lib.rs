@@ -242,6 +242,9 @@ fn decode_line(
     })
 }
 
+/// A gap between two glyphs of at least this many line heights ends the word.
+const WORD_BREAK_GAP: f32 = 1.3;
+
 fn recognise_line(
     gray: &GrayImage,
     ink: &BitImage,
@@ -334,6 +337,14 @@ fn recognise_line(
         if g.ch == ' ' {
             flush(&mut cur, &mut words);
         } else {
+            // a gap wider than the line is tall is a break between words (or table cells) even
+            // when the network wrote no space there: "CantitatePreț", "stejar12340,50"
+            if let Some(prev) = cur.last().filter(|_| g.ch.is_alphanumeric()) {
+                let gap = g.c0.saturating_sub(prev.c1 + 1) as f32 * 4.0 * d.scale;
+                if gap >= WORD_BREAK_GAP * ln.h as f32 {
+                    flush(&mut cur, &mut words);
+                }
+            }
             cur.push(g);
         }
     }
