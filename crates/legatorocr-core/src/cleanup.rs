@@ -572,13 +572,66 @@ pub fn remove_fingers(img: &mut RgbImage, dpi: u32, paper: Rgb<u8>) -> usize {
     for (i, c) in comps.iter().enumerate() {
         let touches = c.x0 == 0 || c.y0 == 0 || c.x1 as usize == w - 1 || c.y1 as usize == h - 1;
         let len = ((c.x1 - c.x0 + 1) as f32).max((c.y1 - c.y0 + 1) as f32);
-        if touches && len >= min_len && c.area as f32 >= min_area {
+        // a hand is a small part of the picture; a "finger" the size of a quarter page is
+        // warm shadow or a cover, and wiping it would take the page with it
+        let small_enough = (c.area as usize) * 8 <= w * h;
+        if touches && len >= min_len && c.area as f32 >= min_area && small_enough {
             hit[i + 1] = true;
             n += 1;
         }
     }
     if n == 0 {
         return 0;
+    }
+    // A finger holds no print. Between the first and last skin pixel of every row, a real
+    // finger is solid skin; text lines in that span (dark pixels that are not skin) mean the
+    // region is page, not hand: leave it alone.
+    {
+        let mut spans: std::collections::HashMap<u32, Vec<(u32, u32)>> = Default::default();
+        for (id, on) in hit.iter().enumerate() {
+            if *on {
+                spans.insert(id as u32, vec![(u32::MAX, 0); h]);
+            }
+        }
+        for y in 0..h {
+            for x in 0..w {
+                let id = lab[y * w + x];
+                if id != 0 {
+                    if let Some(sp) = spans.get_mut(&id) {
+                        let e = &mut sp[y];
+                        e.0 = e.0.min(x as u32);
+                        e.1 = e.1.max(x as u32);
+                    }
+                }
+            }
+        }
+        let raw = small.as_raw();
+        for (id, sp) in &spans {
+            let (mut total, mut ink) = (0u64, 0u64);
+            for (y, &(a, b)) in sp.iter().enumerate() {
+                if a == u32::MAX {
+                    continue;
+                }
+                for x in a as usize..=b as usize {
+                    total += 1;
+                    if lab[y * w + x] == *id {
+                        continue;
+                    }
+                    let q = (y * w + x) * 3;
+                    let lum = ycbcr([raw[q], raw[q + 1], raw[q + 2]]).0;
+                    if lum < 0.6 * py {
+                        ink += 1;
+                    }
+                }
+            }
+            if total > 0 && ink as f64 > 0.02 * total as f64 {
+                hit[*id as usize] = false;
+                n -= 1;
+            }
+        }
+        if n == 0 {
+            return 0;
+        }
     }
     // grow by one small pixel so the soft edge of the finger goes too
     let grown = |sx: i64, sy: i64| -> bool {

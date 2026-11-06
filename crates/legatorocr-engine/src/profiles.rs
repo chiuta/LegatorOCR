@@ -98,6 +98,11 @@ const BUILTIN: &[(&str, &str, &str)] = &[
         "Pages photographed by phone (spreads cut in the middle): perspective fixed, level lighting, wider skew range, fingers removed",
         "mode = color\nnormalize = true\nauto_levels = true\nperspective = true\nsplit = middle\nmax_skew = 15\nfingers = true\nsharpen = 0.5\n",
     ),
+    (
+        "phone-photos-a4",
+        "Phone photos like phone-photos, but every page on a fixed A4 sheet (even pages with few lines): level lighting, wider skew range, fingers removed",
+        "mode = color\nnormalize = true\nauto_levels = true\nperspective = true\nsplit = middle\nmax_skew = 15\nfingers = true\nsharpen = 0.5\npage_size = 210,297\n",
+    ),
 ];
 
 /// Names a profile may have (also the file stem of a user profile).
