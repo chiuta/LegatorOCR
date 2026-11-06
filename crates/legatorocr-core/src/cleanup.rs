@@ -501,6 +501,39 @@ fn ycbcr(p: [u8; 3]) -> (f32, f32, f32) {
     )
 }
 
+/// Morphological opening (erode then dilate, square window of radius `r`) of a 0/1 mask.
+fn open_mask(m: &[u8], w: usize, h: usize, r: usize) -> Vec<u8> {
+    let pass = |src: &[u8], keep_all: bool| -> Vec<u8> {
+        // separable min (keep_all) or max (!keep_all) filter
+        let mut tmp = vec![0u8; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                let (a, b) = (x.saturating_sub(r), (x + r).min(w - 1));
+                let row = &src[y * w + a..=y * w + b];
+                tmp[y * w + x] = if keep_all {
+                    (row.len() == 2 * r + 1 && row.iter().all(|&v| v != 0)) as u8
+                } else {
+                    row.iter().any(|&v| v != 0) as u8
+                };
+            }
+        }
+        let mut out = vec![0u8; w * h];
+        for x in 0..w {
+            for y in 0..h {
+                let (a, b) = (y.saturating_sub(r), (y + r).min(h - 1));
+                let col = (a..=b).map(|yy| tmp[yy * w + x]);
+                out[y * w + x] = if keep_all {
+                    (b - a == 2 * r && col.clone().all(|v| v != 0)) as u8
+                } else {
+                    col.clone().any(|v| v != 0) as u8
+                };
+            }
+        }
+        out
+    };
+    pass(&pass(m, true), false)
+}
+
 /// Remove fingers holding the page: skin-coloured regions (judged relative to the
 /// paper colour, so tinted paper does not fool it) that reach the image border and
 /// are at least 8 mm long. They are painted with `paper`.
@@ -526,8 +559,12 @@ pub fn remove_fingers(img: &mut RgbImage, dpi: u32, paper: Rgb<u8>) -> usize {
                 && y <= 0.97 * py) as u8
         })
         .collect();
-    let (lab, comps) = label(&mask, w, h);
     let sdpi = dpi as f32 / f as f32;
+    // A finger is a solid blob; warm shadowed paper around printed text is full of holes (the
+    // ink is not skin-coloured). Opening with a ~2.5 mm square keeps the first and drops the
+    // second, so a thumb in the corner no longer takes the text lines next to it along.
+    let mask = open_mask(&mask, w, h, ((2.5 / 25.4 * sdpi).round() as usize).max(1));
+    let (lab, comps) = label(&mask, w, h);
     let min_len = 8.0 / 25.4 * sdpi;
     let min_area = (40.0 / 645.16) * sdpi * sdpi; // 40 mm²
     let mut hit = vec![false; comps.len() + 1];
@@ -875,6 +912,30 @@ mod tests {
         assert_eq!(remove_punch_holes(&mut p, dpi), 1);
         assert_eq!(p.get_pixel(60, 400).0, [240, 235, 225]);
         assert_eq!(p.get_pixel(400, 500).0, [10, 10, 10]);
+    }
+
+    #[test]
+    fn warm_shadowed_paper_with_text_lines_is_not_taken_for_a_finger() {
+        // regression: a phone photo's warm shadow at the page foot touched the border and was
+        // wiped together with the text lines in it (text is not skin-coloured: holes in the mask)
+        let dpi = 150;
+        let paper = Rgb([235, 235, 230]);
+        let mut p = RgbImage::from_pixel(600, 800, paper);
+        let warm = Rgb([205, 150, 125]);
+        for y in 600..800 {
+            for x in 0..600 {
+                p.put_pixel(x, y, warm);
+            }
+        }
+        for y in (610..790).step_by(14) {
+            for yy in y..y + 5 {
+                for x in 20..580 {
+                    p.put_pixel(x, yy, Rgb([20, 20, 20]));
+                }
+            }
+        }
+        assert_eq!(remove_fingers(&mut p, dpi, paper), 0);
+        assert_eq!(p.get_pixel(300, 612).0, [20, 20, 20]);
     }
 
     #[test]
