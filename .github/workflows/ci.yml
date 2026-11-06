@@ -14,7 +14,14 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          # the other platforms the releases are built for; a failure here is reported, not fatal,
+          # until their runners have proved stable
+          - { os: ubuntu-24.04-arm, experimental: true }
+          - { os: macos-15-intel, experimental: true }
+          - { os: windows-11-arm, experimental: true }
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental == true }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -26,6 +33,25 @@ jobs:
         run: cargo build --locked --workspace --all-targets
       - name: Test
         run: cargo test --locked --workspace
+      - name: Run the command line on a page (every platform)
+        shell: bash
+        run: |
+          cat > mkpage.py <<'PY'
+          import struct
+          w, h = 900, 1200
+          px = bytearray()
+          for y in range(h - 1, -1, -1):
+              for x in range(w):
+                  bag = x < 120 and (x // 20 + y // 20) % 2 == 0
+                  dark = 150 < y < 1050 and 160 < x < 760 and y % 40 < 12
+                  px += b"\x30\x60\xc0" if bag else (b"\x00\x00\x00" if dark else b"\xf0\xf0\xf0")
+          hdr = b"BM" + struct.pack("<IHHI", 54 + len(px), 0, 0, 54) + struct.pack("<IiiHHIIiiII", 40, w, h, 1, 24, 0, len(px), 2835, 2835, 0, 0)
+          open("page.bmp", "wb").write(hdr + bytes(px))
+          PY
+          python3 mkpage.py || python mkpage.py
+          target/debug/legatorocr page.bmp --profile phone-photos-a4 --trim-background --pdf smoke.pdf --timings
+          test -s smoke.pdf
+          head -c 5 smoke.pdf | grep -q '%PDF-'
       - name: Build and test without the compiled-in OCR model
         if: matrix.os == 'ubuntu-latest'
         run: cargo test --locked --workspace --no-default-features --features lexicon
