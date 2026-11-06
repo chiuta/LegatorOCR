@@ -500,7 +500,7 @@ fn rot90_points(g: &mut Guides, w: u32, h: u32, turns: u8) {
 }
 
 fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
-    let base = src.to_rgb8();
+    let base = crate::stage("sheet/to-rgb", || src.to_rgb8());
     let (w0, h0) = base.dimensions();
     let px = |mm: f32| mm / 25.4 * s.dpi as f32;
     let mut zones: Vec<[f32; 5]> = s
@@ -543,7 +543,7 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
     // a sheet the user turned by hand is not turned again: the automatic check would take the
     // sideways result for a mistake and add a second quarter turn (90 + 90 = upside down)
     if s.auto_orient && s.rotate_quarters.is_multiple_of(4) && !s.sheet_orient_locked {
-        let a = analyse(&transform::gray_of(&rgb), s.dpi);
+        let a = crate::stage("sheet/orient", || analyse(&transform::gray_of(&rgb), s.dpi));
         if orient::needs_quarter_turn(&a.ink, a.dpi) {
             rot90_rects(&mut zones, rgb.width(), rgb.height(), 1);
             rot90_points(&mut guides, rgb.width(), rgb.height(), 1);
@@ -757,7 +757,7 @@ fn prepare(
 ) -> Prepared {
     // --- clean-up: fixes that make every later stage's job easier ----------
     if s.auto_invert {
-        cleanup::invert_if_negative(&mut img);
+        crate::stage("clean-up/invert-check", || cleanup::invert_if_negative(&mut img));
     }
     if s.auto_levels {
         crate::stage("clean-up/auto-levels", || cleanup::auto_levels(&mut img));
@@ -1037,7 +1037,7 @@ fn fit_to_page(p: Prepared, s: &Settings) -> (Prepared, Option<Settings>) {
         ((p.img.width() as f32 * k).round() as u32).max(1),
         ((p.img.height() as f32 * k).round() as u32).max(1),
     );
-    let img = imageops::resize(&p.img, nw, nh, imageops::FilterType::Triangle);
+    let img = crate::stage("fit/resize", || transform::resize_triangle(&p.img, nw, nh));
     let sc = |v: u32| (v as f32 * k).round() as u32;
     let content = Some(Rect {
         x: sc(r.x),
@@ -1206,7 +1206,7 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
             window = crate::stage("output/sharpen", || cleanup::sharpen(&window, s.dpi, s.sharpen));
         }
         if f != 1.0 {
-            window = imageops::resize(&window, ww_out, wh_out, imageops::FilterType::Triangle);
+            window = crate::stage("output/resize", || transform::resize_triangle(&window, ww_out, wh_out));
         }
         let mut canvas = RgbImage::from_pixel(cw, ch, paper);
         imageops::replace(&mut canvas, &window, wx_out, wy_out);

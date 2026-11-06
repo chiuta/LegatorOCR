@@ -395,7 +395,7 @@ pub fn save_page_image_q(pg: &Page, path: &Path, jpeg_quality: u8) -> Result<()>
     match encode_page_image(pg, &ext, jpeg_quality)? {
         Some(bytes) => write_atomic(path, &bytes),
         None => {
-            pg.image.to_dynamic().save(path)?;
+            profile::time("save-image", || pg.image.to_dynamic().save(path))?;
             Ok(())
         }
     }

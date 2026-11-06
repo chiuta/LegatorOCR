@@ -388,3 +388,99 @@ mod gray_tests {
         }
     }
 }
+
+/// Per output index: first source index and the normalised triangle-filter weights, laid out
+/// the way `image::imageops::resize` does it (support grows with the shrink ratio).
+fn triangle_weights(src: usize, dst: usize) -> Vec<(usize, Vec<f32>)> {
+    let ratio = src as f32 / dst as f32;
+    let sratio = ratio.max(1.0);
+    let support = sratio; // triangle support is 1.0
+    (0..dst)
+        .map(|o| {
+            let center = (o as f32 + 0.5) * ratio;
+            let lo = ((center - support).floor().max(0.0)) as usize;
+            let hi = (((center + support).ceil()) as usize).min(src);
+            let mut w: Vec<f32> = (lo..hi.max(lo + 1))
+                .map(|i| {
+                    let x = ((i as f32 + 0.5 - center) / sratio).abs();
+                    (1.0 - x).max(0.0)
+                })
+                .collect();
+            let sum: f32 = w.iter().sum();
+            if sum > 0.0 {
+                w.iter_mut().for_each(|v| *v /= sum);
+            } else {
+                w = vec![1.0];
+            }
+            (lo.min(src - 1), w)
+        })
+        .collect()
+}
+
+/// `imageops::resize(.., Triangle)` for RGB, on all cores. Same filter and weights; results match
+/// the reference to within one grey level (rounding order differs).
+pub fn resize_triangle(img: &RgbImage, nw: u32, nh: u32) -> RgbImage {
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    let (nw, nh) = (nw.max(1) as usize, nh.max(1) as usize);
+    if w == 0 || h == 0 {
+        return RgbImage::new(nw as u32, nh as u32);
+    }
+    let wx = triangle_weights(w, nw);
+    let wy = triangle_weights(h, nh);
+    let src = img.as_raw();
+    // horizontal pass: every source row -> nw pixels (f32)
+    let mut mid = vec![0f32; nw * h * 3];
+    mid.par_chunks_mut(nw * 3).enumerate().for_each(|(y, row)| {
+        let s = &src[y * w * 3..(y + 1) * w * 3];
+        for (x, (lo, ws)) in wx.iter().enumerate() {
+            let (mut r, mut g, mut b) = (0f32, 0f32, 0f32);
+            for (k, &wt) in ws.iter().enumerate() {
+                let i = (lo + k).min(w - 1) * 3;
+                r += s[i] as f32 * wt;
+                g += s[i + 1] as f32 * wt;
+                b += s[i + 2] as f32 * wt;
+            }
+            row[x * 3] = r;
+            row[x * 3 + 1] = g;
+            row[x * 3 + 2] = b;
+        }
+    });
+    // vertical pass: nh output rows, each a weighted sum of whole mid rows (linear memory)
+    let mut out = vec![0u8; nw * nh * 3];
+    out.par_chunks_mut(nw * 3).enumerate().for_each(|(y, row)| {
+        let (lo, ws) = &wy[y];
+        let mut acc = vec![0f32; nw * 3];
+        for (k, &wt) in ws.iter().enumerate() {
+            let m = &mid[(lo + k).min(h - 1) * nw * 3..][..nw * 3];
+            for (a, &v) in acc.iter_mut().zip(m) {
+                *a += v * wt;
+            }
+        }
+        for (o, a) in row.iter_mut().zip(&acc) {
+            *o = a.round().clamp(0.0, 255.0) as u8;
+        }
+    });
+    RgbImage::from_raw(nw as u32, nh as u32, out).expect("size")
+}
+
+#[cfg(test)]
+mod resize_tests {
+    use super::*;
+
+    #[test]
+    fn parallel_triangle_matches_the_reference_within_one_level() {
+        let mut s = 7u32;
+        for (w, h, nw, nh) in [(97u32, 61u32, 40u32, 30u32), (50, 80, 120, 90), (300, 200, 299, 201), (64, 64, 1, 1), (5, 3, 9, 2)] {
+            let img = RgbImage::from_fn(w, h, |x, y| {
+                s = s.wrapping_mul(1664525).wrapping_add(1013904223);
+                let v = ((x * 3 + y * 5) % 200) as u8;
+                Rgb([v, v.wrapping_add((s >> 28) as u8), 255 - v])
+            });
+            let a = imageops::resize(&img, nw, nh, imageops::FilterType::Triangle);
+            let b = resize_triangle(&img, nw, nh);
+            assert_eq!(a.dimensions(), b.dimensions());
+            let worst = a.as_raw().iter().zip(b.as_raw()).map(|(&p, &q)| (p as i32 - q as i32).abs()).max().unwrap();
+            assert!(worst <= 1, "{w}x{h}->{nw}x{nh}: worst diff {worst}");
+        }
+    }
+}
