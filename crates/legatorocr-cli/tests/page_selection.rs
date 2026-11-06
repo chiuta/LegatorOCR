@@ -83,3 +83,20 @@ fn find_replace_file_errors_are_clear() {
     assert!(String::from_utf8_lossy(&o.stderr).contains("wrong => right"));
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn dump_options_lists_every_visible_option_for_the_window() {
+    let o = Command::new(exe()).arg("--dump-options").output().unwrap();
+    assert!(o.status.success());
+    let t = String::from_utf8_lossy(&o.stdout);
+    let rows: Vec<Vec<&str>> = t.lines().map(|l| l.split('\t').collect()).collect();
+    assert!(rows.len() > 150, "{} options", rows.len());
+    assert!(rows.iter().all(|r| r.len() >= 7 && !r[0].is_empty()));
+    let kind = |n: &str| rows.iter().find(|r| r[0] == n).map(|r| r[2]);
+    assert_eq!(kind("dry-run"), Some("flag"));
+    assert_eq!(kind("pdf"), Some("value"));
+    assert_eq!(kind("erase"), Some("repeat"));
+    let fmt = rows.iter().find(|r| r[0] == "format").unwrap();
+    assert!(fmt[4].contains("png") && fmt[5] == "png");
+    assert!(kind("help").is_none() && kind("dump-options").is_none());
+}

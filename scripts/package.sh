@@ -19,12 +19,16 @@ EXE=""; case "$TARGET" in *windows*) EXE=".exe";; esac
 cp "$BIN/legatorocr${EXE}" "$OUT/"
 cp README.md LICENSE THIRD_PARTY_LICENSES.md "$OUT/"
 cp crates/legatorocr-nocr/lexicons/README.md "$OUT/LEXICONS-NOTICE.md"
+# the guide of this edition travels with the program (the window opens it from the Help menu)
+GUIDE=docs/Ghid-LegatorOCR.pdf
+[ -f "$GUIDE" ] && cp "$GUIDE" "$OUT/"
 
 case "$TARGET" in
   *apple*)
     APP="$OUT/LegatorOCR.app/Contents"
     mkdir -p "$APP/MacOS"
-    cp "$BIN/legatorocr-gui" "$APP/MacOS/"
+    cp "$BIN/legatorocr-gui" "$BIN/legatorocr" "$APP/MacOS/"   # the window runs the command-line program next to it
+    mkdir -p "$APP/Resources" && [ -f "$GUIDE" ] && cp "$GUIDE" "$APP/Resources/"
     cat > "$APP/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

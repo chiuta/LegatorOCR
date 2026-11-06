@@ -1,6 +1,7 @@
 // No console window on Windows release builds.
 #![cfg_attr(all(not(debug_assertions), windows), windows_subsystem = "windows")]
 
+mod alloptions;
 mod app;
 mod i18n;
 mod settings;

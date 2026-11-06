@@ -215,6 +215,7 @@ pub struct App {
     ocr_info: String,
     show_about: bool,
     modules: ModulesWindow,
+    allopts: crate::alloptions::AllOptions,
     draw_zones: bool,
     /// With `draw_zones`: the mouse draws dewarp guide lines (freehand along a bent text line).
     draw_guide: bool,
@@ -290,6 +291,7 @@ impl App {
             ocr_info: String::new(),
             show_about: false,
             modules: ModulesWindow::default(),
+            allopts: Default::default(),
             draw_zones: false,
             draw_guide: false,
             guide_path: Vec::new(),
@@ -1182,10 +1184,338 @@ impl App {
                     }
                 }
             });
-            if ui.button(self.tr("menu.about")).clicked() {
-                self.show_about = true;
+            if ui.button(self.tr("menu.all_options")).clicked() {
+                self.allopts.open();
             }
+            ui.menu_button(self.tr("menu.help"), |ui| {
+                if ui.button(self.tr("menu.guide_online")).clicked() {
+                    crate::alloptions::open_target(crate::alloptions::GUIDE_URL);
+                    ui.close();
+                }
+                if let Some(p) = crate::alloptions::local_guide() {
+                    if ui.button(self.tr("menu.guide_local")).clicked() {
+                        crate::alloptions::open_target(&p.to_string_lossy());
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                if ui.button(self.tr("menu.about")).clicked() {
+                    self.show_about = true;
+                    ui.close();
+                }
+            });
         });
+    }
+
+    /// "All options": every command-line option, grouped and searchable, with the equivalent
+    /// command and a Run button (see `alloptions.rs`).
+    fn all_options_window(&mut self, ctx: &egui::Context) {
+        use crate::alloptions as ao;
+        if !self.allopts.show {
+            return;
+        }
+        // output of a running command
+        let mut finished = false;
+        if let Some(run) = &mut self.allopts.run {
+            while let Ok(l) = run.rx.try_recv() {
+                if let Some(rest) = l.strip_prefix('\u{1}') {
+                    run.done = true;
+                    self.allopts.last = Some(rest.to_string());
+                } else {
+                    self.allopts.log.push(l);
+                    if self.allopts.log.len() > 2000 {
+                        self.allopts.log.drain(..500);
+                    }
+                }
+            }
+            finished = run.done;
+            if !finished {
+                ctx.request_repaint_after(std::time::Duration::from_millis(150));
+            }
+        }
+        if finished {
+            self.allopts.run = None;
+        }
+        let tr_search = self.tr("all.search");
+        let tr_only = self.tr("all.only_chosen");
+        let tr_chosen = self.tr("all.chosen");
+        let tr_reset = self.tr("all.reset");
+        let tr_pages = self.tr("all.use_pages");
+        let tr_extra = self.tr("all.extra");
+        let tr_cmd = self.tr("all.command");
+        let tr_copy = self.tr("all.copy");
+        let tr_run = self.tr("all.run");
+        let tr_stop = self.tr("all.stop");
+        let tr_choose = self.tr("all.hint_choose");
+        let tr_lines = self.tr("all.hint_lines");
+        let cat_names: Vec<&'static str> = ao::Cat::ALL.iter().map(|c| self.tr(c.key())).collect();
+        let n_pages = self.sheets.len();
+        let mut open = true;
+        let mut browse: Option<(String, ao::PathKind)> = None;
+        let mut do_run = false;
+        let mut do_stop = false;
+        let mut do_copy: Option<String> = None;
+        let defs = self.allopts.defs.clone();
+        let running = self.allopts.run.is_some();
+        let mut a = std::mem::take(&mut self.allopts);
+        egui::Window::new(self.tr("all.title"))
+            .open(&mut open)
+            .default_size([860.0, 780.0])
+            .min_size([640.0, 560.0])
+            .resizable(true)
+            .show(ctx, |ui| {
+                match &defs {
+                    None | Some(Err(_)) => {
+                        ui.label(self.tr("all.no_cli"));
+                        if let Some(Err(e)) = &defs {
+                            ui.label(RichText::new(e).weak());
+                        }
+                        return;
+                    }
+                    Some(Ok(_)) => {}
+                }
+                let Some(Ok(list)) = &defs else { return };
+                ui.label(RichText::new(self.tr("all.intro")).weak());
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut a.filter)
+                            .hint_text(tr_search)
+                            .desired_width(300.0),
+                    );
+                    ui.checkbox(&mut a.only_chosen, tr_only);
+                    ui.label(format!("{} {}", a.chosen(), tr_chosen));
+                    if ui.button(tr_reset).clicked() {
+                        a.reset();
+                    }
+                });
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .id_salt("allopts_list")
+                    .max_height((ui.available_height() - 300.0).max(180.0))
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for (ci, cat) in ao::Cat::ALL.iter().enumerate() {
+                            let items: Vec<&ao::OptDef> = list
+                                .iter()
+                                .filter(|d| d.cat == *cat && ao::AllOptions::matches(d, &a.filter))
+                                .filter(|d| {
+                                    !a.only_chosen
+                                        || a.vals
+                                            .get(&d.long)
+                                            .is_some_and(|v| v.on || !v.text.trim().is_empty())
+                                })
+                                .collect();
+                            if items.is_empty() {
+                                continue;
+                            }
+                            let mut h = egui::CollapsingHeader::new(
+                                RichText::new(format!("{} ({})", cat_names[ci], items.len()))
+                                    .strong(),
+                            )
+                            .id_salt(("allcat", ci));
+                            if !a.filter.trim().is_empty() || a.only_chosen {
+                                h = h.open(Some(true));
+                            }
+                            h.show(ui, |ui| {
+                                for d in items {
+                                    let v = a.vals.entry(d.long.clone()).or_default();
+                                    ui.horizontal_wrapped(|ui| match d.kind {
+                                        ao::Kind::Flag => {
+                                            ui.checkbox(
+                                                &mut v.on,
+                                                RichText::new(format!("--{}", d.long)).monospace(),
+                                            );
+                                        }
+                                        _ => {
+                                            ui.label(
+                                                RichText::new(format!("--{}", d.long)).monospace(),
+                                            );
+                                            if !d.values.is_empty() {
+                                                let shown = if v.text.is_empty() {
+                                                    "—".to_string()
+                                                } else {
+                                                    v.text.clone()
+                                                };
+                                                egui::ComboBox::from_id_salt(("allval", &d.long))
+                                                    .selected_text(shown)
+                                                    .show_ui(ui, |ui| {
+                                                        ui.selectable_value(
+                                                            &mut v.text,
+                                                            String::new(),
+                                                            "—",
+                                                        );
+                                                        for x in &d.values {
+                                                            ui.selectable_value(
+                                                                &mut v.text,
+                                                                x.clone(),
+                                                                x,
+                                                            );
+                                                        }
+                                                    });
+                                            } else if d.kind == ao::Kind::Repeat {
+                                                ui.add(
+                                                    egui::TextEdit::multiline(&mut v.text)
+                                                        .desired_rows(1)
+                                                        .desired_width(280.0)
+                                                        .hint_text(format!(
+                                                            "{} ({})",
+                                                            d.vname, tr_lines
+                                                        )),
+                                                );
+                                            } else {
+                                                let hint = if d.default.is_empty() {
+                                                    d.vname.clone()
+                                                } else {
+                                                    format!("{} = {}", d.vname, d.default)
+                                                };
+                                                ui.add(
+                                                    egui::TextEdit::singleline(&mut v.text)
+                                                        .desired_width(280.0)
+                                                        .hint_text(hint),
+                                                );
+                                            }
+                                            if let Some(pk) = d.path_kind() {
+                                                if ui.button(tr_choose).clicked() {
+                                                    browse = Some((d.long.clone(), pk));
+                                                }
+                                            }
+                                        }
+                                    })
+                                    .response
+                                    .on_hover_text(&d.help);
+                                    ui.label(RichText::new(d.short_help()).small().weak());
+                                    ui.add_space(2.0);
+                                }
+                            });
+                        }
+                    });
+                ui.separator();
+                ui.checkbox(&mut a.use_pages, format!("{tr_pages} ({n_pages})"));
+                ui.horizontal(|ui| {
+                    ui.label(tr_extra);
+                    ui.add(
+                        egui::TextEdit::singleline(&mut a.extra)
+                            .desired_width(f32::INFINITY)
+                            .hint_text("in1.pdf \"my file.png\""),
+                    );
+                });
+                ui.label(RichText::new(tr_cmd).strong());
+                let proj = (a.use_pages && n_pages > 0).then_some("project.lgr");
+                let mut cmd = a.command_line(proj);
+                ui.add(
+                    egui::TextEdit::multiline(&mut cmd)
+                        .font(egui::TextStyle::Monospace)
+                        .desired_rows(2)
+                        .desired_width(f32::INFINITY),
+                );
+                ui.horizontal(|ui| {
+                    if ui.button(tr_copy).clicked() {
+                        do_copy = Some(cmd.clone());
+                    }
+                    if ui
+                        .add_enabled(!running, egui::Button::new(tr_run))
+                        .clicked()
+                    {
+                        do_run = true;
+                    }
+                    if ui
+                        .add_enabled(running, egui::Button::new(tr_stop))
+                        .clicked()
+                    {
+                        do_stop = true;
+                    }
+                    if running {
+                        ui.spinner();
+                        ui.label(self.tr("all.running"));
+                    } else if let Some(l) = &a.last {
+                        if l == "ok" {
+                            ui.label(self.tr("all.done_ok"));
+                        } else {
+                            ui.label(
+                                RichText::new(format!("{}: {l}", self.tr("all.done_fail")))
+                                    .color(Color32::from_rgb(200, 60, 60)),
+                            );
+                        }
+                    }
+                });
+                if !a.log.is_empty() {
+                    egui::ScrollArea::vertical()
+                        .id_salt("allopts_log")
+                        .max_height(150.0)
+                        .stick_to_bottom(true)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            for l in &a.log {
+                                ui.label(RichText::new(l).monospace().small());
+                            }
+                        });
+                }
+            });
+        self.allopts = a;
+        if let Some(t) = do_copy {
+            ctx.copy_text(t);
+        }
+        if let Some((long, pk)) = browse {
+            let picked = self.pick(|| match pk {
+                ao::PathKind::Dir => rfd::FileDialog::new().pick_folder(),
+                ao::PathKind::Open => rfd::FileDialog::new().pick_file(),
+                ao::PathKind::Save => rfd::FileDialog::new().save_file(),
+            });
+            if let Some(p) = picked {
+                let v = self.allopts.vals.entry(long).or_default();
+                let s = p.to_string_lossy().to_string();
+                if v.text.trim().is_empty() || !v.text.contains('\n') {
+                    v.text = s;
+                } else {
+                    v.text.push('\n');
+                    v.text.push_str(&s);
+                }
+            }
+        }
+        if do_stop {
+            if let Some(r) = &self.allopts.run {
+                r.stop();
+            }
+        }
+        if do_run {
+            let mut args: Vec<String> = Vec::new();
+            if self.allopts.use_pages && !self.sheets.is_empty() {
+                let path =
+                    std::env::temp_dir().join(format!("legatorocr-gui-{}.lgr", std::process::id()));
+                let sheets = self.project_sheets();
+                match self.s.to_project(sheets).save(&path) {
+                    Ok(()) => {
+                        args.push("--project".into());
+                        args.push(path.to_string_lossy().to_string());
+                    }
+                    Err(e) => {
+                        let m = format!("{}: {e:#}", self.tr("status.error"));
+                        self.say(m, true);
+                        return;
+                    }
+                }
+            }
+            args.extend(self.allopts.args());
+            self.allopts.log.clear();
+            self.allopts.last = None;
+            let home = std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(PathBuf::from);
+            self.allopts.log.push(format!(
+                "$ legatorocr {}",
+                args.iter()
+                    .map(|s| ao::quote(s))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ));
+            match ao::spawn(&args, home) {
+                Ok(r) => self.allopts.run = Some(r),
+                Err(e) => self.allopts.log.push(e),
+            }
+        }
+        if !open {
+            self.allopts.show = false;
+        }
     }
 
     /// "Optional modules" window: what is missing, the commands that install it, and a button
@@ -3671,6 +4001,7 @@ impl eframe::App for App {
                 });
         }
         self.modules_window(&ctx);
+        self.all_options_window(&ctx);
         if self.show_about {
             let mut open = true;
             egui::Window::new(self.tr("menu.about"))

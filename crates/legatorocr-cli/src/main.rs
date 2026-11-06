@@ -1,6 +1,6 @@
 mod fff;
 use anyhow::{bail, Context, Result};
-use clap::{Parser, ValueEnum};
+use clap::{CommandFactory, Parser, ValueEnum};
 use legatorocr_core::{HAlign, OutputMode, Settings, SplitMode, Threshold, VAlign};
 use legatorocr_engine::project::{Project, SheetAdj};
 use legatorocr_engine::{
@@ -1450,7 +1450,70 @@ fn watch_loop(cli: &Cli, dir: &std::path::Path) -> Result<()> {
     }
 }
 
+/// `legatorocr --dump-options`: one line per option for the window's "All options" panel, so the
+/// panel always matches the build it ships with. Tab-separated: long name, short name, kind
+/// (`flag`, `value`, `repeat` = the flag is given again for each value, `multi` = several values
+/// after one flag), value name, allowed values (comma-separated), default, help (one line).
+fn dump_options() {
+    let cmd = Cli::command();
+    for a in cmd.get_arguments() {
+        let Some(long) = a.get_long() else { continue };
+        if a.is_hide_set() || matches!(long, "help" | "version") {
+            continue;
+        }
+        let takes = a.get_action().takes_values();
+        let kind = if !takes {
+            "flag"
+        } else if matches!(a.get_action(), clap::ArgAction::Append) {
+            "repeat"
+        } else if a.get_num_args().is_some_and(|n| n.max_values() > 1) {
+            "multi"
+        } else {
+            "value"
+        };
+        let vname = a
+            .get_value_names()
+            .map(|v| {
+                v.iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .unwrap_or_default();
+        let vals = a
+            .get_possible_values()
+            .iter()
+            .filter(|v| !v.is_hide_set())
+            .map(|v| v.get_name().to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let def = a
+            .get_default_values()
+            .iter()
+            .map(|v| v.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let clean = |t: &str| t.replace(['\t', '\n', '\r'], " ");
+        let help = a
+            .get_long_help()
+            .or(a.get_help())
+            .map(|h| h.to_string())
+            .unwrap_or_default();
+        println!(
+            "{long}\t{}\t{kind}\t{}\t{vals}\t{}\t{}",
+            a.get_short().map(String::from).unwrap_or_default(),
+            clean(&vname),
+            clean(&def),
+            clean(&help)
+        );
+    }
+}
+
 fn real_main() -> Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("--dump-options") {
+        dump_options();
+        return Ok(());
+    }
     let mut cli = Cli::parse();
     legatorocr_engine::offline::set(cli.offline);
     legatorocr_engine::set_accurate(cli.accurate);

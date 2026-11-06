@@ -133,6 +133,8 @@ jobs:
         run: |
           set -euo pipefail
           tag="${{ inputs.tag || github.ref_name }}"
+          # a stale guide stops the release: it must name this version
+          python3 scripts/check-guide.py "${tag#v}"
           # the user guide of this edition travels with the release (and is covered by the checksums)
           if [ -f docs/Ghid-LegatorOCR.pdf ]; then cp docs/Ghid-LegatorOCR.pdf "dist/LegatorOCR-${tag#v}-ghid.pdf"; fi
           SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) python3 scripts/sbom.py > "dist/LegatorOCR-${tag#v}-sbom.cdx.json"

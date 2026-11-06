@@ -6,3 +6,4 @@ __pycache__/
 .claude/
 target-wave2/
 .claude/worktrees/
+docs/guide-src/.build.html
