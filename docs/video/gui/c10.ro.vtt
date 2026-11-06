@@ -1,0 +1,22 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:04.361
+„All options” deschide o fereastră cu fiecare opțiune din linia de comandă, ca elemente simple, grupate pe teme.
+
+00:00:04.461 --> 00:00:12.284
+Fă clic pe o temă ca s-o desfaci: aici, opțiunile pentru ordinea paginilor.
+
+00:00:12.384 --> 00:00:17.494
+Căsuța de căutare găsește o opțiune după nume sau după un cuvânt din descriere.
+
+00:00:17.594 --> 00:00:21.461
+Bifează o opțiune și linia de comandă echivalentă apare jos.
+
+00:00:21.561 --> 00:00:28.844
+„Only chosen” arată doar ce ai bifat; „Copy command” pune linia de comandă în clipboard.
+
+00:00:28.944 --> 00:00:36.318
+„Run” pornește comanda; rezultatul apare aici. „--dry-run” doar arată ce s-ar face.
+
+00:00:36.418 --> 00:00:44.202
+„Clear choices” debifează tot; X-ul închide fereastra.

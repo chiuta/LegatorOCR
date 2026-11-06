@@ -1,0 +1,22 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:04.361
+All options opens a window with every command-line option, in plain controls, grouped by topic.
+
+00:00:04.461 --> 00:00:12.284
+Click a topic to unfold it: here the options for page order.
+
+00:00:12.384 --> 00:00:17.494
+The search box finds an option by name or by a word of its description.
+
+00:00:17.594 --> 00:00:21.461
+Tick an option, and the equivalent command line appears at the bottom.
+
+00:00:21.561 --> 00:00:28.844
+Only chosen shows just what you ticked; Copy command puts the command line on the clipboard.
+
+00:00:28.944 --> 00:00:36.318
+Run starts the command; its output appears here. --dry-run only lists what would be done.
+
+00:00:36.418 --> 00:00:44.202
+Clear choices unticks everything; the cross closes the window.

@@ -1,0 +1,28 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:03.900
+Start: the window opens on a welcome card with the three steps.
+
+00:00:04.000 --> 00:00:08.861
+Press “Add scans…” (or the Add button) to pick images, a PDF or an archive.
+
+00:00:08.961 --> 00:00:20.779
+The system file dialog opens; here we type the path and confirm.
+
+00:00:20.879 --> 00:00:25.779
+The page is processed at once: a crooked double sheet is split, straightened and cropped.
+
+00:00:25.879 --> 00:00:41.824
+More files: File ▸ Add images… accepts several at a time.
+
+00:00:41.924 --> 00:01:00.346
+File ▸ Add folder… takes every image of a folder.
+
+00:01:00.446 --> 00:01:09.739
+The page list: select a page to preview it; Up and Down change the order.
+
+00:01:09.839 --> 00:01:16.678
+Remove deletes the selected page from the job; Clear empties the list.
+
+00:01:16.778 --> 00:01:20.604
+The list is empty again and the welcome card is back.

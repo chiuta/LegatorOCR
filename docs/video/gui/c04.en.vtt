@@ -1,0 +1,28 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:06.821
+Draw zones: mark areas on the original image by dragging. Tick “Draw zones”, then pick a kind.
+
+00:00:06.921 --> 00:00:13.833
+Erase: everything inside the rectangle is painted with the paper colour (a stain, a stamp).
+
+00:00:13.933 --> 00:00:20.952
+Picture: a rectangle that stays in colour and detail while the rest may become black and white.
+
+00:00:21.052 --> 00:00:27.968
+No picture: a rectangle where automatically found pictures are taken out again.
+
+00:00:28.068 --> 00:00:39.835
+Right-click a rectangle to remove it; Undo and Redo step through the zones; Clear zones removes them all.
+
+00:00:39.935 --> 00:00:46.850
+Guide line: drag along a bent text line; “Straighten curved lines” then flattens the page along it.
+
+00:00:46.950 --> 00:00:53.889
+Work area: everything outside the rectangle is painted with paper colour (shadows, a neighbour page).
+
+00:00:53.989 --> 00:01:02.792
+Cut line: click or drag on the original: the double sheet is cut there instead of in the automatic place.
+
+00:01:02.892 --> 00:01:18.649
+Content box: tick it to edit the crop. Drag the green edges on the processed page.

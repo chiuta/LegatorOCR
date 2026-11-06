@@ -1,0 +1,28 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:07.869
+Opțiunile de curățare. Ca să facem loc, celelalte secțiuni sunt strânse: un clic pe titlul unei secțiuni o strânge sau o desface.
+
+00:00:07.969 --> 00:00:15.799
+„Invert negative scans”: textul alb pe negru (microfilm) devine normal.
+
+00:00:15.899 --> 00:00:23.238
+„Auto contrast (levels)” întinde scanările șterse pe tot domeniul de tonuri.
+
+00:00:23.338 --> 00:00:35.092
+„Remove show-through” șterge textul văzut prin hârtia subțire; „Smooth halftone (descreen)” elimină punctele de trama imaginilor tipărite.
+
+00:00:35.192 --> 00:00:46.488
+Pagina 2 are perforații: o selectăm și bifăm „Remove punch holes”.
+
+00:00:46.588 --> 00:01:02.875
+Fotografii de telefon: alege fotografia; „Fix perspective” îndreaptă pagina, iar „Wipe the background” șterge masa din jurul ei.
+
+00:01:02.975 --> 00:01:09.337
+„Remove fingers at the edge” șterge degetul care ține pagina, fără să atingă textul tipărit.
+
+00:01:09.437 --> 00:01:18.100
+„Drop colour” scoate o culoare de cerneală înainte de conversia în alb-negru; „Sharpen” face textul mai clar.
+
+00:01:18.200 --> 00:01:28.911
+„Erase zones” primește dreptunghiuri în milimetri (x,y,l,h) ca text, aceleași pe care le poți desena cu mausul.

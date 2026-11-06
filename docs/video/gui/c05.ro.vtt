@@ -1,0 +1,37 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:02.900
+Panoul Settings din dreapta se aplică tuturor paginilor. Mai întâi, Input.
+
+00:00:03.000 --> 00:00:16.165
+Resolution (dpi): rezoluția scanărilor; de ea depinde cum se citesc mărimile în milimetri.
+
+00:00:16.265 --> 00:00:26.533
+„Detect sideways pages” rotește o pagină scanată pe o parte; „Orientation via OCR” folosește recunoașterea textului ca să deosebească sus de jos.
+
+00:00:26.633 --> 00:00:31.091
+Page split: „Automatic” găsește cotorul, „At the middle” taie în jumătate, „Off” păstrează foaia întreagă.
+
+00:00:31.191 --> 00:00:42.230
+Geometry: „Auto-deskew” îndreaptă pagina; „Max skew” limitează unghiul pe care îl poate corecta.
+
+00:00:42.330 --> 00:00:47.468
+Margins: hârtia lăsată în jurul conținutului, în milimetri.
+
+00:00:47.568 --> 00:00:52.025
+Page size: liber, o mărime standard sau una proprie (conținutul e centrat pe ea).
+
+00:00:52.125 --> 00:00:57.487
+Output: modul de culoare al rezultatului. Gray…
+
+00:00:57.587 --> 00:01:02.950
+…Black & white (cu opțiuni de prag)…
+
+00:01:03.050 --> 00:01:16.335
+…„Mixed” păstrează imaginile color și textul alb-negru; „Hybrid” păstrează un strat de fundal color.
+
+00:01:16.435 --> 00:01:31.196
+„Even out lighting” netezește lumina și umbrele inegale; „Straighten curved lines” aplatizează o pagină curbată.
+
+00:01:31.296 --> 00:01:40.500
+„Undo” și „Redo” din capul panoului parcurg modificările de setări.

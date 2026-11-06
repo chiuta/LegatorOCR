@@ -1,0 +1,28 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:07.869
+Clean-up options. To make room, the other sections are folded: click a section title to fold or unfold it.
+
+00:00:07.969 --> 00:00:15.799
+Invert negative scans: white text on black (microfilm) becomes normal.
+
+00:00:15.899 --> 00:00:23.238
+Auto contrast (levels) stretches dull scans to the full range.
+
+00:00:23.338 --> 00:00:35.092
+Remove show-through erases print seen from the other side of thin paper; Smooth halftone (descreen) removes the screen dots of printed pictures.
+
+00:00:35.192 --> 00:00:46.488
+The two page 2 options: first the punch holes. Select the page with holes and tick Remove punch holes.
+
+00:00:46.588 --> 00:01:02.875
+Phone photos: pick the photo, then Fix perspective straightens the page, and Wipe the background removes the table around it.
+
+00:01:02.975 --> 00:01:09.337
+Remove fingers at the edge paints out a thumb holding the page, without touching the print.
+
+00:01:09.437 --> 00:01:18.100
+Drop colour removes one ink colour before black-and-white conversion; Sharpen makes the text crisper.
+
+00:01:18.200 --> 00:01:28.911
+Erase zones takes rectangles in millimetres (x,y,w,h) as text, the same ones you can draw with the mouse.

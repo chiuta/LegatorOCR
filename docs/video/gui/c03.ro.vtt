@@ -1,0 +1,31 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:05.366
+Bara de deasupra previzualizării ajustează doar pagina aleasă. Mai întâi, scanarea pusă pe o parte.
+
+00:00:05.466 --> 00:00:11.327
+A ieșit cu capul în jos: un singur „Rotate left 90°” o pune corect.
+
+00:00:11.427 --> 00:00:22.251
+„Rotate right 90°” rotește în sens invers.
+
+00:00:22.351 --> 00:00:34.639
+Acum foaia dublă strâmbă: „-45°” și „+45°” stabilesc o înclinare diagonală de 45° (pentru pagini fotografiate în unghi)…
+
+00:00:34.739 --> 00:00:38.606
+…iar „Manual skew” îți lasă să alegi singur unghiul exact, în locul celui automat.
+
+00:00:38.706 --> 00:00:42.066
+„Split this sheet”: hotărăști doar pentru această foaie cum e tăiată.
+
+00:00:42.166 --> 00:00:45.165
+Automat, la mijloc sau deloc.
+
+00:00:45.265 --> 00:00:49.715
+„Output of this page”: dă unei singure pagini alt mod de culoare decât restului.
+
+00:00:49.815 --> 00:01:02.905
+Chenarul de conținut (mm): mută fiecare latură a decupării spre exterior (+) sau spre interior (−).
+
+00:01:03.005 --> 00:01:14.806
+„Undo” și „Redo” parcurg modificările de pe această pagină; „Reset” readuce pagina la rezultatul automat.

@@ -1,0 +1,25 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:06.325
+Când paginile arată bine, exportă. File ▸ Export PDF… (sau butonul de la baza setărilor).
+
+00:00:06.425 --> 00:00:23.625
+Scrie un nume și confirmă; paginile sunt procesate și PDF-ul e scris.
+
+00:00:23.725 --> 00:00:26.625
+Bara de stare raportează rezultatul: paginile scrise.
+
+00:00:26.725 --> 00:00:33.055
+File ▸ Export images… salvează paginile procesate ca fișiere-imagine.
+
+00:00:33.155 --> 00:00:50.947
+Alege folderul în care se scriu.
+
+00:00:51.047 --> 00:01:02.667
+File ▸ Save project… păstrează paginile și toate setările într-un singur fișier, ca să continui mai târziu.
+
+00:01:02.767 --> 00:01:19.980
+File ▸ Save project to folder… copiază în folder și imaginile paginilor.
+
+00:01:20.080 --> 00:01:40.847
+File ▸ Open project… încarcă un proiect salvat: pagini, setări și ajustările de pe fiecare pagină.
