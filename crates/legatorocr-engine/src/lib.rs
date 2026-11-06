@@ -392,7 +392,7 @@ pub fn save_page_image_q(pg: &Page, path: &Path, jpeg_quality: u8) -> Result<()>
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
-    match encode_page_image(pg, &ext, jpeg_quality)? {
+    match profile::time("encode-image", || encode_page_image(pg, &ext, jpeg_quality))? {
         Some(bytes) => write_atomic(path, &bytes),
         None => {
             profile::time("save-image", || pg.image.to_dynamic().save(path))?;

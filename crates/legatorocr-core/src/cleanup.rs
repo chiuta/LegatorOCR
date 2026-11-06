@@ -129,22 +129,30 @@ fn blur(img: &RgbImage, r: usize) -> RgbImage {
             let mut tmp = vec![0f32; cur.len()];
             let mut col = vec![0f32; w * 3];
             for _ in 0..2 {
-                // horizontal: sliding window along each row
+                // horizontal: sliding window along each row, the three channels together
+                // (same additions in the same order per channel as one channel at a time)
                 for y in 0..hb {
-                    for c in 0..3 {
-                        let at = |x: usize| (y * w + x) * 3 + c;
-                        let (mut sum, mut lo, mut hi) = (0f32, 0usize, 0usize);
-                        for x in 0..w {
-                            let (nlo, nhi) = (x.saturating_sub(r), (x + r + 1).min(w));
-                            while hi < nhi {
-                                sum += cur[at(hi)];
-                                hi += 1;
+                    let row = &cur[y * w * 3..(y + 1) * w * 3];
+                    let out = &mut tmp[y * w * 3..(y + 1) * w * 3];
+                    let mut sum = [0f32; 3];
+                    let (mut lo, mut hi) = (0usize, 0usize);
+                    for x in 0..w {
+                        let (nlo, nhi) = (x.saturating_sub(r), (x + r + 1).min(w));
+                        while hi < nhi {
+                            for c in 0..3 {
+                                sum[c] += row[hi * 3 + c];
                             }
-                            while lo < nlo {
-                                sum -= cur[at(lo)];
-                                lo += 1;
+                            hi += 1;
+                        }
+                        while lo < nlo {
+                            for c in 0..3 {
+                                sum[c] -= row[lo * 3 + c];
                             }
-                            tmp[at(x)] = sum / (hi - lo) as f32;
+                            lo += 1;
+                        }
+                        let n = (hi - lo) as f32;
+                        for c in 0..3 {
+                            out[x * 3 + c] = sum[c] / n;
                         }
                     }
                 }
