@@ -1,6 +1,10 @@
 # LegatorOCR
 
-Prezentare / presentation site: <https://legatorocr.chiuta.ro> (sursa în `docs/`).
+**English** · [Română](README.ro.md) · [Français](README.fr.md) · [Italiano](README.it.md) · [Español](README.es.md) · [Português](README.pt.md) · [Deutsch](README.de.md) · [Magyar](README.hu.md)
+
+Version: 0.2.0-pre.30 · Last updated: 2026-11-06
+
+Presentation site: <https://legatorocr.chiuta.ro> (source in `docs/`).
 
 Clean-room Rust post-processor for scanned books:
 **split → deskew → crop → margins → clean / binarize → PDF with a searchable OCR text layer.**
