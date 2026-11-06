@@ -34,6 +34,8 @@ const FILES: [(&str, &[u8]); 0] = [];
 
 pub struct Lexicon {
     words: HashSet<String>,
+    /// Romanian: also accept the 1953-1993 spelling (`cuvînt`, `romîn`, `sînt`)
+    old_orthography: bool,
 }
 
 impl Lexicon {
@@ -58,6 +60,7 @@ impl Lexicon {
                 let _ = flate2::read::GzDecoder::new(FILES[i].1).read_to_string(&mut s);
             }
             Lexicon {
+                old_orthography: FILES[i].0 == "ro",
                 words: s
                     .lines()
                     .map(|l| l.trim().to_string())
@@ -76,7 +79,11 @@ impl Lexicon {
     }
 
     pub fn contains(&self, w: &str) -> bool {
-        self.words.contains(&w.to_lowercase())
+        let lw = w.to_lowercase();
+        if self.words.contains(&lw) {
+            return true;
+        }
+        self.old_orthography && modern_spelling(&lw).is_some_and(|m| self.words.contains(&m))
     }
 
     /// Range of a token without surrounding punctuation (`„word,` → `word`).
@@ -85,6 +92,29 @@ impl Lexicon {
         let (b, c) = w.char_indices().rev().find(|(_, c)| c.is_alphabetic())?;
         Some((a, b + c.len_utf8()))
     }
+}
+
+/// The modern form of a word written in the 1953-1993 Romanian spelling: `î` inside a word was
+/// today's `â` (`cuvînt` -> `cuvânt`, `romîn` -> `român`) and `sînt` was `sunt`. `None` when the
+/// word has neither.
+pub fn modern_spelling(w: &str) -> Option<String> {
+    let (head, rest) = match w.strip_prefix("sînt") {
+        Some(r) => ("sunt", r),
+        None => ("", w),
+    };
+    let chars: Vec<char> = rest.chars().collect();
+    let mut out = chars.clone();
+    let mut changed = !head.is_empty();
+    // the first letter of the word itself stays (`încă`); with the `sunt` head there is none left
+    let from = if head.is_empty() { 1 } else { 0 };
+    for i in from..chars.len().saturating_sub(usize::from(head.is_empty())) {
+        if chars[i] == 'î' {
+            out[i] = 'â';
+            changed = true;
+        }
+    }
+    let s: String = out.into_iter().collect();
+    changed.then(|| format!("{head}{s}"))
 }
 
 /// `true` if the token's letters form a word of any of the lists.
@@ -187,4 +217,30 @@ fn code_of(p: &str) -> Option<&'static str> {
 /// `true` when every name in the list is one of the eight languages the native engine reads.
 pub fn all_supported(lang: &str) -> bool {
     !lang.is_empty() && lang.split('+').all(|p| code_of(p).is_some())
+}
+
+#[cfg(test)]
+mod old_spelling_tests {
+    use super::*;
+
+    #[test]
+    fn the_1953_spelling_maps_to_the_modern_one() {
+        assert_eq!(modern_spelling("cuvînt").as_deref(), Some("cuvânt"));
+        assert_eq!(modern_spelling("romîn").as_deref(), Some("român"));
+        assert_eq!(modern_spelling("sîntem").as_deref(), Some("suntem"));
+        // initial and final î stay; a word without an inner î is not touched
+        assert_eq!(modern_spelling("încă"), None);
+        assert_eq!(modern_spelling("a coborî"), None);
+        assert_eq!(modern_spelling("mare"), None);
+    }
+
+    #[cfg(feature = "lexicon")]
+    #[test]
+    fn the_romanian_list_accepts_both_spellings() {
+        let ro = Lexicon::load("ro").unwrap();
+        assert!(ro.contains("cuvânt"));
+        assert!(ro.contains("cuvînt"));
+        assert!(ro.contains("sîntem"));
+        assert!(!ro.contains("cuvxnt"));
+    }
 }
