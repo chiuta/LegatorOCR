@@ -25,7 +25,8 @@ fn key(line: &str) -> String {
         .filter(|c| !c.is_whitespace())
         .collect();
     // a page number with a dot or a dash around it is still just a number
-    k.trim_matches(|c: char| !c.is_alphanumeric() && c != '#').to_string()
+    k.trim_matches(|c: char| !c.is_alphanumeric() && c != '#')
+        .to_string()
 }
 
 /// Text of the pages without their running heads/feet, and the removed lines (page, text).
@@ -58,8 +59,11 @@ pub fn strip(text: &str) -> (String, Vec<(usize, String)>) {
         }
     }
     let need = n.div_ceil(2).max(4);
-    let furniture: std::collections::HashSet<&String> =
-        count.iter().filter(|&(_, &c)| c >= need).map(|(k, _)| k).collect();
+    let furniture: std::collections::HashSet<&String> = count
+        .iter()
+        .filter(|&(_, &c)| c >= need)
+        .map(|(k, _)| k)
+        .collect();
     if furniture.is_empty() {
         return (text.to_string(), Vec::new());
     }
@@ -91,7 +95,12 @@ mod tests {
 
     fn book(pages: usize) -> String {
         (1..=pages)
-            .map(|i| format!("TEHNOLOGIA MOBILEI\nText al paginii {i}, cu cuvinte.\nAlt rând de text.\n{}", 20 + i))
+            .map(|i| {
+                format!(
+                    "TEHNOLOGIA MOBILEI\nText al paginii {i}, cu cuvinte.\nAlt rând de text.\n{}",
+                    20 + i
+                )
+            })
             .collect::<Vec<_>>()
             .join("\x0c")
     }
@@ -116,7 +125,9 @@ mod tests {
 
     #[test]
     fn a_line_that_is_only_sometimes_repeated_stays() {
-        let mut pages: Vec<String> = (1..=8).map(|i| format!("Capitol {i}\nText {i}\nfinal {i}x")).collect();
+        let mut pages: Vec<String> = (1..=8)
+            .map(|i| format!("Capitol {i}\nText {i}\nfinal {i}x"))
+            .collect();
         pages[2] = "Capitol 3\nText\nCapitol".into();
         let (_, gone) = strip(&pages.join("\x0c"));
         assert!(gone.iter().all(|(_, t)| !t.starts_with("Text")));

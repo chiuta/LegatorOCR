@@ -189,7 +189,8 @@ fn forward_tta(model: &Model, data: &[f32], w: usize) -> (usize, Vec<f32>) {
             let mut v = vec![0.0f32; data.len()];
             for y in 0..LINE_H as i32 {
                 let sy = (y + dy).clamp(0, LINE_H as i32 - 1) as usize;
-                v[y as usize * w..(y as usize + 1) * w].copy_from_slice(&data[sy * w..(sy + 1) * w]);
+                v[y as usize * w..(y as usize + 1) * w]
+                    .copy_from_slice(&data[sy * w..(sy + 1) * w]);
             }
             variants.push(v);
         }

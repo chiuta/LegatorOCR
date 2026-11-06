@@ -217,7 +217,11 @@ fn keeps_hyphen(before: &str, after: &[char]) -> bool {
         return false;
     };
     let left: String = {
-        let mut v: Vec<char> = before.chars().rev().take_while(|c| c.is_alphabetic()).collect();
+        let mut v: Vec<char> = before
+            .chars()
+            .rev()
+            .take_while(|c| c.is_alphabetic())
+            .collect();
         v.reverse();
         v.into_iter().collect()
     };
@@ -421,7 +425,10 @@ mod tests {
         // both halves are words and the join is not: a compound
         assert_eq!(pp("social-\ndemocrat"), "social-democrat");
         // the join is a word: an ordinary hyphenation
-        assert_eq!(pp("atingerea tan-\ngențială a solului"), "atingerea tangențială a solului");
+        assert_eq!(
+            pp("atingerea tan-\ngențială a solului"),
+            "atingerea tangențială a solului"
+        );
     }
 
     #[test]

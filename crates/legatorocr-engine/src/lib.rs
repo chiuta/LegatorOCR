@@ -48,6 +48,7 @@ pub mod ocfl;
 pub mod ocrcache;
 pub mod offline;
 pub mod runninghead;
+pub mod textrules;
 
 /// Accurate mode of the built-in OCR (`--accurate`): three passes per line, averaged.
 pub fn set_accurate(on: bool) {
@@ -1082,6 +1083,10 @@ pub fn run_export(
                 .paragraph_text
                 .take()
                 .map(|t| ropost::postprocess_pages(&t, &o));
+        }
+        if textrules::enabled() {
+            res.text = res.text.take().map(|t| textrules::apply(&t).0);
+            res.paragraph_text = res.paragraph_text.take().map(|t| textrules::apply(&t).0);
         }
         res.hocr = Some(legatorocr_ocr::hocr_document(&hocr_pages));
         res.alto = Some(legatorocr_ocr::alto_document(&alto_pages, "LegatorOCR"));

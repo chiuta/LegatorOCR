@@ -140,6 +140,33 @@ struct Cli {
     #[arg(long)]
     drop_running_heads: bool,
 
+    /// With --ocr: your own corrections for the .txt and .docx text, one `wrong => right` per
+    /// line (`#` starts a comment). Whole words only, applied in file order after --clean-text.
+    /// The PDF text layer, hOCR and JSON keep the raw words.
+    #[arg(long, value_name = "FILE")]
+    find_replace: Option<PathBuf>,
+
+    /// Keep only these input pages, counted after folders and PDFs are expanded: `1-10,15,20-`
+    /// (from 1; an open end runs to the last page).
+    #[arg(long, value_name = "RANGE")]
+    pages: Option<String>,
+
+    /// For a stack scanned on a feeder that does one side at a time: the inputs are all the
+    /// fronts, then all the backs in reverse order (as they come out of the feeder). Puts them
+    /// in reading order: front 1, back 1, front 2, back 2, ...
+    #[arg(long)]
+    duplex_adf: bool,
+
+    /// Reverse the order of all input pages (a stack scanned from the last page).
+    #[arg(long)]
+    reverse: bool,
+
+    /// Show what would be done (the pages in the order they would be processed, and the files
+    /// that would be written) and stop; nothing is processed or written. For checking a big
+    /// batch, a page range or a duplex order before the long run.
+    #[arg(long)]
+    dry_run: bool,
+
     /// Leave out PDF inputs that already have a text layer (only scans without text are
     /// processed), so a half-finished batch can be run again without redoing finished files.
     #[arg(long)]
@@ -1157,6 +1184,60 @@ fn output_stems(paths: &[PathBuf]) -> Vec<String> {
             }
         })
         .collect()
+}
+
+/// Page selection and order helpers.
+mod page_order {
+    use std::collections::HashSet;
+
+    /// Fronts 0..h, backs h..n in reverse -> f0 b0 f1 b1 ...
+    pub fn duplex_adf(n: usize) -> Vec<usize> {
+        let h = n / 2;
+        (0..h).flat_map(|i| [i, n - 1 - i]).collect()
+    }
+
+    /// `1-10,15,20-` (1-based) -> 0-based indices below `n`.
+    pub fn parse_range(s: &str, n: usize) -> Result<HashSet<usize>, String> {
+        let mut out = HashSet::new();
+        for part in s.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+            let (a, b) = match part.split_once('-') {
+                Some((a, b)) => (a.trim(), Some(b.trim())),
+                None => (part, None),
+            };
+            let num = |t: &str| {
+                t.parse::<usize>()
+                    .map_err(|_| format!("`{part}` is not a page range"))
+            };
+            let lo = if a.is_empty() { 1 } else { num(a)? };
+            let hi = match b {
+                None => lo,
+                Some("") => n,
+                Some(b) => num(b)?,
+            };
+            if lo == 0 || hi < lo {
+                return Err(format!("`{part}` is not a page range (pages count from 1)"));
+            }
+            for p in lo..=hi.min(n) {
+                out.insert(p - 1);
+            }
+        }
+        Ok(out)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        #[test]
+        fn orders_and_ranges() {
+            assert_eq!(duplex_adf(6), vec![0, 5, 1, 4, 2, 3]);
+            let r = parse_range("1-2,5,7-", 8).unwrap();
+            let mut v: Vec<_> = r.into_iter().collect();
+            v.sort();
+            assert_eq!(v, vec![0, 1, 4, 6, 7]);
+            assert!(parse_range("0", 5).is_err());
+            assert!(parse_range("x", 5).is_err());
+        }
+    }
 }
 
 /// Canonical, lower-cased paths of the real files behind the inputs. A page of a multi-page
@@ -2452,6 +2533,30 @@ fn real_main() -> Result<()> {
         }
     }
     adjusts.resize(inputs.len(), SheetAdj::default());
+    if cli.duplex_adf || cli.reverse || cli.pages.is_some() {
+        let n = inputs.len();
+        let mut order: Vec<usize> = (0..n).collect();
+        if cli.duplex_adf {
+            if n % 2 != 0 {
+                bail!("--duplex-adf needs an even number of pages (fronts, then backs); got {n}");
+            }
+            order = page_order::duplex_adf(n);
+        }
+        if cli.reverse {
+            order.reverse();
+        }
+        if let Some(r) = &cli.pages {
+            let keep =
+                page_order::parse_range(r, n).map_err(|e| anyhow::anyhow!("--pages: {e}"))?;
+            order = order.into_iter().filter(|i| keep.contains(i)).collect();
+            if order.is_empty() {
+                bail!("--pages {r}: no page left (there are {n})");
+            }
+        }
+        inputs = order.iter().map(|&i| inputs[i].clone()).collect();
+        adjusts = order.iter().map(|&i| adjusts[i].clone()).collect();
+        eprintln!("page selection/order: {} of {n} page(s) used", inputs.len());
+    }
     if cli.skip_text || cli.ocr_mode.as_deref() == Some("skip") {
         // inputs are PDF pages as `file.pdf#N`; decide once per file
         let mut seen: std::collections::HashMap<PathBuf, bool> = std::collections::HashMap::new();
@@ -2499,6 +2604,39 @@ fn real_main() -> Result<()> {
     }
     if inputs.is_empty() {
         bail!("the project lists no pages");
+    }
+    if let Some(f) = &cli.find_replace {
+        let src = std::fs::read_to_string(f)
+            .with_context(|| format!("--find-replace: cannot read {}", f.display()))?;
+        let rules = legatorocr_engine::textrules::parse(&src)
+            .map_err(|e| anyhow::anyhow!("--find-replace {}: {e}", f.display()))?;
+        legatorocr_engine::textrules::set_rules(rules);
+    }
+    if cli.dry_run {
+        println!(
+            "{} page(s) would be processed, in this order:",
+            inputs.len()
+        );
+        for (i, p) in inputs.iter().enumerate() {
+            println!("{:>5}  {}", i + 1, p.display());
+        }
+        let mut outs: Vec<String> = Vec::new();
+        for (name, v) in [
+            ("PDF", &cli.pdf),
+            ("text", &cli.txt),
+            ("hOCR", &cli.hocr),
+            ("Word", &cli.docx),
+        ] {
+            if let Some(p) = v {
+                outs.push(format!("{name}: {}", p.display()));
+            }
+        }
+        if !matches!(cli.format, Fmt::None) || outs.is_empty() {
+            outs.push(format!("page images in {}", cli.out_dir.display()));
+        }
+        println!("would write -> {}", outs.join("; "));
+        println!("(--dry-run: nothing was processed)");
+        return Ok(());
     }
     let mut archive_project: Option<Project> = None;
     if let Some(path) = cli.save_project.as_ref().or(cli.archive_package.as_ref()) {
@@ -3152,7 +3290,11 @@ fn real_main() -> Result<()> {
         eprintln!(
             "{} running head/foot/page-number lines left out of the text (e.g. {})",
             res.running_heads.len(),
-            shown.iter().map(|t| format!("\"{t}\"")).collect::<Vec<_>>().join(", ")
+            shown
+                .iter()
+                .map(|t| format!("\"{t}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
         );
     }
     if let Some(t) = &res.text {
