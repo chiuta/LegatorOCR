@@ -533,7 +533,7 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
     if s.perspective {
         // guide points are carried through the projective warp; zones are not followed
         let mut moved: Guides = guides.clone();
-        if let Some(flat) = crate::perspective::correct_tracking(&rgb, &mut moved) {
+        if let Some(flat) = crate::stage("sheet/perspective", || crate::perspective::correct_tracking(&rgb, &mut moved)) {
             rgb = flat;
             zones.clear();
             guides = moved;
@@ -782,7 +782,7 @@ fn prepare(
     }
     if s.fingers {
         let paper = transform::estimate_background(&img);
-        cleanup::remove_fingers(&mut img, s.dpi, paper);
+        crate::stage("clean-up/fingers", || cleanup::remove_fingers(&mut img, s.dpi, paper));
     }
     let bg = crate::stage("clean-up/background", || {
         transform::estimate_background(&img)
@@ -881,7 +881,7 @@ fn prepare(
     // is painted over (it would count as print for the content box, layout and OCR)
     if s.trim_background {
         let paper = transform::estimate_background(&img);
-        cleanup::trim_to_paper(&mut img, s.dpi, paper);
+        crate::stage("clean-up/trim", || cleanup::trim_to_paper(&mut img, s.dpi, paper));
     }
 
     // --- content ----------------------------------------------------------
@@ -1200,10 +1200,10 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
             } else {
                 bg
             };
-            window = transform::normalize_background(&window, s.dpi, target);
+            window = crate::stage("output/normalize", || transform::normalize_background(&window, s.dpi, target));
         }
         if s.sharpen > 0.0 {
-            window = cleanup::sharpen(&window, s.dpi, s.sharpen);
+            window = crate::stage("output/sharpen", || cleanup::sharpen(&window, s.dpi, s.sharpen));
         }
         if f != 1.0 {
             window = imageops::resize(&window, ww_out, wh_out, imageops::FilterType::Triangle);
