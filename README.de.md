@@ -21,7 +21,7 @@ Einzelseiten-Anpassungen (Drehung, Teilung, Schräglage, Korrektur des Inhaltsra
 Sprachen (folgen der Systemsprache; Umschaltung im Menü): Română, English, Français, Italiano,
 Español, Português, Deutsch, Magyar.
 
-**Videotour durch das Fenster** — 11 stumme Clips (insgesamt etwa 14 Minuten, Untertitel auf Englisch und Rumänisch), die jede Funktion der GUI durchgehen: [docs/video/gui/](docs/video/gui/), oder der Abschnitt *Window tour* der [Projektseite](https://legatorocr.chiuta.ro/). Aufgenommen unter Linux mit erzeugten Beispiel-Scans; Drag-and-drop ins Fenster wird nur beschrieben, nicht gezeigt.
+**Videotour durch das Fenster** — 11 Clips ohne Ton (insgesamt etwa 14 Minuten, Untertitel in acht Sprachen), die jede Funktion der grafischen Oberfläche durchgehen: [docs/video/gui/](docs/video/gui/) oder der Abschnitt *Fenster-Rundgang* auf der [Projektseite](https://legatorocr.chiuta.ro/). Aufgenommen unter Linux mit erzeugten Beispielscans und englischer Oberfläche; das Ziehen von Dateien ins Fenster wird nur beschrieben, nicht gezeigt.
 
 **CLI**
 

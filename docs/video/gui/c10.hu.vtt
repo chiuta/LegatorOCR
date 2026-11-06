@@ -1,0 +1,22 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:04.361
+Az All options egy ablakot nyit a parancssor minden opciójával, egyszerű vezérlőkkel, témák szerint csoportosítva.
+
+00:00:04.461 --> 00:00:12.284
+Kattints egy témára a kinyitáshoz: itt az oldalsorrend opciói.
+
+00:00:12.384 --> 00:00:17.494
+A keresőmező név vagy a leírás egy szava alapján talál meg egy opciót.
+
+00:00:17.594 --> 00:00:21.461
+Jelölj be egy opciót, és alul megjelenik az egyenértékű parancssor.
+
+00:00:21.561 --> 00:00:28.844
+Az Only chosen csak azt mutatja, amit bejelöltél; a Copy command a vágólapra teszi a parancssort.
+
+00:00:28.944 --> 00:00:36.318
+A Run elindítja a parancsot; a kimenete itt jelenik meg. A --dry-run csak felsorolja, mi történne.
+
+00:00:36.418 --> 00:00:44.202
+A Clear choices mindent kijelöletlenre állít; a kereszt bezárja az ablakot.

@@ -1,0 +1,25 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:06.325
+Ha az oldalak rendben vannak, exportálj. File ▸ Export PDF… (vagy a gomb a beállítások alján).
+
+00:00:06.425 --> 00:00:23.625
+Írj be egy nevet, és erősítsd meg; az oldalak feldolgozásra kerülnek, és a PDF kiíródik.
+
+00:00:23.725 --> 00:00:26.625
+Az állapotsor jelzi az eredményt: kiírt oldalak.
+
+00:00:26.725 --> 00:00:33.055
+A File ▸ Export images… ehelyett a feldolgozott oldalakat képfájlokként menti.
+
+00:00:33.155 --> 00:00:50.947
+Válaszd ki a mappát, ahová kiírja őket.
+
+00:00:51.047 --> 00:01:02.667
+A File ▸ Save project… az oldalakat és minden beállítást egyetlen fájlban őrzi meg, a későbbi folytatáshoz.
+
+00:01:02.767 --> 00:01:19.980
+A File ▸ Save project to folder… az oldalképeket is bemásolja a mappába.
+
+00:01:20.080 --> 00:01:40.847
+A File ▸ Open project… betölt egy mentett projektet: az oldalakat, a beállításokat és az oldalankénti módosításokat.

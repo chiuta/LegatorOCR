@@ -1,0 +1,31 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:05.366
+Az előnézet feletti sáv csak a kijelölt oldalt állítja. Először az oldalára fektetett szkennelés.
+
+00:00:05.466 --> 00:00:11.327
+Fejjel lefelé jött ki: egy Rotate left 90° helyretesz.
+
+00:00:11.427 --> 00:00:22.251
+A Rotate right 90° a másik irányba forgat.
+
+00:00:22.351 --> 00:00:34.639
+Most a ferde kétoldalas lap: a -45° és a +45° 45°-os átlós dőlést állít be (szögből fényképezett oldalakhoz)…
+
+00:00:34.739 --> 00:00:38.606
+…a Manual skew pedig lehetővé teszi, hogy az automatikus helyett te add meg a pontos szöget.
+
+00:00:38.706 --> 00:00:42.066
+Split this sheet: csak erre a lapra döntsd el, hogyan vágódjon.
+
+00:00:42.166 --> 00:00:45.165
+Automatic, at the middle (középen), vagy egyáltalán nem.
+
+00:00:45.265 --> 00:00:49.715
+Output of this page: egy oldalnak a többiétől eltérő színmódot adhatsz.
+
+00:00:49.815 --> 00:01:02.905
+Content box (mm): told el a vágás mindegyik oldalát kifelé (+) vagy befelé (−).
+
+00:01:03.005 --> 00:01:14.806
+Az Undo és a Redo végiglépked az oldalon végzett módosításaidon; a Reset visszaállítja az oldalt az automatikus eredményre.

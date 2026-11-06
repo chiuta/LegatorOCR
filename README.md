@@ -21,7 +21,7 @@ per-page adjustments (rotation, split, skew, content-box correction) in a plain-
 Languages (follow the system language; switch in the menu): Română, English, Français, Italiano,
 Español, Português, Deutsch, Magyar.
 
-**Video tour of the window** — 11 silent clips (about 14 minutes in all, English and Romanian subtitles) that go through every function of the GUI: [docs/video/gui/](docs/video/gui/), or the *Window tour* section of the [project page](https://legatorocr.chiuta.ro/). Filmed on Linux with generated sample scans; drag-and-drop into the window is only described, not shown.
+**Video tour of the window** — 11 silent clips (about 14 minutes in all, subtitles in eight languages) that go through every function of the GUI: [docs/video/gui/](docs/video/gui/), or the *Window tour* section of the [project page](https://legatorocr.chiuta.ro/). Filmed on Linux with generated sample scans and the English interface; drag-and-drop into the window is only described, not shown.
 
 **CLI**
 

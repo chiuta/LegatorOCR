@@ -21,7 +21,7 @@ os ajustes de cada página (rotação, divisão, inclinação, correção da cai
 Idiomas (seguem o idioma do sistema; mudam-se no menu): Română, English, Français, Italiano,
 Español, Português, Deutsch, Magyar.
 
-**Visita em vídeo à janela** — 11 clipes silenciosos (cerca de 14 minutos no total, com legendas em inglês e romeno) que percorrem todas as funções da GUI: [docs/video/gui/](docs/video/gui/), ou a secção *Window tour* da [página do projeto](https://legatorocr.chiuta.ro/). Filmado em Linux com digitalizações de exemplo geradas; o arrastar e largar para a janela é apenas descrito, não mostrado.
+**Visita em vídeo à janela** — 11 clipes sem som (cerca de 14 minutos no total, legendas em oito idiomas) que percorrem cada função da interface gráfica: [docs/video/gui/](docs/video/gui/), ou a secção *Visita à janela* da [página do projeto](https://legatorocr.chiuta.ro/). Gravados em Linux com digitalizações de exemplo geradas e a interface em inglês; arrastar ficheiros para a janela é apenas descrito, não mostrado.
 
 **CLI**
 

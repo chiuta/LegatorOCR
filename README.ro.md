@@ -21,7 +21,7 @@ ajustările fiecărei pagini (rotire, împărțire, înclinare, corecția casete
 Limbi (urmează limba sistemului; se schimbă din meniu): Română, English, Français, Italiano,
 Español, Português, Deutsch, Magyar.
 
-**Tur video al ferestrei** — 11 clipuri fără sunet (aproximativ 14 minute în total, cu subtitrări în engleză și română) care parcurg toate funcțiile GUI: [docs/video/gui/](docs/video/gui/), sau secțiunea *Window tour* din [pagina proiectului](https://legatorocr.chiuta.ro/). Filmat pe Linux cu scanări de probă generate; tragerea și plasarea (drag-and-drop) în fereastră este doar descrisă, nu arătată.
+**Tur video al ferestrei** — 11 clipuri fără sunet (circa 14 minute în total, cu subtitrări în opt limbi) care parcurg fiecare funcție a interfeței grafice: [docs/video/gui/](docs/video/gui/), sau secțiunea *Tur al ferestrei* de pe [pagina proiectului](https://legatorocr.chiuta.ro/). Filmate pe Linux, cu scanări de probă generate și interfața în engleză; tragerea fișierelor în fereastră este doar descrisă, nu arătată.
 
 **CLI**
 

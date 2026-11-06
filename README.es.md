@@ -21,7 +21,7 @@ los ajustes de cada página (rotación, división, inclinación, corrección del
 Idiomas (siguen el idioma del sistema; se cambian en el menú): Română, English, Français, Italiano,
 Español, Português, Deutsch, Magyar.
 
-**Recorrido en vídeo de la ventana** — 11 clips mudos (unos 14 minutos en total, con subtítulos en inglés y rumano) que recorren todas las funciones de la GUI: [docs/video/gui/](docs/video/gui/), o la sección *Window tour* de la [página del proyecto](https://legatorocr.chiuta.ro/). Grabados en Linux con escaneos de muestra generados; arrastrar y soltar en la ventana solo se describe, no se muestra.
+**Recorrido en vídeo de la ventana** — 11 clips sin sonido (unos 14 minutos en total, subtítulos en ocho idiomas) que recorren cada función de la interfaz gráfica: [docs/video/gui/](docs/video/gui/), o la sección *Recorrido por la ventana* de la [página del proyecto](https://legatorocr.chiuta.ro/). Grabados en Linux con escaneos de ejemplo generados y la interfaz en inglés; arrastrar archivos a la ventana solo se describe, no se muestra.
 
 **CLI**
 

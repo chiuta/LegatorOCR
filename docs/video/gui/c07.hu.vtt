@@ -1,0 +1,34 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:05.811
+PDF opciók. Az első három szakasz a hely kedvéért össze van csukva.
+
+00:00:05.911 --> 00:00:13.938
+JPEG quality: mennyire erősen tömörítődnek a színes és szürke oldalak (0 = veszteségmentes). Az Output dpi csökkenti a felbontást a fájl kisebbítéséhez.
+
+00:00:14.038 --> 00:00:21.866
+A Skip blank pages kihagyja az üres oldalakat a PDF-ből; a Same size for all pages minden oldalnak azonos méretet ad.
+
+00:00:21.966 --> 00:00:26.328
+A Skip consecutive duplicate pages eldobja az előzővel azonos oldalt.
+
+00:00:26.428 --> 00:00:33.250
+A Split PDF at blank pages és a vonalkódos elválasztó lapok (Code 128) több PDF-et csinálnak egy kötegből.
+
+00:00:33.350 --> 00:00:40.672
+A Bookmarks forrásfájlonként egy könyvjelzőt ad hozzá; a PDF/A-2b archiváló PDF-et ír beágyazott betűtípussal és színprofillal.
+
+00:00:40.772 --> 00:00:50.472
+A Front-matter pages az első oldalakat római számokkal számozza; a Target PDF size megabájtban megadott fájlméretre törekszik.
+
+00:00:50.572 --> 00:00:55.775
+PDF author, és egy jelszó a védett bemeneti PDF-ek megnyitásához.
+
+00:00:55.875 --> 00:01:00.235
+OCR: jelöld be a „Searchable text (OCR) in PDF” négyzetet egy láthatatlan szövegréteg hozzáadásához; válaszd ki a felismerési nyelveket.
+
+00:01:00.335 --> 00:01:15.004
+Az Also save text (.txt) és az Also save hOCR a felismert szöveget a PDF mellé írja.
+
+00:01:15.104 --> 00:01:21.466
+A Segmentation mode megmondja a felismerőnek, hogyan épül fel az oldal (oszlopok, egyetlen blokk, egyetlen sor…).

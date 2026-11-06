@@ -1,0 +1,37 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:02.900
+A jobb oldali Settings panel minden oldalra vonatkozik. Először az Input következik.
+
+00:00:03.000 --> 00:00:16.165
+Resolution (dpi): a szkennelések felbontása; ez dönti el, hogyan értelmeződnek a milliméteres méretek.
+
+00:00:16.265 --> 00:00:26.533
+A Detect sideways pages elforgatja az oldalára szkennelt oldalt; az Orientation via OCR szövegfelismeréssel különbözteti meg a fent és a lent irányt.
+
+00:00:26.633 --> 00:00:31.091
+Page split: az Automatic megtalálja a gerincet, az At the middle félbevág, az Off egyben hagyja a lapot.
+
+00:00:31.191 --> 00:00:42.230
+Geometry: az Auto-deskew kiegyenesíti az oldalt; a Max skew korlátozza a javítható szöget.
+
+00:00:42.330 --> 00:00:47.468
+Margins: a tartalom körül hagyott papír, milliméterben.
+
+00:00:47.568 --> 00:00:52.025
+Page size: Free (szabad), szabványos méret vagy egyéni (a tartalom középre kerül rajta).
+
+00:00:52.125 --> 00:00:57.487
+Output: az eredmény színmódja. Gray…
+
+00:00:57.587 --> 00:01:02.950
+…Black & white (küszöbölési opciókkal)…
+
+00:01:03.050 --> 00:01:16.335
+…a Mixed a képeket színesen, a szöveget fekete-fehéren tartja meg; a Hybrid egy színes háttérréteget is megtart.
+
+00:01:16.435 --> 00:01:31.196
+Az Even out lighting kiegyenlíti az egyenetlen fényt és árnyékot; a Straighten curved lines kiegyenesíti a hajlott oldalt.
+
+00:01:31.296 --> 00:01:40.500
+A panel tetején lévő Undo és Redo végiglépked a beállítások módosításain.

@@ -21,7 +21,7 @@ le regolazioni per pagina (rotazione, divisione, inclinazione, correzione del ri
 Lingue (seguono la lingua di sistema; si cambiano dal menu): Română, English, Français, Italiano,
 Español, Português, Deutsch, Magyar.
 
-**Tour video della finestra** — 11 clip mute (circa 14 minuti in tutto, sottotitoli in inglese e rumeno) che passano in rassegna ogni funzione della GUI: [docs/video/gui/](docs/video/gui/), oppure la sezione *Window tour* della [pagina del progetto](https://legatorocr.chiuta.ro/). Girate su Linux con scansioni di esempio generate; il trascinamento (drag-and-drop) nella finestra è solo descritto, non mostrato.
+**Tour video della finestra** — 11 clip senza audio (circa 14 minuti in tutto, sottotitoli in otto lingue) che passano in rassegna ogni funzione dell’interfaccia grafica: [docs/video/gui/](docs/video/gui/), oppure la sezione *Tour della finestra* della [pagina del progetto](https://legatorocr.chiuta.ro/). Girati su Linux con scansioni di prova generate e l’interfaccia in inglese; il trascinamento dei file nella finestra è solo descritto, non mostrato.
 
 **CLI**
 

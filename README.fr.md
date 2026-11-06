@@ -21,7 +21,7 @@ les ajustements par page (rotation, découpage, inclinaison, correction de la zo
 Langues (suivent la langue du système ; changement dans le menu) : Română, English, Français, Italiano,
 Español, Português, Deutsch, Magyar.
 
-**Visite vidéo de la fenêtre** — 11 clips muets (environ 14 minutes en tout, sous-titres en anglais et en roumain) qui parcourent toutes les fonctions de l’interface graphique : [docs/video/gui/](docs/video/gui/), ou la section *Visite de la fenêtre* de la [page du projet](https://legatorocr.chiuta.ro/). Filmée sous Linux avec des scans d’exemple générés ; le glisser-déposer dans la fenêtre est seulement décrit, pas montré.
+**Visite vidéo de la fenêtre** — 11 clips muets (environ 14 minutes au total, sous-titres en huit langues) qui passent en revue chaque fonction de l’interface graphique : [docs/video/gui/](docs/video/gui/), ou la section *Visite de la fenêtre* de la [page du projet](https://legatorocr.chiuta.ro/). Filmés sous Linux avec des scans d’exemple générés et l’interface en anglais ; le glisser-déposer dans la fenêtre est seulement décrit, pas montré.
 
 **Ligne de commande**
 

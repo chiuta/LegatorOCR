@@ -1,0 +1,28 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:07.869
+Clean-up opciók. A hely kedvéért a többi szakasz össze van csukva: kattints egy szakasz címére az összecsukáshoz vagy kinyitáshoz.
+
+00:00:07.969 --> 00:00:15.799
+Invert negative scans: a fekete alapon fehér szöveg (mikrofilm) normálissá válik.
+
+00:00:15.899 --> 00:00:23.238
+Az Auto contrast (levels) a fakó szkenneléseket a teljes tartományra nyújtja.
+
+00:00:23.338 --> 00:00:35.092
+A Remove show-through eltünteti a vékony papír túloldaláról átlátszó nyomtatást; a Smooth halftone (descreen) eltávolítja a nyomtatott képek raszterpontjait.
+
+00:00:35.192 --> 00:00:46.488
+A 2. oldal két opciója: először a lyukasztások. Jelöld ki a lyukas oldalt, és jelöld be a Remove punch holes négyzetet.
+
+00:00:46.588 --> 00:01:02.875
+Telefonos fotók: válaszd ki a fotót, majd a Fix perspective kiegyenesíti az oldalt, a Wipe the background pedig eltávolítja körülötte az asztalt.
+
+00:01:02.975 --> 00:01:09.337
+A Remove fingers at the edge kifesti az oldalt tartó hüvelykujjat, a nyomtatáshoz nem nyúlva.
+
+00:01:09.437 --> 00:01:18.100
+A Drop colour a fekete-fehér átalakítás előtt eltávolít egy tintaszínt; a Sharpen élesebbé teszi a szöveget.
+
+00:01:18.200 --> 00:01:28.911
+Az Erase zones szövegként fogad milliméteres téglalapokat (x,y,w,h), ugyanazokat, amelyeket egérrel is rajzolhatsz.

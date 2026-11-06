@@ -21,7 +21,7 @@ az oldalankénti módosításokkal (forgatás, felezés, ferdeség, tartalomdobo
 Nyelvek (követik a rendszernyelvet; a menüben váltható): Română, English, Français, Italiano,
 Español, Português, Deutsch, Magyar.
 
-**Videós körséta az ablakban** — 11 néma klip (összesen kb. 14 perc, angol és román felirattal), amely végigvezet a GUI minden funkcióján: [docs/video/gui/](docs/video/gui/), vagy a [projektoldal](https://legatorocr.chiuta.ro/) *Window tour* szakasza. Linuxon, generált mintaszkennelésekkel készült; az ablakba húzás (drag-and-drop) csak le van írva, nem látható.
+**Videós körséta az ablakban** — 11 hang nélküli klip (összesen kb. 14 perc, feliratok nyolc nyelven), amelyek a grafikus felület minden funkcióját bemutatják: [docs/video/gui/](docs/video/gui/), vagy az *Ablakkörút* szakasz a [projektoldalon](https://legatorocr.chiuta.ro/). Linuxon, generált mintaszkennelésekkel és angol felülettel vették fel; a fájlok ablakba húzását csak leírja, nem mutatja.
 
 **CLI**
 
