@@ -1,0 +1,25 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:06.325
+Wenn die Seiten richtig aussehen, exportieren Sie. File ▸ Export PDF… (oder die Schaltfläche unten in den Einstellungen).
+
+00:00:06.425 --> 00:00:23.625
+Tippen Sie einen Namen und bestätigen Sie; die Seiten werden verarbeitet und das PDF wird geschrieben.
+
+00:00:23.725 --> 00:00:26.625
+Die Statusleiste meldet das Ergebnis: geschriebene Seiten.
+
+00:00:26.725 --> 00:00:33.055
+File ▸ Export images… speichert stattdessen die verarbeiteten Seiten als Bilddateien.
+
+00:00:33.155 --> 00:00:50.947
+Wählen Sie den Ordner, in den sie geschrieben werden.
+
+00:00:51.047 --> 00:01:02.667
+File ▸ Save project… behält die Seiten und jede Einstellung in einer Datei, um später weiterzumachen.
+
+00:01:02.767 --> 00:01:19.980
+File ▸ Save project to folder… kopiert zusätzlich die Seitenbilder in den Ordner.
+
+00:01:20.080 --> 00:01:40.847
+File ▸ Open project… lädt ein gespeichertes Projekt: Seiten, Einstellungen und die Anpassungen pro Seite.

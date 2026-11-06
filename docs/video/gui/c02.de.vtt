@@ -1,0 +1,34 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:06.372
+Sieben verschiedene Scans sind geladen. Ein Klick auf eine Seite in der Liste zeigt ihre Vorschau.
+
+00:00:06.472 --> 00:00:09.373
+Side by side zeigt Original und Ergebnis; hier wird ein Doppelblatt zu zwei Seiten.
+
+00:00:09.473 --> 00:00:17.297
+Original zeigt nur den Scan, Processed nur das Ergebnis.
+
+00:00:17.397 --> 00:00:26.355
+Slider legt beide übereinander: Ziehen Sie die Trennlinie, um Vorher und Nachher zu vergleichen.
+
+00:00:26.455 --> 00:00:35.240
+Fit skaliert die Vorschau auf das Fenster; schalten Sie es aus, um echte Pixel zu sehen.
+
+00:00:35.340 --> 00:00:52.104
+Wählen Sie andere Seitenarten: eine Einzelseite mit Lochung, eine leere Seite, ein Negativ …
+
+00:00:52.204 --> 00:00:57.566
+… eine seitlich liegende Seite (sie wird automatisch gedreht, kann aber kopfstehend enden: Die Rotate-Schaltflächen beheben das, siehe nächster Clip) und ein Handyfoto.
+
+00:00:57.666 --> 00:01:07.965
+Auch die Tastatur funktioniert: Pfeiltasten und Page Up/Down wechseln zwischen den Seiten, Home und End springen zur ersten und letzten.
+
+00:01:08.065 --> 00:01:19.245
+Strg+K (Ctrl+K) öffnet die Befehlspalette: Tippen Sie ein paar Buchstaben und drücken Sie Enter.
+
+00:01:19.345 --> 00:01:25.419
+Seiten, die einen Blick brauchen, werden markiert: Die Leiste zeigt, wie viele es sind, „Next“ springt zur nächsten (Taste N).
+
+00:01:25.519 --> 00:01:37.978
+Die Befehlspalette kann in der Liste auch nur die markierten Seiten anzeigen.

@@ -1,0 +1,22 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:04.361
+All options öffnet ein Fenster mit jeder Kommandozeilenoption, in einfachen Bedienelementen, nach Themen gruppiert.
+
+00:00:04.461 --> 00:00:12.284
+Ein Klick auf ein Thema klappt es auf: hier die Optionen für die Seitenreihenfolge.
+
+00:00:12.384 --> 00:00:17.494
+Das Suchfeld findet eine Option nach Namen oder nach einem Wort ihrer Beschreibung.
+
+00:00:17.594 --> 00:00:21.461
+Haken Sie eine Option an, und unten erscheint die entsprechende Kommandozeile.
+
+00:00:21.561 --> 00:00:28.844
+Only chosen zeigt nur, was Sie angehakt haben; Copy command legt die Kommandozeile in die Zwischenablage.
+
+00:00:28.944 --> 00:00:36.318
+Run startet den Befehl; seine Ausgabe erscheint hier. --dry-run listet nur auf, was getan würde.
+
+00:00:36.418 --> 00:00:44.202
+Clear choices hakt alles ab; das Kreuz schließt das Fenster.

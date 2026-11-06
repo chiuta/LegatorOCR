@@ -1,0 +1,28 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:06.821
+Draw zones: Markieren Sie Bereiche auf dem Originalbild durch Ziehen. Haken Sie „Draw zones“ an und wählen Sie dann eine Art.
+
+00:00:06.921 --> 00:00:13.833
+Erase: Alles im Rechteck wird mit der Papierfarbe übermalt (ein Fleck, ein Stempel).
+
+00:00:13.933 --> 00:00:20.952
+Picture: ein Rechteck, das farbig und detailreich bleibt, während der Rest schwarzweiß werden darf.
+
+00:00:21.052 --> 00:00:27.968
+No picture: ein Rechteck, in dem automatisch gefundene Bilder wieder herausgenommen werden.
+
+00:00:28.068 --> 00:00:39.835
+Rechtsklick auf ein Rechteck entfernt es; Undo und Redo gehen die Zonen schrittweise durch; Clear zones entfernt alle.
+
+00:00:39.935 --> 00:00:46.850
+Guide line: Ziehen Sie entlang einer gebogenen Textzeile; „Straighten curved lines“ glättet die Seite dann entlang dieser Linie.
+
+00:00:46.950 --> 00:00:53.889
+Work area: Alles außerhalb des Rechtecks wird mit Papierfarbe übermalt (Schatten, eine Nachbarseite).
+
+00:00:53.989 --> 00:01:02.792
+Cut line: Klicken oder ziehen Sie auf dem Original: Das Doppelblatt wird dort geschnitten statt an der automatischen Stelle.
+
+00:01:02.892 --> 00:01:18.649
+Content box: Haken Sie es an, um den Zuschnitt zu bearbeiten. Ziehen Sie die grünen Kanten auf der verarbeiteten Seite.

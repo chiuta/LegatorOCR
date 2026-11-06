@@ -1,0 +1,28 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:07.869
+Optionen zur Bereinigung (Clean-up). Um Platz zu schaffen, sind die anderen Abschnitte eingeklappt: Ein Klick auf einen Abschnittstitel klappt ihn ein oder aus.
+
+00:00:07.969 --> 00:00:15.799
+Invert negative scans: Weißer Text auf Schwarz (Mikrofilm) wird normal.
+
+00:00:15.899 --> 00:00:23.238
+Auto contrast (levels) dehnt blasse Scans auf den vollen Tonwertbereich.
+
+00:00:23.338 --> 00:00:35.092
+Remove show-through entfernt Druck, der von der Rückseite dünnen Papiers durchscheint; Smooth halftone (descreen) entfernt die Rasterpunkte gedruckter Bilder.
+
+00:00:35.192 --> 00:00:46.488
+Die beiden Optionen an Seite 2: zuerst die Lochung. Wählen Sie die Seite mit Löchern aus und haken Sie Remove punch holes an.
+
+00:00:46.588 --> 00:01:02.875
+Handyfotos: Wählen Sie das Foto, dann richtet Fix perspective die Seite aus, und Wipe the background entfernt den Tisch um sie herum.
+
+00:01:02.975 --> 00:01:09.337
+Remove fingers at the edge übermalt einen Daumen, der die Seite hält, ohne den Druck zu berühren.
+
+00:01:09.437 --> 00:01:18.100
+Drop colour entfernt vor der Schwarzweiß-Umwandlung eine Tintenfarbe; Sharpen macht den Text schärfer.
+
+00:01:18.200 --> 00:01:28.911
+Erase zones nimmt Rechtecke in Millimetern (x,y,w,h) als Text entgegen, dieselben, die Sie mit der Maus zeichnen können.

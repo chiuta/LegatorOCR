@@ -1,0 +1,37 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:02.900
+Das Settings-Panel rechts gilt für alle Seiten. Zuerst kommt Input.
+
+00:00:03.000 --> 00:00:16.165
+Resolution (dpi): die Auflösung der Scans; sie bestimmt, wie Größen in Millimetern gelesen werden.
+
+00:00:16.265 --> 00:00:26.533
+Detect sideways pages dreht eine Seite, die auf der Seite liegend gescannt wurde; Orientation via OCR nutzt die Texterkennung, um oben von unten zu unterscheiden.
+
+00:00:26.633 --> 00:00:31.091
+Page split: Automatic findet den Bund, At the middle schneidet in der Mitte durch, Off lässt das Blatt ganz.
+
+00:00:31.191 --> 00:00:42.230
+Geometry: Auto-deskew richtet die Seite gerade; Max skew begrenzt den Winkel, den es korrigieren darf.
+
+00:00:42.330 --> 00:00:47.468
+Margins: das Papier, das um den Inhalt bleibt, in Millimetern.
+
+00:00:47.568 --> 00:00:52.025
+Page size: Free, ein Standardformat oder ein eigenes (der Inhalt wird darauf zentriert).
+
+00:00:52.125 --> 00:00:57.487
+Output: der Farbmodus des Ergebnisses. Gray …
+
+00:00:57.587 --> 00:01:02.950
+… Black & white (mit Schwellwert-Optionen) …
+
+00:01:03.050 --> 00:01:16.335
+… Mixed behält Bilder in Farbe und Text in Schwarzweiß; Hybrid behält eine farbige Hintergrundebene.
+
+00:01:16.435 --> 00:01:31.196
+Even out lighting gleicht ungleichmäßiges Licht und Schatten aus; Straighten curved lines glättet eine gewölbte Seite.
+
+00:01:31.296 --> 00:01:40.500
+Undo und Redo oben im Panel gehen die Änderungen der Einstellungen schrittweise durch.

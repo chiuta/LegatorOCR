@@ -1,0 +1,31 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:05.366
+Die Leiste über der Vorschau passt nur die ausgewählte Seite an. Zuerst der seitlich liegende Scan.
+
+00:00:05.466 --> 00:00:11.327
+Er kam kopfstehend heraus: Ein Klick auf Rotate left 90° stellt ihn richtig.
+
+00:00:11.427 --> 00:00:22.251
+Rotate right 90° dreht in die andere Richtung.
+
+00:00:22.351 --> 00:00:34.639
+Nun das schiefe Doppelblatt: -45° und +45° stellen eine diagonale Schräglage von 45° ein (für schräg fotografierte Seiten) …
+
+00:00:34.739 --> 00:00:38.606
+… und mit Manual skew legen Sie den genauen Winkel selbst fest, statt den automatischen zu nehmen.
+
+00:00:38.706 --> 00:00:42.066
+Split this sheet: Legen Sie nur für dieses Blatt fest, wie es geschnitten wird.
+
+00:00:42.166 --> 00:00:45.165
+Automatisch, in der Mitte oder gar nicht.
+
+00:00:45.265 --> 00:00:49.715
+Output of this page: Geben Sie einer Seite einen anderen Farbmodus als dem Rest.
+
+00:00:49.815 --> 00:01:02.905
+Content box (mm): Verschieben Sie jede Seite des Zuschnitts nach außen (+) oder innen (−).
+
+00:01:03.005 --> 00:01:14.806
+Undo und Redo gehen Ihre Änderungen an dieser Seite schrittweise durch; Reset bringt die Seite zum automatischen Ergebnis zurück.
