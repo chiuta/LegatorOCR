@@ -1212,6 +1212,8 @@ impl App {
     fn all_options_window(&mut self, ctx: &egui::Context) {
         use crate::alloptions as ao;
         if !self.allopts.show {
+            // closed while a command runs: dropping the run stops it (nobody would see its output)
+            self.allopts.run = None;
             return;
         }
         // output of a running command

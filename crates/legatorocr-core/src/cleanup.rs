@@ -608,14 +608,23 @@ pub fn trim_to_paper(img: &mut RgbImage, dpi: u32, paper: Rgb<u8>) -> bool {
     if (best.area as usize) * 100 < w * h * 20 {
         return false;
     }
-    let id = bi as u32 + 1;
+    let _ = bi;
+    // Every big blob counts as paper: a dark gutter or a banner can split the sheet in two,
+    // and painting the smaller piece white would wipe a page.
+    let keep: Vec<bool> = std::iter::once(false)
+        .chain(
+            comps
+                .iter()
+                .map(|c| c.area * 4 >= best.area && (c.area as usize) * 100 >= w * h * 3),
+        )
+        .collect();
     // convex hull of the blob grown by `grow` (Minkowski sum with a square = hull of the
     // corners of squares around its row ends)
     let mut pts: Vec<(i64, i64)> = Vec::new();
     for y in 0..h {
         let (mut a, mut b) = (usize::MAX, 0usize);
         for x in 0..w {
-            if lab[y * w + x] == id {
+            if keep.get(lab[y * w + x] as usize).copied().unwrap_or(false) {
                 a = a.min(x);
                 b = b.max(x);
             }
@@ -1421,5 +1430,34 @@ mod big_image_tests {
         let dt = t.elapsed().as_secs_f32();
         eprintln!("big image: {dt:.2}s");
         assert!(dt < 30.0, "too slow: {dt}s");
+    }
+}
+
+#[cfg(test)]
+mod split_sheet_tests {
+    use super::*;
+    use image::{Rgb, RgbImage};
+
+    #[test]
+    fn a_dark_gutter_does_not_make_one_page_vanish() {
+        let paper = Rgb([235, 235, 230]);
+        let mut img = RgbImage::from_pixel(1200, 800, paper);
+        for x in 570..630 {
+            for y in 0..800 {
+                img.put_pixel(x, y, Rgb([175, 175, 172]));
+            }
+        }
+        for (x0, x1) in [(100u32, 500u32), (700, 1100)] {
+            for y in (100..700).step_by(40) {
+                for x in x0..x1 {
+                    for dy in 0..8 {
+                        img.put_pixel(x, y + dy, Rgb([30, 30, 30]));
+                    }
+                }
+            }
+        }
+        let _ = trim_to_paper(&mut img, 150, paper);
+        assert_eq!(img.get_pixel(300, 100), &Rgb([30, 30, 30]), "left page text wiped");
+        assert_eq!(img.get_pixel(900, 100), &Rgb([30, 30, 30]), "right page text wiped");
     }
 }

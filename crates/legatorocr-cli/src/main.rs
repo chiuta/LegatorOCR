@@ -1219,7 +1219,7 @@ mod page_order {
                 Some("") => n,
                 Some(b) => num(b)?,
             };
-            if lo == 0 || hi < lo {
+            if lo == 0 || (hi < lo && b != Some("")) {
                 return Err(format!("`{part}` is not a page range (pages count from 1)"));
             }
             for p in lo..=hi.min(n) {
@@ -1241,6 +1241,7 @@ mod page_order {
             assert_eq!(v, vec![0, 1, 4, 6, 7]);
             assert!(parse_range("0", 5).is_err());
             assert!(parse_range("x", 5).is_err());
+            assert!(parse_range("4-", 3).unwrap().is_empty()); // open end past the last page: nothing left
         }
     }
 }
@@ -2517,7 +2518,9 @@ fn real_main() -> Result<()> {
         .chain(cli.tei.iter())
         .chain(cli.passages_jsonl.iter())
     {
-        legatorocr_engine::check_writable(p)?;
+        if !cli.dry_run {
+            legatorocr_engine::check_writable(p)?;
+        }
     }
     if cli.pdf.is_none()
         && cli.djvu.is_none()
@@ -2541,7 +2544,7 @@ fn real_main() -> Result<()> {
 
     // --- run: process → (save images) → OCR → PDF ---------------------------
     // Fail now, not after an hour of OCR: make sure the outputs can be written.
-    if let Some(pdf) = cli.pdf.as_ref().filter(|p| !done_has_mark(p)) {
+    if let Some(pdf) = cli.pdf.as_ref().filter(|p| !cli.dry_run && !done_has_mark(p)) {
         legatorocr_engine::check_writable(pdf)?;
     }
     let mut inputs: Vec<PathBuf> = Vec::new();

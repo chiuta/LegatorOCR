@@ -454,13 +454,24 @@ pub fn quote(a: &str) -> String {
 pub struct Run {
     pub rx: Receiver<String>,
     child: Arc<Mutex<Option<Child>>>,
+    stopped: Arc<std::sync::atomic::AtomicBool>,
     pub done: bool,
 }
 
 impl Run {
     pub fn stop(&self) {
-        if let Some(c) = self.child.lock().unwrap().as_mut() {
+        self.stopped.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(c) = self.child.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
             let _ = c.kill();
+        }
+    }
+}
+
+impl Drop for Run {
+    /// Closing the window (or the app) must not leave the CLI running unseen.
+    fn drop(&mut self) {
+        if !self.done {
+            self.stop();
         }
     }
 }
@@ -499,16 +510,25 @@ pub fn spawn(args: &[String], cwd: Option<PathBuf>) -> Result<Run, String> {
         }));
     }
     let waiter = shared.clone();
+    let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let was_stopped = stopped.clone();
     std::thread::spawn(move || {
         for r in readers {
             let _ = r.join();
         }
-        let status = waiter
-            .lock()
-            .unwrap()
-            .take()
-            .and_then(|mut c| c.wait().ok());
+        // Poll instead of blocking in `wait` with the lock held: Stop must never wait for the exit.
+        let status = loop {
+            let mut g = waiter.lock().unwrap_or_else(|e| e.into_inner());
+            match g.as_mut().map(|c| c.try_wait()) {
+                Some(Ok(Some(s))) => break Some(s),
+                Some(Ok(None)) => {}
+                _ => break None,
+            }
+            drop(g);
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
         let _ = tx.send(match status {
+            _ if was_stopped.load(std::sync::atomic::Ordering::SeqCst) => "\u{1}stopped".to_string(),
             Some(s) if s.success() => "\u{1}ok".to_string(),
             Some(s) => format!("\u{1}exit {}", s.code().unwrap_or(-1)),
             None => "\u{1}stopped".to_string(),
@@ -517,6 +537,7 @@ pub fn spawn(args: &[String], cwd: Option<PathBuf>) -> Result<Run, String> {
     Ok(Run {
         rx,
         child: shared,
+        stopped,
         done: false,
     })
 }
