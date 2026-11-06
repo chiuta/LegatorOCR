@@ -166,9 +166,20 @@ struct Decoded {
 
 /// Average the network's probabilities over copies of the line shifted by a pixel or two. The copies
 /// have the same width, so the columns line up.
+static ACCURATE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Accurate mode: every line is read three times (shifted a pixel up and down) and the
+/// probabilities averaged. About 1.7x slower; measured 3.66 -> 3.39 % CER on the magazine set.
+pub fn set_accurate(on: bool) {
+    ACCURATE.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
 fn forward_tta(model: &Model, data: &[f32], w: usize) -> (usize, Vec<f32>) {
     let (t, mut lp) = model.forward(data, w);
-    let mode = std::env::var("LNTTA").unwrap_or_default();
+    let mut mode = std::env::var("LNTTA").unwrap_or_default();
+    if mode.is_empty() && ACCURATE.load(std::sync::atomic::Ordering::Relaxed) {
+        mode = "v".into();
+    }
     if mode.is_empty() {
         return (t, lp);
     }

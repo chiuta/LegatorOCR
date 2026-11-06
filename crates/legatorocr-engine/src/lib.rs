@@ -47,6 +47,11 @@ pub mod naming;
 pub mod ocfl;
 pub mod ocrcache;
 pub mod offline;
+
+/// Accurate mode of the built-in OCR (`--accurate`): three passes per line, averaged.
+pub fn set_accurate(on: bool) {
+    legatorocr_nocr::set_accurate(on);
+}
 pub mod package;
 pub mod pagelang;
 pub mod pagenum;

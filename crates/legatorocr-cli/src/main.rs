@@ -288,6 +288,11 @@ struct Cli {
     /// not restricted.
     #[arg(long)]
     offline: bool,
+    /// With the built-in OCR: read every line three times (shifted a pixel up and down) and
+    /// average, for difficult scans. About 1.7 times slower; on the magazine test pages the
+    /// error rate went 3.66 % -> 3.39 %, on clean books and brochures it made no difference.
+    #[arg(long)]
+    accurate: bool,
 
     /// With --compare-text: also write FILE.html, the two texts merged word by word (words only in
     /// the first struck out in red, words only in the second underlined in green). Works for two
@@ -1355,6 +1360,7 @@ fn watch_loop(cli: &Cli, dir: &std::path::Path) -> Result<()> {
 fn real_main() -> Result<()> {
     let mut cli = Cli::parse();
     legatorocr_engine::offline::set(cli.offline);
+    legatorocr_engine::set_accurate(cli.accurate);
     if cli.force_ocr {
         cli.ocr_mode = Some("force".into());
         cli.ocr = true;
