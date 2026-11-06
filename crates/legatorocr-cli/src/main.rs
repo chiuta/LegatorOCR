@@ -128,6 +128,11 @@ struct Cli {
     #[arg(long)]
     clean_text: bool,
 
+    /// With --clean-text: write ş ţ (cedilla) instead of the standard ș ț (comma below), for
+    /// programs and fonts that only know the cedilla letters.
+    #[arg(long)]
+    cedilla: bool,
+
     /// Leave out PDF inputs that already have a text layer (only scans without text are
     /// processed), so a half-finished batch can be run again without redoing finished files.
     #[arg(long)]
@@ -2739,6 +2744,7 @@ fn real_main() -> Result<()> {
     };
     legatorocr_engine::profile::enable(cli.timings);
     legatorocr_engine::ropost::set_enabled(cli.clean_text);
+    legatorocr_engine::ropost::set_cedilla(cli.cedilla);
     legatorocr_engine::pagenum::set_enabled(cli.page_labels);
     legatorocr_engine::memcap::set(cli.max_memory);
     if cli.auto_retry {

@@ -131,7 +131,30 @@ fn edit_distance(a: &[char], b: &[char], cap: usize) -> Option<usize> {
 
 // ---------------------------------------------------------------- cedilla
 
+static CEDILLA: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// `--cedilla`: the clean-up writes `ş ţ` (cedilla, what older Windows fonts and some programs
+/// expect) instead of the standard `ș ț` (comma below).
+pub fn set_cedilla(on: bool) {
+    CEDILLA.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn to_cedilla(text: &str) -> String {
+    text.chars()
+        .map(|c| match c {
+            '\u{0218}' => '\u{015E}',
+            '\u{0219}' => '\u{015F}',
+            '\u{021A}' => '\u{0162}',
+            '\u{021B}' => '\u{0163}',
+            c => c,
+        })
+        .collect()
+}
+
 fn comma_below(text: &str) -> String {
+    if CEDILLA.load(std::sync::atomic::Ordering::Relaxed) {
+        return to_cedilla(text);
+    }
     text.chars()
         .map(|c| match c {
             '\u{015E}' => '\u{0218}',
@@ -170,6 +193,12 @@ fn dehyphenate(text: &str) -> String {
                     k += 1;
                 }
                 if k < len && c[k].is_lowercase() {
+                    // `social-` / `democrat` is one compound, `tan-` / `gențială` one word: with
+                    // the Romanian list at hand, a break whose two halves are words and whose
+                    // join is not keeps its hyphen
+                    if ch != '\u{00AD}' && keeps_hyphen(&out, &c[k..]) {
+                        out.push('-');
+                    }
                     i = k;
                     continue;
                 }
@@ -179,6 +208,25 @@ fn dehyphenate(text: &str) -> String {
         i += 1;
     }
     out
+}
+
+/// `true` when the word broken across the line is a hyphenated compound: both halves are listed
+/// words (3+ letters) and the plain join is not.
+fn keeps_hyphen(before: &str, after: &[char]) -> bool {
+    let Some(lex) = legatorocr_nocr::lexicon::Lexicon::load("ro").filter(|l| !l.is_empty()) else {
+        return false;
+    };
+    let left: String = {
+        let mut v: Vec<char> = before.chars().rev().take_while(|c| c.is_alphabetic()).collect();
+        v.reverse();
+        v.into_iter().collect()
+    };
+    let right: String = after.iter().take_while(|c| c.is_alphabetic()).collect();
+    if left.chars().count() < 3 || right.chars().count() < 3 {
+        return false;
+    }
+    let joined = format!("{left}{right}");
+    lex.contains(&left) && lex.contains(&right) && !lex.contains(&joined)
 }
 
 // ----------------------------------------------------------------- quotes
@@ -366,6 +414,20 @@ pub fn postprocess_pages(text: &str, o: &PostOptions) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "lexicon")]
+    #[test]
+    fn a_break_inside_a_compound_keeps_its_hyphen() {
+        // both halves are words and the join is not: a compound
+        assert_eq!(pp("social-\ndemocrat"), "social-democrat");
+        // the join is a word: an ordinary hyphenation
+        assert_eq!(pp("atingerea tan-\ngențială a solului"), "atingerea tangențială a solului");
+    }
+
+    #[test]
+    fn cedilla_output_maps_the_four_letters() {
+        assert_eq!(to_cedilla("Șțefan și ținut"), "Şţefan şi ţinut");
+    }
 
     fn pp(s: &str) -> String {
         postprocess(s, &PostOptions::default())
