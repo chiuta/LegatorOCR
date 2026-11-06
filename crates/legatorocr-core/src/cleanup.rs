@@ -537,21 +537,53 @@ fn open_mask(m: &[u8], w: usize, h: usize, r: usize) -> Vec<u8> {
 /// Square window max (`max`) or min filter of radius `r` over a `w×h` byte plane; the window is
 /// cut at the border (so an erosion does not eat in from the image edge).
 fn box_filter(src: &[u8], w: usize, h: usize, r: usize, max: bool) -> Vec<u8> {
-    let pick = |a: u8, b: u8| if max { a.max(b) } else { a.min(b) };
-    let init = if max { 0u8 } else { 255u8 };
-    let mut tmp = vec![0u8; w * h];
+    if w == 0 || h == 0 {
+        return Vec::new();
+    }
+    // Two 1-D passes; the second runs on the transpose so both walk memory linearly.
+    let t = transpose(&slide(src, w, h, r, max), w, h);
+    transpose(&slide(&t, h, w, r, max), h, w)
+}
+
+fn transpose(src: &[u8], w: usize, h: usize) -> Vec<u8> {
+    let mut out = vec![0u8; w * h];
     for y in 0..h {
-        let row = &src[y * w..(y + 1) * w];
         for x in 0..w {
-            let (a, b) = (x.saturating_sub(r), (x + r).min(w - 1));
-            tmp[y * w + x] = row[a..=b].iter().fold(init, |m, &v| pick(m, v));
+            out[x * h + y] = src[y * w + x];
         }
     }
+    out
+}
+
+/// Max/min over the window `[x-r, x+r]` (cut at the row ends) of every row, in O(w) per row
+/// with a monotonic queue.
+fn slide(src: &[u8], w: usize, h: usize, r: usize, max: bool) -> Vec<u8> {
     let mut out = vec![0u8; w * h];
-    for x in 0..w {
-        for y in 0..h {
-            let (a, b) = (y.saturating_sub(r), (y + r).min(h - 1));
-            out[y * w + x] = (a..=b).fold(init, |m, yy| pick(m, tmp[yy * w + x]));
+    let mut q: Vec<usize> = Vec::with_capacity(w.min(2 * r + 2));
+    for y in 0..h {
+        let row = &src[y * w..(y + 1) * w];
+        let o = &mut out[y * w..(y + 1) * w];
+        q.clear();
+        let mut head = 0usize;
+        let mut next = 0usize; // next index to push
+        for (x, ox) in o.iter_mut().enumerate() {
+            let hi = (x + r).min(w - 1);
+            while next <= hi {
+                let v = row[next];
+                while q.len() > head && {
+                    let l = row[q[q.len() - 1]];
+                    if max { l <= v } else { l >= v }
+                } {
+                    q.pop();
+                }
+                q.push(next);
+                next += 1;
+            }
+            let lo = x.saturating_sub(r);
+            while q[head] < lo {
+                head += 1;
+            }
+            *ox = row[q[head]];
         }
     }
     out
@@ -1459,5 +1491,51 @@ mod split_sheet_tests {
         let _ = trim_to_paper(&mut img, 150, paper);
         assert_eq!(img.get_pixel(300, 100), &Rgb([30, 30, 30]), "left page text wiped");
         assert_eq!(img.get_pixel(900, 100), &Rgb([30, 30, 30]), "right page text wiped");
+    }
+}
+
+#[cfg(test)]
+mod box_filter_tests {
+    use super::*;
+
+    fn naive(src: &[u8], w: usize, h: usize, r: usize, max: bool) -> Vec<u8> {
+        let mut out = vec![0u8; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                let (x0, x1) = (x.saturating_sub(r), (x + r).min(w - 1));
+                let (y0, y1) = (y.saturating_sub(r), (y + r).min(h - 1));
+                let mut m = if max { 0u8 } else { 255u8 };
+                for yy in y0..=y1 {
+                    for xx in x0..=x1 {
+                        let v = src[yy * w + xx];
+                        m = if max { m.max(v) } else { m.min(v) };
+                    }
+                }
+                out[y * w + x] = m;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn box_filter_equals_the_naive_window_on_random_images() {
+        let mut s = 99u32;
+        for (w, h) in [(1usize, 1usize), (1, 9), (9, 1), (5, 7), (31, 17), (64, 40)] {
+            for r in [0usize, 1, 2, 3, 8, 21, 100] {
+                let src: Vec<u8> = (0..w * h)
+                    .map(|_| {
+                        s = s.wrapping_mul(1664525).wrapping_add(1013904223);
+                        (s >> 24) as u8
+                    })
+                    .collect();
+                for max in [true, false] {
+                    assert_eq!(
+                        box_filter(&src, w, h, r, max),
+                        naive(&src, w, h, r, max),
+                        "{w}x{h} r={r} max={max}"
+                    );
+                }
+            }
+        }
     }
 }
