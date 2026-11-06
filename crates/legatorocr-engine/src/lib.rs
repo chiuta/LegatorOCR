@@ -21,6 +21,7 @@ pub mod burst;
 pub mod catalog;
 pub mod certify;
 pub mod checksums;
+pub mod corrections;
 pub mod djvu;
 pub mod doctor;
 pub mod docx;
@@ -905,6 +906,12 @@ pub fn run_export(
                             r
                         }
                         _ => (pg, words),
+                    };
+                    // hand-corrected text (--apply-text) goes onto the words of this page
+                    let words = if corrections::enabled() {
+                        corrections::apply(base + i, words)
+                    } else {
+                        words
                     };
                     kept.push((pg, words));
                 }
@@ -2015,7 +2022,6 @@ mod batch_features_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
-
 
 /// A page that holds a lot of content but gave (almost) no words is read again on its content
 /// box alone: the wedges and margins around a tilted photographed page can derail the layout

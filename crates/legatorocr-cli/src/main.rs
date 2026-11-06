@@ -692,6 +692,15 @@ struct Cli {
     #[arg(long, default_value_t = 80)]
     verify_per_page: usize,
 
+    /// With --ocr: replace the recognised text by the hand-corrected text of --proof-sheet
+    /// (FILE: one text per output page, pages separated by a form feed). The corrected words are
+    /// matched to the recognised ones in reading order, so the PDF text layer, --txt and --hocr
+    /// carry the corrections and keep a box for every word; a split or an added word gets a share
+    /// of a neighbour's box. A page whose corrected text is empty is left as recognised, pages
+    /// past the end of FILE are untouched. Not checked against the picture: the file is trusted.
+    #[arg(long, value_name = "FILE.txt", requires = "ocr")]
+    apply_text: Option<PathBuf>,
+
     /// Confidence limit for --doubtful-words (0-100).
     #[arg(long, value_name = "CONF", default_value_t = 85.0)]
     doubtful_conf: f32,
@@ -2730,6 +2739,19 @@ fn real_main() -> Result<()> {
     if inputs.is_empty() {
         bail!("the project lists no pages");
     }
+    if let Some(f) = &cli.apply_text {
+        let src = std::fs::read_to_string(f)
+            .with_context(|| format!("--apply-text: cannot read {}", f.display()))?;
+        legatorocr_engine::corrections::set(&src);
+        let pages = legatorocr_engine::corrections::page_count();
+        if pages != inputs.len() {
+            eprintln!(
+                "--apply-text: {} has {pages} page(s), the run has {} input page(s); extra or missing pages are left as recognised (a split sheet gives more output pages)",
+                f.display(),
+                inputs.len()
+            );
+        }
+    }
     if let Some(f) = &cli.find_replace {
         let src = std::fs::read_to_string(f)
             .with_context(|| format!("--find-replace: cannot read {}", f.display()))?;
@@ -3174,6 +3196,13 @@ fn real_main() -> Result<()> {
         },
         &|_, _| {},
     )?;
+    if cli.apply_text.is_some() {
+        let c = legatorocr_engine::corrections::totals();
+        eprintln!(
+            "--apply-text: {} word(s) changed, {} added, {} removed",
+            c.changed, c.added, c.removed
+        );
+    }
     {
         let title = res
             .text
