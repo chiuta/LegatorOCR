@@ -1,0 +1,22 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:04.361
+All options apre una finestra con ogni opzione della riga di comando, in semplici controlli, raggruppata per argomento.
+
+00:00:04.461 --> 00:00:12.284
+Fai clic su un argomento per aprirlo: qui le opzioni per l’ordine delle pagine.
+
+00:00:12.384 --> 00:00:17.494
+La casella di ricerca trova un’opzione per nome o per una parola della sua descrizione.
+
+00:00:17.594 --> 00:00:21.461
+Spunta un’opzione e in fondo compare la riga di comando equivalente.
+
+00:00:21.561 --> 00:00:28.844
+Only chosen mostra solo ciò che hai spuntato; Copy command mette la riga di comando negli appunti.
+
+00:00:28.944 --> 00:00:36.318
+Run avvia il comando; il suo output compare qui. --dry-run elenca soltanto ciò che verrebbe fatto.
+
+00:00:36.418 --> 00:00:44.202
+Clear choices deseleziona tutto; la croce chiude la finestra.

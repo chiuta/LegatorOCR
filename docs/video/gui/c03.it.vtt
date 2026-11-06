@@ -1,0 +1,31 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:05.366
+La barra sopra l’anteprima regola solo la pagina selezionata. Prima, la scansione di lato.
+
+00:00:05.466 --> 00:00:11.327
+È uscita capovolta: un clic su Rotate left 90° la rimette a posto.
+
+00:00:11.427 --> 00:00:22.251
+Rotate right 90° gira nell’altro verso.
+
+00:00:22.351 --> 00:00:34.639
+Ora il foglio doppio storto: -45° e +45° impostano un’inclinazione diagonale di 45° (per pagine fotografate di sbieco)…
+
+00:00:34.739 --> 00:00:38.606
+…e Manual skew permette di impostare tu l’angolo esatto al posto di quello automatico.
+
+00:00:38.706 --> 00:00:42.066
+Split this sheet: decidi solo per questo foglio come viene tagliato.
+
+00:00:42.166 --> 00:00:45.165
+Automatic, At the middle, oppure per nulla (Off).
+
+00:00:45.265 --> 00:00:49.715
+Output of this page: dai a una pagina una modalità colore diversa dalle altre.
+
+00:00:49.815 --> 00:01:02.905
+Content box (mm): sposta ogni lato del ritaglio verso l’esterno (+) o l’interno (−).
+
+00:01:03.005 --> 00:01:14.806
+Undo e Redo scorrono le tue modifiche su questa pagina; Reset riporta la pagina al risultato automatico.

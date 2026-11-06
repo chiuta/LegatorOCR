@@ -1,0 +1,28 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:06.821
+Draw zones: segna aree sull’immagine originale trascinando. Spunta “Draw zones”, poi scegli un tipo.
+
+00:00:06.921 --> 00:00:13.833
+Erase: tutto ciò che sta dentro il rettangolo viene dipinto con il colore della carta (una macchia, un timbro).
+
+00:00:13.933 --> 00:00:20.952
+Picture: un rettangolo che resta a colori e nei dettagli mentre il resto può diventare in bianco e nero.
+
+00:00:21.052 --> 00:00:27.968
+No picture: un rettangolo in cui le immagini trovate automaticamente vengono tolte di nuovo.
+
+00:00:28.068 --> 00:00:39.835
+Clic destro su un rettangolo per rimuoverlo; Undo e Redo scorrono le zone; Clear zones le rimuove tutte.
+
+00:00:39.935 --> 00:00:46.850
+Guide line: trascina lungo una riga di testo curva; “Straighten curved lines” spiana poi la pagina seguendola.
+
+00:00:46.950 --> 00:00:53.889
+Work area: tutto ciò che sta fuori dal rettangolo viene dipinto con il colore della carta (ombre, una pagina vicina).
+
+00:00:53.989 --> 00:01:02.792
+Cut line: fai clic o trascina sull’originale: il foglio doppio viene tagliato lì invece che nel punto automatico.
+
+00:01:02.892 --> 00:01:18.649
+Content box: spuntalo per modificare il ritaglio. Trascina i bordi verdi sulla pagina elaborata.

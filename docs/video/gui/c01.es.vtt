@@ -1,0 +1,28 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:03.900
+Inicio: la ventana se abre con una tarjeta de bienvenida con los tres pasos.
+
+00:00:04.000 --> 00:00:08.861
+Pulse “Add scans…” (o el botón Add) para elegir imágenes, un PDF o un archivo comprimido.
+
+00:00:08.961 --> 00:00:20.779
+Se abre el diálogo de archivos del sistema; aquí escribimos la ruta y confirmamos.
+
+00:00:20.879 --> 00:00:25.779
+La página se procesa al instante: una hoja doble torcida se divide, se endereza y se recorta.
+
+00:00:25.879 --> 00:00:41.824
+Más archivos: File ▸ Add images… acepta varios a la vez.
+
+00:00:41.924 --> 00:01:00.346
+File ▸ Add folder… toma todas las imágenes de una carpeta.
+
+00:01:00.446 --> 00:01:09.739
+La lista de páginas: seleccione una página para verla; Up y Down cambian el orden.
+
+00:01:09.839 --> 00:01:16.678
+Remove quita del trabajo la página seleccionada; Clear vacía la lista.
+
+00:01:16.778 --> 00:01:20.604
+La lista vuelve a estar vacía y reaparece la tarjeta de bienvenida.

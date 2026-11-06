@@ -1,0 +1,31 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:05.366
+La barra sobre la vista previa ajusta solo la página seleccionada. Primero, el escaneo de lado.
+
+00:00:05.466 --> 00:00:11.327
+Ha salido boca abajo: un Rotate left 90° la deja bien.
+
+00:00:11.427 --> 00:00:22.251
+Rotate right 90° gira en el otro sentido.
+
+00:00:22.351 --> 00:00:34.639
+Ahora la hoja doble torcida: -45° y +45° fijan una inclinación diagonal de 45° (para páginas fotografiadas en ángulo)…
+
+00:00:34.739 --> 00:00:38.606
+…y Manual skew permite fijar usted mismo el ángulo exacto en lugar del automático.
+
+00:00:38.706 --> 00:00:42.066
+Split this sheet: decida solo para esta hoja cómo se corta.
+
+00:00:42.166 --> 00:00:45.165
+Automatic, at the middle o no cortar.
+
+00:00:45.265 --> 00:00:49.715
+Output of this page: dé a una página un modo de color distinto del resto.
+
+00:00:49.815 --> 00:01:02.905
+Content box (mm): mueva cada lado del recorte hacia fuera (+) o hacia dentro (−).
+
+00:01:03.005 --> 00:01:14.806
+Undo y Redo recorren sus cambios en esta página; Reset devuelve la página al resultado automático.

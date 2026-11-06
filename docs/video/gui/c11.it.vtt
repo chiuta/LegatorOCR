@@ -1,0 +1,19 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:07.825
+Language: l’interfaccia parla otto lingue. Apri il menu Language.
+
+00:00:07.925 --> 00:00:17.758
+Tutta la finestra cambia in una volta; la scelta viene ricordata.
+
+00:00:17.858 --> 00:00:28.654
+Help ▸ About mostra la versione e i crediti.
+
+00:00:28.754 --> 00:00:39.548
+File ▸ Optional modules… controlla quali strumenti extra sono installati; nessuno è obbligatorio, il motore OCR è integrato.
+
+00:00:39.648 --> 00:00:50.377
+Undo e Redo funzionano anche da tastiera: Ctrl+Z e Ctrl+Y.
+
+00:00:50.477 --> 00:00:55.315
+I file si possono anche trascinare nella finestra da un file manager, e il programma può essere avviato con dei file sulla riga di comando.

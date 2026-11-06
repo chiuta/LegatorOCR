@@ -1,0 +1,31 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:05.366
+A barra acima da pré-visualização ajusta apenas a página selecionada. Primeiro, a digitalização deitada.
+
+00:00:05.466 --> 00:00:11.327
+Saiu de cabeça para baixo: um Rotate left 90° põe-na certa.
+
+00:00:11.427 --> 00:00:22.251
+Rotate right 90° roda para o outro lado.
+
+00:00:22.351 --> 00:00:34.639
+Agora a folha dupla torta: -45° e +45° definem uma inclinação diagonal de 45° (para páginas fotografadas em ângulo)…
+
+00:00:34.739 --> 00:00:38.606
+…e Manual skew permite definir você próprio o ângulo exato, em vez do automático.
+
+00:00:38.706 --> 00:00:42.066
+Split this sheet: decida só para esta folha como é cortada.
+
+00:00:42.166 --> 00:00:45.165
+Automática, ao meio, ou nada.
+
+00:00:45.265 --> 00:00:49.715
+Output of this page: dê a uma página um modo de cor diferente do resto.
+
+00:00:49.815 --> 00:01:02.905
+Content box (mm): mova cada lado do recorte para fora (+) ou para dentro (−).
+
+00:01:03.005 --> 00:01:14.806
+Undo e Redo percorrem as suas alterações nesta página; Reset devolve a página ao resultado automático.

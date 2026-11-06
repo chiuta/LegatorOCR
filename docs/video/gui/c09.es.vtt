@@ -1,0 +1,25 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:06.325
+Cuando las páginas se vean bien, exporte. File ▸ Export PDF… (o el botón al final de los ajustes).
+
+00:00:06.425 --> 00:00:23.625
+Escriba un nombre y confirme; las páginas se procesan y se escribe el PDF.
+
+00:00:23.725 --> 00:00:26.625
+La barra de estado informa del resultado: páginas escritas.
+
+00:00:26.725 --> 00:00:33.055
+File ▸ Export images… guarda en su lugar las páginas procesadas como archivos de imagen.
+
+00:00:33.155 --> 00:00:50.947
+Elija la carpeta donde escribirlas.
+
+00:00:51.047 --> 00:01:02.667
+File ▸ Save project… guarda las páginas y todos los ajustes en un solo archivo, para continuar más tarde.
+
+00:01:02.767 --> 00:01:19.980
+File ▸ Save project to folder… copia además las imágenes de las páginas en la carpeta.
+
+00:01:20.080 --> 00:01:40.847
+File ▸ Open project… carga un proyecto guardado: páginas, ajustes y los ajustes de cada página.

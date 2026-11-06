@@ -1,0 +1,28 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:06.821
+Draw zones: marque áreas na imagem original arrastando. Marque “Draw zones” e depois escolha um tipo.
+
+00:00:06.921 --> 00:00:13.833
+Erase: tudo o que está dentro do retângulo é pintado com a cor do papel (uma mancha, um carimbo).
+
+00:00:13.933 --> 00:00:20.952
+Picture: um retângulo que se mantém a cores e com detalhe enquanto o resto pode passar a preto e branco.
+
+00:00:21.052 --> 00:00:27.968
+No picture: um retângulo onde as imagens encontradas automaticamente são retiradas de novo.
+
+00:00:28.068 --> 00:00:39.835
+Clique direito num retângulo para o remover; Undo e Redo percorrem as zonas; Clear zones remove-as todas.
+
+00:00:39.935 --> 00:00:46.850
+Guide line: arraste ao longo de uma linha de texto curva; “Straighten curved lines” aplana então a página segundo ela.
+
+00:00:46.950 --> 00:00:53.889
+Work area: tudo o que está fora do retângulo é pintado com a cor do papel (sombras, uma página vizinha).
+
+00:00:53.989 --> 00:01:02.792
+Cut line: clique ou arraste no original: a folha dupla é cortada aí e não no sítio automático.
+
+00:01:02.892 --> 00:01:18.649
+Content box: marque-a para editar o recorte. Arraste os bordos verdes na página processada.

@@ -1,0 +1,22 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:04.361
+All options abre una ventana con todas las opciones de la línea de comandos, en controles sencillos, agrupadas por tema.
+
+00:00:04.461 --> 00:00:12.284
+Haga clic en un tema para desplegarlo: aquí, las opciones del orden de las páginas.
+
+00:00:12.384 --> 00:00:17.494
+El cuadro de búsqueda encuentra una opción por su nombre o por una palabra de su descripción.
+
+00:00:17.594 --> 00:00:21.461
+Marque una opción y abajo aparece la línea de comandos equivalente.
+
+00:00:21.561 --> 00:00:28.844
+Only chosen muestra solo lo que ha marcado; Copy command copia la línea de comandos al portapapeles.
+
+00:00:28.944 --> 00:00:36.318
+Run inicia el comando; su salida aparece aquí. --dry-run solo lista lo que se haría.
+
+00:00:36.418 --> 00:00:44.202
+Clear choices desmarca todo; la cruz cierra la ventana.

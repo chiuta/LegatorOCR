@@ -1,0 +1,28 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:07.869
+Opções de limpeza. Para criar espaço, as outras secções estão recolhidas: clique no título de uma secção para a recolher ou expandir.
+
+00:00:07.969 --> 00:00:15.799
+Invert negative scans: texto branco sobre preto (microfilme) passa a normal.
+
+00:00:15.899 --> 00:00:23.238
+Auto contrast (levels) estica as digitalizações baças até ao intervalo completo.
+
+00:00:23.338 --> 00:00:35.092
+Remove show-through apaga a impressão vista do outro lado de papel fino; Smooth halftone (descreen) remove os pontos de trama das imagens impressas.
+
+00:00:35.192 --> 00:00:46.488
+As duas opções da página 2: primeiro os furos de perfuração. Selecione a página com furos e marque Remove punch holes.
+
+00:00:46.588 --> 00:01:02.875
+Fotografias de telemóvel: escolha a fotografia, depois Fix perspective endireita a página e Wipe the background remove a mesa à volta.
+
+00:01:02.975 --> 00:01:09.337
+Remove fingers at the edge apaga um polegar que segura a página, sem tocar na impressão.
+
+00:01:09.437 --> 00:01:18.100
+Drop colour remove uma cor de tinta antes da conversão para preto e branco; Sharpen torna o texto mais nítido.
+
+00:01:18.200 --> 00:01:28.911
+Erase zones aceita como texto retângulos em milímetros (x,y,w,h), os mesmos que pode desenhar com o rato.
