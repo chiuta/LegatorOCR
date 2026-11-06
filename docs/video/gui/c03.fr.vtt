@@ -1,0 +1,31 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:05.366
+La barre au-dessus de l’aperçu ne règle que la page sélectionnée. D’abord, le scan couché.
+
+00:00:05.466 --> 00:00:11.327
+Il est sorti à l’envers : un seul Rotate left 90° le remet d’aplomb.
+
+00:00:11.427 --> 00:00:22.251
+Rotate right 90° tourne dans l’autre sens.
+
+00:00:22.351 --> 00:00:34.639
+Maintenant la double feuille de travers : -45° et +45° règlent une inclinaison en diagonale de 45° (pour des pages photographiées en biais)…
+
+00:00:34.739 --> 00:00:38.606
+…et Manual skew permet de fixer vous-même l’angle exact au lieu de l’angle automatique.
+
+00:00:38.706 --> 00:00:42.066
+Split this sheet : décidez pour cette seule feuille comment elle est coupée.
+
+00:00:42.166 --> 00:00:45.165
+Automatique, au milieu, ou pas du tout.
+
+00:00:45.265 --> 00:00:49.715
+Output of this page : donnez à une page un autre mode de couleur que le reste.
+
+00:00:49.815 --> 00:01:02.905
+Content box (mm) : déplacez chaque côté du recadrage vers l’extérieur (+) ou l’intérieur (−).
+
+00:01:03.005 --> 00:01:14.806
+Undo et Redo parcourent vos modifications sur cette page ; Reset ramène la page au résultat automatique.

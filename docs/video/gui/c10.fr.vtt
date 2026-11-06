@@ -1,0 +1,22 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:04.361
+All options ouvre une fenêtre avec chaque option de la ligne de commande, sous forme de commandes simples, groupées par thème.
+
+00:00:04.461 --> 00:00:12.284
+Cliquez sur un thème pour le déplier : ici les options de l’ordre des pages.
+
+00:00:12.384 --> 00:00:17.494
+Le champ de recherche trouve une option par son nom ou par un mot de sa description.
+
+00:00:17.594 --> 00:00:21.461
+Cochez une option, et la ligne de commande équivalente apparaît en bas.
+
+00:00:21.561 --> 00:00:28.844
+Only chosen n’affiche que ce que vous avez coché ; Copy command place la ligne de commande dans le presse-papiers.
+
+00:00:28.944 --> 00:00:36.318
+Run lance la commande ; sa sortie apparaît ici. --dry-run liste seulement ce qui serait fait.
+
+00:00:36.418 --> 00:00:44.202
+Clear choices décoche tout ; la croix ferme la fenêtre.

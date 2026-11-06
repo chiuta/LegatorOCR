@@ -1,0 +1,28 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:06.821
+Draw zones : marquez des zones sur l’image originale en les faisant glisser. Cochez « Draw zones », puis choisissez un type.
+
+00:00:06.921 --> 00:00:13.833
+Erase : tout l’intérieur du rectangle est peint de la couleur du papier (une tache, un tampon).
+
+00:00:13.933 --> 00:00:20.952
+Picture : un rectangle qui reste en couleur et en détail alors que le reste peut passer en noir et blanc.
+
+00:00:21.052 --> 00:00:27.968
+No picture : un rectangle où les images trouvées automatiquement sont retirées.
+
+00:00:28.068 --> 00:00:39.835
+Clic droit sur un rectangle pour le supprimer ; Undo et Redo parcourent les zones ; Clear zones les supprime toutes.
+
+00:00:39.935 --> 00:00:46.850
+Guide line : faites glisser le long d’une ligne de texte courbée ; « Straighten curved lines » aplatit alors la page le long de cette ligne.
+
+00:00:46.950 --> 00:00:53.889
+Work area : tout ce qui est hors du rectangle est peint de la couleur du papier (ombres, page voisine).
+
+00:00:53.989 --> 00:01:02.792
+Cut line : cliquez ou faites glisser sur l’original : la double feuille est coupée là au lieu de l’endroit automatique.
+
+00:01:02.892 --> 00:01:18.649
+Content box : cochez-la pour modifier le recadrage. Faites glisser les bords verts sur la page traitée.
