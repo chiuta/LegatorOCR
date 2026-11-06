@@ -95,8 +95,8 @@ const BUILTIN: &[(&str, &str, &str)] = &[
     ),
     (
         "phone-photos",
-        "Pages photographed by phone: perspective fixed, level lighting, wider skew range, fingers removed",
-        "mode = color\nnormalize = true\nauto_levels = true\nperspective = true\nmax_skew = 15\nfingers = true\nsharpen = 0.5\n",
+        "Pages photographed by phone (spreads cut in the middle): perspective fixed, level lighting, wider skew range, fingers removed",
+        "mode = color\nnormalize = true\nauto_levels = true\nperspective = true\nsplit = middle\nmax_skew = 15\nfingers = true\nsharpen = 0.5\n",
     ),
 ];
 
