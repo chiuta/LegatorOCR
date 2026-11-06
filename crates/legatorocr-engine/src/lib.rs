@@ -47,6 +47,7 @@ pub mod naming;
 pub mod ocfl;
 pub mod ocrcache;
 pub mod offline;
+pub mod runninghead;
 
 /// Accurate mode of the built-in OCR (`--accurate`): three passes per line, averaged.
 pub fn set_accurate(on: bool) {
@@ -243,6 +244,8 @@ pub struct ExportResult {
     pub text: Option<String>,
     /// Same text with a blank line between paragraphs (for DOCX).
     pub paragraph_text: Option<String>,
+    /// Running heads, feet and page numbers taken out of the text (`--drop-running-heads`): page, line.
+    pub running_heads: Vec<(usize, String)>,
     /// hOCR document when OCR ran.
     pub hocr: Option<String>,
     /// ALTO v4 XML of all pages (with `--ocr`).
@@ -1064,6 +1067,14 @@ pub fn run_export(
     if ocr_opts.is_some() {
         res.text = Some(texts.join("\n\x0c"));
         res.paragraph_text = Some(par_texts.join("\n\x0c"));
+        if runninghead::enabled() {
+            if let Some(t) = res.text.take() {
+                let (t2, gone) = runninghead::strip(&t);
+                res.running_heads = gone;
+                res.text = Some(t2);
+            }
+            res.paragraph_text = res.paragraph_text.take().map(|t| runninghead::strip(&t).0);
+        }
         if ropost::enabled() {
             let o = ropost::PostOptions::default();
             res.text = res.text.take().map(|t| ropost::postprocess_pages(&t, &o));

@@ -133,6 +133,13 @@ struct Cli {
     #[arg(long)]
     cedilla: bool,
 
+    /// With --ocr: leave running heads, running feet and printed page numbers out of the .txt and
+    /// .docx text (the first or last line of a page that repeats, digits ignored, on at least
+    /// half of the pages; needs four pages). The lines taken out are listed on stderr; the PDF text
+    /// layer, hOCR and JSON keep everything.
+    #[arg(long)]
+    drop_running_heads: bool,
+
     /// Leave out PDF inputs that already have a text layer (only scans without text are
     /// processed), so a half-finished batch can be run again without redoing finished files.
     #[arg(long)]
@@ -2745,6 +2752,7 @@ fn real_main() -> Result<()> {
     legatorocr_engine::profile::enable(cli.timings);
     legatorocr_engine::ropost::set_enabled(cli.clean_text);
     legatorocr_engine::ropost::set_cedilla(cli.cedilla);
+    legatorocr_engine::runninghead::set_enabled(cli.drop_running_heads);
     legatorocr_engine::pagenum::set_enabled(cli.page_labels);
     legatorocr_engine::memcap::set(cli.max_memory);
     if cli.auto_retry {
@@ -3132,6 +3140,19 @@ fn real_main() -> Result<()> {
             } else {
                 String::new()
             }
+        );
+    }
+    if !res.running_heads.is_empty() {
+        let mut shown: Vec<&str> = Vec::new();
+        for (_, t) in &res.running_heads {
+            if !shown.contains(&t.as_str()) && shown.len() < 3 {
+                shown.push(t);
+            }
+        }
+        eprintln!(
+            "{} running head/foot/page-number lines left out of the text (e.g. {})",
+            res.running_heads.len(),
+            shown.iter().map(|t| format!("\"{t}\"")).collect::<Vec<_>>().join(", ")
         );
     }
     if let Some(t) = &res.text {
