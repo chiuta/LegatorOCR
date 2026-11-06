@@ -35,8 +35,45 @@ impl Drop for TempDir {
     }
 }
 
+/// The `openssl` program that can make CAdES signatures (`cms -cades`, OpenSSL 3). The one on
+/// the PATH is tried first; on macOS the system one is LibreSSL, which cannot, so the Homebrew
+/// installs are tried next. `LEGATOROCR_OPENSSL` names one explicitly.
+fn openssl_program() -> Option<&'static str> {
+    use std::sync::OnceLock;
+    static FOUND: OnceLock<Option<String>> = OnceLock::new();
+    FOUND
+        .get_or_init(|| {
+            let from_env = std::env::var("LEGATOROCR_OPENSSL").ok();
+            let candidates = from_env.into_iter().chain(
+                [
+                    "openssl",
+                    "/opt/homebrew/opt/openssl@3/bin/openssl",
+                    "/usr/local/opt/openssl@3/bin/openssl",
+                    "/opt/homebrew/bin/openssl",
+                    "/usr/local/bin/openssl",
+                ]
+                .map(String::from),
+            );
+            for c in candidates {
+                let out = Command::new(&c).args(["cms", "-help"]).output();
+                if let Ok(o) = out {
+                    let text = format!(
+                        "{}{}",
+                        String::from_utf8_lossy(&o.stdout),
+                        String::from_utf8_lossy(&o.stderr)
+                    );
+                    if text.contains("-cades") {
+                        return Some(c);
+                    }
+                }
+            }
+            None
+        })
+        .as_deref()
+}
+
 fn openssl() -> Command {
-    Command::new("openssl")
+    Command::new(openssl_program().unwrap_or("openssl"))
 }
 
 /// Sign `input` into `output`. The PKCS#12 password is read from the environment variable
@@ -51,6 +88,13 @@ pub fn sign_pdf(
     tsa_url: Option<&str>,
 ) -> Result<()> {
     let data = std::fs::read(input).with_context(|| format!("reading {}", input.display()))?;
+    if openssl_program().is_none() {
+        bail!(
+            "signing needs OpenSSL 3 (`openssl cms -cades`); the openssl found is missing or too old \
+             (macOS ships LibreSSL). Install OpenSSL 3 (macOS: `brew install openssl@3`) or point \
+             LEGATOROCR_OPENSSL at it"
+        );
+    }
     if std::env::var_os(pass_env).is_none() {
         bail!("set the PKCS#12 password in the environment variable {pass_env} (use an empty value for none)");
     }
@@ -392,12 +436,9 @@ fn der_trim(d: &[u8]) -> Option<&[u8]> {
 mod tests {
     use super::*;
 
+    /// These tests sign with `openssl cms -cades`: skipped where no OpenSSL 3 is installed.
     fn have_openssl() -> bool {
-        Command::new("openssl")
-            .arg("version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        openssl_program().is_some()
     }
 
     #[test]
@@ -492,7 +533,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         let run = |args: &[&str]| {
-            let o = Command::new("openssl")
+            let o = openssl()
                 .args(args)
                 .current_dir(&d)
                 .output()
