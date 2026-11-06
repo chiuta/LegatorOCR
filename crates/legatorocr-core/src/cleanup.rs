@@ -534,6 +534,159 @@ fn open_mask(m: &[u8], w: usize, h: usize, r: usize) -> Vec<u8> {
     pass(&pass(m, true), false)
 }
 
+/// Square window max (`max`) or min filter of radius `r` over a `w×h` byte plane; the window is
+/// cut at the border (so an erosion does not eat in from the image edge).
+fn box_filter(src: &[u8], w: usize, h: usize, r: usize, max: bool) -> Vec<u8> {
+    let pick = |a: u8, b: u8| if max { a.max(b) } else { a.min(b) };
+    let init = if max { 0u8 } else { 255u8 };
+    let mut tmp = vec![0u8; w * h];
+    for y in 0..h {
+        let row = &src[y * w..(y + 1) * w];
+        for x in 0..w {
+            let (a, b) = (x.saturating_sub(r), (x + r).min(w - 1));
+            tmp[y * w + x] = row[a..=b].iter().fold(init, |m, &v| pick(m, v));
+        }
+    }
+    let mut out = vec![0u8; w * h];
+    for x in 0..w {
+        for y in 0..h {
+            let (a, b) = (y.saturating_sub(r), (y + r).min(h - 1));
+            out[y * w + x] = (a..=b).fold(init, |m, yy| pick(m, tmp[yy * w + x]));
+        }
+    }
+    out
+}
+
+/// Paint what lies outside the paper with `paper`. A page photographed on a bag or a
+/// tablecloth keeps, once levelled and cut, wedges of that background in its corners; layout
+/// analysis and OCR take them for print and the content box grows over them. The paper is the
+/// smooth, bright, colourless surface (text removed by a closing; the lace of a bag has
+/// texture and colour); its largest blob, cleaned of thin leaks by an erosion, gives a convex
+/// outline which is grown back by the same amount. Returns false (image untouched) when no
+/// page-sized paper blob is found.
+pub fn trim_to_paper(img: &mut RgbImage, dpi: u32, paper: Rgb<u8>) -> bool {
+    if img.width() < 64 || img.height() < 64 {
+        return false;
+    }
+    let f = (dpi / 75).max(1);
+    let small = crate::transform::downscale_rgb(img, f);
+    let (w, h) = (small.width() as usize, small.height() as usize);
+    if w < 40 || h < 40 {
+        return false;
+    }
+    let raw = small.as_raw();
+    let plane = |c: usize| -> Vec<u8> { (0..w * h).map(|i| raw[i * 3 + c]).collect() };
+    let gray: Vec<u8> = (0..w * h)
+        .map(|i| ((raw[i * 3] as u32 * 30 + raw[i * 3 + 1] as u32 * 59 + raw[i * 3 + 2] as u32 * 11) / 100) as u8)
+        .collect();
+    let close = |p: &[u8], r: usize| box_filter(&box_filter(p, w, h, r, true), w, h, r, false);
+    let c = close(&gray, 4);
+    let (cr, cg, cb) = (close(&plane(0), 4), close(&plane(1), 4), close(&plane(2), 4));
+    let (dmax, dmin) = (box_filter(&c, w, h, 4, true), box_filter(&c, w, h, 4, false));
+    let mut sorted = c.clone();
+    sorted.sort_unstable();
+    let p90 = sorted[sorted.len() * 9 / 10] as f32;
+    let mut mask: Vec<u8> = (0..w * h)
+        .map(|i| {
+            let tex = dmax[i] as i32 - dmin[i] as i32;
+            let hi = cr[i].max(cg[i]).max(cb[i]) as i32;
+            let lo = cr[i].min(cg[i]).min(cb[i]) as i32;
+            (c[i] as f32 > 0.8 * p90 && tex < 22 && hi - lo < 45) as u8
+        })
+        .collect();
+    let open = |m: &[u8], r: usize| box_filter(&box_filter(m, w, h, r, false), w, h, r, true);
+    let closeb = |m: &[u8], r: usize| box_filter(&box_filter(m, w, h, r, true), w, h, r, false);
+    mask = open(&mask, 3);
+    mask = closeb(&mask, 7);
+    mask = open(&mask, 15);
+    let grow = 21usize;
+    let eroded = box_filter(&mask, w, h, grow, false);
+    let (lab, comps) = label(&eroded, w, h);
+    let Some((bi, best)) = comps.iter().enumerate().max_by_key(|(_, c)| c.area) else {
+        return false;
+    };
+    if (best.area as usize) * 100 < w * h * 20 {
+        return false;
+    }
+    let id = bi as u32 + 1;
+    // convex hull of the blob grown by `grow` (Minkowski sum with a square = hull of the
+    // corners of squares around its row ends)
+    let mut pts: Vec<(i64, i64)> = Vec::new();
+    for y in 0..h {
+        let (mut a, mut b) = (usize::MAX, 0usize);
+        for x in 0..w {
+            if lab[y * w + x] == id {
+                a = a.min(x);
+                b = b.max(x);
+            }
+        }
+        if a != usize::MAX {
+            for x in [a, b] {
+                for (dx, dy) in [(-1i64, -1i64), (1, -1), (1, 1), (-1, 1)] {
+                    pts.push((x as i64 + dx * grow as i64, y as i64 + dy * grow as i64));
+                }
+            }
+        }
+    }
+    pts.sort_unstable();
+    pts.dedup();
+    let cross = |o: (i64, i64), a: (i64, i64), b: (i64, i64)| {
+        (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
+    };
+    let mut hull: Vec<(i64, i64)> = Vec::new();
+    for pass in 0..2 {
+        let start = hull.len();
+        let it: Box<dyn Iterator<Item = &(i64, i64)>> = if pass == 0 {
+            Box::new(pts.iter())
+        } else {
+            Box::new(pts.iter().rev())
+        };
+        for &p in it {
+            while hull.len() >= start + 2
+                && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0
+            {
+                hull.pop();
+            }
+            hull.push(p);
+        }
+        hull.pop();
+    }
+    if hull.len() < 3 {
+        return false;
+    }
+    // x-range of the hull on every small row
+    let mut lo = vec![f64::INFINITY; h];
+    let mut hi = vec![f64::NEG_INFINITY; h];
+    for i in 0..hull.len() {
+        let (a, b) = (hull[i], hull[(i + 1) % hull.len()]);
+        let (y0, y1) = (a.1.min(b.1).max(0), a.1.max(b.1).min(h as i64 - 1));
+        for y in y0..=y1 {
+            let x = if a.1 == b.1 {
+                a.0.min(b.0) as f64
+            } else {
+                a.0 as f64 + (b.0 - a.0) as f64 * (y - a.1) as f64 / (b.1 - a.1) as f64
+            };
+            lo[y as usize] = lo[y as usize].min(x);
+            hi[y as usize] = hi[y as usize].max(x);
+            if a.1 == b.1 {
+                hi[y as usize] = hi[y as usize].max(a.0.max(b.0) as f64);
+            }
+        }
+    }
+    let (iw, ih) = (img.width() as usize, img.height() as usize);
+    for y in 0..ih {
+        let sy = (y / f as usize).min(h - 1);
+        let (a, b) = (lo[sy], hi[sy]);
+        for x in 0..iw {
+            let sx = x as f64 / f as f64;
+            if !(sx >= a && sx <= b) {
+                img.put_pixel(x as u32, y as u32, paper);
+            }
+        }
+    }
+    true
+}
+
 /// Remove fingers holding the page: skin-coloured regions (judged relative to the
 /// paper colour, so tinted paper does not fool it) that reach the image border and
 /// are at least 8 mm long. They are painted with `paper`.
@@ -989,6 +1142,52 @@ mod tests {
         }
         assert_eq!(remove_fingers(&mut p, dpi, paper), 0);
         assert_eq!(p.get_pixel(300, 612).0, [20, 20, 20]);
+    }
+
+    #[test]
+    fn textured_background_beside_the_paper_is_painted_over_but_the_page_stays() {
+        let paper = Rgb([240, 240, 236]);
+        let (w, h) = (1200u32, 1600u32);
+        let mut p = RgbImage::from_pixel(w, h, paper);
+        // a bag: a bluish checkerboard strip along the left edge and the top
+        for y in 0..h {
+            for x in 0..w {
+                if (x < 220 || y < 140) && ((x / 40 + y / 40) % 2 == 0) {
+                    p.put_pixel(x, y, Rgb([90, 80, 140]));
+                } else if x < 220 || y < 140 {
+                    p.put_pixel(x, y, Rgb([210, 205, 235]));
+                }
+            }
+        }
+        // text lines on the page
+        for y in (300..1500).step_by(40) {
+            for yy in y..y + 8 {
+                for x in 320..1100 {
+                    p.put_pixel(x, yy, Rgb([30, 30, 30]));
+                }
+            }
+        }
+        assert!(trim_to_paper(&mut p, 300, paper));
+        assert_eq!(p.get_pixel(60, 800).0, paper.0, "bag at the left is gone");
+        assert_eq!(p.get_pixel(600, 40).0, paper.0, "bag at the top is gone");
+        assert_eq!(p.get_pixel(500, 303).0, [30, 30, 30], "text stays");
+        assert_eq!(p.get_pixel(700, 1000).0, paper.0);
+    }
+
+    #[test]
+    fn a_page_with_no_background_is_left_alone() {
+        let paper = Rgb([240, 240, 236]);
+        let mut p = RgbImage::from_pixel(1200, 1600, paper);
+        for y in (200..1400).step_by(40) {
+            for yy in y..y + 8 {
+                for x in 100..1100 {
+                    p.put_pixel(x, yy, Rgb([30, 30, 30]));
+                }
+            }
+        }
+        let before = p.clone();
+        trim_to_paper(&mut p, 300, paper);
+        assert_eq!(p, before);
     }
 
     #[test]

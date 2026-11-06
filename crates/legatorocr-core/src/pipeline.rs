@@ -874,6 +874,13 @@ fn prepare(
         }
     }
 
+    // photographed pages: what the levelled page still shows of the table or bag around it
+    // is painted over (it would count as print for the content box, layout and OCR)
+    if s.perspective {
+        let paper = transform::estimate_background(&img);
+        cleanup::trim_to_paper(&mut img, s.dpi, paper);
+    }
+
     // --- content ----------------------------------------------------------
     let gray_full = crate::stage("content/grayscale", || transform::gray_of(&img));
     let mut a = crate::stage("content/analyse", || analyse(&gray_full, s.dpi));
