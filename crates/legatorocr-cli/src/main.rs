@@ -1,3 +1,4 @@
+mod escl;
 mod fff;
 use anyhow::{bail, Context, Result};
 use clap::{CommandFactory, Parser, ValueEnum};
@@ -44,7 +45,7 @@ enum Fmt {
 #[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "install_modules", "watch", "verify_bag", "verify_ocfl", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "decode_worker", "fuse_frames", "verify_document", "integrity_hints", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "extract_project", "search_preset", "search_help"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "install_modules", "scan_escl", "watch", "verify_bag", "verify_ocfl", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "decode_worker", "fuse_frames", "verify_document", "integrity_hints", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "extract_project", "search_preset", "search_help"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -321,12 +322,37 @@ struct Cli {
     #[arg(long, default_value_t = 12.0)]
     vectorize_min_area: f64,
 
-    /// Sealed mode: refuse the two features that use the network (--timestamp / time-stamp
-    /// requests and --install-modules). Also on when LEGATOROCR_OFFLINE=1. It is a refusal inside
+    /// Sealed mode: refuse the features that use the network (--timestamp / time-stamp
+    /// requests, --install-modules and --scan-escl). Also on when LEGATOROCR_OFFLINE=1. It is a refusal inside
     /// this program, not a firewall: programs you point it at (Tesseract, an ONNX script) are
     /// not restricted.
     #[arg(long)]
     offline: bool,
+    /// Scan from a network scanner over eSCL (AirScan / Mopria), plain HTTP only: `HOST`,
+    /// `HOST:PORT` or `http://HOST[:PORT][/ROOT]` (root defaults to /eSCL). The pages are saved as
+    /// scan-0001.jpg, … in --scan-dir and then processed like any other input. No discovery: give
+    /// the address (the scanner's web page or your router lists it). HTTPS scanners are not
+    /// supported. Tested against a stand-in server only, not a real scanner. Refused with --offline.
+    #[arg(long, value_name = "HOST")]
+    scan_escl: Option<String>,
+    /// With --scan-escl: folder for the scanned pages.
+    #[arg(long, default_value = "scan", value_name = "DIR")]
+    scan_dir: PathBuf,
+    /// With --scan-escl: resolution, 75 to 1200.
+    #[arg(long, default_value_t = 300)]
+    scan_dpi: u32,
+    /// With --scan-escl: color, gray or bw.
+    #[arg(long, default_value = "color")]
+    scan_mode: String,
+    /// With --scan-escl: platen (one page) or feeder (until the feeder is empty).
+    #[arg(long, default_value = "platen")]
+    scan_source: String,
+    /// With --scan-escl: stop after this many pages (0 = no limit).
+    #[arg(long, default_value_t = 0)]
+    scan_pages: usize,
+    /// With --scan-escl: only scan and save the pages; do not process them.
+    #[arg(long)]
+    scan_only: bool,
     /// With the built-in OCR: read every line three times (shifted a pixel up and down) and
     /// average, for difficult scans. About 1.7 times slower; on the magazine test pages the
     /// error rate went 3.66 % -> 3.39 %, on clean books and brochures it made no difference.
@@ -1522,6 +1548,28 @@ fn real_main() -> Result<()> {
     }
     let mut cli = Cli::parse();
     legatorocr_engine::offline::set(cli.offline);
+    if let Some(addr) = cli.scan_escl.clone() {
+        legatorocr_engine::offline::refuse("--scan-escl")?;
+        let o = escl::Options {
+            dpi: cli.scan_dpi,
+            mode: cli.scan_mode.clone(),
+            source: cli.scan_source.clone(),
+            max_pages: cli.scan_pages,
+        };
+        let files = escl::scan(&addr, &o, &cli.scan_dir)?;
+        eprintln!(
+            "scanned {} page(s) into {}",
+            files.len(),
+            cli.scan_dir.display()
+        );
+        if cli.scan_only {
+            for f in &files {
+                println!("{}", f.display());
+            }
+            return Ok(());
+        }
+        cli.inputs.extend(files);
+    }
     legatorocr_engine::set_accurate(cli.accurate);
     if cli.force_ocr {
         cli.ocr_mode = Some("force".into());
@@ -2544,7 +2592,11 @@ fn real_main() -> Result<()> {
 
     // --- run: process → (save images) → OCR → PDF ---------------------------
     // Fail now, not after an hour of OCR: make sure the outputs can be written.
-    if let Some(pdf) = cli.pdf.as_ref().filter(|p| !cli.dry_run && !done_has_mark(p)) {
+    if let Some(pdf) = cli
+        .pdf
+        .as_ref()
+        .filter(|p| !cli.dry_run && !done_has_mark(p))
+    {
         legatorocr_engine::check_writable(pdf)?;
     }
     let mut inputs: Vec<PathBuf> = Vec::new();
