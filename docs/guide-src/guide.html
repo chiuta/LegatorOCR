@@ -101,7 +101,7 @@
 <p>Rețeta pe 4 fișiere de test: 6 pagini în carte.pdf. Cu --pdfa programul scrie PDF/A-2b.</p>
 <h3 id="poze-de-pe-telefon-pagini-curate">Poze de pe telefon → pagini curate</h3>
 <pre><code>legatorocr photos/*.jpg --profile phone-photos --pdf pagini.pdf -o pages</code></pre>
-<p>Profilul uniformizează lumina, lărgește intervalul de înclinare și scoate degetele. Mai multe poze ale aceleiași pagini se pot combina întâi cu <code>--fuse-frames</code> (ajută la zgomot puternic; la zgomot moderat nu). Opțiunea primește un fișier de ieșire: legatorocr poza1.jpg poza2.jpg poza3.jpg --fuse-frames pagina.png, apoi prelucrezi pagina.png ca de obicei; prima poză este referința.</p>
+<p>Profilul uniformizează lumina, corectează perspectiva, șterge fundalul din jurul paginii (<code>--trim-background</code>), taie cărțile deschise la mijloc, lărgește intervalul de înclinare și scoate degetele fără să atingă textul. O pagină care iese fără text este citită a doua oară doar pe conținutul ei. Pentru pagini uniforme pe A4, cu textul mărit, folosește <code>--profile phone-photos-a4</code>. Mai multe poze ale aceleiași pagini se pot combina întâi cu <code>--fuse-frames</code> (ajută la zgomot puternic; la zgomot moderat nu). Opțiunea primește un fișier de ieșire: legatorocr poza1.jpg poza2.jpg poza3.jpg --fuse-frames pagina.png, apoi prelucrezi pagina.png ca de obicei; prima poză este referința.</p>
 <p><img src="img/6e773135-1c80.jpg" alt="fuse-frames"></p>
 <p>--fuse-frames cu trei poze ale aceleiași pagini: le aliniază și scrie fused.png din 3 din 3 cadre.</p>
 <h3 id="copie-de-arhivă-cu-dovadă-de-integritate">Copie de arhivă cu dovadă de integritate</h3>

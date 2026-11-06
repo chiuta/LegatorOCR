@@ -116,6 +116,7 @@ pub struct UiSettings {
     pub show_through: bool,
     pub descreen: bool,
     pub perspective: bool,
+    pub trim_background: bool,
     pub align: (HAlign, VAlign),
     pub pdf_quality: u8,
     pub skip_blank: bool,
@@ -179,6 +180,7 @@ impl Default for UiSettings {
             show_through: false,
             descreen: false,
             perspective: false,
+            trim_background: false,
             align: (HAlign::Center, VAlign::Center),
             pdf_quality: 80,
             skip_blank: false,
@@ -306,6 +308,7 @@ impl UiSettings {
             show_through: self.show_through,
             descreen: self.descreen,
             perspective: self.perspective,
+            trim_background: self.trim_background,
         }
     }
 
@@ -403,6 +406,7 @@ impl UiSettings {
         self.show_through = c.show_through;
         self.descreen = c.descreen;
         self.perspective = c.perspective;
+        self.trim_background = c.trim_background;
         if let Some(v) = p.get("pdf_quality").and_then(|v| v.parse::<u8>().ok()) {
             self.pdf_quality = v.min(100);
         }
@@ -595,6 +599,7 @@ mod tests {
             despeckle_strength: 2.5,
             show_through: true,
             perspective: true,
+            trim_background: true,
             ..Default::default()
         };
         let text = s.to_project(vec![]).to_text(None);
@@ -629,8 +634,8 @@ mod tests {
             (true, false, 25)
         );
         assert_eq!(
-            (back.show_through, back.descreen, back.perspective),
-            (true, false, true)
+            (back.show_through, back.descreen, back.perspective, back.trim_background),
+            (true, false, true, true)
         );
         assert_eq!(
             (

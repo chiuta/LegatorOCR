@@ -1105,6 +1105,11 @@ struct Cli {
     #[arg(long)]
     perspective: bool,
 
+    /// Paint white what the levelled page still shows of the table or bag around it (phone
+    /// photos); keeps it out of the content box, the layout analysis and the OCR.
+    #[arg(long)]
+    trim_background: bool,
+
     /// Smooth halftone screens of printed photographs.
     #[arg(long)]
     descreen: bool,
@@ -2375,6 +2380,7 @@ fn real_main() -> Result<()> {
         show_through: cli.show_through,
         descreen: cli.descreen,
         perspective: cli.perspective,
+        trim_background: cli.trim_background,
     };
 
     let project = cli.project.as_deref().map(Project::load).transpose()?;
@@ -2403,6 +2409,7 @@ fn real_main() -> Result<()> {
             "--dropout",
             "--descreen",
             "--perspective",
+            "--trim-background",
             "--dewarp",
             "--fingers",
             "--punch-holes",

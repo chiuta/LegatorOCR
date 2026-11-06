@@ -148,6 +148,8 @@ pub struct Settings {
     pub descreen: bool,
     /// Straighten pages photographed at an angle (finds the page quadrilateral).
     pub perspective: bool,
+    /// Paint over the table or bag still visible around the page (phone photos).
+    pub trim_background: bool,
 }
 
 impl Default for Settings {
@@ -198,6 +200,7 @@ impl Default for Settings {
             show_through: false,
             descreen: false,
             perspective: false,
+            trim_background: false,
         }
     }
 }
@@ -876,7 +879,7 @@ fn prepare(
 
     // photographed pages: what the levelled page still shows of the table or bag around it
     // is painted over (it would count as print for the content box, layout and OCR)
-    if s.perspective {
+    if s.trim_background {
         let paper = transform::estimate_background(&img);
         cleanup::trim_to_paper(&mut img, s.dpi, paper);
     }
@@ -2304,6 +2307,7 @@ mod tests {
                 show_through: rnd(2) == 0,
                 descreen: rnd(2) == 0,
                 perspective: rnd(2) == 0,
+                trim_background: rnd(2) == 0,
             };
             let pages = process_page(&DynamicImage::ImageRgb8(img), &s);
             assert!(!pages.is_empty() && pages.len() <= 2, "iteration {it}");

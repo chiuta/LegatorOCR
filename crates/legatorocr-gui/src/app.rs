@@ -2391,6 +2391,9 @@ impl App {
                             .checkbox(&mut self.s.perspective, tr("set.perspective"))
                             .changed();
                         ch |= ui
+                            .checkbox(&mut self.s.trim_background, tr("set.trim_background"))
+                            .changed();
+                        ch |= ui
                             .checkbox(&mut self.s.punch_holes, tr("set.punch"))
                             .changed();
                         ch |= ui

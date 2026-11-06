@@ -857,7 +857,9 @@ pub fn run_export(
                             };
                             match profile::time("ocr", || ocrcache::recognize(&pg.image, pg.dpi, o))
                             {
-                                Ok(w) => w,
+                                Ok(w) => retry_on_content(&pg, w, |img, dpi| {
+                                    ocrcache::recognize(img, dpi, o).ok()
+                                }),
                                 Err(e) if job.keep_going => {
                                     ocr_warnings.lock().unwrap().push((
                                         sheet.path.clone(),
@@ -1210,6 +1212,56 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    fn blank_words(n: usize) -> Vec<Word> {
+        (0..n)
+            .map(|i| Word {
+                text: format!("w{i}"),
+                x: 5,
+                y: 7,
+                w: 10,
+                h: 10,
+                conf: 90.0,
+                line: 0,
+            })
+            .collect()
+    }
+
+    fn page_with(content: Option<[u32; 4]>) -> Page {
+        Page {
+            image: legatorocr_core::PageImage::Rgb(image::RgbImage::new(1000, 1400)),
+            dpi: 300,
+            skew_deg: 0.0,
+            blank: false,
+            split_index: None,
+            content_box: content,
+            layers: None,
+        }
+    }
+
+    #[test]
+    fn a_page_that_read_empty_is_read_again_on_its_content_and_boxes_move_back() {
+        let pg = page_with(Some([100, 200, 800, 1000]));
+        let out = retry_on_content(&pg, Vec::new(), |img, _| {
+            // the crop starts at (100-m, 200-m) with m = 300/8 = 37
+            assert!(img.width() < 1000 && img.height() < 1400);
+            Some(blank_words(30))
+        });
+        assert_eq!(out.len(), 30);
+        assert_eq!((out[0].x, out[0].y), (5 + 63, 7 + 163));
+    }
+
+    #[test]
+    fn the_retry_is_dropped_when_it_finds_little_and_skipped_for_small_content_or_enough_words() {
+        let pg = page_with(Some([100, 200, 800, 1000]));
+        let out = retry_on_content(&pg, blank_words(2), |_, _| Some(blank_words(9)));
+        assert_eq!(out.len(), 2, "9 words is not clearly more than 2");
+        let small = page_with(Some([100, 200, 100, 100]));
+        let out = retry_on_content(&small, Vec::new(), |_, _| panic!("must not read"));
+        assert!(out.is_empty());
+        let out = retry_on_content(&pg, blank_words(20), |_, _| panic!("must not read"));
+        assert_eq!(out.len(), 20);
+    }
+
     use super::*;
     use image::{GrayImage, Luma};
     use std::sync::Mutex;
@@ -1961,6 +2013,56 @@ mod batch_features_tests {
         assert!(q < 95, "got {q}");
         assert_eq!(quality_for_target(&s, None, 1_000, &no).unwrap(), 30);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+
+/// A page that holds a lot of content but gave (almost) no words is read again on its content
+/// box alone: the wedges and margins around a tilted photographed page can derail the layout
+/// analysis, while the same page cut to its content reads normally. The retry is kept only
+/// when it finds clearly more words; its boxes are moved back onto the full page.
+fn retry_on_content<F>(pg: &legatorocr_core::Page, words: Vec<Word>, read: F) -> Vec<Word>
+where
+    F: Fn(&legatorocr_core::PageImage, u32) -> Option<Vec<Word>>,
+{
+    use legatorocr_core::PageImage;
+    if words.len() >= 8 || pg.blank {
+        return words;
+    }
+    let Some([cx, cy, cw, ch]) = pg.content_box else {
+        return words;
+    };
+    let (pw, ph) = (pg.image.width(), pg.image.height());
+    // only a page with a substantial body: small content is a heading, a number, a stamp
+    if (cw as u64 * ch as u64) * 100 < (pw as u64 * ph as u64) * 25 {
+        return words;
+    }
+    let m = (pg.dpi / 8).max(8);
+    let x0 = cx.saturating_sub(m);
+    let y0 = cy.saturating_sub(m);
+    let x1 = (cx + cw + m).min(pw);
+    let y1 = (cy + ch + m).min(ph);
+    if x1 <= x0 + 16 || y1 <= y0 + 16 {
+        return words;
+    }
+    let cropped = match &pg.image {
+        PageImage::Rgb(i) => {
+            PageImage::Rgb(image::imageops::crop_imm(i, x0, y0, x1 - x0, y1 - y0).to_image())
+        }
+        PageImage::Gray(i) => {
+            PageImage::Gray(image::imageops::crop_imm(i, x0, y0, x1 - x0, y1 - y0).to_image())
+        }
+        PageImage::Bw(_) => return words,
+    };
+    match read(&cropped, pg.dpi) {
+        Some(mut again) if again.len() >= words.len() * 3 + 10 => {
+            for w in &mut again {
+                w.x += x0;
+                w.y += y0;
+            }
+            again
+        }
+        _ => words,
     }
 }
 

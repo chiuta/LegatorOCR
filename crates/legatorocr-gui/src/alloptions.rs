@@ -174,6 +174,7 @@ pub fn category(long: &str) -> Cat {
         "dropout",
         "show-through",
         "perspective",
+        "trim-background",
         "descreen",
         "despeckle",
         "no-despeckle",

@@ -96,12 +96,12 @@ const BUILTIN: &[(&str, &str, &str)] = &[
     (
         "phone-photos",
         "Pages photographed by phone (spreads cut in the middle): perspective fixed, level lighting, wider skew range, fingers removed",
-        "mode = color\nnormalize = true\nauto_levels = true\nperspective = true\nsplit = middle\nmax_skew = 15\nfingers = true\nsharpen = 0.5\n",
+        "mode = color\nnormalize = true\nauto_levels = true\nperspective = true\ntrim_background = true\nsplit = middle\nmax_skew = 15\nfingers = true\nsharpen = 0.5\n",
     ),
     (
         "phone-photos-a4",
         "Phone photos like phone-photos, but every page on a fixed A4 sheet, the text scaled up to fill it: level lighting, wider skew range, fingers removed",
-        "mode = color\nnormalize = true\nauto_levels = true\nperspective = true\nsplit = middle\nmax_skew = 15\nfingers = true\nsharpen = 0.5\npage_size = 210,297\nfit_width = true\nfit_height = true\n",
+        "mode = color\nnormalize = true\nauto_levels = true\nperspective = true\ntrim_background = true\nsplit = middle\nmax_skew = 15\nfingers = true\nsharpen = 0.5\npage_size = 210,297\nfit_width = true\nfit_height = true\n",
     ),
 ];
 

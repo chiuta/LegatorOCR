@@ -233,6 +233,7 @@ pub fn settings_to_pairs(s: &Settings) -> Vec<(&'static str, String)> {
         ("show_through", s.show_through.to_string()),
         ("descreen", s.descreen.to_string()),
         ("perspective", s.perspective.to_string()),
+        ("trim_background", s.trim_background.to_string()),
     ]
 }
 
@@ -322,6 +323,7 @@ pub fn apply_pair(s: &mut Settings, k: &str, v: &str) -> Result<bool> {
         "show_through" => s.show_through = b(v).ok_or_else(bad)?,
         "descreen" => s.descreen = b(v).ok_or_else(bad)?,
         "perspective" => s.perspective = b(v).ok_or_else(bad)?,
+        "trim_background" => s.trim_background = b(v).ok_or_else(bad)?,
         _ => return Ok(false),
     }
     Ok(true)
