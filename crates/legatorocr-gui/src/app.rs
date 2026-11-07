@@ -123,6 +123,14 @@ struct Ready {
     pages: Vec<PageTex>,
 }
 
+/// "Auto all": a background search for the fine-turn angle of every sheet.
+struct TurnBatch {
+    done: usize,
+    found: usize,
+    total: usize,
+    rx: mpsc::Receiver<(u64, Option<f32>)>,
+}
+
 struct Sheet {
     id: u64,
     path: PathBuf,
@@ -234,7 +242,7 @@ pub struct App {
     /// A running search for the sheet's fine-turn angle (sheet id, result), started by the Auto button.
     turn_probe: Option<(u64, mpsc::Receiver<Option<f32>>)>,
     /// The same for every sheet (Auto for all): (sheets done, sheets found, total, results).
-    turn_batch: Option<(usize, usize, usize, mpsc::Receiver<(u64, Option<f32>)>)>,
+    turn_batch: Option<TurnBatch>,
     guide_path: Vec<egui::Pos2>,
     /// A node of a dewarp guide being dragged: (guide, node, position as fractions of the scan).
     guide_live: Option<(usize, usize, (f32, f32))>,
@@ -3107,9 +3115,20 @@ impl App {
                     }
                 }
             });
-            self.turn_batch = Some((0, 0, total, rx));
+            self.turn_batch = Some(TurnBatch {
+                done: 0,
+                found: 0,
+                total,
+                rx,
+            });
         }
-        if let Some((done, found, total, rx)) = self.turn_batch.as_mut() {
+        if let Some(TurnBatch {
+            done,
+            found,
+            total,
+            rx,
+        }) = self.turn_batch.as_mut()
+        {
             let mut results = Vec::new();
             let finished = loop {
                 match rx.try_recv() {
