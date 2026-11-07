@@ -99,6 +99,8 @@ pub struct UiSettings {
     pub auto_invert: bool,
     pub auto_levels: bool,
     pub sharpen: f32,
+    pub denoise: f32,
+    pub deblur: f32,
     pub punch_holes: bool,
     pub fingers: bool,
     pub remove_lines: bool,
@@ -167,6 +169,8 @@ impl Default for UiSettings {
             auto_invert: false,
             auto_levels: false,
             sharpen: 0.0,
+            denoise: 0.0,
+            deblur: 0.0,
             punch_holes: false,
             fingers: false,
             remove_lines: false,
@@ -323,6 +327,8 @@ impl UiSettings {
             auto_invert: self.auto_invert,
             auto_levels: self.auto_levels,
             sharpen: self.sharpen,
+            denoise: self.denoise,
+            deblur: self.deblur,
             punch_holes: self.punch_holes,
             fingers: self.fingers,
             remove_lines: self.remove_lines,
@@ -424,6 +430,8 @@ impl UiSettings {
         self.auto_invert = c.auto_invert;
         self.auto_levels = c.auto_levels;
         self.sharpen = c.sharpen;
+        self.denoise = c.denoise;
+        self.deblur = c.deblur;
         self.punch_holes = c.punch_holes;
         self.fingers = c.fingers;
         self.remove_lines = c.remove_lines;
@@ -645,6 +653,8 @@ mod tests {
             pdf_author: "Ana".into(),
             auto_invert: true,
             sharpen: 0.8,
+            denoise: 0.0,
+            deblur: 0.0,
             punch_holes: true,
             remove_lines: true,
             erase: "10,20,30,15;0,0,5,5".into(),

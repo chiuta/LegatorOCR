@@ -1027,6 +1027,16 @@ struct Cli {
     #[arg(long, default_value_t = 0.0)]
     sharpen: f32,
 
+    /// Edge-preserving noise smoothing, 0–1 (0 = off): grain and scanner noise in flat areas are
+    /// smoothed, strokes and edges are left alone. Colour / gray / hybrid output.
+    #[arg(long, default_value_t = 0.0)]
+    denoise: f32,
+
+    /// Deconvolution against a mild blur, 0–1 (0 = off), for soft or slightly out-of-focus
+    /// scans. Runs before --sharpen. Amplifies noise: combine with --denoise.
+    #[arg(long, default_value_t = 0.0)]
+    deblur: f32,
+
     /// Erase punch / binder holes near the page edge.
     #[arg(long)]
     punch_holes: bool,
@@ -2343,6 +2353,8 @@ fn real_main() -> Result<()> {
     })?;
     in_range("picture-sensitivity", cli.picture_sensitivity, 0.0, 1.0)?;
     in_range("sharpen", cli.sharpen, 0.0, 2.0)?;
+    in_range("denoise", cli.denoise, 0.0, 1.0)?;
+    in_range("deblur", cli.deblur, 0.0, 1.0)?;
     in_range("despeckle-strength", cli.despeckle_strength, 0.25, 4.0)?;
     if let Some(d) = cli.output_dpi {
         if !(36..=1200).contains(&d) {
@@ -2398,6 +2410,8 @@ fn real_main() -> Result<()> {
         auto_invert: cli.invert,
         auto_levels: cli.auto_levels,
         sharpen: cli.sharpen,
+        denoise: cli.denoise,
+        deblur: cli.deblur,
         punch_holes: cli.punch_holes,
         fingers: cli.fingers,
         remove_lines: cli.remove_lines,
@@ -2475,6 +2489,8 @@ fn real_main() -> Result<()> {
             "--threshold",
             "--sauvola-k",
             "--sharpen",
+            "--denoise",
+            "--deblur",
             "--despeckle-strength",
             "--output-dpi",
             "--hybrid-dpi",

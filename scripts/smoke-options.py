@@ -21,6 +21,8 @@ CASES = {
  "author": ["--author", "A. Autor", "--subject", "Subiect", "--keywords", "a,b"],
  "auto-levels": ["--auto-levels"], "auto-rotate": ["--auto-rotate"], "invert": ["--invert"],
  "normalize": ["--normalize"], "sharpen": ["--sharpen", "1"], "descreen": ["--descreen"],
+ "denoise": ["--mode", "color", "--denoise", "0.6"], "deblur": ["--mode", "color", "--deblur", "0.6"],
+ "bernsen": ["--threshold", "bernsen"], "phansalkar": ["--threshold", "phansalkar"], "edgeplus": ["--threshold", "edgeplus"],
  "despeckle": ["--despeckle-strength", "2"], "no-despeckle": ["--no-despeckle"], "no-deskew": ["--no-deskew"],
  "no-auto-orient": ["--no-auto-orient"], "max-skew": ["--max-skew", "5"], "jpeg": ["--format", "jpeg", "--jpeg-quality", "80", "--out-dir", "{d}/o"],
 "fit": ["--page-size", "a4", "--fit-width", "--fit-height"],

@@ -98,6 +98,10 @@ pub struct Settings {
     pub auto_levels: bool,
     /// Unsharp-mask amount 0–2 (0 = off) for colour / gray / hybrid output.
     pub sharpen: f32,
+    /// Edge-preserving noise smoothing 0–1 (0 = off): flat areas are smoothed, strokes are kept.
+    pub denoise: f32,
+    /// Deconvolution against a mild blur 0–1 (0 = off), for soft or out-of-focus scans.
+    pub deblur: f32,
     /// Erase binder / punch holes near the page edge.
     pub punch_holes: bool,
     /// Erase fingers holding the page at the border (skin-coloured regions).
@@ -192,6 +196,8 @@ impl Default for Settings {
             auto_invert: false,
             auto_levels: false,
             sharpen: 0.0,
+            denoise: 0.0,
+            deblur: 0.0,
             punch_holes: false,
             fingers: false,
             remove_lines: false,
@@ -404,6 +410,8 @@ impl Settings {
         s.picture_sensitivity = fin(s.picture_sensitivity, 0.0, 1.0, d.picture_sensitivity);
         s.hybrid_bg_dpi = s.hybrid_bg_dpi.clamp(36, 300);
         s.sharpen = fin(s.sharpen, 0.0, 2.0, 0.0);
+        s.denoise = fin(s.denoise, 0.0, 1.0, 0.0);
+        s.deblur = fin(s.deblur, 0.0, 1.0, 0.0);
         s.despeckle_strength = fin(s.despeckle_strength, 0.25, 4.0, 1.0);
         s.sheet_erase_zones = s
             .sheet_erase_zones
@@ -1311,6 +1319,16 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
             };
             window = crate::stage("output/normalize", || {
                 transform::normalize_background(&window, s.dpi, target)
+            });
+        }
+        if s.denoise > 0.0 {
+            window = crate::stage("output/denoise", || {
+                cleanup::denoise(&window, s.dpi, s.denoise)
+            });
+        }
+        if s.deblur > 0.0 {
+            window = crate::stage("output/deblur", || {
+                cleanup::deblur(&window, s.dpi, s.deblur)
             });
         }
         if s.sharpen > 0.0 {
@@ -2553,6 +2571,8 @@ mod tests {
                 auto_invert: rnd(2) == 0,
                 auto_levels: rnd(2) == 0,
                 sharpen: rnd(300) as f32 / 100.0 - 0.5,
+                denoise: rnd(150) as f32 / 100.0 - 0.25,
+                deblur: rnd(150) as f32 / 100.0 - 0.25,
                 punch_holes: rnd(2) == 0,
                 fingers: rnd(2) == 0,
                 remove_lines: rnd(2) == 0,

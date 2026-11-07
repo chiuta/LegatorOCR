@@ -161,6 +161,8 @@ pub fn category(long: &str) -> Cat {
         "invert",
         "auto-levels",
         "sharpen",
+        "denoise",
+        "deblur",
         "punch",
         "fingers",
         "remove-lines",

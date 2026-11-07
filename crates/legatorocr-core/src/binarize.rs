@@ -254,15 +254,19 @@ fn is_flat(g: &GrayImage) -> bool {
 /// O(1) per pixel whatever the radius). Returns `(min, max)` planes.
 fn local_extrema(g: &GrayImage, r: usize) -> (Vec<u8>, Vec<u8>) {
     use std::collections::VecDeque;
-    fn pass(src: &[u8], len: usize, stride: usize, count: usize, r: usize, mn: &mut [u8], mx: &mut [u8], from_min: Option<(&[u8], &[u8])>) {
+    fn pass(
+        srcs: (&[u8], &[u8]),
+        dims: (usize, usize, usize),
+        r: usize,
+        mn: &mut [u8],
+        mx: &mut [u8],
+    ) {
+        let (len, stride, count) = dims;
+        let (lo_src, hi_src) = srcs;
         for line in 0..count {
             let at = |i: usize| line * if stride == 1 { len } else { 1 } + i * stride;
             let mut dmin: VecDeque<usize> = VecDeque::new();
             let mut dmax: VecDeque<usize> = VecDeque::new();
-            let (lo_src, hi_src) = match from_min {
-                Some((a, b)) => (a, b),
-                None => (src, src),
-            };
             let mut next = 0usize;
             for i in 0..len {
                 let hi = (i + r).min(len - 1);
@@ -294,10 +298,10 @@ fn local_extrema(g: &GrayImage, r: usize) -> (Vec<u8>, Vec<u8>) {
     let raw = g.as_raw();
     let mut mn1 = vec![0u8; w * h];
     let mut mx1 = vec![0u8; w * h];
-    pass(raw, w, 1, h, r, &mut mn1, &mut mx1, None);
+    pass((raw, raw), (w, 1, h), r, &mut mn1, &mut mx1);
     let mut mn2 = vec![0u8; w * h];
     let mut mx2 = vec![0u8; w * h];
-    pass(raw, h, w, w, r, &mut mn2, &mut mx2, Some((&mn1, &mx1)));
+    pass((&mn1, &mx1), (h, w, w), r, &mut mn2, &mut mx2);
     (mn2, mx2)
 }
 

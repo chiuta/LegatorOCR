@@ -204,6 +204,54 @@ pub fn sharpen(img: &RgbImage, dpi: u32, amount: f32) -> RgbImage {
     out
 }
 
+/// Edge-preserving smoothing: where a pixel differs little from its local mean (grain, sensor
+/// noise) it moves toward the mean; where it differs a lot (a stroke, an edge) it is kept.
+/// `strength` 0–1 sets both the radius (0.2–0.5 mm) and how large a difference still counts as noise.
+pub fn denoise(img: &RgbImage, dpi: u32, strength: f32) -> RgbImage {
+    if strength.is_nan() || strength <= 0.0 || img.width() < 3 || img.height() < 3 {
+        return img.clone();
+    }
+    let s = strength.min(1.0);
+    let r = (((0.2 + 0.3 * s) / 25.4 * dpi as f32).round() as usize).max(1);
+    let b = blur(img, r);
+    let limit = 10.0 + 40.0 * s;
+    let mut out = img.clone();
+    let src = img.as_raw().chunks_exact(3).zip(b.as_raw().chunks_exact(3));
+    for (o, (p, m)) in out.as_mut().chunks_exact_mut(3).zip(src) {
+        // size of the difference over all three channels decides, so a coloured edge is kept
+        let d = (0..3)
+            .map(|c| (p[c] as f32 - m[c] as f32).abs())
+            .fold(0.0, f32::max);
+        let w = (1.0 - d / limit).clamp(0.0, 1.0);
+        for c in 0..3 {
+            o[c] = (p[c] as f32 + w * (m[c] as f32 - p[c] as f32)).round() as u8;
+        }
+    }
+    out
+}
+
+/// Van Cittert deconvolution against a box blur of about 0.15–0.3 mm: `x ← x + k·(y − blur(x))`
+/// for three rounds, with `k` = `amount`·0.8. Raises edge contrast that a soft lens or a movement
+/// took away; unlike an unsharp mask it undoes a blur model instead of boosting local contrast.
+pub fn deblur(img: &RgbImage, dpi: u32, amount: f32) -> RgbImage {
+    if amount.is_nan() || amount <= 0.0 || img.width() < 3 || img.height() < 3 {
+        return img.clone();
+    }
+    let a = amount.min(1.0);
+    let r = (((0.15 + 0.15 * a) / 25.4 * dpi as f32).round() as usize).max(1);
+    let k = 0.8 * a;
+    let mut x = img.clone();
+    for _ in 0..3 {
+        let bx = blur(&x, r);
+        for ((o, &y), &b) in x.as_mut().iter_mut().zip(img.as_raw()).zip(bx.as_raw()) {
+            *o = (*o as f32 + k * (y as f32 - b as f32))
+                .round()
+                .clamp(0.0, 255.0) as u8;
+        }
+    }
+    x
+}
+
 /// Replace pixels that are strongly of the chosen primary with `paper`.
 pub fn dropout(img: &mut RgbImage, which: Dropout, paper: Rgb<u8>) {
     if which == Dropout::Off {
@@ -963,6 +1011,65 @@ pub fn remove_lines(bw: &mut BitImage, dpi: u32) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn denoise_calms_grain_but_keeps_a_stroke() {
+        let mut img = RgbImage::from_pixel(80, 60, Rgb([230, 230, 230]));
+        let mut seed = 99u32;
+        for p in img.pixels_mut() {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let n = ((seed >> 24) % 9) as i32 - 4;
+            *p = Rgb([(230 + n) as u8; 3]);
+        }
+        for y in 20..24 {
+            for x in 10..70 {
+                img.put_pixel(x, y, Rgb([20, 20, 20]));
+            }
+        }
+        let var = |im: &RgbImage| {
+            let v: Vec<f32> = (0..10)
+                .flat_map(|y| (0..80).map(move |x| (x, y)))
+                .map(|(x, y)| im.get_pixel(x, y).0[0] as f32)
+                .collect();
+            let m = v.iter().sum::<f32>() / v.len() as f32;
+            v.iter().map(|a| (a - m) * (a - m)).sum::<f32>() / v.len() as f32
+        };
+        let out = denoise(&img, 300, 0.6);
+        assert!(
+            var(&out) < var(&img) * 0.5,
+            "{} vs {}",
+            var(&out),
+            var(&img)
+        );
+        // the stroke core is still black
+        assert!(out.get_pixel(40, 21).0[0] < 60);
+        assert_eq!(denoise(&img, 300, 0.0), img);
+    }
+
+    #[test]
+    fn deblur_sharpens_a_blurred_edge() {
+        let mut sharp = RgbImage::from_pixel(60, 20, Rgb([240; 3]));
+        for y in 0..20 {
+            for x in 30..60 {
+                sharp.put_pixel(x, y, Rgb([20; 3]));
+            }
+        }
+        let soft = blur(&sharp, 3);
+        // width of the transition: pixels strictly between 60 and 200 on one row
+        let width = |im: &RgbImage| {
+            (0..60)
+                .filter(|&x| (61..200).contains(&im.get_pixel(x, 10).0[0]))
+                .count()
+        };
+        let out = deblur(&soft, 300, 1.0);
+        assert!(
+            width(&out) < width(&soft),
+            "{} vs {}",
+            width(&out),
+            width(&soft)
+        );
+        assert_eq!(deblur(&soft, 300, 0.0), soft);
+    }
+
     /// Blur every channel with two box passes per axis (≈ Gaussian), radius `r` px.
     fn blur_reference(img: &RgbImage, r: usize) -> RgbImage {
         let (w, h) = (img.width() as usize, img.height() as usize);
