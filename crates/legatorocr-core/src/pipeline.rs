@@ -140,7 +140,8 @@ pub struct Settings {
     /// guide points follow the turn (a zone becomes the box around its turned corners).
     pub sheet_turn_deg: f32,
     /// Where to cut a two-page sheet: a fraction (0-1) of the loaded sheet's width, set by dragging
-    /// a line on the original. Used when splitting is on, at any rotation (on a sheet turned by
+    /// a line on the original. With a fine turn (`sheet_turn_deg`) the cut goes through the middle
+    /// of that line as the turn carries it, and is vertical on the turned sheet. Used when splitting is on, at any rotation (on a sheet turned by
     /// 90 or 270 degrees the two pages lie one above the other).
     pub sheet_split_frac: Option<f32>,
     /// Drop one printed colour (form rules, stamps).
@@ -520,6 +521,17 @@ fn turn_point(p: (f32, f32), w: u32, h: u32, rad: f32) -> (f32, f32) {
     (nw / 2.0 + dx * c - dy * s, nh / 2.0 + dx * s + dy * c)
 }
 
+/// Where the user's cut line (a fraction `f` of the loaded sheet's width, or of its height for a
+/// sheet turned by a quarter) falls on the sheet as it is now: through the middle of the line when
+/// the sheet was turned by a fine angle, plain `f * size` otherwise.
+fn cut_coordinate(f: f32, along_x: bool, size_now: u32, turned: Option<(u32, u32, f32)>) -> f32 {
+    match turned {
+        Some((w, h, rad)) if along_x => turn_point((f * w as f32, h as f32 / 2.0), w, h, rad).0,
+        Some((w, h, rad)) => turn_point((w as f32 / 2.0, f * h as f32), w, h, rad).1,
+        None => f * size_now as f32,
+    }
+}
+
 fn turn_rect(z: &mut [f32; 5], w: u32, h: u32, rad: f32) {
     let corners = [
         (z[0], z[1]),
@@ -568,10 +580,14 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
     } else {
         transform::rot90(&base, s.rotate_quarters)
     };
+    // (width, height, angle) of the sheet before the fine turn: the cut line the user dragged on the
+    // original is placed through this
+    let mut turned: Option<(u32, u32, f32)> = None;
     if s.sheet_turn_deg.abs() >= 0.01 {
         let rad = s.sheet_turn_deg.to_radians();
         let (w, h) = rgb.dimensions();
         if transform::rotation_fits(w, h, rad) {
+            turned = Some((w, h, rad));
             let fill = transform::estimate_background(&rgb);
             rgb = crate::stage("sheet/fine-turn", || transform::rotate_cw(&rgb, rad, fill));
             for z in zones.iter_mut() {
@@ -615,13 +631,12 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
             .sheet_split_frac
             .filter(|f| f.is_finite() && *f > 0.0 && *f < 1.0)
             .map(|f| {
-                let h = rgb.height() as f32;
                 let fy = if s.rotate_quarters % 4 == 1 {
                     f
                 } else {
                     1.0 - f
                 };
-                (fy * h).round() as u32
+                cut_coordinate(fy, false, rgb.height(), turned).round() as u32
             })
             .filter(|&y| y > 0 && y < rgb.height());
         if let Some(y) = cut_y {
@@ -668,7 +683,9 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
                 _ => None,
             });
         let cut = match s.split {
-            _ if manual.is_some() => manual.map(|f| (f * rgb.width() as f32).round() as u32),
+            _ if manual.is_some() => {
+                manual.map(|f| cut_coordinate(f, true, rgb.width(), turned).round() as u32)
+            }
             SplitMode::Middle => {
                 (rgb.width() as f32 >= 1.15 * rgb.height() as f32).then_some(rgb.width() / 2)
             }
@@ -1442,6 +1459,34 @@ pub(crate) mod testutil {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_cut_line_follows_the_fine_turn() {
+        let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(1200, 800, Rgb([240, 240, 240])));
+        let base = Settings {
+            split: SplitMode::Auto,
+            sheet_split_frac: Some(0.4),
+            ..Settings::default()
+        };
+        // no turn: 40 % of the width, as always
+        let plain = split_sheet(&img, &base.clone().sanitized());
+        assert_eq!(plain[0].0.width(), 480);
+        // turned by 8 degrees: the cut is where the middle of the dragged line has gone
+        let s = Settings {
+            sheet_turn_deg: 8.0,
+            ..base
+        }
+        .sanitized();
+        let rad = 8f32.to_radians();
+        let want = turn_point((480.0, 400.0), 1200, 800, rad).0.round() as u32;
+        let parts = split_sheet(&img, &s);
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0].0.width(), want);
+        assert_ne!(
+            want,
+            (0.4 * parts[0].0.width() as f32 + 0.4 * parts[1].0.width() as f32) as u32
+        );
+    }
+
     #[test]
     fn a_crooked_spread_turned_back_is_cut_at_its_gutter() {
         // two text-like columns with a gutter between them, scanned 6 degrees crooked
