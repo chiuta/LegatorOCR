@@ -962,6 +962,12 @@ struct Cli {
     #[arg(long, allow_negative_numbers = true)]
     skew: Option<f32>,
 
+    /// Turn the whole loaded sheet by this many degrees (clockwise positive, at most 45) before it
+    /// is cut in two, so that a spread scanned crooked gets a vertical gutter. Unlike --skew,
+    /// which levels each page after the cut.
+    #[arg(long, allow_negative_numbers = true, default_value_t = 0.0)]
+    sheet_turn: f32,
+
     /// Maximum skew searched, in degrees.
     #[arg(long, default_value_t = 7.0)]
     max_skew: f32,
@@ -2391,6 +2397,7 @@ fn real_main() -> Result<()> {
         remove_lines: cli.remove_lines,
         sheet_erase_zones: Vec::new(),
         sheet_orient_locked: false,
+        sheet_turn_deg: cli.sheet_turn,
         sheet_work_mm: match cli.work_area.as_deref() {
             None => None,
             Some(v) => Some(
