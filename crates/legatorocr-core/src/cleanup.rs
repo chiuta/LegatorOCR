@@ -216,15 +216,15 @@ pub fn denoise(img: &RgbImage, dpi: u32, strength: f32) -> RgbImage {
     let b = blur(img, r);
     let limit = 10.0 + 40.0 * s;
     let mut out = img.clone();
-    let src = img.as_raw().chunks_exact(3).zip(b.as_raw().chunks_exact(3));
-    for (o, (p, m)) in out.as_mut().chunks_exact_mut(3).zip(src) {
+    for (x, y, o) in out.enumerate_pixels_mut() {
+        let (p, m) = (img.get_pixel(x, y).0, b.get_pixel(x, y).0);
         // size of the difference over all three channels decides, so a coloured edge is kept
         let d = (0..3)
             .map(|c| (p[c] as f32 - m[c] as f32).abs())
             .fold(0.0, f32::max);
         let w = (1.0 - d / limit).clamp(0.0, 1.0);
         for c in 0..3 {
-            o[c] = (p[c] as f32 + w * (m[c] as f32 - p[c] as f32)).round() as u8;
+            o.0[c] = (p[c] as f32 + w * (m[c] as f32 - p[c] as f32)).round() as u8;
         }
     }
     out
