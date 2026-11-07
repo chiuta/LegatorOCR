@@ -580,7 +580,11 @@ fn slide(src: &[u8], w: usize, h: usize, r: usize, max: bool) -> Vec<u8> {
                 let v = row[next];
                 while q.len() > head && {
                     let l = row[q[q.len() - 1]];
-                    if max { l <= v } else { l >= v }
+                    if max {
+                        l <= v
+                    } else {
+                        l >= v
+                    }
                 } {
                     q.pop();
                 }
@@ -617,12 +621,22 @@ pub fn trim_to_paper(img: &mut RgbImage, dpi: u32, paper: Rgb<u8>) -> bool {
     let raw = small.as_raw();
     let plane = |c: usize| -> Vec<u8> { (0..w * h).map(|i| raw[i * 3 + c]).collect() };
     let gray: Vec<u8> = (0..w * h)
-        .map(|i| ((raw[i * 3] as u32 * 30 + raw[i * 3 + 1] as u32 * 59 + raw[i * 3 + 2] as u32 * 11) / 100) as u8)
+        .map(|i| {
+            ((raw[i * 3] as u32 * 30 + raw[i * 3 + 1] as u32 * 59 + raw[i * 3 + 2] as u32 * 11)
+                / 100) as u8
+        })
         .collect();
     let close = |p: &[u8], r: usize| box_filter(&box_filter(p, w, h, r, true), w, h, r, false);
     let c = close(&gray, 4);
-    let (cr, cg, cb) = (close(&plane(0), 4), close(&plane(1), 4), close(&plane(2), 4));
-    let (dmax, dmin) = (box_filter(&c, w, h, 4, true), box_filter(&c, w, h, 4, false));
+    let (cr, cg, cb) = (
+        close(&plane(0), 4),
+        close(&plane(1), 4),
+        close(&plane(2), 4),
+    );
+    let (dmax, dmin) = (
+        box_filter(&c, w, h, 4, true),
+        box_filter(&c, w, h, 4, false),
+    );
     let mut sorted = c.clone();
     sorted.sort_unstable();
     let p90 = sorted[sorted.len() * 9 / 10] as f32;
@@ -1497,8 +1511,16 @@ mod split_sheet_tests {
             }
         }
         let _ = trim_to_paper(&mut img, 150, paper);
-        assert_eq!(img.get_pixel(300, 100), &Rgb([30, 30, 30]), "left page text wiped");
-        assert_eq!(img.get_pixel(900, 100), &Rgb([30, 30, 30]), "right page text wiped");
+        assert_eq!(
+            img.get_pixel(300, 100),
+            &Rgb([30, 30, 30]),
+            "left page text wiped"
+        );
+        assert_eq!(
+            img.get_pixel(900, 100),
+            &Rgb([30, 30, 30]),
+            "right page text wiped"
+        );
     }
 }
 

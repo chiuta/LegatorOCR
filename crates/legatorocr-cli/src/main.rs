@@ -968,6 +968,12 @@ struct Cli {
     #[arg(long, allow_negative_numbers = true, default_value_t = 0.0)]
     sheet_turn: f32,
 
+    /// Find the --sheet-turn of every sheet by itself (up to ±20°, from the text lines of the
+    /// whole sheet) when the sheet has no turn of its own: for a batch of spreads scanned crooked.
+    /// A sheet with too little text to judge is left as it is.
+    #[arg(long)]
+    auto_sheet_turn: bool,
+
     /// Maximum skew searched, in degrees.
     #[arg(long, default_value_t = 7.0)]
     max_skew: f32,
@@ -2398,6 +2404,7 @@ fn real_main() -> Result<()> {
         sheet_erase_zones: Vec::new(),
         sheet_orient_locked: false,
         sheet_turn_deg: cli.sheet_turn,
+        auto_sheet_turn: cli.auto_sheet_turn,
         sheet_work_mm: match cli.work_area.as_deref() {
             None => None,
             Some(v) => Some(

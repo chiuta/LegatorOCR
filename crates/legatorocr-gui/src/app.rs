@@ -123,6 +123,14 @@ struct Ready {
     pages: Vec<PageTex>,
 }
 
+/// "Auto all": a background search for the fine-turn angle of every sheet.
+struct TurnBatch {
+    done: usize,
+    found: usize,
+    total: usize,
+    rx: mpsc::Receiver<(u64, Option<f32>)>,
+}
+
 struct Sheet {
     id: u64,
     path: PathBuf,
@@ -233,6 +241,8 @@ pub struct App {
     grid_made: Option<std::time::Instant>,
     /// A running search for the sheet's fine-turn angle (sheet id, result), started by the Auto button.
     turn_probe: Option<(u64, mpsc::Receiver<Option<f32>>)>,
+    /// The same for every sheet (Auto for all): (sheets done, sheets found, total, results).
+    turn_batch: Option<TurnBatch>,
     guide_path: Vec<egui::Pos2>,
     /// A node of a dewarp guide being dragged: (guide, node, position as fractions of the scan).
     guide_live: Option<(usize, usize, (f32, f32))>,
@@ -315,6 +325,7 @@ impl App {
             grid_rows: 5,
             grid_made: None,
             turn_probe: None,
+            turn_batch: None,
             guide_path: Vec::new(),
             guide_live: None,
             draw_pictures: false,
@@ -2882,6 +2893,7 @@ impl App {
         );
         let (mut clear_zones, mut undo_zone, mut redo_zone) = (false, false, false);
         let mut auto_turn = false;
+        let mut auto_turn_all = false;
         let adj_before = ZoneSnap::of(&self.sheets[i].adj);
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(tr("adj.title")).strong());
@@ -2933,6 +2945,16 @@ impl App {
                 .clicked()
             {
                 auto_turn = true;
+            }
+            if ui
+                .add_enabled(
+                    self.turn_probe.is_none() && self.turn_batch.is_none(),
+                    egui::Button::new(tr("adj.turn_auto_all")),
+                )
+                .on_hover_text(tr("adj.turn_auto_all_hint"))
+                .clicked()
+            {
+                auto_turn_all = true;
             }
             ui.separator();
             let label = match adj.split {
@@ -3073,6 +3095,71 @@ impl App {
                 let _ = tx.send(found);
             });
             self.turn_probe = Some((id, rx));
+        }
+        if auto_turn_all && self.turn_batch.is_none() {
+            // every sheet in turn, in the background; the angles are written as they arrive
+            let jobs: Vec<(u64, PathBuf, legatorocr_core::Settings)> = self
+                .sheets
+                .iter()
+                .map(|s| (s.id, s.path.clone(), self.s.to_core(&s.adj)))
+                .collect();
+            let total = jobs.len();
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                for (id, path, st) in jobs {
+                    let found = legatorocr_engine::load_image(&path)
+                        .ok()
+                        .and_then(|img| legatorocr_core::detect_sheet_turn(&img, &st));
+                    if tx.send((id, found)).is_err() {
+                        break;
+                    }
+                }
+            });
+            self.turn_batch = Some(TurnBatch {
+                done: 0,
+                found: 0,
+                total,
+                rx,
+            });
+        }
+        if let Some(TurnBatch {
+            done,
+            found,
+            total,
+            rx,
+        }) = self.turn_batch.as_mut()
+        {
+            let mut results = Vec::new();
+            let finished = loop {
+                match rx.try_recv() {
+                    Ok(r) => results.push(r),
+                    Err(mpsc::TryRecvError::Empty) => break false,
+                    Err(mpsc::TryRecvError::Disconnected) => break true,
+                }
+            };
+            for (id, deg) in results {
+                *done += 1;
+                if let (Some(deg), Some(k)) = (deg, self.sheets.iter().position(|s| s.id == id)) {
+                    *found += 1;
+                    self.sheets[k].adj.sheet_turn_deg = deg;
+                    self.sheets[k].adj_gen += 1;
+                }
+            }
+            let (d, f, n) = (*done, *found, *total);
+            if finished || d >= n {
+                self.turn_batch = None;
+                let msg = tr("adj.turn_batch_done")
+                    .replacen("{}", &f.to_string(), 1)
+                    .replacen("{}", &n.to_string(), 1);
+                self.say(msg, false);
+            } else {
+                let msg = tr("adj.turn_batch_run")
+                    .replacen("{}", &d.to_string(), 1)
+                    .replacen("{}", &n.to_string(), 1);
+                self.say(msg, false);
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(150));
+            }
         }
         if let Some((id, rx)) = &self.turn_probe {
             let id = *id;
