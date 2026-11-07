@@ -1194,6 +1194,12 @@ struct Cli {
     #[arg(long, value_name = "COLOR")]
     erase_color: Option<String>,
 
+    /// Lift the fold shadow toward a book's spine: the paper tone of each column in the outer
+    /// 18 % of both page edges is brought up to the tone of the page's middle (never darkened).
+    /// Works on the page after the cut, before binarising, so black & white output benefits too.
+    #[arg(long)]
+    fold_shadow: bool,
+
     /// Right-to-left book (Arabic, Hebrew, manga): when a two-page spread is cut in two, the
     /// right-hand page comes first, and the PDF asks viewers for right-to-left reading.
     #[arg(long)]
@@ -2446,6 +2452,7 @@ fn real_main() -> Result<()> {
         auto_invert: cli.invert,
         auto_levels: cli.auto_levels,
         sharpen: cli.sharpen,
+        fold_shadow: cli.fold_shadow,
         fill_color,
         right_to_left: cli.right_to_left,
         remove_bg: cli.remove_background,
@@ -2528,6 +2535,7 @@ fn real_main() -> Result<()> {
             "--threshold",
             "--sauvola-k",
             "--sharpen",
+            "--fold-shadow",
             "--erase-color",
             "--right-to-left",
             "--remove-background",

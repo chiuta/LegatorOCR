@@ -98,6 +98,8 @@ pub struct Settings {
     pub auto_levels: bool,
     /// Unsharp-mask amount 0–2 (0 = off) for colour / gray / hybrid output.
     pub sharpen: f32,
+    /// Lift the darkening toward the spine of a book page (fold shadow), column by column.
+    pub fold_shadow: bool,
     /// Colour for the `erase_zones` rectangles instead of the paper tone (fill zones: white, black
     /// or any colour).
     pub fill_color: Option<[u8; 3]>,
@@ -204,6 +206,7 @@ impl Default for Settings {
             auto_invert: false,
             auto_levels: false,
             sharpen: 0.0,
+            fold_shadow: false,
             fill_color: None,
             right_to_left: false,
             remove_bg: false,
@@ -900,6 +903,11 @@ fn prepare(
     }
     if s.descreen {
         cleanup::descreen(&mut img, s.dpi);
+    }
+    if s.fold_shadow {
+        crate::stage("clean-up/fold-shadow", || {
+            cleanup::flatten_fold_shadow(&mut img)
+        });
     }
     if s.show_through {
         let paper = transform::estimate_background(&img);
@@ -2628,6 +2636,7 @@ mod tests {
                 auto_invert: rnd(2) == 0,
                 auto_levels: rnd(2) == 0,
                 sharpen: rnd(300) as f32 / 100.0 - 0.5,
+                fold_shadow: rnd(2) == 1,
                 fill_color: (rnd(2) == 1).then(|| [rnd(256) as u8, rnd(256) as u8, rnd(256) as u8]),
                 right_to_left: rnd(2) == 1,
                 remove_bg: rnd(2) == 1,

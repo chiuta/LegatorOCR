@@ -287,6 +287,64 @@ pub fn parse_color(s: &str) -> Option<[u8; 3]> {
     }
 }
 
+/// Fold shadow: the paper of a book page darkens toward the spine. For every column in the
+/// outer 18 % of each side the paper tone (the 85th-percentile brightness, which print does not
+/// reach) is compared with the page's middle; a darker column is multiplied up to match (at most
+/// 1.8x), after smoothing the gains along the page so no stripes appear. Never darkens.
+pub fn flatten_fold_shadow(img: &mut RgbImage) {
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    if w < 40 || h < 40 {
+        return;
+    }
+    let luma = |p: &Rgb<u8>| (p.0[0] as u32 * 77 + p.0[1] as u32 * 150 + p.0[2] as u32 * 29) >> 8;
+    let paper_of = |x: usize| -> u32 {
+        let mut hist = [0u32; 256];
+        for y in 0..h {
+            hist[luma(img.get_pixel(x as u32, y as u32)) as usize] += 1;
+        }
+        let want = (h as f32 * 0.85) as u32;
+        let mut acc = 0;
+        for (v, &n) in hist.iter().enumerate() {
+            acc += n;
+            if acc >= want {
+                return v as u32;
+            }
+        }
+        255
+    };
+    let mid: Vec<u32> = (w * 4 / 10..w * 6 / 10).map(paper_of).collect();
+    let mut sorted = mid.clone();
+    sorted.sort_unstable();
+    let reference = sorted[sorted.len() / 2] as f32;
+    if reference < 100.0 {
+        return; // no paper to speak of
+    }
+    let edge = (w as f32 * 0.18) as usize;
+    let mut gain = vec![1.0f32; w];
+    for x in (0..edge).chain(w - edge..w) {
+        let p = paper_of(x).max(1) as f32;
+        if p < reference * 0.985 {
+            gain[x] = (reference / p).min(1.8);
+        }
+    }
+    // smooth along the page (moving average over 9 columns)
+    let raw = gain.clone();
+    for x in 0..w {
+        let (a, b) = (x.saturating_sub(4), (x + 4).min(w - 1));
+        gain[x] = raw[a..=b].iter().sum::<f32>() / (b - a + 1) as f32;
+    }
+    for y in 0..h {
+        for x in 0..w {
+            if gain[x] > 1.002 {
+                let p = img.get_pixel_mut(x as u32, y as u32);
+                for c in p.0.iter_mut() {
+                    *c = (*c as f32 * gain[x]).round().min(255.0) as u8;
+                }
+            }
+        }
+    }
+}
+
 /// Replace pixels that are strongly of the chosen primary with `paper`.
 pub fn dropout(img: &mut RgbImage, which: Dropout, paper: Rgb<u8>) {
     if which == Dropout::Off {
@@ -1046,6 +1104,38 @@ pub fn remove_lines(bw: &mut BitImage, dpi: u32) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fold_shadow_is_lifted_but_print_and_the_middle_stay() {
+        let (w, h) = (300u32, 200u32);
+        let mut img = RgbImage::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                // paper 240, falling to 150 over the last 15 % (toward the spine)
+                let d = (x as f32 - w as f32 * 0.85).max(0.0) / (w as f32 * 0.15);
+                let v = (240.0 - 90.0 * d) as u8;
+                img.put_pixel(x, y, Rgb([v, v, v]));
+            }
+        }
+        for y in (20..180).step_by(16) {
+            for x in 30..270 {
+                let v = img.get_pixel(x, y).0[0] / 6;
+                img.put_pixel(x, y, Rgb([v, v, v]));
+            }
+        }
+        let before_mid = *img.get_pixel(150, 10);
+        flatten_fold_shadow(&mut img);
+        assert_eq!(*img.get_pixel(150, 10), before_mid);
+        let edge = img.get_pixel(295, 10).0[0];
+        assert!(edge >= 225, "edge paper lifted to {edge}");
+        // print is still dark near the shadow
+        assert!(img.get_pixel(260, 36).0[0] < 120);
+        // an evenly lit page is unchanged
+        let mut flat = RgbImage::from_pixel(120, 80, Rgb([230, 230, 230]));
+        let copy = flat.clone();
+        flatten_fold_shadow(&mut flat);
+        assert_eq!(flat, copy);
+    }
+
     #[test]
     fn colours_parse() {
         assert_eq!(parse_color("#ff8000"), Some([255, 128, 0]));

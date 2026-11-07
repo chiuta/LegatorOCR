@@ -25,6 +25,7 @@ CASES = {
  "remove-background": ["--mode", "color", "--remove-background"], "optimize": ["--mode", "color", "--optimize", "3"], "optimize0": ["--mode", "color", "--optimize", "0"],
  "right-to-left": ["--split", "middle", "--right-to-left"],
  "erase-color": ["--mode", "color", "--erase", "20,20,30,30", "--erase-color", "#ff0000"],
+ "fold-shadow": ["--mode", "color", "--fold-shadow"],
  "bernsen": ["--threshold", "bernsen"], "phansalkar": ["--threshold", "phansalkar"], "edgeplus": ["--threshold", "edgeplus"],
  "despeckle": ["--despeckle-strength", "2"], "no-despeckle": ["--no-despeckle"], "no-deskew": ["--no-deskew"],
  "no-auto-orient": ["--no-auto-orient"], "max-skew": ["--max-skew", "5"], "jpeg": ["--format", "jpeg", "--jpeg-quality", "80", "--out-dir", "{d}/o"],

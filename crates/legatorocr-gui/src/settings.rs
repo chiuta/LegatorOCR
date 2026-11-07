@@ -99,6 +99,7 @@ pub struct UiSettings {
     pub auto_invert: bool,
     pub auto_levels: bool,
     pub sharpen: f32,
+    pub fold_shadow: bool,
     pub fill_color: Option<[u8; 3]>,
     pub right_to_left: bool,
     pub remove_bg: bool,
@@ -172,6 +173,7 @@ impl Default for UiSettings {
             auto_invert: false,
             auto_levels: false,
             sharpen: 0.0,
+            fold_shadow: false,
             fill_color: None,
             right_to_left: false,
             remove_bg: false,
@@ -333,6 +335,7 @@ impl UiSettings {
             auto_invert: self.auto_invert,
             auto_levels: self.auto_levels,
             sharpen: self.sharpen,
+            fold_shadow: self.fold_shadow,
             fill_color: self.fill_color,
             right_to_left: self.right_to_left,
             remove_bg: self.remove_bg,
@@ -439,6 +442,7 @@ impl UiSettings {
         self.auto_invert = c.auto_invert;
         self.auto_levels = c.auto_levels;
         self.sharpen = c.sharpen;
+        self.fold_shadow = c.fold_shadow;
         self.fill_color = c.fill_color;
         self.right_to_left = c.right_to_left;
         self.remove_bg = c.remove_bg;
@@ -665,6 +669,7 @@ mod tests {
             pdf_author: "Ana".into(),
             auto_invert: true,
             sharpen: 0.8,
+            fold_shadow: false,
             fill_color: None,
             right_to_left: false,
             remove_bg: false,
