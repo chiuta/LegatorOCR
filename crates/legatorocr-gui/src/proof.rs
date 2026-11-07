@@ -163,6 +163,38 @@ pub fn replace_token(page: &mut String, old: &str, new: &str) -> bool {
     }
 }
 
+/// Render every page of `pdf` to PNG files in `dir` with `pdftoppm` (150 dpi); the files are
+/// returned in page order. Fails with a short reason when the program is missing or errs.
+fn render_pdf(pdf: &Path, dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let _ = std::fs::remove_dir_all(dir);
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let out = std::process::Command::new("pdftoppm")
+        .args(["-r", "150", "-png"])
+        .arg(pdf)
+        .arg(dir.join("p"))
+        .output()
+        .map_err(|e| format!("pdftoppm: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("pdftoppm exit {}", out.status.code().unwrap_or(-1)));
+    }
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "png"))
+        .collect();
+    files.sort();
+    if files.is_empty() {
+        return Err("no page".into());
+    }
+    Ok(files)
+}
+
+impl Drop for ProofWindow {
+    fn drop(&mut self) {
+        self.clear_render_dir();
+    }
+}
+
 /// Box of a word (corners in page pixels) and the page size.
 type Mark = ((u32, u32), (u32, u32), f32, f32);
 
@@ -189,6 +221,9 @@ pub struct ProofWindow {
     fixes: HashMap<(usize, usize), String>,
     done: HashSet<(usize, usize)>,
     selected: Option<(usize, usize)>,
+    /// The PDF of the last export of this session (its `.txt` / `.hocr` lie beside it).
+    pub last_export: Option<PathBuf>,
+    render_dir: Option<PathBuf>,
     pending_scroll: bool,
     crops: Option<(usize, Vec<(usize, TextureHandle)>)>,
 }
@@ -285,6 +320,36 @@ impl ProofWindow {
         self.crops = Some((index, list));
     }
 
+    /// Load what an export left beside `pdf`: `pdf.txt` (needed), `pdf.hocr` (if there) and the
+    /// pages rendered from the PDF with `pdftoppm` (if that program is installed). Returns a
+    /// short account for the status line.
+    pub fn load_export(&mut self, pdf: &Path) -> Result<String, String> {
+        let txt = pdf.with_extension("txt");
+        let n = self.load_text(&txt)?;
+        let mut note = format!("{n} · {}", txt.display());
+        let hocr = pdf.with_extension("hocr");
+        if hocr.is_file() && self.load_hocr(&hocr).is_ok() {
+            note += " + hOCR";
+        }
+        self.clear_render_dir();
+        let dir = std::env::temp_dir().join(format!("legatorocr-proof-{}", std::process::id()));
+        match render_pdf(pdf, &dir) {
+            Ok(files) => {
+                note += &format!(" + {} pages", files.len());
+                self.render_dir = Some(dir);
+                self.set_images(files);
+            }
+            Err(e) => note += &format!(" (no pictures: {e})"),
+        }
+        Ok(note)
+    }
+
+    fn clear_render_dir(&mut self) {
+        if let Some(d) = self.render_dir.take() {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
     /// Write the pages back (to `path`, or over the file they came from).
     pub fn save(&mut self, path: Option<&Path>) -> Result<PathBuf, String> {
         let target = path
@@ -359,6 +424,14 @@ impl ProofWindow {
                             .pick_files()
                         {
                             self.set_images(f);
+                        }
+                    }
+                    if let Some(p) = self.last_export.clone() {
+                        if ui.button(tr("proof.last_export")).clicked() {
+                            self.message = Some(match self.load_export(&p) {
+                                Ok(m) => (m, false),
+                                Err(e) => (e, true),
+                            });
                         }
                     }
                     if ui.button(tr("proof.open_hocr")).clicked() {
@@ -699,5 +772,29 @@ mod tests {
         assert_eq!(page, "cartea este bunaesle\neste");
         assert!(!replace_token(&mut page, "esle", "x"));
         assert!(!replace_token(&mut page, "", "x"));
+    }
+
+    #[test]
+    fn export_files_are_found_beside_the_pdf() {
+        let dir = std::env::temp_dir().join(format!("legator-exp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pdf = dir.join("book.pdf");
+        std::fs::write(&pdf, b"%PDF-1.4\n").unwrap();
+        let mut w = ProofWindow::default();
+        assert!(w.load_export(&pdf).is_err(), "no book.txt yet");
+        std::fs::write(dir.join("book.txt"), "a b\x0cc").unwrap();
+        std::fs::write(
+            dir.join("book.hocr"),
+            "<div class='ocr_page' title='bbox 0 0 10 10'><span class='ocrx_word' title='bbox 1 1 5 5; x_wconf 40'>a</span></div>",
+        )
+        .unwrap();
+        let note = w.load_export(&pdf).unwrap();
+        assert!(note.starts_with("2 ") && note.contains("hOCR"), "{note}");
+        assert_eq!(w.hocr.len(), 1);
+        assert!(
+            note.contains("no pictures"),
+            "an empty file renders nothing: {note}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

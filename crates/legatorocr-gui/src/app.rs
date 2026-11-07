@@ -705,6 +705,10 @@ impl App {
                     self.job = None;
                     match r {
                         Ok(d) => {
+                            // a single PDF with its text sidecars can be proofread in the window
+                            if d.kind == JobKind::Pdf && d.docs == 0 && self.s.ocr {
+                                self.proof.last_export = Some(d.target.clone());
+                            }
                             let key = if d.docs > 0 {
                                 "status.split_saved"
                             } else if d.kind == JobKind::Pdf {
