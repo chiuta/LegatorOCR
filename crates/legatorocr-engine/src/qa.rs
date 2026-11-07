@@ -17,6 +17,7 @@ struct Entry {
     path: PathBuf,
     sharp: f32,
     hash: u64,
+    thumb: Vec<u8>,
     cut: bool,
     dpi: f32,
 }
@@ -51,6 +52,7 @@ pub fn record(index: usize, path: &Path, img: &image::DynamicImage) {
         path: path.to_path_buf(),
         sharp: q::sharpness(&g),
         hash: q::perceptual_hash(&g),
+        thumb: q::thumbnail(&g),
         cut: q::edge_text_cut(&g),
         dpi: q::effective_dpi(w, h, a4),
     };
@@ -84,6 +86,10 @@ pub fn report() -> Vec<String> {
     }
     let hashes: Vec<u64> = rows.iter().map(|e| e.hash).collect();
     for (a, b) in q::near_duplicates(&hashes, 6) {
+        // the hash is only a pre-filter: text pages share margins and columns, so confirm
+        if q::thumb_correlation(&rows[a].thumb, &rows[b].thumb) < 0.9 {
+            continue;
+        }
         out.push(format!(
             "{} and {} look like duplicates",
             name(rows[a]),

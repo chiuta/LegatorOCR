@@ -274,6 +274,37 @@ pub fn perceptual_hash(img: &GrayImage) -> u64 {
     hash
 }
 
+/// 32x32 grayscale thumbnail, row-major, for [`thumb_correlation`].
+pub fn thumbnail(img: &GrayImage) -> Vec<u8> {
+    if img.width() == 0 || img.height() == 0 {
+        return Vec::new();
+    }
+    imageops::resize(img, 32, 32, imageops::FilterType::Triangle).into_raw()
+}
+
+/// Pearson correlation (-1..1) of two thumbnails; 0 when either is empty, of another size or
+/// flat. The difference hash alone cannot tell two text pages apart (margins and columns
+/// dominate its 64 bits), so duplicates are confirmed with this.
+pub fn thumb_correlation(a: &[u8], b: &[u8]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let n = a.len() as f64;
+    let ma = a.iter().map(|&v| v as f64).sum::<f64>() / n;
+    let mb = b.iter().map(|&v| v as f64).sum::<f64>() / n;
+    let (mut ab, mut aa, mut bb) = (0.0, 0.0, 0.0);
+    for (&x, &y) in a.iter().zip(b) {
+        let (x, y) = (x as f64 - ma, y as f64 - mb);
+        ab += x * y;
+        aa += x * x;
+        bb += y * y;
+    }
+    if aa <= 0.0 || bb <= 0.0 {
+        return 0.0;
+    }
+    (ab / (aa.sqrt() * bb.sqrt())) as f32
+}
+
 /// All index pairs `(i, j)`, `i < j`, whose hashes differ in at most
 /// `max_hamming` bits. O(n^2); fine for book-sized batches.
 pub fn near_duplicates(hashes: &[u64], max_hamming: u32) -> Vec<(usize, usize)> {
@@ -692,6 +723,36 @@ mod tests {
         assert!((ha ^ hc).count_ones() > 6);
         assert_eq!(near_duplicates(&[ha, hc, hb], 6), vec![(0, 2)]);
         assert_eq!(perceptual_hash(&a), perceptual_hash(&a.clone()));
+    }
+
+    #[test]
+    fn correlation_separates_pages_the_hash_cannot() {
+        let a = stripes(800, 1100);
+        let mut b = GrayImage::from_pixel(800, 1100, Luma([235]));
+        imageops::replace(&mut b, &a, 4, 3);
+        // same layout, other text: stripes of another phase inside the same margins
+        let c = GrayImage::from_fn(800, 1100, |x, y| {
+            if (60..1040).contains(&y) && (80..720).contains(&x) && ((y + 7) / 11 + x / 23) % 2 == 0
+            {
+                Luma([20])
+            } else {
+                Luma([235])
+            }
+        });
+        let (ta, tb, tc) = (thumbnail(&a), thumbnail(&b), thumbnail(&c));
+        assert!(
+            thumb_correlation(&ta, &tb) > 0.9,
+            "{}",
+            thumb_correlation(&ta, &tb)
+        );
+        assert!(
+            thumb_correlation(&ta, &tc) < 0.9,
+            "{}",
+            thumb_correlation(&ta, &tc)
+        );
+        assert_eq!(thumb_correlation(&[], &[]), 0.0);
+        assert_eq!(thumb_correlation(&[5; 4], &[5; 4]), 0.0, "flat images");
+        assert_eq!(thumb_correlation(&ta, &ta[1..]), 0.0);
     }
 
     #[test]

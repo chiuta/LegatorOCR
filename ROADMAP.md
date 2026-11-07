@@ -16,7 +16,7 @@ Working rule for every item: record a number *before*, build, record a number *a
 | 1.1 | done | `--ocr-mode skip` (= `--skip-text`), `redo` / `force`: the default already rebuilds each page from its image and reads it again, the old text layer is never kept, so both equal the default; no mode keeps an old layer and adds to it |
 | 1.2 | done | `--clean-text`; limits: joins hyphenated lowercase compounds |
 | 1.3 | done | `--alto`, `--page-xml`; **validated against the published schemas** (`scripts/validate-outputs.py`: ALTO 4.4 valid; PAGE valid against the 2024-07-15 PRImA schema after rewriting our 2019-07-15 namespace, because the old schema file is not published any more; the W3C xlink schema was unreachable so a stand-in for its `simpleLink` attributes was used; one real page) |
-| 1.5, 1.13 | done | `--quality-report`; thresholds are untuned heuristics |
+| 1.5, 1.13 | done | `--quality-report`; thresholds are untuned heuristics. **Duplicate note fixed 2026-11-07**: the 64-bit difference hash alone flagged 124 false pairs on six real magazine issues (248 pages of text; text pages share margins and columns); it is now only a pre-filter and a pair must also correlate >= 0.9 on 32x32 thumbnails. False duplicate notes 124 -> 0; a page repeated on purpose is still found. Real pairs in those issues: none known, so recall on real duplicates is tested on one constructed case only |
 | 1.6 | done | `--page-lang` |
 | 1.7 | done | `--explain` |
 | 1.8 | done | `--page-labels`; needs OCR to see the printed number |
