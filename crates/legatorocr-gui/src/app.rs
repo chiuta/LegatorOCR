@@ -226,6 +226,11 @@ pub struct App {
     draw_zones: bool,
     /// With `draw_zones`: the mouse draws dewarp guide lines (freehand along a bent text line).
     draw_guide: bool,
+    /// Size of the grid of guide points made by the Grid button (points per line, lines).
+    grid_cols: usize,
+    grid_rows: usize,
+    /// When the Grid button last made a grid: a double click must not make two.
+    grid_made: Option<std::time::Instant>,
     guide_path: Vec<egui::Pos2>,
     /// A node of a dewarp guide being dragged: (guide, node, position as fractions of the scan).
     guide_live: Option<(usize, usize, (f32, f32))>,
@@ -304,6 +309,9 @@ impl App {
             allopts: Default::default(),
             draw_zones: false,
             draw_guide: false,
+            grid_cols: 7,
+            grid_rows: 5,
+            grid_made: None,
             guide_path: Vec::new(),
             guide_live: None,
             draw_pictures: false,
@@ -411,6 +419,7 @@ impl App {
                         mode: a.mode.map(ModeChoice::to_core),
                         dewarp_guides: a.dewarp_guides.clone(),
                         orient_locked: a.orient_locked,
+                        turn_deg: a.sheet_turn_deg,
                         work_mm: a.work_mm,
                         split_frac: a.split_frac,
                         ..Default::default()
@@ -521,6 +530,7 @@ impl App {
                         mode: a.mode.map(ModeChoice::from_core),
                         dewarp_guides: a.dewarp_guides.clone(),
                         orient_locked: a.orient_locked,
+                        sheet_turn_deg: a.turn_deg,
                         work_mm: a.work_mm,
                         split_frac: a.split_frac,
                     };
@@ -2843,6 +2853,12 @@ impl App {
                 {
                     make_grid = true;
                 }
+                if self.draw_guide {
+                    ui.label(tr("zones.grid_cols"));
+                    ui.add(egui::DragValue::new(&mut self.grid_cols).range(2..=40));
+                    ui.label(tr("zones.grid_rows"));
+                    ui.add(egui::DragValue::new(&mut self.grid_rows).range(1..=20));
+                }
             }
             // the zoom slider only means something when "fit" is off; shown greyed it looked like a stuck control
             if !self.fit {
@@ -2884,6 +2900,26 @@ impl App {
                     adj_changed = true;
                 }
             }
+            // fine turn of the original before it is cut in two: level a crooked spread so the gutter
+            // is vertical (the slider covers ±20°; the number box takes any angle up to ±45°)
+            ui.label(tr("adj.turn")).on_hover_text(tr("adj.turn_hint"));
+            adj_changed |= ui
+                .add(
+                    egui::Slider::new(&mut adj.sheet_turn_deg, -20.0..=20.0)
+                        .clamping(egui::SliderClamping::Edits)
+                        .suffix("°")
+                        .fixed_decimals(1),
+                )
+                .changed();
+            adj_changed |= ui
+                .add(
+                    egui::DragValue::new(&mut adj.sheet_turn_deg)
+                        .range(-45.0..=45.0)
+                        .speed(0.05)
+                        .suffix("°")
+                        .fixed_decimals(2),
+                )
+                .changed();
             ui.separator();
             let label = match adj.split {
                 None => tr("adj.split_default"),
@@ -3011,16 +3047,15 @@ impl App {
         if adj_changed {
             self.sheets[i].adj_gen += 1;
         }
-        if make_grid {
-            // a regular grid of draggable points: 5 lines of 7 points over the page. Lines that
-            // are already there are not added again (a second click used to double the grid).
+        if make_grid
+            && self
+                .grid_made
+                .is_none_or(|t| t.elapsed().as_secs_f32() > 0.7)
+        {
+            // a regular grid of draggable points (columns x rows as chosen). Lines that are already
+            // there are not added again, and a double click makes one grid, not two.
             let adj = &mut self.sheets[i].adj;
-            let grid: Vec<Vec<(f32, f32)>> = (0..5)
-                .map(|r| {
-                    let y = 0.15 + 0.175 * r as f32;
-                    (0..7).map(|c| (0.06 + 0.88 * c as f32 / 6.0, y)).collect()
-                })
-                .collect();
+            let grid = crate::settings::grid_guides(self.grid_cols, self.grid_rows);
             let missing: Vec<_> = grid
                 .into_iter()
                 .filter(|g| !adj.dewarp_guides.contains(g))
@@ -3029,6 +3064,7 @@ impl App {
                 adj.dewarp_guides.extend(missing);
                 self.sheets[i].adj_gen += 1;
             }
+            self.grid_made = Some(std::time::Instant::now());
         }
         // Undo for every control: record the state from before this frame's change, unless it
         // continues a change made less than a second ago (a slider drag is one step).
@@ -3507,13 +3543,29 @@ impl App {
                                                     };
                                                     let q = a + ab * t;
                                                     let d = p.distance(q);
-                                                    if d <= 10.0 && best.is_none_or(|bb| d < bb.2) {
+                                                    if d <= 12.0 && best.is_none_or(|bb| d < bb.2) {
                                                         best = Some((gi, ki + 1, d, q));
                                                     }
                                                 }
                                             }
+                                            // not next to a point that is already there: a double
+                                            // click that is a little off a point used to put a second
+                                            // one on top of it
                                             if let Some((g, k, _, q)) = best {
-                                                node_insert = Some((g, k, from_scr(q)));
+                                                let nodes: Vec<(f32, f32)> = guide_list[g]
+                                                    .iter()
+                                                    .map(|n| {
+                                                        let s = to_scr(*n);
+                                                        (s.x, s.y)
+                                                    })
+                                                    .collect();
+                                                if crate::settings::clear_of_nodes(
+                                                    &nodes,
+                                                    (q.x, q.y),
+                                                    16.0,
+                                                ) {
+                                                    node_insert = Some((g, k, from_scr(q)));
+                                                }
                                             }
                                         }
                                     }

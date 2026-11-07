@@ -47,6 +47,8 @@ pub struct SheetAdj {
     pub split_frac: Option<f32>,
     /// Turned by hand: no automatic orientation for this sheet (`orient-locked = 1`).
     pub orient_locked: bool,
+    /// Fine turn of the sheet before the cut, degrees clockwise (`turn = -1.5`).
+    pub turn_deg: f32,
 }
 
 impl SheetAdj {
@@ -71,6 +73,7 @@ impl SheetAdj {
         }
         s.sheet_dewarp_guides = self.dewarp_guides.clone();
         s.sheet_orient_locked = self.orient_locked;
+        s.sheet_turn_deg = self.turn_deg;
         s.sheet_work_mm = self.work_mm.or(s.sheet_work_mm);
         s.sheet_split_frac = self.split_frac.or(s.sheet_split_frac);
         s
@@ -439,6 +442,9 @@ impl Project {
             if a.orient_locked {
                 out.push_str("orient-locked = 1\n");
             }
+            if a.turn_deg != 0.0 {
+                out.push_str(&format!("turn = {}\n", a.turn_deg));
+            }
             if let Some(f) = a.split_frac {
                 out.push_str(&format!("split-at = {f}\n"));
             }
@@ -531,6 +537,15 @@ impl Project {
                         adj.work_mm = Some(z[0]);
                     }
                     "orient-locked" => adj.orient_locked = matches!(v, "1" | "true" | "yes"),
+                    "turn" => {
+                        adj.turn_deg = v
+                            .parse()
+                            .ok()
+                            .filter(|d: &f32| d.is_finite() && d.abs() <= 45.0)
+                            .ok_or_else(|| {
+                                at(anyhow::anyhow!("invalid turn '{v}' (degrees, at most 45)"))
+                            })?
+                    }
                     "split-at" => {
                         let f: f32 = v
                             .parse()
@@ -707,6 +722,7 @@ mod tests {
                 work_mm: Some([5.0, 6.0, 100.0, 120.5]),
                 split_frac: Some(0.4375),
                 orient_locked: true,
+                turn_deg: -2.5,
                 picture_mm: vec![[50.0, 60.0, 70.5, 80.0]],
                 no_picture_mm: vec![[1.0, 2.0, 30.0, 40.5]],
                 mode: Some(OutputMode::Gray),

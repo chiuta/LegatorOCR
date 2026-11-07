@@ -228,6 +228,35 @@ pub struct SheetAdjust {
     pub split_frac: Option<f32>,
     /// The sheet was turned by hand: no automatic orientation on top (until Reset).
     pub orient_locked: bool,
+    /// Fine turn of the original before it is cut in two (degrees, clockwise positive, ±20 on the
+    /// slider): levels a spread scanned crooked so the gutter is vertical.
+    pub sheet_turn_deg: f32,
+}
+
+/// A regular grid of dewarp guide lines over the page: `rows` lines of `cols` points each, as
+/// fractions (0-1) of the scan. At least 2 points per line (a guide needs two), 1 to 20 lines.
+pub fn grid_guides(cols: usize, rows: usize) -> Vec<Vec<(f32, f32)>> {
+    let (cols, rows) = (cols.clamp(2, 40), rows.clamp(1, 20));
+    (0..rows)
+        .map(|r| {
+            let y = if rows == 1 {
+                0.5
+            } else {
+                0.15 + 0.70 * r as f32 / (rows - 1) as f32
+            };
+            (0..cols)
+                .map(|c| (0.06 + 0.88 * c as f32 / (cols - 1) as f32, y))
+                .collect()
+        })
+        .collect()
+}
+
+/// Whether a new point may be put at screen position `at` on a guide: not on top of (or next to)
+/// a point that is already there. `min_px` is the clearance in screen pixels.
+pub fn clear_of_nodes(nodes: &[(f32, f32)], at: (f32, f32), min_px: f32) -> bool {
+    nodes
+        .iter()
+        .all(|n| ((n.0 - at.0).powi(2) + (n.1 - at.1).powi(2)).sqrt() >= min_px)
 }
 
 impl SheetAdjust {
@@ -281,6 +310,7 @@ impl UiSettings {
             sheet_no_picture_zones: adj.no_picture_mm.clone(),
             sheet_dewarp_guides: adj.dewarp_guides.clone(),
             sheet_orient_locked: adj.orient_locked,
+            sheet_turn_deg: adj.sheet_turn_deg,
             sheet_work_mm: adj.work_mm,
             sheet_split_frac: adj.split_frac,
             align: self.align,
@@ -560,6 +590,29 @@ mod portable_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_grid_has_the_asked_size_and_the_default_is_unchanged() {
+        let g = grid_guides(7, 5);
+        assert_eq!((g.len(), g[0].len()), (5, 7));
+        assert!((g[0][0].1 - 0.15).abs() < 1e-6 && (g[4][0].1 - 0.85).abs() < 1e-6);
+        assert!((g[0][0].0 - 0.06).abs() < 1e-6 && (g[0][6].0 - 0.94).abs() < 1e-6);
+        let g = grid_guides(4, 3);
+        assert_eq!((g.len(), g[0].len()), (3, 4));
+        assert!((g[1][0].1 - 0.5).abs() < 1e-6);
+        // nonsense sizes are brought into range; a guide always has two points
+        assert_eq!(grid_guides(0, 0).len(), 1);
+        assert_eq!(grid_guides(0, 0)[0].len(), 2);
+        assert_eq!(grid_guides(1000, 1000).len(), 20);
+    }
+
+    #[test]
+    fn a_point_is_not_added_on_top_of_another() {
+        let nodes = [(100.0, 100.0), (200.0, 100.0)];
+        assert!(!clear_of_nodes(&nodes, (100.0, 100.0), 16.0));
+        assert!(!clear_of_nodes(&nodes, (111.0, 103.0), 16.0));
+        assert!(clear_of_nodes(&nodes, (150.0, 100.0), 16.0));
+    }
+
     use super::*;
 
     #[test]

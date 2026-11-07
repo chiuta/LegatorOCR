@@ -134,6 +134,11 @@ pub struct Settings {
     /// The user turned this sheet by hand (even back to 0 degrees): neither the built-in sideways
     /// check nor Tesseract's OSD may turn it again.
     pub sheet_orient_locked: bool,
+    /// Fine turn of the whole sheet in degrees (clockwise positive, at most ±45), applied to the
+    /// loaded sheet before it is cut in two, so that a spread scanned crooked can be levelled
+    /// until the gutter is vertical. The canvas grows so nothing is clipped; hand-drawn zones and
+    /// guide points follow the turn (a zone becomes the box around its turned corners).
+    pub sheet_turn_deg: f32,
     /// Where to cut a two-page sheet: a fraction (0-1) of the loaded sheet's width, set by dragging
     /// a line on the original. Used when splitting is on, at any rotation (on a sheet turned by
     /// 90 or 270 degrees the two pages lie one above the other).
@@ -194,6 +199,7 @@ impl Default for Settings {
             sheet_erase_zones: Vec::new(),
             sheet_work_mm: None,
             sheet_orient_locked: false,
+            sheet_turn_deg: 0.0,
             sheet_split_frac: None,
             dropout: Dropout::Off,
             despeckle_strength: 1.0,
@@ -357,6 +363,11 @@ impl Settings {
         for g in &mut s.dewarp_guides {
             g.truncate(256);
         }
+        s.sheet_turn_deg = if s.sheet_turn_deg.is_finite() {
+            s.sheet_turn_deg.clamp(-45.0, 45.0)
+        } else {
+            0.0
+        };
         s.manual_skew_deg = s
             .manual_skew_deg
             .filter(|v| v.is_finite())
@@ -499,6 +510,33 @@ fn rot90_points(g: &mut Guides, w: u32, h: u32, turns: u8) {
     }
 }
 
+/// Where a point of an `w` x `h` image lands after [`transform::rotate_cw`] by `rad` (same
+/// centre mapping as the resampling there, on the enlarged canvas).
+fn turn_point(p: (f32, f32), w: u32, h: u32, rad: f32) -> (f32, f32) {
+    let (s, c) = (rad.sin(), rad.cos());
+    let nw = (w as f32 * c.abs() + h as f32 * s.abs()).ceil().max(1.0);
+    let nh = (w as f32 * s.abs() + h as f32 * c.abs()).ceil().max(1.0);
+    let (dx, dy) = (p.0 - w as f32 / 2.0, p.1 - h as f32 / 2.0);
+    (nw / 2.0 + dx * c - dy * s, nh / 2.0 + dx * s + dy * c)
+}
+
+fn turn_rect(z: &mut [f32; 5], w: u32, h: u32, rad: f32) {
+    let corners = [
+        (z[0], z[1]),
+        (z[0] + z[2], z[1]),
+        (z[0], z[1] + z[3]),
+        (z[0] + z[2], z[1] + z[3]),
+    ]
+    .map(|q| turn_point(q, w, h, rad));
+    let (x0, x1) = corners
+        .iter()
+        .fold((f32::MAX, f32::MIN), |a, q| (a.0.min(q.0), a.1.max(q.0)));
+    let (y0, y1) = corners
+        .iter()
+        .fold((f32::MAX, f32::MIN), |a, q| (a.0.min(q.1), a.1.max(q.1)));
+    *z = [x0, y0, x1 - x0, y1 - y0, z[4]];
+}
+
 fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
     let base = crate::stage("sheet/to-rgb", || src.to_rgb8());
     let (w0, h0) = base.dimensions();
@@ -530,10 +568,28 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
     } else {
         transform::rot90(&base, s.rotate_quarters)
     };
+    if s.sheet_turn_deg.abs() >= 0.01 {
+        let rad = s.sheet_turn_deg.to_radians();
+        let (w, h) = rgb.dimensions();
+        if transform::rotation_fits(w, h, rad) {
+            let fill = transform::estimate_background(&rgb);
+            rgb = crate::stage("sheet/fine-turn", || transform::rotate_cw(&rgb, rad, fill));
+            for z in zones.iter_mut() {
+                turn_rect(z, w, h, rad);
+            }
+            for g in guides.iter_mut() {
+                for p in g.iter_mut() {
+                    *p = turn_point(*p, w, h, rad);
+                }
+            }
+        }
+    }
     if s.perspective {
         // guide points are carried through the projective warp; zones are not followed
         let mut moved: Guides = guides.clone();
-        if let Some(flat) = crate::stage("sheet/perspective", || crate::perspective::correct_tracking(&rgb, &mut moved)) {
+        if let Some(flat) = crate::stage("sheet/perspective", || {
+            crate::perspective::correct_tracking(&rgb, &mut moved)
+        }) {
             rgb = flat;
             zones.clear();
             guides = moved;
@@ -757,7 +813,9 @@ fn prepare(
 ) -> Prepared {
     // --- clean-up: fixes that make every later stage's job easier ----------
     if s.auto_invert {
-        crate::stage("clean-up/invert-check", || cleanup::invert_if_negative(&mut img));
+        crate::stage("clean-up/invert-check", || {
+            cleanup::invert_if_negative(&mut img)
+        });
     }
     if s.auto_levels {
         crate::stage("clean-up/auto-levels", || cleanup::auto_levels(&mut img));
@@ -782,7 +840,9 @@ fn prepare(
     }
     if s.fingers {
         let paper = transform::estimate_background(&img);
-        crate::stage("clean-up/fingers", || cleanup::remove_fingers(&mut img, s.dpi, paper));
+        crate::stage("clean-up/fingers", || {
+            cleanup::remove_fingers(&mut img, s.dpi, paper)
+        });
     }
     let bg = crate::stage("clean-up/background", || {
         transform::estimate_background(&img)
@@ -881,7 +941,9 @@ fn prepare(
     // is painted over (it would count as print for the content box, layout and OCR)
     if s.trim_background {
         let paper = transform::estimate_background(&img);
-        crate::stage("clean-up/trim", || cleanup::trim_to_paper(&mut img, s.dpi, paper));
+        crate::stage("clean-up/trim", || {
+            cleanup::trim_to_paper(&mut img, s.dpi, paper)
+        });
     }
 
     // --- content ----------------------------------------------------------
@@ -1200,13 +1262,19 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
             } else {
                 bg
             };
-            window = crate::stage("output/normalize", || transform::normalize_background(&window, s.dpi, target));
+            window = crate::stage("output/normalize", || {
+                transform::normalize_background(&window, s.dpi, target)
+            });
         }
         if s.sharpen > 0.0 {
-            window = crate::stage("output/sharpen", || cleanup::sharpen(&window, s.dpi, s.sharpen));
+            window = crate::stage("output/sharpen", || {
+                cleanup::sharpen(&window, s.dpi, s.sharpen)
+            });
         }
         if f != 1.0 {
-            window = crate::stage("output/resize", || transform::resize_triangle(&window, ww_out, wh_out));
+            window = crate::stage("output/resize", || {
+                transform::resize_triangle(&window, ww_out, wh_out)
+            });
         }
         let mut canvas = RgbImage::from_pixel(cw, ch, paper);
         imageops::replace(&mut canvas, &window, wx_out, wy_out);
@@ -1374,6 +1442,79 @@ pub(crate) mod testutil {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_crooked_spread_turned_back_is_cut_at_its_gutter() {
+        // two text-like columns with a gutter between them, scanned 6 degrees crooked
+        let mut flat = RgbImage::from_pixel(1200, 800, Rgb([240, 240, 240]));
+        for (x0, x1) in [(100u32, 560u32), (640, 1100)] {
+            for y in (100..700).step_by(24) {
+                for x in x0..x1 {
+                    for dy in 0..8 {
+                        if (x / 6) % 4 != 0 {
+                            flat.put_pixel(x, y + dy, Rgb([20, 20, 20]));
+                        }
+                    }
+                }
+            }
+        }
+        let crooked = transform::rotate_cw(&flat, 6f32.to_radians(), Rgb([240, 240, 240]));
+        let img = DynamicImage::ImageRgb8(crooked.clone());
+        let s = Settings {
+            split: SplitMode::Auto,
+            sheet_turn_deg: -6.0,
+            ..Settings::default()
+        };
+        let parts = split_sheet(&img, &s.sanitized());
+        assert_eq!(parts.len(), 2, "the turned sheet should be cut in two");
+        let total: u32 = parts.iter().map(|p| p.0.width()).sum();
+        let left = parts[0].0.width() as f32 / total as f32;
+        assert!((0.4..0.6).contains(&left), "cut at {left}");
+    }
+
+    #[test]
+    fn a_fine_turn_of_the_sheet_levels_it_before_the_cut() {
+        // a 300 x 200 px sheet: a point on the left edge's middle goes where the turn puts it
+        let (x, y) = turn_point((0.0, 100.0), 300, 200, 10f32.to_radians());
+        let (nw, nh) = (
+            (300.0 * 10f32.to_radians().cos() + 200.0 * 10f32.to_radians().sin()).ceil(),
+            (300.0 * 10f32.to_radians().sin() + 200.0 * 10f32.to_radians().cos()).ceil(),
+        );
+        // the centre stays the centre of the larger canvas
+        let c = turn_point((150.0, 100.0), 300, 200, 10f32.to_radians());
+        assert!((c.0 - nw / 2.0).abs() < 0.01 && (c.1 - nh / 2.0).abs() < 0.01);
+        assert!(x > 0.0 && y > 0.0, "{x} {y}");
+        // a zone turned by 10 degrees is boxed by its turned corners, never smaller than before
+        let mut z = [100.0, 50.0, 80.0, 40.0, 0.0];
+        turn_rect(&mut z, 300, 200, 10f32.to_radians());
+        assert!(z[2] > 80.0 && z[3] > 40.0, "{z:?}");
+        // through the whole pipeline: a turned sheet makes a larger canvas, 0 degrees changes nothing
+        let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(300, 200, Rgb([240, 240, 240])));
+        let base = Settings {
+            split: SplitMode::Off,
+            ..Settings::default()
+        };
+        let plain = split_sheet(&img, &base.sanitized());
+        let turned = split_sheet(
+            &img,
+            &Settings {
+                sheet_turn_deg: 10.0,
+                ..base.clone()
+            }
+            .sanitized(),
+        );
+        assert_eq!(plain[0].0.dimensions(), (300, 200));
+        assert!(turned[0].0.width() > 300 && turned[0].0.height() > 200);
+        let nan = split_sheet(
+            &img,
+            &Settings {
+                sheet_turn_deg: f32::NAN,
+                ..base
+            }
+            .sanitized(),
+        );
+        assert_eq!(nan[0].0.dimensions(), (300, 200));
+    }
+
     use super::testutil::*;
 
     #[test]
@@ -2257,6 +2398,11 @@ mod tests {
                     Vec::new()
                 },
                 sheet_orient_locked: rnd(5) == 0,
+                sheet_turn_deg: if rnd(4) == 0 {
+                    rnd(60) as f32 - 30.0
+                } else {
+                    0.0
+                },
                 sheet_work_mm: if rnd(4) == 0 {
                     Some([
                         rnd(100) as f32 - 20.0,

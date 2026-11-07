@@ -2391,6 +2391,7 @@ fn real_main() -> Result<()> {
         remove_lines: cli.remove_lines,
         sheet_erase_zones: Vec::new(),
         sheet_orient_locked: false,
+        sheet_turn_deg: 0.0,
         sheet_work_mm: match cli.work_area.as_deref() {
             None => None,
             Some(v) => Some(
