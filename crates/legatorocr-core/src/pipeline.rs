@@ -98,6 +98,9 @@ pub struct Settings {
     pub auto_levels: bool,
     /// Unsharp-mask amount 0–2 (0 = off) for colour / gray / hybrid output.
     pub sharpen: f32,
+    /// Colour for the `erase_zones` rectangles instead of the paper tone (fill zones: white, black
+    /// or any colour).
+    pub fill_color: Option<[u8; 3]>,
     /// Right-to-left book: a sheet cut in two yields the right-hand page first.
     pub right_to_left: bool,
     /// Make the paper pure white (colour / gray / hybrid output): evens the lighting out and
@@ -201,6 +204,7 @@ impl Default for Settings {
             auto_invert: false,
             auto_levels: false,
             sharpen: 0.0,
+            fill_color: None,
             right_to_left: false,
             remove_bg: false,
             denoise: 0.0,
@@ -902,7 +906,10 @@ fn prepare(
         img = cleanup::show_through(&img, s.dpi, paper);
     }
     if !s.erase_zones.is_empty() {
-        let paper = transform::estimate_background(&img);
+        let paper = s
+            .fill_color
+            .map(Rgb)
+            .unwrap_or_else(|| transform::estimate_background(&img));
         cleanup::erase_zones(&mut img, s.dpi, &s.erase_zones, paper);
     }
     if s.punch_holes {
@@ -2621,6 +2628,7 @@ mod tests {
                 auto_invert: rnd(2) == 0,
                 auto_levels: rnd(2) == 0,
                 sharpen: rnd(300) as f32 / 100.0 - 0.5,
+                fill_color: (rnd(2) == 1).then(|| [rnd(256) as u8, rnd(256) as u8, rnd(256) as u8]),
                 right_to_left: rnd(2) == 1,
                 remove_bg: rnd(2) == 1,
                 denoise: rnd(150) as f32 / 100.0 - 0.25,

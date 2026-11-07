@@ -267,6 +267,26 @@ pub fn whiten_paper(img: &mut RgbImage) {
     }
 }
 
+/// `#RRGGBB`, `RRGGBB`, `#RGB` or one of `white`, `black` → colour.
+pub fn parse_color(s: &str) -> Option<[u8; 3]> {
+    let t = s.trim().to_ascii_lowercase();
+    match t.as_str() {
+        "white" => return Some([255, 255, 255]),
+        "black" => return Some([0, 0, 0]),
+        _ => {}
+    }
+    let h = t.strip_prefix('#').unwrap_or(&t);
+    if !h.is_ascii() {
+        return None;
+    }
+    let v = |a: &str| u8::from_str_radix(a, 16).ok();
+    match h.len() {
+        6 => Some([v(&h[0..2])?, v(&h[2..4])?, v(&h[4..6])?]),
+        3 => Some([v(&h[0..1])? * 17, v(&h[1..2])? * 17, v(&h[2..3])? * 17]),
+        _ => None,
+    }
+}
+
 /// Replace pixels that are strongly of the chosen primary with `paper`.
 pub fn dropout(img: &mut RgbImage, which: Dropout, paper: Rgb<u8>) {
     if which == Dropout::Off {
@@ -1026,6 +1046,16 @@ pub fn remove_lines(bw: &mut BitImage, dpi: u32) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn colours_parse() {
+        assert_eq!(parse_color("#ff8000"), Some([255, 128, 0]));
+        assert_eq!(parse_color("F80"), Some([255, 136, 0]));
+        assert_eq!(parse_color(" Black "), Some([0, 0, 0]));
+        assert_eq!(parse_color("#12"), None);
+        assert_eq!(parse_color("#gg0000"), None);
+        assert_eq!(parse_color("é12345"), None);
+    }
+
     #[test]
     fn whiten_paper_clears_paper_noise_but_not_print_or_tint() {
         let mut img = RgbImage::from_pixel(4, 1, Rgb([244, 243, 245]));

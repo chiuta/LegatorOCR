@@ -1189,6 +1189,11 @@ struct Cli {
     #[arg(long)]
     dewarp: bool,
 
+    /// Colour for the --erase rectangles instead of the paper tone: `white`, `black` or
+    /// `#RRGGBB`. Black on a black & white page makes a black bar (a redaction).
+    #[arg(long, value_name = "COLOR")]
+    erase_color: Option<String>,
+
     /// Right-to-left book (Arabic, Hebrew, manga): when a two-page spread is cut in two, the
     /// right-hand page comes first, and the PDF asks viewers for right-to-left reading.
     #[arg(long)]
@@ -2377,6 +2382,13 @@ fn real_main() -> Result<()> {
     })?;
     in_range("picture-sensitivity", cli.picture_sensitivity, 0.0, 1.0)?;
     in_range("sharpen", cli.sharpen, 0.0, 2.0)?;
+    let fill_color =
+        match cli.erase_color.as_deref() {
+            None => None,
+            Some(c) => Some(legatorocr_core::cleanup::parse_color(c).with_context(|| {
+                format!("unknown --erase-color '{c}' (white, black or #RRGGBB)")
+            })?),
+        };
     in_range("denoise", cli.denoise, 0.0, 1.0)?;
     in_range("deblur", cli.deblur, 0.0, 1.0)?;
     in_range("despeckle-strength", cli.despeckle_strength, 0.25, 4.0)?;
@@ -2434,6 +2446,7 @@ fn real_main() -> Result<()> {
         auto_invert: cli.invert,
         auto_levels: cli.auto_levels,
         sharpen: cli.sharpen,
+        fill_color,
         right_to_left: cli.right_to_left,
         remove_bg: cli.remove_background,
         denoise: cli.denoise,
@@ -2515,6 +2528,7 @@ fn real_main() -> Result<()> {
             "--threshold",
             "--sauvola-k",
             "--sharpen",
+            "--erase-color",
             "--right-to-left",
             "--remove-background",
             "--denoise",

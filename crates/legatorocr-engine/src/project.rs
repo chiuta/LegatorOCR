@@ -203,6 +203,12 @@ pub fn settings_to_pairs(s: &Settings) -> Vec<(&'static str, String)> {
         ("auto_invert", s.auto_invert.to_string()),
         ("auto_levels", s.auto_levels.to_string()),
         ("sharpen", s.sharpen.to_string()),
+        (
+            "fill_color",
+            s.fill_color
+                .map(|c| format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2]))
+                .unwrap_or_default(),
+        ),
         ("right_to_left", s.right_to_left.to_string()),
         ("remove_bg", s.remove_bg.to_string()),
         ("denoise", s.denoise.to_string()),
@@ -285,6 +291,13 @@ pub fn apply_pair(s: &mut Settings, k: &str, v: &str) -> Result<bool> {
         "auto_invert" => s.auto_invert = b(v).ok_or_else(bad)?,
         "auto_levels" => s.auto_levels = b(v).ok_or_else(bad)?,
         "sharpen" => s.sharpen = v.parse().map_err(|_| bad())?,
+        "fill_color" => {
+            s.fill_color = if v.trim().is_empty() {
+                None
+            } else {
+                Some(legatorocr_core::cleanup::parse_color(v).ok_or_else(bad)?)
+            }
+        }
         "right_to_left" => s.right_to_left = v.parse().map_err(|_| bad())?,
         "remove_bg" => s.remove_bg = v.parse().map_err(|_| bad())?,
         "denoise" => s.denoise = v.parse().map_err(|_| bad())?,
