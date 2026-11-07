@@ -1011,7 +1011,7 @@ struct Cli {
     #[arg(long, default_value_t = 0.3)]
     sauvola_k: f32,
 
-    /// Binarisation method: sauvola, wolf, niblack, nick, bradley, otsu, auto (per page).
+    /// Binarisation method: sauvola, wolf, niblack, nick, bradley, bernsen, phansalkar, edgeplus, otsu, auto (per page).
     #[arg(long, default_value = "sauvola")]
     threshold: String,
 
@@ -2337,7 +2337,7 @@ fn real_main() -> Result<()> {
     }
     let threshold = Threshold::from_name(&cli.threshold).with_context(|| {
         format!(
-            "unknown --threshold '{}' (sauvola, wolf, niblack, nick, bradley, otsu, auto)",
+            "unknown --threshold '{}' (sauvola, wolf, niblack, nick, bradley, bernsen, phansalkar, edgeplus, otsu, auto)",
             cli.threshold
         )
     })?;
