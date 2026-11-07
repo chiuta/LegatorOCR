@@ -161,6 +161,7 @@ pub fn category(long: &str) -> Cat {
         "invert",
         "auto-levels",
         "sharpen",
+        "right-to-left",
         "remove-background",
         "denoise",
         "deblur",

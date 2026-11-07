@@ -98,6 +98,8 @@ pub struct Settings {
     pub auto_levels: bool,
     /// Unsharp-mask amount 0–2 (0 = off) for colour / gray / hybrid output.
     pub sharpen: f32,
+    /// Right-to-left book: a sheet cut in two yields the right-hand page first.
+    pub right_to_left: bool,
     /// Make the paper pure white (colour / gray / hybrid output): evens the lighting out and
     /// pushes everything close to the paper tone to 255, so the page compresses and prints clean.
     pub remove_bg: bool,
@@ -199,6 +201,7 @@ impl Default for Settings {
             auto_invert: false,
             auto_levels: false,
             sharpen: 0.0,
+            right_to_left: false,
             remove_bg: false,
             denoise: 0.0,
             deblur: 0.0,
@@ -587,6 +590,14 @@ fn turn_rect(z: &mut [f32; 5], w: u32, h: u32, rad: f32) {
 }
 
 fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
+    let mut parts = split_sheet_left_first(src, s);
+    if s.right_to_left && parts.len() == 2 {
+        parts.reverse();
+    }
+    parts
+}
+
+fn split_sheet_left_first(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
     let base = crate::stage("sheet/to-rgb", || src.to_rgb8());
     let (w0, h0) = base.dimensions();
     let px = |mm: f32| mm / 25.4 * s.dpi as f32;
@@ -1639,6 +1650,37 @@ mod tests {
     }
 
     #[test]
+    fn right_to_left_gives_the_right_hand_page_first() {
+        // text only on the left half
+        let mut flat = RgbImage::from_pixel(800, 400, Rgb([240, 240, 240]));
+        for y in (60..340).step_by(20) {
+            for x in 60..340 {
+                for dy in 0..6 {
+                    flat.put_pixel(x, y + dy, Rgb([20, 20, 20]));
+                }
+            }
+        }
+        let img = DynamicImage::ImageRgb8(flat);
+        let dark = |p: &SheetPart| p.0.pixels().filter(|q| q.0[0] < 100).count();
+        let base = Settings {
+            split: SplitMode::Middle,
+            ..Settings::default()
+        };
+        let ltr = split_sheet(&img, &base.clone().sanitized());
+        assert_eq!(ltr.len(), 2);
+        assert!(dark(&ltr[0]) > 1000 && dark(&ltr[1]) == 0);
+        let rtl = split_sheet(
+            &img,
+            &Settings {
+                right_to_left: true,
+                ..base
+            }
+            .sanitized(),
+        );
+        assert!(dark(&rtl[0]) == 0 && dark(&rtl[1]) > 1000);
+    }
+
+    #[test]
     fn a_crooked_spread_turned_back_is_cut_at_its_gutter() {
         // two text-like columns with a gutter between them, scanned 6 degrees crooked
         let mut flat = RgbImage::from_pixel(1200, 800, Rgb([240, 240, 240]));
@@ -2579,6 +2621,7 @@ mod tests {
                 auto_invert: rnd(2) == 0,
                 auto_levels: rnd(2) == 0,
                 sharpen: rnd(300) as f32 / 100.0 - 0.5,
+                right_to_left: rnd(2) == 1,
                 remove_bg: rnd(2) == 1,
                 denoise: rnd(150) as f32 / 100.0 - 0.25,
                 deblur: rnd(150) as f32 / 100.0 - 0.25,

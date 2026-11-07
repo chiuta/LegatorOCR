@@ -1189,6 +1189,11 @@ struct Cli {
     #[arg(long)]
     dewarp: bool,
 
+    /// Right-to-left book (Arabic, Hebrew, manga): when a two-page spread is cut in two, the
+    /// right-hand page comes first, and the PDF asks viewers for right-to-left reading.
+    #[arg(long)]
+    right_to_left: bool,
+
     /// Size / quality trade-off in the style of OCRmyPDF: 0 = lossless pages (JPEG off), 1 =
     /// as set (default), 2 = JPEG quality at most 70 and hybrid background at most 100 dpi,
     /// 3 = JPEG quality at most 50, hybrid background at most 72 dpi and pages at most 200 dpi.
@@ -2429,6 +2434,7 @@ fn real_main() -> Result<()> {
         auto_invert: cli.invert,
         auto_levels: cli.auto_levels,
         sharpen: cli.sharpen,
+        right_to_left: cli.right_to_left,
         remove_bg: cli.remove_background,
         denoise: cli.denoise,
         deblur: cli.deblur,
@@ -2509,6 +2515,7 @@ fn real_main() -> Result<()> {
             "--threshold",
             "--sauvola-k",
             "--sharpen",
+            "--right-to-left",
             "--remove-background",
             "--denoise",
             "--deblur",
@@ -3071,6 +3078,7 @@ fn real_main() -> Result<()> {
                 rights: cli.rights_notice.clone(),
                 provenance: provenance.clone(),
                 attachments: meta_attachments,
+                right_to_left: cli.right_to_left,
             },
             bookmarks: cli.bookmarks,
             front_matter: cli.front_matter,
