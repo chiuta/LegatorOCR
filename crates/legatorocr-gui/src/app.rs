@@ -231,6 +231,8 @@ pub struct App {
     grid_rows: usize,
     /// When the Grid button last made a grid: a double click must not make two.
     grid_made: Option<std::time::Instant>,
+    /// A running search for the sheet's fine-turn angle (sheet id, result), started by the Auto button.
+    turn_probe: Option<(u64, mpsc::Receiver<Option<f32>>)>,
     guide_path: Vec<egui::Pos2>,
     /// A node of a dewarp guide being dragged: (guide, node, position as fractions of the scan).
     guide_live: Option<(usize, usize, (f32, f32))>,
@@ -312,6 +314,7 @@ impl App {
             grid_cols: 7,
             grid_rows: 5,
             grid_made: None,
+            turn_probe: None,
             guide_path: Vec::new(),
             guide_live: None,
             draw_pictures: false,
@@ -2878,6 +2881,7 @@ impl App {
             !self.sheets[i].zone_redo.is_empty(),
         );
         let (mut clear_zones, mut undo_zone, mut redo_zone) = (false, false, false);
+        let mut auto_turn = false;
         let adj_before = ZoneSnap::of(&self.sheets[i].adj);
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(tr("adj.title")).strong());
@@ -2920,6 +2924,16 @@ impl App {
                         .fixed_decimals(2),
                 )
                 .changed();
+            if ui
+                .add_enabled(
+                    self.turn_probe.is_none(),
+                    egui::Button::new(tr("adj.turn_auto")),
+                )
+                .on_hover_text(tr("adj.turn_auto_hint"))
+                .clicked()
+            {
+                auto_turn = true;
+            }
             ui.separator();
             let label = match adj.split {
                 None => tr("adj.split_default"),
@@ -3046,6 +3060,43 @@ impl App {
         });
         if adj_changed {
             self.sheets[i].adj_gen += 1;
+        }
+        if auto_turn && self.turn_probe.is_none() {
+            // look for the angle in the background: a large scan takes a moment to open
+            let (path, id) = (self.sheets[i].path.clone(), self.sheets[i].id);
+            let st = self.s.to_core(&self.sheets[i].adj);
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let found = legatorocr_engine::load_image(&path)
+                    .ok()
+                    .and_then(|img| legatorocr_core::detect_sheet_turn(&img, &st));
+                let _ = tx.send(found);
+            });
+            self.turn_probe = Some((id, rx));
+        }
+        if let Some((id, rx)) = &self.turn_probe {
+            let id = *id;
+            match rx.try_recv() {
+                Ok(found) => {
+                    self.turn_probe = None;
+                    if let Some(k) = self.sheets.iter().position(|s| s.id == id) {
+                        match found {
+                            Some(deg) => {
+                                self.sheets[k].adj.sheet_turn_deg = deg;
+                                self.sheets[k].adj_gen += 1;
+                                let msg = tr("adj.turn_found").replace("{}", &format!("{deg:.1}"));
+                                self.say(msg, false);
+                            }
+                            None => self.say(tr("adj.turn_none").to_string(), true),
+                        }
+                    }
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ui.ctx()
+                        .request_repaint_after(std::time::Duration::from_millis(100));
+                }
+                Err(mpsc::TryRecvError::Disconnected) => self.turn_probe = None,
+            }
         }
         if make_grid
             && self
@@ -3205,6 +3256,7 @@ impl App {
         let draw_cut = self.draw_extra == 2;
         let work_now: Option<[f32; 4]> = sheet.adj.work_mm;
         let cut_now: Option<f32> = sheet.adj.split_frac;
+        let turn_now: f32 = sheet.adj.sheet_turn_deg;
         let mut new_work: Option<Option<[f32; 4]>> = None;
         let mut new_cut: Option<Option<f32>> = None;
         let guide_list: Vec<Vec<(f32, f32)>> = sheet.adj.dewarp_guides.clone();
@@ -3376,6 +3428,32 @@ impl App {
                                     [egui::pos2(x, rect.min.y), egui::pos2(x, rect.max.y)],
                                     egui::Stroke::new(2.0, Color32::from_rgb(255, 140, 0)),
                                 );
+                            }
+                            // the fine turn is not applied to this picture (zones are drawn on the sheet as
+                            // loaded): show the sheet's new axes instead, so text lines that lie along
+                            // the horizontal ones and the gutter along the vertical ones are level after the turn
+                            if turn_now.abs() >= 0.05 {
+                                let a = turn_now.to_radians();
+                                let (dx, dy) = (a.cos(), -a.sin());
+                                let c = rect.center();
+                                let len = rect.width().max(rect.height()) * 1.5;
+                                let col = Color32::from_rgba_unmultiplied(0, 190, 220, 150);
+                                let stroke = egui::Stroke::new(1.0, col);
+                                for k in [-0.3f32, -0.15, 0.0, 0.15, 0.3] {
+                                    let o = egui::vec2(-dy, dx) * (k * rect.height());
+                                    let (p0, p1) = (
+                                        c + o - egui::vec2(dx, dy) * len,
+                                        c + o + egui::vec2(dx, dy) * len,
+                                    );
+                                    painter.with_clip_rect(rect).line_segment([p0, p1], stroke);
+                                }
+                                for k in [-0.3f32, 0.0, 0.3] {
+                                    let o = egui::vec2(dx, dy) * (k * rect.width());
+                                    let v = egui::vec2(-dy, dx);
+                                    painter
+                                        .with_clip_rect(rect)
+                                        .line_segment([c + o - v * len, c + o + v * len], stroke);
+                                }
                             }
                             if draw_zones && draw_work {
                                 if resp.drag_started() {

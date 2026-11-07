@@ -511,6 +511,22 @@ fn rot90_points(g: &mut Guides, w: u32, h: u32, turns: u8) {
     }
 }
 
+/// The fine turn (degrees, clockwise, as `sheet_turn_deg` takes it) that levels the text lines of
+/// the whole loaded sheet, for the "Auto" button next to the slider. `None` when the sheet has too
+/// little text to judge or the lines do not agree on a direction. Searches up to ±20 degrees (the
+/// per-page deskew only looks as far as `--max-skew`); the result is rounded to 0.1.
+pub fn detect_sheet_turn(src: &DynamicImage, s: &Settings) -> Option<f32> {
+    let s = &s.sanitized();
+    let mut rgb = src.to_rgb8();
+    if !s.rotate_quarters.is_multiple_of(4) {
+        rgb = transform::rot90(&rgb, s.rotate_quarters);
+    }
+    let a = analyse(&transform::gray_of(&rgb), s.dpi);
+    let deg = deskew::detect_skew(&a.ink, 20.0)?.to_degrees();
+    let deg = (deg * 10.0).round() / 10.0;
+    (deg.abs() >= 0.1).then_some(deg)
+}
+
 /// Where a point of an `w` x `h` image lands after [`transform::rotate_cw`] by `rad` (same
 /// centre mapping as the resampling there, on the enlarged canvas).
 fn turn_point(p: (f32, f32), w: u32, h: u32, rad: f32) -> (f32, f32) {
@@ -1459,6 +1475,35 @@ pub(crate) mod testutil {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_sheet_turn_is_found_and_levels_the_sheet() {
+        let mut flat = RgbImage::from_pixel(1200, 800, Rgb([240, 240, 240]));
+        for (x0, x1) in [(100u32, 560u32), (640, 1100)] {
+            for y in (100..700).step_by(24) {
+                for x in x0..x1 {
+                    for dy in 0..8 {
+                        if (x / 6) % 4 != 0 {
+                            flat.put_pixel(x, y + dy, Rgb([20, 20, 20]));
+                        }
+                    }
+                }
+            }
+        }
+        for deg in [-9.0f32, 4.5, 14.0] {
+            let crooked = transform::rotate_cw(&flat, deg.to_radians(), Rgb([240, 240, 240]));
+            let img = DynamicImage::ImageRgb8(crooked);
+            let found = detect_sheet_turn(&img, &Settings::default()).expect("a turn");
+            assert!((found + deg).abs() <= 0.6, "turned {deg}, found {found}");
+        }
+        // a level sheet and a blank one give nothing
+        assert_eq!(
+            detect_sheet_turn(&DynamicImage::ImageRgb8(flat), &Settings::default()),
+            None
+        );
+        let blank = DynamicImage::ImageRgb8(RgbImage::from_pixel(600, 400, Rgb([240; 3])));
+        assert_eq!(detect_sheet_turn(&blank, &Settings::default()), None);
+    }
+
     #[test]
     fn the_cut_line_follows_the_fine_turn() {
         let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(1200, 800, Rgb([240, 240, 240])));
