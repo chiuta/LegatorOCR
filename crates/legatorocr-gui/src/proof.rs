@@ -138,19 +138,21 @@ pub fn parse_hocr(text: &str) -> Vec<(u32, u32, Vec<HWord>)> {
     pages
 }
 
-/// Replace the first whole token `old` of `page` (tokens are separated by white space) by `new`.
-/// Returns false when no token equals `old`.
-pub fn replace_token(page: &mut String, old: &str, new: &str) -> bool {
+/// Replace the `n`-th (0-based) whole token equal to `old` by `new`; false when there are fewer.
+pub fn replace_nth_token(page: &mut String, old: &str, new: &str, n: usize) -> bool {
     if old.is_empty() {
         return false;
     }
     let mut start = None;
-    let mut pos = 0;
+    let (mut pos, mut seen) = (0, 0);
     for tok in page.split_inclusive(char::is_whitespace) {
         let word = tok.trim_end_matches(char::is_whitespace);
         if word == old {
-            start = Some(pos);
-            break;
+            if seen == n {
+                start = Some(pos);
+                break;
+            }
+            seen += 1;
         }
         pos += tok.len();
     }
@@ -220,6 +222,8 @@ pub struct ProofWindow {
     limit: f32,
     fixes: HashMap<(usize, usize), String>,
     done: HashSet<(usize, usize)>,
+    /// Doubtful words already replaced in the text (they no longer count as earlier occurrences).
+    replaced: HashSet<(usize, usize)>,
     selected: Option<(usize, usize)>,
     /// The PDF of the last export of this session (its `.txt` / `.hocr` lie beside it).
     pub last_export: Option<PathBuf>,
@@ -277,6 +281,21 @@ impl ProofWindow {
         v.sort_by(|a, b| a.1.conf.total_cmp(&b.1.conf));
         v.truncate(40);
         v
+    }
+
+    /// Which occurrence of its text, among the words of page `index` that are still in the text
+    /// unchanged, the hOCR word `k` is (0 = the first). The hOCR lists words in the order of the
+    /// text file, so this is the index of the token to replace.
+    pub fn occurrence(&self, index: usize, k: usize) -> usize {
+        let Some((_, _, words)) = self.hocr.get(index) else {
+            return 0;
+        };
+        let Some(me) = words.get(k) else { return 0 };
+        words[..k]
+            .iter()
+            .enumerate()
+            .filter(|(j, w)| w.text == me.text && !self.replaced.contains(&(index, *j)))
+            .count()
     }
 
     fn word_crops(&mut self, ctx: &egui::Context) {
@@ -667,8 +686,15 @@ impl ProofWindow {
                                     ui.add(egui::TextEdit::singleline(buf).desired_width(160.0));
                                     let new = buf.clone();
                                     if ui.button(tr("proof.replace")).clicked() {
-                                        if replace_token(&mut self.pages[index], &text, &new) {
+                                        let nth = self.occurrence(index, k);
+                                        if replace_nth_token(
+                                            &mut self.pages[index],
+                                            &text,
+                                            &new,
+                                            nth,
+                                        ) {
                                             self.dirty = true;
+                                            self.replaced.insert((index, k));
                                             self.done.insert((index, k));
                                             self.crops = None;
                                         } else {
@@ -779,12 +805,12 @@ mod tests {
             "a word already dealt with leaves the list"
         );
         let mut page = "cartea esle bunaesle\nesle".to_string();
-        assert!(replace_token(&mut page, "esle", "este"));
+        assert!(replace_nth_token(&mut page, "esle", "este", 0));
         assert_eq!(page, "cartea este bunaesle\nesle", "first whole token only");
-        assert!(replace_token(&mut page, "esle", "este"));
+        assert!(replace_nth_token(&mut page, "esle", "este", 0));
         assert_eq!(page, "cartea este bunaesle\neste");
-        assert!(!replace_token(&mut page, "esle", "x"));
-        assert!(!replace_token(&mut page, "", "x"));
+        assert!(!replace_nth_token(&mut page, "esle", "x", 0));
+        assert!(!replace_nth_token(&mut page, "", "x", 0));
     }
 
     #[test]
@@ -809,5 +835,51 @@ mod tests {
             "an empty file renders nothing: {note}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_shown_occurrence_is_the_one_replaced() {
+        let mut w = ProofWindow::default();
+        let hw = |t: &str| HWord {
+            text: t.into(),
+            x0: 0,
+            y0: 0,
+            x1: 5,
+            y1: 5,
+            conf: 10.0,
+        };
+        w.hocr = vec![(10, 10, vec![hw("esle"), hw("bun"), hw("esle"), hw("esle")])];
+        let mut page = "esle bun esle esle".to_string();
+        assert_eq!(w.occurrence(0, 0), 0);
+        assert_eq!(w.occurrence(0, 2), 1);
+        assert_eq!(w.occurrence(0, 3), 2);
+        // the third word is corrected: the text keeps the first and second as they were
+        assert!(replace_nth_token(
+            &mut page,
+            "esle",
+            "este",
+            w.occurrence(0, 3)
+        ));
+        assert_eq!(page, "esle bun esle este");
+        w.replaced.insert((0, 3));
+        // then the first: still the first token
+        assert!(replace_nth_token(
+            &mut page,
+            "esle",
+            "ESTE",
+            w.occurrence(0, 0)
+        ));
+        assert_eq!(page, "ESTE bun esle este");
+        w.replaced.insert((0, 0));
+        // the second is now the first token still equal to "esle"
+        assert_eq!(w.occurrence(0, 2), 0);
+        assert!(replace_nth_token(
+            &mut page,
+            "esle",
+            "x",
+            w.occurrence(0, 2)
+        ));
+        assert_eq!(page, "ESTE bun x este");
+        assert!(!replace_nth_token(&mut page, "esle", "x", 0));
     }
 }

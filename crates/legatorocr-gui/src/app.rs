@@ -220,6 +220,8 @@ pub struct App {
     proof: crate::proof::ProofWindow,
     /// The corrected text is loaded into the engine for the running export.
     apply_pending: bool,
+    /// Pages written by the last finished export (to compare with the corrected text).
+    last_pages: usize,
     allopts: crate::alloptions::AllOptions,
     draw_zones: bool,
     /// With `draw_zones`: the mouse draws dewarp guide lines (freehand along a bent text line).
@@ -298,6 +300,7 @@ impl App {
             modules: ModulesWindow::default(),
             proof: crate::proof::ProofWindow::default(),
             apply_pending: false,
+            last_pages: 0,
             allopts: Default::default(),
             draw_zones: false,
             draw_guide: false,
@@ -708,6 +711,7 @@ impl App {
                     self.job = None;
                     match r {
                         Ok(d) => {
+                            self.last_pages = d.pages;
                             // a single PDF with its text sidecars can be proofread in the window
                             if d.kind == JobKind::Pdf && d.docs == 0 && self.s.ocr {
                                 self.proof.last_export = Some(d.target.clone());
@@ -4045,15 +4049,26 @@ impl eframe::App for App {
         if self.apply_pending && self.job.is_none() {
             self.apply_pending = false;
             let c = legatorocr_engine::corrections::totals();
+            let text_pages = legatorocr_engine::corrections::page_count();
             legatorocr_engine::corrections::clear();
-            let m = format!(
+            let mut m = format!(
                 "{}: {} / {} / {}",
                 self.tr("proof.applied"),
                 c.changed,
                 c.added,
                 c.removed
             );
-            self.say(m, false);
+            // pages are matched by position: a different count means the order has shifted
+            let differ = self.last_pages != 0 && text_pages != self.last_pages;
+            if differ {
+                m += &format!(
+                    " — {}: {} ≠ {}",
+                    self.tr("proof.pages_differ"),
+                    text_pages,
+                    self.last_pages
+                );
+            }
+            self.say(m, differ);
         }
         self.all_options_window(&ctx);
         if self.show_about {
