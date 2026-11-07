@@ -1,5 +1,9 @@
-# LegatorOCR command-line image (server / batch use). UNTESTED: written on 2026-11-06 where no Docker
-# daemon was available; build it once and run `docker run --rm legatorocr --doctor` before relying on it.
+# LegatorOCR command-line image (server / batch use). NOT BUILT AS AN IMAGE: on 2026-11-07 a Docker daemon
+# started in the work environment but the registry (registry-1.docker.io) was refused by its network policy,
+# so the base images could not be pulled. Checked instead: the files this Dockerfile copies (Cargo.toml,
+# Cargo.lock, crates/, tools/) are enough for `cargo build --release --locked -p legatorocr-cli`. Not checked:
+# the Rust version of the rust:1 image against rust-version in Cargo.toml, the apt package names, the
+# runtime of the image. Build it once and run `docker run --rm legatorocr --doctor` before relying on it.
 #
 #   docker build -t legatorocr .
 #   docker run --rm -v "$PWD":/work legatorocr scan-*.png --pdf /work/book.pdf --ocr --lang ron
