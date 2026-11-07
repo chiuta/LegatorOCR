@@ -38,7 +38,7 @@ More: `--threshold sauvola|wolf|niblack|nick|bradley|otsu`, `--normalize` (even 
 `--project FILE.lgr` / `--save-project FILE.lgr`. Multi-page TIFFs are read page by page
 (`scan.tif#3` addresses one page).
 
-`--skip-blank`, `--skew DEG` (fixed correction), `--rotate 90`, `--pdf-quality N` (0 = lossless),
+`--skip-blank`, `--skew DEG` (fixed correction), `--sheet-turn DEG` (turn the whole sheet before the cut in two, ±45), `--rotate 90`, `--pdf-quality N` (0 = lossless),
 `--format png|jpeg|tiff|none`, `--tessdata DIR`, `--psm N`, `--min-conf N`, `--keep-going` (skip unreadable
 inputs, exit status 2) — see `legatorocr --help`. A folder can be given instead of files. Resolution is
 read from the PNG/JPEG header when it says 150–1200 dpi (otherwise 300; override with `--dpi`); camera
@@ -114,7 +114,7 @@ A build **without the compiled-in recogniser model** (for example while its lice
 | PDF navigation | `--bookmarks` (one outline entry per source file), `--front-matter N` (pages i, ii, iii … then 1, 2, 3 in PDF viewers) |
 | Erase zones | `--erase X,Y,W,H` (mm from the page's top-left, repeatable): painted with the paper colour before anything else is measured; `erase=` in `.lgr` projects; GUI text field |
 | Hand rotation | in the GUI, a sheet turned with the rotate buttons (or ±45°) is locked: automatic orientation (built-in check, Tesseract OSD) is not applied on top, even at 0°; Reset gives it back. In projects: `orient-locked = 1` |
-| Fine turn of the original | in the GUI, a slider (±20°, number box up to ±45°) turns the whole sheet before it is cut into two pages, so a crooked spread gets a vertical gutter; hand-drawn zones and guide points turn with it (a zone becomes the box around its turned corners). The cut line dragged on the original is a fraction of the turned sheet's width. In projects: `turn = -1.5`. No command-line option yet |
+| Fine turn of the original | in the GUI, a slider (±20°, number box up to ±45°) turns the whole sheet before it is cut into two pages, so a crooked spread gets a vertical gutter; hand-drawn zones and guide points turn with it (a zone becomes the box around its turned corners). The cut line dragged on the original is a fraction of the turned sheet's width. In projects: `turn = -1.5`; on the command line `--sheet-turn -1.5` |
 | Working area and cut line | `--work-area X,Y,W,H` (mm of the loaded scan): everything outside is painted with the paper colour before anything is measured; `--cut-at FRACTION` cuts a two-page sheet at that share of its width instead of the gutter or the middle (any rotation; on a sheet turned by 90° or 270° the two pages come out one above the other). In the GUI both are drawn or dragged on the original ("Work area", "Cut line"); `work =` and `split-at =` in `.lgr` projects. Tested on synthetic sheets only |
 | Batch | `--skip-duplicates` (consecutive pages with a 96×128 thumbnail difference ≤ 2/255), `--split-on-blank` (blank pages separate documents → `name_001.pdf`, …), `--target-size MB` (JPEG quality chosen from a sample of pages so the PDF fits) |
 | OCR input | pages below 250 dpi are enlarged ×2–×4 (Catmull-Rom) before Tesseract; word boxes are mapped back |

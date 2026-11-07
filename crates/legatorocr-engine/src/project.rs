@@ -73,7 +73,8 @@ impl SheetAdj {
         }
         s.sheet_dewarp_guides = self.dewarp_guides.clone();
         s.sheet_orient_locked = self.orient_locked;
-        s.sheet_turn_deg = self.turn_deg;
+        // on top of a global `--sheet-turn`, like the quarter turns
+        s.sheet_turn_deg += self.turn_deg;
         s.sheet_work_mm = self.work_mm.or(s.sheet_work_mm);
         s.sheet_split_frac = self.split_frac.or(s.sheet_split_frac);
         s
@@ -696,6 +697,18 @@ mod tests {
         }
         .apply(&g);
         assert_eq!((b.rotate_quarters, b.manual_skew_deg), (3, Some(-1.0)));
+        // the sheet's fine turn comes on top of a global `--sheet-turn` (a default sheet keeps it)
+        let g = Settings {
+            sheet_turn_deg: 3.0,
+            ..Settings::default()
+        };
+        assert_eq!(SheetAdj::default().apply(&g).sheet_turn_deg, 3.0);
+        let c = SheetAdj {
+            turn_deg: -1.0,
+            ..SheetAdj::default()
+        }
+        .apply(&g);
+        assert_eq!(c.sheet_turn_deg, 2.0);
     }
 
     #[test]
