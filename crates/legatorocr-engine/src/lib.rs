@@ -21,6 +21,7 @@ pub mod burst;
 pub mod catalog;
 pub mod certify;
 pub mod checksums;
+pub mod classify;
 pub mod corrections;
 pub mod djvu;
 pub mod doctor;

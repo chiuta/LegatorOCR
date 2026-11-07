@@ -15,6 +15,7 @@ for i in range(18): dr.text((140, 160 + i * 52), "Aceasta este o linie de text d
 dr.line([(140, 1180), (1100, 1180)], fill=60, width=3)
 im.save(d / "p.png")
 (d / "p2.png").write_bytes((d / "p.png").read_bytes())
+(d / "rules.txt").write_text("[Text]\nmatch = any\nterms = linie, proba\ntag = demo\nfolder = Demo\n")
 CASES = {
  "ocrmypdf-aliases": ["--language", "ron", "--force-ocr", "--deskew", "--rotate-pages", "--output-type", "pdfa-2", "-j", "2", "--sidecar", "{o}.txt"],
  "alto": ["--ocr", "--alto", "{o}.alto.xml"], "page-xml": ["--ocr", "--page-xml", "{o}.pagexml.xml"],
@@ -26,6 +27,7 @@ CASES = {
  "right-to-left": ["--split", "middle", "--right-to-left"],
  "erase-color": ["--mode", "color", "--erase", "20,20,30,30", "--erase-color", "#ff0000"],
  "fold-shadow": ["--mode", "color", "--fold-shadow"],
+ "classify": ["--ocr", "--classify", "{d}/rules.txt", "--classify-out", "{o}.tags.json", "--sort-originals", "{d}/sorted"],
  "bernsen": ["--threshold", "bernsen"], "phansalkar": ["--threshold", "phansalkar"], "edgeplus": ["--threshold", "edgeplus"],
  "despeckle": ["--despeckle-strength", "2"], "no-despeckle": ["--no-despeckle"], "no-deskew": ["--no-deskew"],
  "no-auto-orient": ["--no-auto-orient"], "max-skew": ["--max-skew", "5"], "jpeg": ["--format", "jpeg", "--jpeg-quality", "80", "--out-dir", "{d}/o"],

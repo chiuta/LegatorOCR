@@ -161,6 +161,8 @@ pub fn category(long: &str) -> Cat {
         "invert",
         "auto-levels",
         "sharpen",
+        "classify",
+        "sort-originals",
         "fold-shadow",
         "erase-color",
         "right-to-left",

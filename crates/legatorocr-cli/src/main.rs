@@ -1200,6 +1200,28 @@ struct Cli {
     #[arg(long)]
     fold_shadow: bool,
 
+    /// Tags and a target folder from the OCR text, by your own rules (Paperless-style matching):
+    /// a rules file with `[name]` blocks, `match = any|all|regex`, `terms` / `pattern`, `tag` and
+    /// `folder` (format in the guide and in `classify.rs`). Any / all ignore case and diacritics.
+    /// Prints the tags; with --classify-out writes them as JSON, with --sort-originals files the
+    /// input there. Needs --ocr.
+    #[arg(long, value_name = "RULES")]
+    classify: Option<PathBuf>,
+
+    /// With --classify: write the matched rules, tags and folder as one JSON line to this file.
+    #[arg(long, value_name = "FILE")]
+    classify_out: Option<PathBuf>,
+
+    /// With --classify: copy every input file into DIR/<folder of the first matching rule that
+    /// has one>/ (`_unsorted` when none matched). A name that exists is never overwritten (`-2`,
+    /// `-3`, …). Works with --watch, so a scan that arrives is processed and filed.
+    #[arg(long, value_name = "DIR")]
+    sort_originals: Option<PathBuf>,
+
+    /// With --sort-originals: remove the original after the copy has been checked (same size).
+    #[arg(long)]
+    sort_move: bool,
+
     /// Right-to-left book (Arabic, Hebrew, manga): when a two-page spread is cut in two, the
     /// right-hand page comes first, and the PDF asks viewers for right-to-left reading.
     #[arg(long)]
@@ -2388,6 +2410,28 @@ fn real_main() -> Result<()> {
     })?;
     in_range("picture-sensitivity", cli.picture_sensitivity, 0.0, 1.0)?;
     in_range("sharpen", cli.sharpen, 0.0, 2.0)?;
+    let classify_rules = match &cli.classify {
+        None => {
+            if cli.classify_out.is_some() || cli.sort_originals.is_some() {
+                bail!("--classify-out and --sort-originals need --classify RULES");
+            }
+            None
+        }
+        Some(p) => {
+            if !cli.ocr {
+                bail!("--classify needs --ocr (the rules read the recognised text)");
+            }
+            let src = std::fs::read_to_string(p)
+                .with_context(|| format!("cannot read the rules file {}", p.display()))?;
+            Some(
+                legatorocr_engine::classify::parse(&src)
+                    .map_err(|e| anyhow::anyhow!("{}: {e}", p.display()))?,
+            )
+        }
+    };
+    if cli.sort_move && cli.sort_originals.is_none() {
+        bail!("--sort-move needs --sort-originals DIR");
+    }
     let fill_color =
         match cli.erase_color.as_deref() {
             None => None,
@@ -2535,6 +2579,10 @@ fn real_main() -> Result<()> {
             "--threshold",
             "--sauvola-k",
             "--sharpen",
+            "--classify",
+            "--classify-out",
+            "--sort-originals",
+            "--sort-move",
             "--fold-shadow",
             "--erase-color",
             "--right-to-left",
@@ -3659,6 +3707,36 @@ fn real_main() -> Result<()> {
         eprintln!("wrote {} ({} passages)", p.display(), ps.len());
         written.push(p.clone());
     }
+    if let Some(rules) = &classify_rules {
+        let text = res.text.as_deref().unwrap_or("");
+        let o = legatorocr_engine::classify::classify(rules, text);
+        let name = cli
+            .inputs
+            .first()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        eprintln!(
+            "classified: rules [{}], tags [{}], folder {}",
+            o.rules.join(", "),
+            o.tags.join(", "),
+            o.folder.as_deref().unwrap_or("-")
+        );
+        if let Some(p) = &cli.classify_out {
+            write_atomic(
+                p,
+                legatorocr_engine::classify::to_json(&name, &o).as_bytes(),
+            )?;
+            eprintln!("wrote {}", p.display());
+            written.push(p.clone());
+        }
+        if let Some(dir) = &cli.sort_originals {
+            let sub = o.folder.as_deref().unwrap_or("_unsorted");
+            for f in cli.inputs.iter().filter(|f| f.is_file()) {
+                let to = file_into(f, &dir.join(sub), cli.sort_move)?;
+                eprintln!("filed {} -> {}", f.display(), to.display());
+            }
+        }
+    }
     if let Some(p) = &cli.doubtful_words {
         if let Some((tsv, n, total)) = legatorocr_engine::doubtful::finish() {
             write_atomic(p, tsv.as_bytes())?;
@@ -4104,5 +4182,63 @@ mod optimize_tests {
             (0, 100, Some(150))
         );
         assert!(Cli::try_parse_from(["legatorocr", "x.png", "--optimize", "4"]).is_err());
+    }
+}
+
+/// Copy `file` into `dir` (created) without overwriting: `name.pdf`, `name-2.pdf`, … With
+/// `remove_original` the source is deleted once the copy has the same size.
+fn file_into(
+    file: &std::path::Path,
+    dir: &std::path::Path,
+    remove_original: bool,
+) -> Result<PathBuf> {
+    std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+    let ext = file.extension().and_then(|s| s.to_str());
+    let mut to = dir.join(file.file_name().context("no file name")?);
+    let mut n = 1;
+    while to.exists() {
+        n += 1;
+        to = dir.join(match ext {
+            Some(e) => format!("{stem}-{n}.{e}"),
+            None => format!("{stem}-{n}"),
+        });
+    }
+    std::fs::copy(file, &to).with_context(|| format!("cannot copy to {}", to.display()))?;
+    if remove_original {
+        if std::fs::metadata(file)?.len() == std::fs::metadata(&to)?.len() {
+            std::fs::remove_file(file)
+                .with_context(|| format!("copied, but cannot remove {}", file.display()))?;
+        } else {
+            bail!(
+                "the copy {} differs in size; the original was kept",
+                to.display()
+            );
+        }
+    }
+    Ok(to)
+}
+
+#[cfg(test)]
+mod file_into_tests {
+    use super::*;
+
+    #[test]
+    fn files_are_copied_without_overwriting_and_moved_only_when_asked() {
+        let d = std::env::temp_dir().join(format!("lgr-fi-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let src = d.join("a.pdf");
+        std::fs::write(&src, b"hello").unwrap();
+        let t1 = file_into(&src, &d.join("out/F"), false).unwrap();
+        let t2 = file_into(&src, &d.join("out/F"), false).unwrap();
+        assert_eq!(t1.file_name().unwrap(), "a.pdf");
+        assert_eq!(t2.file_name().unwrap(), "a-2.pdf");
+        assert!(src.exists());
+        let t3 = file_into(&src, &d.join("out/F"), true).unwrap();
+        assert_eq!(t3.file_name().unwrap(), "a-3.pdf");
+        assert!(!src.exists());
+        assert_eq!(std::fs::read(&t3).unwrap(), b"hello");
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
