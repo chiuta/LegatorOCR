@@ -218,6 +218,8 @@ pub struct App {
     show_about: bool,
     modules: ModulesWindow,
     proof: crate::proof::ProofWindow,
+    /// The corrected text is loaded into the engine for the running export.
+    apply_pending: bool,
     allopts: crate::alloptions::AllOptions,
     draw_zones: bool,
     /// With `draw_zones`: the mouse draws dewarp guide lines (freehand along a bent text line).
@@ -295,6 +297,7 @@ impl App {
             show_about: false,
             modules: ModulesWindow::default(),
             proof: crate::proof::ProofWindow::default(),
+            apply_pending: false,
             allopts: Default::default(),
             draw_zones: false,
             draw_guide: false,
@@ -4022,6 +4025,35 @@ impl eframe::App for App {
         {
             let lang = self.lang;
             self.proof.ui(&ctx, &|k| t(lang, k));
+        }
+        if std::mem::take(&mut self.proof.apply_requested) {
+            if !self.s.ocr {
+                let m = self.tr("proof.need_ocr").to_string();
+                self.say(m, true);
+            } else if self.job.is_none() && !self.sheets.is_empty() {
+                legatorocr_engine::corrections::set(&self.proof.corrected_text());
+                self.start_export(&ctx, JobKind::Pdf);
+                if self.job.is_some() {
+                    self.apply_pending = true;
+                } else {
+                    // the file dialog was closed: nothing runs, nothing to apply
+                    legatorocr_engine::corrections::clear();
+                }
+            }
+        }
+        // the corrected text belongs to one export: forget it when that export is over
+        if self.apply_pending && self.job.is_none() {
+            self.apply_pending = false;
+            let c = legatorocr_engine::corrections::totals();
+            legatorocr_engine::corrections::clear();
+            let m = format!(
+                "{}: {} / {} / {}",
+                self.tr("proof.applied"),
+                c.changed,
+                c.added,
+                c.removed
+            );
+            self.say(m, false);
         }
         self.all_options_window(&ctx);
         if self.show_about {

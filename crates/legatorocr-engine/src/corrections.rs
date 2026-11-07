@@ -41,6 +41,14 @@ pub fn set(text: &str) {
     *PAGES.lock().unwrap() = Some(pages);
 }
 
+/// Forget the corrected text and the totals (the window applies it to one export only).
+pub fn clear() {
+    *PAGES.lock().unwrap() = None;
+    CHANGED.store(0, Ordering::Relaxed);
+    ADDED.store(0, Ordering::Relaxed);
+    REMOVED.store(0, Ordering::Relaxed);
+}
+
 pub fn enabled() -> bool {
     PAGES.lock().unwrap().is_some()
 }
@@ -348,6 +356,6 @@ mod tests {
             "a form feed after the last page is not a page"
         );
         assert_eq!(apply(5, w.clone()), w, "a page past the file is untouched");
-        *PAGES.lock().unwrap() = None;
+        clear();
     }
 }

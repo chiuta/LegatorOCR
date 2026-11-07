@@ -223,6 +223,8 @@ pub struct ProofWindow {
     selected: Option<(usize, usize)>,
     /// The PDF of the last export of this session (its `.txt` / `.hocr` lie beside it).
     pub last_export: Option<PathBuf>,
+    /// Set by the button *Export PDF with corrections*; the application takes it each frame.
+    pub apply_requested: bool,
     render_dir: Option<PathBuf>,
     pending_scroll: bool,
     crops: Option<(usize, Vec<(usize, TextureHandle)>)>,
@@ -350,6 +352,11 @@ impl ProofWindow {
         }
     }
 
+    /// The corrected pages as one text (form feeds between pages), as `--apply-text` reads it.
+    pub fn corrected_text(&self) -> String {
+        join_pages(&self.pages)
+    }
+
     /// Write the pages back (to `path`, or over the file they came from).
     pub fn save(&mut self, path: Option<&Path>) -> Result<PathBuf, String> {
         let target = path
@@ -444,6 +451,12 @@ impl ProofWindow {
                                 Err(e) => (e, true),
                             });
                         }
+                    }
+                    if ui
+                        .add_enabled(!self.pages.is_empty(), egui::Button::new(tr("proof.apply")))
+                        .clicked()
+                    {
+                        self.apply_requested = true;
                     }
                     let can_save = self.text_path.is_some() && !self.pages.is_empty();
                     if ui
