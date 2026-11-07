@@ -2,7 +2,7 @@
 //! the recognised words of each page, so the PDF text layer, the plain text and hOCR carry the
 //! corrections while every word keeps a box.
 //!
-//! The corrected page is compared with the recognised words, in reading order, by a longest
+//! The corrected page is compared with the recognised words, in the order the text output lists them, by a longest
 //! common subsequence of whole tokens. Between two equal tokens the differing stretch of
 //! `k` old words and `m` new tokens is resolved so: the first `min(k, m)` old words take the
 //! new texts one by one; surplus old words are dropped; surplus new tokens share the box of the
@@ -78,8 +78,10 @@ pub fn align(words: Vec<Word>, corrected: &str) -> (Vec<Word>, Counts) {
     if new_t.is_empty() || words.is_empty() {
         return (words, Counts::default());
     }
-    let mut order: Vec<usize> = (0..words.len()).collect();
-    order.sort_by_key(|&i| (words[i].line, words[i].x));
+    // the text file lists the words in the order the engine produced them (`words_to_text`), so
+    // that is the order to compare in, not a re-sorted one: with another order words that moved
+    // would be dropped and added again
+    let order: Vec<usize> = (0..words.len()).collect();
     let n = order.len();
     let m = new_t.len();
     if n.saturating_mul(m) > MAX_CELLS {
@@ -322,17 +324,15 @@ mod tests {
     }
 
     #[test]
-    fn works_in_reading_order_whatever_the_vector_order() {
-        let mut w = vec![word("doi", 100, 0), word("unu", 0, 0), word("trei", 0, 1)];
-        w[0].line = 0;
-        let (o, _) = align(w, "unu doi trei");
-        assert_eq!(
-            texts(&o),
-            ["doi", "unu", "trei"],
-            "the vector order is kept"
-        );
-        let (o, c) = align(vec![word("doi", 100, 0), word("unu", 0, 0)], "unu 2");
-        assert_eq!(texts(&o), ["2", "unu"]);
+    fn compares_in_the_order_the_text_output_lists_the_words() {
+        // vector order a, b, c although `c` sits on line 0 to the right of `a`: the text file reads
+        // "a b c", so nothing may change (a sort by line and x would drop and re-add words)
+        let w = vec![word("a", 0, 0), word("b", 0, 1), word("c", 50, 0)];
+        let (o, c) = align(w.clone(), "a b c");
+        assert_eq!(o, w);
+        assert_eq!(c, Counts::default());
+        let (o, c) = align(vec![word("doi", 100, 0), word("unu", 0, 0)], "doi 2");
+        assert_eq!(texts(&o), ["doi", "2"]);
         assert_eq!(c.changed, 1);
     }
 
