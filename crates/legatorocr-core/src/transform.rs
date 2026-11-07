@@ -470,7 +470,13 @@ mod resize_tests {
     #[test]
     fn parallel_triangle_matches_the_reference_within_one_level() {
         let mut s = 7u32;
-        for (w, h, nw, nh) in [(97u32, 61u32, 40u32, 30u32), (50, 80, 120, 90), (300, 200, 299, 201), (64, 64, 1, 1), (5, 3, 9, 2)] {
+        for (w, h, nw, nh) in [
+            (97u32, 61u32, 40u32, 30u32),
+            (50, 80, 120, 90),
+            (300, 200, 299, 201),
+            (64, 64, 1, 1),
+            (5, 3, 9, 2),
+        ] {
             let img = RgbImage::from_fn(w, h, |x, y| {
                 s = s.wrapping_mul(1664525).wrapping_add(1013904223);
                 let v = ((x * 3 + y * 5) % 200) as u8;
@@ -479,7 +485,13 @@ mod resize_tests {
             let a = imageops::resize(&img, nw, nh, imageops::FilterType::Triangle);
             let b = resize_triangle(&img, nw, nh);
             assert_eq!(a.dimensions(), b.dimensions());
-            let worst = a.as_raw().iter().zip(b.as_raw()).map(|(&p, &q)| (p as i32 - q as i32).abs()).max().unwrap();
+            let worst = a
+                .as_raw()
+                .iter()
+                .zip(b.as_raw())
+                .map(|(&p, &q)| (p as i32 - q as i32).abs())
+                .max()
+                .unwrap();
             assert!(worst <= 1, "{w}x{h}->{nw}x{nh}: worst diff {worst}");
         }
     }

@@ -687,7 +687,12 @@ mod tests {
             (true, false, 25)
         );
         assert_eq!(
-            (back.show_through, back.descreen, back.perspective, back.trim_background),
+            (
+                back.show_through,
+                back.descreen,
+                back.perspective,
+                back.trim_background
+            ),
             (true, false, true, true)
         );
         assert_eq!(

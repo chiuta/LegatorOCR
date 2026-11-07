@@ -460,8 +460,14 @@ pub struct Run {
 
 impl Run {
     pub fn stop(&self) {
-        self.stopped.store(true, std::sync::atomic::Ordering::SeqCst);
-        if let Some(c) = self.child.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        self.stopped
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(c) = self
+            .child
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_mut()
+        {
             let _ = c.kill();
         }
     }
@@ -528,7 +534,9 @@ pub fn spawn(args: &[String], cwd: Option<PathBuf>) -> Result<Run, String> {
             std::thread::sleep(std::time::Duration::from_millis(50));
         };
         let _ = tx.send(match status {
-            _ if was_stopped.load(std::sync::atomic::Ordering::SeqCst) => "\u{1}stopped".to_string(),
+            _ if was_stopped.load(std::sync::atomic::Ordering::SeqCst) => {
+                "\u{1}stopped".to_string()
+            }
             Some(s) if s.success() => "\u{1}ok".to_string(),
             Some(s) => format!("\u{1}exit {}", s.code().unwrap_or(-1)),
             None => "\u{1}stopped".to_string(),

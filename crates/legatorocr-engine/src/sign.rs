@@ -533,11 +533,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         let run = |args: &[&str]| {
-            let o = openssl()
-                .args(args)
-                .current_dir(&d)
-                .output()
-                .unwrap();
+            let o = openssl().args(args).current_dir(&d).output().unwrap();
             assert!(
                 o.status.success(),
                 "openssl {args:?}: {}",
