@@ -45,7 +45,7 @@ enum Fmt {
 #[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "install_modules", "scan_escl", "watch", "verify_bag", "verify_ocfl", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "decode_worker", "fuse_frames", "verify_document", "integrity_hints", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "extract_project", "search_preset", "search_help"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "install_modules", "scan_escl", "watch", "verify_bag", "verify_ocfl", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "pdfa_check", "decode_worker", "fuse_frames", "verify_document", "integrity_hints", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "extract_project", "search_preset", "search_help"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -808,6 +808,17 @@ struct Cli {
     #[arg(long, value_name = "FILE")]
     verify_pdf_signatures: Option<PathBuf>,
 
+    /// PDF/A preflight of FILE, then exit: the built-in checks (XMP identification, output
+    /// intent, no encryption / JavaScript / LZW, embedded fonts, file identifier) and, when a
+    /// `verapdf` command is found, veraPDF's verdict too (flavour from the file's own XMP). A
+    /// subset of the standard, not a validation: veraPDF decides. Exit 1 when anything fails.
+    #[arg(long, value_name = "FILE")]
+    pdfa_check: Option<PathBuf>,
+
+    /// veraPDF command for --pdfa-check (default: `verapdf` on the PATH).
+    #[arg(long, value_name = "CMD", default_value = "verapdf")]
+    verapdf: String,
+
     /// CA / signer certificate (PEM) for --verify-pdf-signatures.
     #[arg(long, value_name = "PEM")]
     sign_ca: Option<PathBuf>,
@@ -1011,7 +1022,7 @@ struct Cli {
     #[arg(long, default_value_t = 0.3)]
     sauvola_k: f32,
 
-    /// Binarisation method: sauvola, wolf, niblack, nick, bradley, otsu, auto (per page).
+    /// Binarisation method: sauvola, wolf, niblack, nick, bradley, bernsen, phansalkar, edgeplus, otsu, auto (per page).
     #[arg(long, default_value = "sauvola")]
     threshold: String,
 
@@ -1026,6 +1037,22 @@ struct Cli {
     /// Unsharp-mask amount, 0–2 (0 = off).
     #[arg(long, default_value_t = 0.0)]
     sharpen: f32,
+
+    /// Make the paper pure white in colour / gray / hybrid output: the lighting is evened out and
+    /// every tone close to the paper's goes to 255 (smaller files, clean print). Strokes and
+    /// pictures keep their tones. Implies the effect of --normalize.
+    #[arg(long)]
+    remove_background: bool,
+
+    /// Edge-preserving noise smoothing, 0–1 (0 = off): grain and scanner noise in flat areas are
+    /// smoothed, strokes and edges are left alone. Colour / gray / hybrid output.
+    #[arg(long, default_value_t = 0.0)]
+    denoise: f32,
+
+    /// Deconvolution against a mild blur, 0–1 (0 = off), for soft or slightly out-of-focus
+    /// scans. Runs before --sharpen. Amplifies noise: combine with --denoise.
+    #[arg(long, default_value_t = 0.0)]
+    deblur: f32,
 
     /// Erase punch / binder holes near the page edge.
     #[arg(long)]
@@ -1172,6 +1199,57 @@ struct Cli {
     /// Straighten curved text lines (page curl).
     #[arg(long)]
     dewarp: bool,
+
+    /// Colour for the --erase rectangles instead of the paper tone: `white`, `black` or
+    /// `#RRGGBB`. Black on a black & white page makes a black bar (a redaction).
+    #[arg(long, value_name = "COLOR")]
+    erase_color: Option<String>,
+
+    /// Lift the fold shadow toward a book's spine: the paper tone of each column in the outer
+    /// 18 % of both page edges is brought up to the tone of the page's middle (never darkened).
+    /// Works on the page after the cut, before binarising, so black & white output benefits too.
+    #[arg(long)]
+    fold_shadow: bool,
+
+    /// Tags and a target folder from the OCR text, by your own rules (Paperless-style matching):
+    /// a rules file with `[name]` blocks, `match = any|all|regex`, `terms` / `pattern`, `tag` and
+    /// `folder` (format in the guide and in `classify.rs`). Any / all ignore case and diacritics.
+    /// Prints the tags; with --classify-out writes them as JSON, with --sort-originals files the
+    /// input there. Needs --ocr.
+    #[arg(long, value_name = "RULES")]
+    classify: Option<PathBuf>,
+
+    /// With --classify: write the matched rules, tags and folder as one JSON line to this file.
+    #[arg(long, value_name = "FILE")]
+    classify_out: Option<PathBuf>,
+
+    /// With --classify: copy every input file into DIR/<folder of the first matching rule that
+    /// has one>/ (`_unsorted` when none matched). A name that exists is never overwritten (`-2`,
+    /// `-3`, …). Works with --watch, so a scan that arrives is processed and filed.
+    #[arg(long, value_name = "DIR")]
+    sort_originals: Option<PathBuf>,
+
+    /// With --sort-originals: remove the original after the copy has been checked (same size).
+    #[arg(long)]
+    sort_move: bool,
+
+    /// Marginal dewarping: straighten a bent left margin of a justified text block (the other
+    /// direction of --dewarp, which straightens bent lines). Needs at least 8 text lines that
+    /// agree on a smooth curve; ragged, indented or already straight text is left alone.
+    #[arg(long)]
+    dewarp_margin: bool,
+
+    /// Right-to-left book (Arabic, Hebrew, manga): when a two-page spread is cut in two, the
+    /// right-hand page comes first, and the PDF asks viewers for right-to-left reading.
+    #[arg(long)]
+    right_to_left: bool,
+
+    /// Size / quality trade-off in the style of OCRmyPDF: 0 = lossless pages (JPEG off), 1 =
+    /// as set (default), 2 = JPEG quality at most 70 and hybrid background at most 100 dpi,
+    /// 3 = JPEG quality at most 50, hybrid background at most 72 dpi and pages at most 200 dpi.
+    /// Levels 2 and 3 only lower what the other options set, never raise it.
+    #[arg(long, value_parser = clap::value_parser!(u8).range(0..=3))]
+    optimize: Option<u8>,
 
     /// Downsample output to this dpi (never upsamples).
     #[arg(long)]
@@ -1610,6 +1688,12 @@ fn real_main() -> Result<()> {
                 cli.pdfa_part = n;
             }
         }
+    }
+    match cli.optimize {
+        Some(0) => cli.pdf_quality = 0,
+        Some(2) => apply_optimize_caps(&mut cli, 70, 100, None),
+        Some(3) => apply_optimize_caps(&mut cli, 50, 72, Some(200)),
+        _ => {}
     }
     if let Some(n) = cli.jobs.filter(|&n| n > 0) {
         // the global pool is built once, before any parallel work
@@ -2085,6 +2169,52 @@ fn real_main() -> Result<()> {
         println!("wrote {}", out.display());
         return Ok(());
     }
+    if let Some(f) = &cli.pdfa_check {
+        let bytes = std::fs::read(f).with_context(|| format!("cannot read {}", f.display()))?;
+        let findings = legatorocr_engine::pdfapreflight::check_bytes(&bytes);
+        let mut bad = false;
+        for x in &findings {
+            println!("{} {}", if x.ok { "ok  " } else { "FAIL" }, x.what);
+            bad |= !x.ok;
+        }
+        if legatorocr_engine::pdfapreflight::have_verapdf(&cli.verapdf) {
+            let flavour = String::from_utf8_lossy(&bytes);
+            let part = flavour
+                .split("pdfaid:part")
+                .nth(1)
+                .and_then(|s| s.chars().find(|c| c.is_ascii_digit()))
+                .unwrap_or('2');
+            match legatorocr_engine::pdfapreflight::run_verapdf(
+                &cli.verapdf,
+                f,
+                &format!("{part}b"),
+            ) {
+                Ok((pass, line)) => {
+                    println!("{} veraPDF: {line}", if pass { "ok  " } else { "FAIL" });
+                    bad |= !pass;
+                }
+                Err(e) => {
+                    println!("FAIL veraPDF: {e}");
+                    bad = true;
+                }
+            }
+        } else {
+            println!(
+                "note veraPDF not found ({}): only the built-in subset was checked",
+                cli.verapdf
+            );
+        }
+        println!(
+            "{}: {}",
+            f.display(),
+            if bad {
+                "problems found"
+            } else {
+                "no problem found by these checks (not a PDF/A validation)"
+            }
+        );
+        std::process::exit(if bad { 1 } else { 0 });
+    }
     if let Some(f) = &cli.verify_pdf_signatures {
         let rs =
             legatorocr_engine::sign::verify_pdf(f, cli.sign_ca.as_deref(), cli.tsa_ca.as_deref())?;
@@ -2337,12 +2467,43 @@ fn real_main() -> Result<()> {
     }
     let threshold = Threshold::from_name(&cli.threshold).with_context(|| {
         format!(
-            "unknown --threshold '{}' (sauvola, wolf, niblack, nick, bradley, otsu, auto)",
+            "unknown --threshold '{}' (sauvola, wolf, niblack, nick, bradley, bernsen, phansalkar, edgeplus, otsu, auto)",
             cli.threshold
         )
     })?;
     in_range("picture-sensitivity", cli.picture_sensitivity, 0.0, 1.0)?;
     in_range("sharpen", cli.sharpen, 0.0, 2.0)?;
+    let classify_rules = match &cli.classify {
+        None => {
+            if cli.classify_out.is_some() || cli.sort_originals.is_some() {
+                bail!("--classify-out and --sort-originals need --classify RULES");
+            }
+            None
+        }
+        Some(p) => {
+            if !cli.ocr {
+                bail!("--classify needs --ocr (the rules read the recognised text)");
+            }
+            let src = std::fs::read_to_string(p)
+                .with_context(|| format!("cannot read the rules file {}", p.display()))?;
+            Some(
+                legatorocr_engine::classify::parse(&src)
+                    .map_err(|e| anyhow::anyhow!("{}: {e}", p.display()))?,
+            )
+        }
+    };
+    if cli.sort_move && cli.sort_originals.is_none() {
+        bail!("--sort-move needs --sort-originals DIR");
+    }
+    let fill_color =
+        match cli.erase_color.as_deref() {
+            None => None,
+            Some(c) => Some(legatorocr_core::cleanup::parse_color(c).with_context(|| {
+                format!("unknown --erase-color '{c}' (white, black or #RRGGBB)")
+            })?),
+        };
+    in_range("denoise", cli.denoise, 0.0, 1.0)?;
+    in_range("deblur", cli.deblur, 0.0, 1.0)?;
     in_range("despeckle-strength", cli.despeckle_strength, 0.25, 4.0)?;
     if let Some(d) = cli.output_dpi {
         if !(36..=1200).contains(&d) {
@@ -2398,6 +2559,13 @@ fn real_main() -> Result<()> {
         auto_invert: cli.invert,
         auto_levels: cli.auto_levels,
         sharpen: cli.sharpen,
+        dewarp_margin: cli.dewarp_margin,
+        fold_shadow: cli.fold_shadow,
+        fill_color,
+        right_to_left: cli.right_to_left,
+        remove_bg: cli.remove_background,
+        denoise: cli.denoise,
+        deblur: cli.deblur,
         punch_holes: cli.punch_holes,
         fingers: cli.fingers,
         remove_lines: cli.remove_lines,
@@ -2475,6 +2643,19 @@ fn real_main() -> Result<()> {
             "--threshold",
             "--sauvola-k",
             "--sharpen",
+            "--pdfa-check",
+            "--verapdf",
+            "--dewarp-margin",
+            "--classify",
+            "--classify-out",
+            "--sort-originals",
+            "--sort-move",
+            "--fold-shadow",
+            "--erase-color",
+            "--right-to-left",
+            "--remove-background",
+            "--denoise",
+            "--deblur",
             "--despeckle-strength",
             "--output-dpi",
             "--hybrid-dpi",
@@ -3034,6 +3215,7 @@ fn real_main() -> Result<()> {
                 rights: cli.rights_notice.clone(),
                 provenance: provenance.clone(),
                 attachments: meta_attachments,
+                right_to_left: cli.right_to_left,
             },
             bookmarks: cli.bookmarks,
             front_matter: cli.front_matter,
@@ -3592,6 +3774,36 @@ fn real_main() -> Result<()> {
         eprintln!("wrote {} ({} passages)", p.display(), ps.len());
         written.push(p.clone());
     }
+    if let Some(rules) = &classify_rules {
+        let text = res.text.as_deref().unwrap_or("");
+        let o = legatorocr_engine::classify::classify(rules, text);
+        let name = cli
+            .inputs
+            .first()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        eprintln!(
+            "classified: rules [{}], tags [{}], folder {}",
+            o.rules.join(", "),
+            o.tags.join(", "),
+            o.folder.as_deref().unwrap_or("-")
+        );
+        if let Some(p) = &cli.classify_out {
+            write_atomic(
+                p,
+                legatorocr_engine::classify::to_json(&name, &o).as_bytes(),
+            )?;
+            eprintln!("wrote {}", p.display());
+            written.push(p.clone());
+        }
+        if let Some(dir) = &cli.sort_originals {
+            let sub = o.folder.as_deref().unwrap_or("_unsorted");
+            for f in cli.inputs.iter().filter(|f| f.is_file()) {
+                let to = file_into(f, &dir.join(sub), cli.sort_move)?;
+                eprintln!("filed {} -> {}", f.display(), to.display());
+            }
+        }
+    }
     if let Some(p) = &cli.doubtful_words {
         if let Some((tsv, n, total)) = legatorocr_engine::doubtful::finish() {
             write_atomic(p, tsv.as_bytes())?;
@@ -3987,5 +4199,113 @@ mod tests {
         for bad in ["0x0", "100000x100000", "nanx5", "5", "axb"] {
             assert!(parse_page_size(bad).is_err(), "{bad}");
         }
+    }
+}
+
+/// `--optimize` 2 and 3: lower the JPEG quality, the hybrid background resolution and (level 3)
+/// the page resolution to these limits. A lossless setting (`--pdf-quality 0`) and any value
+/// already below the limit are left alone.
+fn apply_optimize_caps(cli: &mut Cli, quality: u8, hybrid_dpi: u32, page_dpi: Option<u32>) {
+    if cli.pdf_quality > quality {
+        cli.pdf_quality = quality;
+    }
+    cli.hybrid_dpi = cli.hybrid_dpi.min(hybrid_dpi);
+    if let Some(cap) = page_dpi {
+        cli.output_dpi = Some(cli.output_dpi.map_or(cap, |d| d.min(cap)));
+    }
+}
+
+#[cfg(test)]
+mod optimize_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn optimize_levels_only_lower_things() {
+        let mut c = Cli::parse_from([
+            "legatorocr",
+            "x.png",
+            "--optimize",
+            "3",
+            "--hybrid-dpi",
+            "60",
+        ]);
+        apply_optimize_caps(&mut c, 50, 72, Some(200));
+        assert_eq!(
+            (c.pdf_quality, c.hybrid_dpi, c.output_dpi),
+            (50, 60, Some(200))
+        );
+        let mut c = Cli::parse_from([
+            "legatorocr",
+            "x.png",
+            "--pdf-quality",
+            "0",
+            "--output-dpi",
+            "150",
+        ]);
+        apply_optimize_caps(&mut c, 70, 100, None);
+        assert_eq!(
+            (c.pdf_quality, c.hybrid_dpi, c.output_dpi),
+            (0, 100, Some(150))
+        );
+        assert!(Cli::try_parse_from(["legatorocr", "x.png", "--optimize", "4"]).is_err());
+    }
+}
+
+/// Copy `file` into `dir` (created) without overwriting: `name.pdf`, `name-2.pdf`, … With
+/// `remove_original` the source is deleted once the copy has the same size.
+fn file_into(
+    file: &std::path::Path,
+    dir: &std::path::Path,
+    remove_original: bool,
+) -> Result<PathBuf> {
+    std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+    let ext = file.extension().and_then(|s| s.to_str());
+    let mut to = dir.join(file.file_name().context("no file name")?);
+    let mut n = 1;
+    while to.exists() {
+        n += 1;
+        to = dir.join(match ext {
+            Some(e) => format!("{stem}-{n}.{e}"),
+            None => format!("{stem}-{n}"),
+        });
+    }
+    std::fs::copy(file, &to).with_context(|| format!("cannot copy to {}", to.display()))?;
+    if remove_original {
+        if std::fs::metadata(file)?.len() == std::fs::metadata(&to)?.len() {
+            std::fs::remove_file(file)
+                .with_context(|| format!("copied, but cannot remove {}", file.display()))?;
+        } else {
+            bail!(
+                "the copy {} differs in size; the original was kept",
+                to.display()
+            );
+        }
+    }
+    Ok(to)
+}
+
+#[cfg(test)]
+mod file_into_tests {
+    use super::*;
+
+    #[test]
+    fn files_are_copied_without_overwriting_and_moved_only_when_asked() {
+        let d = std::env::temp_dir().join(format!("lgr-fi-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let src = d.join("a.pdf");
+        std::fs::write(&src, b"hello").unwrap();
+        let t1 = file_into(&src, &d.join("out/F"), false).unwrap();
+        let t2 = file_into(&src, &d.join("out/F"), false).unwrap();
+        assert_eq!(t1.file_name().unwrap(), "a.pdf");
+        assert_eq!(t2.file_name().unwrap(), "a-2.pdf");
+        assert!(src.exists());
+        let t3 = file_into(&src, &d.join("out/F"), true).unwrap();
+        assert_eq!(t3.file_name().unwrap(), "a-3.pdf");
+        assert!(!src.exists());
+        assert_eq!(std::fs::read(&t3).unwrap(), b"hello");
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

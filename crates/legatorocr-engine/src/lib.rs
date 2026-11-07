@@ -21,6 +21,7 @@ pub mod burst;
 pub mod catalog;
 pub mod certify;
 pub mod checksums;
+pub mod classify;
 pub mod corrections;
 pub mod djvu;
 pub mod doctor;
@@ -48,6 +49,7 @@ pub mod naming;
 pub mod ocfl;
 pub mod ocrcache;
 pub mod offline;
+pub mod pdfapreflight;
 pub mod runninghead;
 pub mod textrules;
 

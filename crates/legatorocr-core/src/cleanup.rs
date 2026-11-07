@@ -204,6 +204,147 @@ pub fn sharpen(img: &RgbImage, dpi: u32, amount: f32) -> RgbImage {
     out
 }
 
+/// Edge-preserving smoothing: where a pixel differs little from its local mean (grain, sensor
+/// noise) it moves toward the mean; where it differs a lot (a stroke, an edge) it is kept.
+/// `strength` 0–1 sets both the radius (0.2–0.5 mm) and how large a difference still counts as noise.
+pub fn denoise(img: &RgbImage, dpi: u32, strength: f32) -> RgbImage {
+    if strength.is_nan() || strength <= 0.0 || img.width() < 3 || img.height() < 3 {
+        return img.clone();
+    }
+    let s = strength.min(1.0);
+    let r = (((0.2 + 0.3 * s) / 25.4 * dpi as f32).round() as usize).max(1);
+    let b = blur(img, r);
+    let limit = 10.0 + 40.0 * s;
+    let mut out = img.clone();
+    for (x, y, o) in out.enumerate_pixels_mut() {
+        let (p, m) = (img.get_pixel(x, y).0, b.get_pixel(x, y).0);
+        // size of the difference over all three channels decides, so a coloured edge is kept
+        let d = (0..3)
+            .map(|c| (p[c] as f32 - m[c] as f32).abs())
+            .fold(0.0, f32::max);
+        let w = (1.0 - d / limit).clamp(0.0, 1.0);
+        for c in 0..3 {
+            o.0[c] = (p[c] as f32 + w * (m[c] as f32 - p[c] as f32)).round() as u8;
+        }
+    }
+    out
+}
+
+/// Van Cittert deconvolution against a box blur of about 0.15–0.3 mm: `x ← x + k·(y − blur(x))`
+/// for three rounds, with `k` = `amount`·0.8. Raises edge contrast that a soft lens or a movement
+/// took away; unlike an unsharp mask it undoes a blur model instead of boosting local contrast.
+pub fn deblur(img: &RgbImage, dpi: u32, amount: f32) -> RgbImage {
+    if amount.is_nan() || amount <= 0.0 || img.width() < 3 || img.height() < 3 {
+        return img.clone();
+    }
+    let a = amount.min(1.0);
+    let r = (((0.15 + 0.15 * a) / 25.4 * dpi as f32).round() as usize).max(1);
+    let k = 0.8 * a;
+    let mut x = img.clone();
+    for _ in 0..3 {
+        let bx = blur(&x, r);
+        for ((o, &y), &b) in x.as_mut().iter_mut().zip(img.as_raw()).zip(bx.as_raw()) {
+            *o = (*o as f32 + k * (y as f32 - b as f32))
+                .round()
+                .clamp(0.0, 255.0) as u8;
+        }
+    }
+    x
+}
+
+/// Push the paper tone to pure white after the lighting has been evened out: a pixel whose
+/// darkest channel is at least 215 is blended toward 255 (fully at 240), so noise and faint
+/// stains on the paper vanish; darker tones (print, pictures) are left as they are.
+pub fn whiten_paper(img: &mut RgbImage) {
+    for p in img.pixels_mut() {
+        let lo = p.0[0].min(p.0[1]).min(p.0[2]) as f32;
+        let t = ((lo - 215.0) / 25.0).clamp(0.0, 1.0);
+        if t > 0.0 {
+            for c in p.0.iter_mut() {
+                *c = (*c as f32 + t * (255.0 - *c as f32)).round() as u8;
+            }
+        }
+    }
+}
+
+/// `#RRGGBB`, `RRGGBB`, `#RGB` or one of `white`, `black` → colour.
+pub fn parse_color(s: &str) -> Option<[u8; 3]> {
+    let t = s.trim().to_ascii_lowercase();
+    match t.as_str() {
+        "white" => return Some([255, 255, 255]),
+        "black" => return Some([0, 0, 0]),
+        _ => {}
+    }
+    let h = t.strip_prefix('#').unwrap_or(&t);
+    if !h.is_ascii() {
+        return None;
+    }
+    let v = |a: &str| u8::from_str_radix(a, 16).ok();
+    match h.len() {
+        6 => Some([v(&h[0..2])?, v(&h[2..4])?, v(&h[4..6])?]),
+        3 => Some([v(&h[0..1])? * 17, v(&h[1..2])? * 17, v(&h[2..3])? * 17]),
+        _ => None,
+    }
+}
+
+/// Fold shadow: the paper of a book page darkens toward the spine. For every column in the
+/// outer 18 % of each side the paper tone (the 85th-percentile brightness, which print does not
+/// reach) is compared with the page's middle; a darker column is multiplied up to match (at most
+/// 1.8x), after smoothing the gains along the page so no stripes appear. Never darkens.
+pub fn flatten_fold_shadow(img: &mut RgbImage) {
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    if w < 40 || h < 40 {
+        return;
+    }
+    let luma = |p: &Rgb<u8>| (p.0[0] as u32 * 77 + p.0[1] as u32 * 150 + p.0[2] as u32 * 29) >> 8;
+    let paper_of = |x: usize| -> u32 {
+        let mut hist = [0u32; 256];
+        for y in 0..h {
+            hist[luma(img.get_pixel(x as u32, y as u32)) as usize] += 1;
+        }
+        let want = (h as f32 * 0.85) as u32;
+        let mut acc = 0;
+        for (v, &n) in hist.iter().enumerate() {
+            acc += n;
+            if acc >= want {
+                return v as u32;
+            }
+        }
+        255
+    };
+    let mid: Vec<u32> = (w * 4 / 10..w * 6 / 10).map(paper_of).collect();
+    let mut sorted = mid.clone();
+    sorted.sort_unstable();
+    let reference = sorted[sorted.len() / 2] as f32;
+    if reference < 100.0 {
+        return; // no paper to speak of
+    }
+    let edge = (w as f32 * 0.18) as usize;
+    let mut gain = vec![1.0f32; w];
+    for x in (0..edge).chain(w - edge..w) {
+        let p = paper_of(x).max(1) as f32;
+        if p < reference * 0.985 {
+            gain[x] = (reference / p).min(1.8);
+        }
+    }
+    // smooth along the page (moving average over 9 columns)
+    let raw = gain.clone();
+    for x in 0..w {
+        let (a, b) = (x.saturating_sub(4), (x + 4).min(w - 1));
+        gain[x] = raw[a..=b].iter().sum::<f32>() / (b - a + 1) as f32;
+    }
+    for y in 0..h {
+        for x in 0..w {
+            if gain[x] > 1.002 {
+                let p = img.get_pixel_mut(x as u32, y as u32);
+                for c in p.0.iter_mut() {
+                    *c = (*c as f32 * gain[x]).round().min(255.0) as u8;
+                }
+            }
+        }
+    }
+}
+
 /// Replace pixels that are strongly of the chosen primary with `paper`.
 pub fn dropout(img: &mut RgbImage, which: Dropout, paper: Rgb<u8>) {
     if which == Dropout::Off {
@@ -963,6 +1104,121 @@ pub fn remove_lines(bw: &mut BitImage, dpi: u32) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fold_shadow_is_lifted_but_print_and_the_middle_stay() {
+        let (w, h) = (300u32, 200u32);
+        let mut img = RgbImage::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                // paper 240, falling to 150 over the last 15 % (toward the spine)
+                let d = (x as f32 - w as f32 * 0.85).max(0.0) / (w as f32 * 0.15);
+                let v = (240.0 - 90.0 * d) as u8;
+                img.put_pixel(x, y, Rgb([v, v, v]));
+            }
+        }
+        for y in (20..180).step_by(16) {
+            for x in 30..270 {
+                let v = img.get_pixel(x, y).0[0] / 6;
+                img.put_pixel(x, y, Rgb([v, v, v]));
+            }
+        }
+        let before_mid = *img.get_pixel(150, 10);
+        flatten_fold_shadow(&mut img);
+        assert_eq!(*img.get_pixel(150, 10), before_mid);
+        let edge = img.get_pixel(295, 10).0[0];
+        assert!(edge >= 225, "edge paper lifted to {edge}");
+        // print is still dark near the shadow
+        assert!(img.get_pixel(260, 36).0[0] < 120);
+        // an evenly lit page is unchanged
+        let mut flat = RgbImage::from_pixel(120, 80, Rgb([230, 230, 230]));
+        let copy = flat.clone();
+        flatten_fold_shadow(&mut flat);
+        assert_eq!(flat, copy);
+    }
+
+    #[test]
+    fn colours_parse() {
+        assert_eq!(parse_color("#ff8000"), Some([255, 128, 0]));
+        assert_eq!(parse_color("F80"), Some([255, 136, 0]));
+        assert_eq!(parse_color(" Black "), Some([0, 0, 0]));
+        assert_eq!(parse_color("#12"), None);
+        assert_eq!(parse_color("#gg0000"), None);
+        assert_eq!(parse_color("é12345"), None);
+    }
+
+    #[test]
+    fn whiten_paper_clears_paper_noise_but_not_print_or_tint() {
+        let mut img = RgbImage::from_pixel(4, 1, Rgb([244, 243, 245]));
+        img.put_pixel(1, 0, Rgb([120, 120, 120])); // print
+        img.put_pixel(2, 0, Rgb([200, 230, 230])); // light tint (a red channel at 200)
+        img.put_pixel(3, 0, Rgb([225, 225, 225])); // faint stain, partly cleared
+        whiten_paper(&mut img);
+        assert_eq!(img.get_pixel(0, 0).0, [255, 255, 255]);
+        assert_eq!(img.get_pixel(1, 0).0, [120, 120, 120]);
+        assert_eq!(img.get_pixel(2, 0).0, [200, 230, 230]);
+        let g = img.get_pixel(3, 0).0[0];
+        assert!(g > 225 && g < 255, "{g}");
+    }
+
+    #[test]
+    fn denoise_calms_grain_but_keeps_a_stroke() {
+        let mut img = RgbImage::from_pixel(80, 60, Rgb([230, 230, 230]));
+        let mut seed = 99u32;
+        for p in img.pixels_mut() {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let n = ((seed >> 24) % 9) as i32 - 4;
+            *p = Rgb([(230 + n) as u8; 3]);
+        }
+        for y in 20..24 {
+            for x in 10..70 {
+                img.put_pixel(x, y, Rgb([20, 20, 20]));
+            }
+        }
+        let var = |im: &RgbImage| {
+            let v: Vec<f32> = (0..10)
+                .flat_map(|y| (0..80).map(move |x| (x, y)))
+                .map(|(x, y)| im.get_pixel(x, y).0[0] as f32)
+                .collect();
+            let m = v.iter().sum::<f32>() / v.len() as f32;
+            v.iter().map(|a| (a - m) * (a - m)).sum::<f32>() / v.len() as f32
+        };
+        let out = denoise(&img, 300, 0.6);
+        assert!(
+            var(&out) < var(&img) * 0.5,
+            "{} vs {}",
+            var(&out),
+            var(&img)
+        );
+        // the stroke core is still black
+        assert!(out.get_pixel(40, 21).0[0] < 60);
+        assert_eq!(denoise(&img, 300, 0.0), img);
+    }
+
+    #[test]
+    fn deblur_sharpens_a_blurred_edge() {
+        let mut sharp = RgbImage::from_pixel(60, 20, Rgb([240; 3]));
+        for y in 0..20 {
+            for x in 30..60 {
+                sharp.put_pixel(x, y, Rgb([20; 3]));
+            }
+        }
+        let soft = blur(&sharp, 3);
+        // width of the transition: pixels strictly between 60 and 200 on one row
+        let width = |im: &RgbImage| {
+            (0..60)
+                .filter(|&x| (61..200).contains(&im.get_pixel(x, 10).0[0]))
+                .count()
+        };
+        let out = deblur(&soft, 300, 1.0);
+        assert!(
+            width(&out) < width(&soft),
+            "{} vs {}",
+            width(&out),
+            width(&soft)
+        );
+        assert_eq!(deblur(&soft, 300, 0.0), soft);
+    }
+
     /// Blur every channel with two box passes per axis (≈ Gaussian), radius `r` px.
     fn blur_reference(img: &RgbImage, r: usize) -> RgbImage {
         let (w, h) = (img.width() as usize, img.height() as usize);

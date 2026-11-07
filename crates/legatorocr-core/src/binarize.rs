@@ -59,6 +59,15 @@ pub enum Threshold {
     Nick,
     /// Bradley–Roth: `T = m·(1 − t)`, fast and tolerant of uneven light.
     Bradley,
+    /// Bernsen: the midpoint of the local darkest and lightest pixel, used only where the local
+    /// contrast is at least 40 levels (flat neighbourhoods are paper). Keeps strokes on uneven light.
+    Bernsen,
+    /// Phansalkar: Sauvola with a term that raises the threshold on dark, low-contrast
+    /// neighbourhoods; made for faint, stained or very uneven pages.
+    Phansalkar,
+    /// Sauvola kept only where the neighbourhood has real contrast (or the pixel is clearly dark):
+    /// stains, shadows and show-through that Sauvola would pick up in flat grey areas stay paper.
+    EdgePlus,
     /// One global Otsu threshold (clean, evenly lit scans).
     Otsu,
     /// Per page: try the local methods on a small copy and keep the one that leaves
@@ -67,12 +76,15 @@ pub enum Threshold {
 }
 
 impl Threshold {
-    pub const ALL: [Threshold; 7] = [
+    pub const ALL: [Threshold; 10] = [
         Threshold::Sauvola,
         Threshold::Wolf,
         Threshold::Niblack,
         Threshold::Nick,
         Threshold::Bradley,
+        Threshold::Bernsen,
+        Threshold::Phansalkar,
+        Threshold::EdgePlus,
         Threshold::Otsu,
         Threshold::Auto,
     ];
@@ -83,6 +95,9 @@ impl Threshold {
             Threshold::Niblack => "niblack",
             Threshold::Nick => "nick",
             Threshold::Bradley => "bradley",
+            Threshold::Bernsen => "bernsen",
+            Threshold::Phansalkar => "phansalkar",
+            Threshold::EdgePlus => "edgeplus",
             Threshold::Otsu => "otsu",
             Threshold::Auto => "auto",
         }
@@ -235,6 +250,61 @@ fn is_flat(g: &GrayImage) -> bool {
     hi.saturating_sub(lo) < 40
 }
 
+/// Darkest and lightest value of every pixel's `(2r+1)²` window (separable, monotonic deque:
+/// O(1) per pixel whatever the radius). Returns `(min, max)` planes.
+fn local_extrema(g: &GrayImage, r: usize) -> (Vec<u8>, Vec<u8>) {
+    use std::collections::VecDeque;
+    fn pass(
+        srcs: (&[u8], &[u8]),
+        dims: (usize, usize, usize),
+        r: usize,
+        mn: &mut [u8],
+        mx: &mut [u8],
+    ) {
+        let (len, stride, count) = dims;
+        let (lo_src, hi_src) = srcs;
+        for line in 0..count {
+            let at = |i: usize| line * if stride == 1 { len } else { 1 } + i * stride;
+            let mut dmin: VecDeque<usize> = VecDeque::new();
+            let mut dmax: VecDeque<usize> = VecDeque::new();
+            let mut next = 0usize;
+            for i in 0..len {
+                let hi = (i + r).min(len - 1);
+                while next <= hi {
+                    let (vl, vh) = (lo_src[at(next)], hi_src[at(next)]);
+                    while dmin.back().is_some_and(|&b| lo_src[at(b)] >= vl) {
+                        dmin.pop_back();
+                    }
+                    dmin.push_back(next);
+                    while dmax.back().is_some_and(|&b| hi_src[at(b)] <= vh) {
+                        dmax.pop_back();
+                    }
+                    dmax.push_back(next);
+                    next += 1;
+                }
+                let lo = i.saturating_sub(r);
+                while dmin.front().is_some_and(|&f| f < lo) {
+                    dmin.pop_front();
+                }
+                while dmax.front().is_some_and(|&f| f < lo) {
+                    dmax.pop_front();
+                }
+                mn[at(i)] = lo_src[at(*dmin.front().unwrap())];
+                mx[at(i)] = hi_src[at(*dmax.front().unwrap())];
+            }
+        }
+    }
+    let (w, h) = (g.width() as usize, g.height() as usize);
+    let raw = g.as_raw();
+    let mut mn1 = vec![0u8; w * h];
+    let mut mx1 = vec![0u8; w * h];
+    pass((raw, raw), (w, 1, h), r, &mut mn1, &mut mx1);
+    let mut mn2 = vec![0u8; w * h];
+    let mut mx2 = vec![0u8; w * h];
+    pass((&mn1, &mx1), (h, w, w), r, &mut mn2, &mut mx2);
+    (mn2, mx2)
+}
+
 /// Binarise with the chosen local method. `window` ≈ one third of an inch is a good size.
 /// Ink = 1. Rows are processed in parallel bands.
 pub fn threshold(g: &GrayImage, method: Threshold, window: u32, k: f32) -> BitImage {
@@ -261,6 +331,7 @@ pub fn threshold(g: &GrayImage, method: Threshold, window: u32, k: f32) -> BitIm
     let k = k.clamp(0.0, 1.0) as f64;
     let raw = g.as_raw();
     let band = (h / (rayon::current_num_threads() * 2)).clamp(64, 512);
+    let extrema = (method == Threshold::Bernsen).then(|| local_extrema(g, r));
     // Wolf needs the page-wide extremes first.
     let (gmin, smax) = if method == Threshold::Wolf {
         (0..h.div_ceil(band))
@@ -304,6 +375,28 @@ pub fn threshold(g: &GrayImage, method: Threshold, window: u32, k: f32) -> BitIm
                         Threshold::Niblack => m - 0.67 * k * s,
                         Threshold::Nick => m - 0.67 * k * (s * s + m * m / area_px).sqrt(),
                         Threshold::Bradley => m * (1.0 - 0.5 * k),
+                        Threshold::Bernsen => {
+                            let (mn, mx) = extrema.as_ref().expect("extrema computed");
+                            let i = y * w + x;
+                            let (lo, hi) = (mn[i] as f64, mx[i] as f64);
+                            if hi - lo < 40.0 {
+                                0.0
+                            } else {
+                                (lo + hi) / 2.0
+                            }
+                        }
+                        Threshold::Phansalkar => {
+                            let (mn, sn) = (m / 255.0, s / 255.0);
+                            let kk = 0.15 + 0.25 * k;
+                            255.0 * mn * (1.0 + 2.0 * (-10.0 * mn).exp() + kk * (sn / 0.5 - 1.0))
+                        }
+                        Threshold::EdgePlus => {
+                            if s < 12.0 && row[x] > 100 {
+                                0.0
+                            } else {
+                                m * (1.0 + k * (s / 128.0 - 1.0))
+                            }
+                        }
                         Threshold::Otsu | Threshold::Auto => unreachable!(),
                     };
                     o[x] = (row[x] as f64 <= t) as u8;
@@ -422,6 +515,50 @@ mod tests {
     }
 
     #[test]
+    fn local_extrema_match_a_brute_force_window() {
+        let g = page();
+        let g = image::imageops::crop_imm(&g, 0, 0, 60, 45).to_image();
+        for r in [1usize, 4, 9] {
+            let (mn, mx) = local_extrema(&g, r);
+            let (w, h) = (g.width() as i64, g.height() as i64);
+            for y in 0..h {
+                for x in 0..w {
+                    let (mut lo, mut hi) = (255u8, 0u8);
+                    for yy in (y - r as i64).max(0)..=(y + r as i64).min(h - 1) {
+                        for xx in (x - r as i64).max(0)..=(x + r as i64).min(w - 1) {
+                            let v = g.get_pixel(xx as u32, yy as u32).0[0];
+                            lo = lo.min(v);
+                            hi = hi.max(v);
+                        }
+                    }
+                    let i = (y * w + x) as usize;
+                    assert_eq!((mn[i], mx[i]), (lo, hi), "r={r} at {x},{y}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn edgeplus_drops_a_flat_grey_stain_that_sauvola_keeps() {
+        use image::Luma;
+        let mut g = GrayImage::from_pixel(300, 200, Luma([235]));
+        for y in 20..180 {
+            for x in 20..120 {
+                g.put_pixel(x, y, Luma([150])); // a stain, no strokes
+            }
+        }
+        for y in 100..108 {
+            for x in 180..260 {
+                g.put_pixel(x, y, Luma([20])); // one real stroke
+            }
+        }
+        let stain = |b: &BitImage| (60..140).map(|y| b.get(70, y) as u32).sum::<u32>();
+        let e = threshold(&g, Threshold::EdgePlus, 41, 0.3);
+        assert_eq!(stain(&e), 0, "stain stays paper");
+        assert!(e.count_ink() > 400, "stroke kept");
+    }
+
+    #[test]
     fn names_round_trip() {
         for m in Threshold::ALL {
             assert_eq!(Threshold::from_name(m.name()), Some(m));
@@ -448,6 +585,9 @@ mod tests {
             Threshold::Sauvola,
             Threshold::Niblack,
             Threshold::Nick,
+            Threshold::Bernsen,
+            Threshold::Phansalkar,
+            Threshold::EdgePlus,
             Threshold::Auto,
         ] {
             for (name, g) in [("noisy", &noisy), ("dark", &dark), ("white", &white)] {

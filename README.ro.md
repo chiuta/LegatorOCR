@@ -2,7 +2,7 @@
 
 [English](README.md) · **Română** · [Français](README.fr.md) · [Italiano](README.it.md) · [Español](README.es.md) · [Português](README.pt.md) · [Deutsch](README.de.md) · [Magyar](README.hu.md)
 
-Versiune: 0.2.0-pre.34 · Ultima actualizare: 2026-11-07
+Versiune: 0.2.0-pre.35 · Ultima actualizare: 2026-11-07
 
 Site de prezentare: <https://legatorocr.chiuta.ro> (sursa în `docs/`).
 
@@ -103,7 +103,7 @@ O compilare **fără modelul de recunoaștere inclus în program** (de exemplu c
 | Dewarp | liniile de text sunt urmărite prin fâșii verticale înguste (vârfurile profilului de rânduri înlănțuite de la o fâșie la alta); ondularea fiecărei linii în jurul propriei înălțimi medii devine un câmp de reeșantionare verticală, interpolat între linii; omis dacă mai multe linii lungi nu arată o curbură clară |
 | Iluminare | `--normalize`: culoarea hârtiei pe canal dintr-o copie de ≈60 dpi filtrată cu maxim și estompată, apoi un câștig pe pixel |
 | Binarizare | Sauvola (implicit), Wolf, Niblack, NICK, Bradley, Otsu, **auto** (pe pagină: încearcă metodele locale pe o copie de ≈150 dpi și o păstrează pe cea cu cele mai puține pete izolate și o proporție plauzibilă de cerneală), toate din sume glisante pe coloane, cu memorie O(lățime) |
-| Curățare | `--invert` (negative: mediană închisă + coadă luminoasă), `--auto-levels` (întindere 0,5 %/99,5 %, un singur câștig pentru toate canalele), `--dropout red|green|blue`, `--punch-holes` (pete rotunde închise de 3–10 mm lângă margine, umplute cu culoarea hârtiei din jur), `--fingers` (regiuni de culoarea pielii care ating marginea, judecate relativ la culoarea hârtiei), `--remove-lines` (linii ≥ 25 mm și grosime ≤ 1,2 mm; tijele literelor care traversează o linie supraviețuiesc), `--sharpen` (mască de neclaritate ≈0,3 mm), `--despeckle-strength` |
+| Curățare | `--invert` (negative: mediană închisă + coadă luminoasă), `--auto-levels` (întindere 0,5 %/99,5 %, un singur câștig pentru toate canalele), `--dropout red|green|blue`, `--punch-holes` (pete rotunde închise de 3–10 mm lângă margine, umplute cu culoarea hârtiei din jur), `--fingers` (regiuni de culoarea pielii care ating marginea, judecate relativ la culoarea hârtiei), `--remove-lines` (linii ≥ 25 mm și grosime ≤ 1,2 mm; tijele literelor care traversează o linie supraviețuiesc), `--sharpen`, `--denoise 0-1` (netezire care păstrează marginile), `--deblur 0-1` (deconvoluție Van Cittert pentru scanări moi) (mască de neclaritate ≈0,3 mm), `--despeckle-strength` |
 | Imagini | dale cu o proporție mare de tonuri medii (textul este bimodal, fotografiile sunt continue) sau zone întunecate pline, închise și filtrate după dimensiune → pete de culoare |
 | Ieșire | color, tonuri de gri, alb-negru, **mixed** (text 1-bit + pete de culoare) sau **hybrid** (+ strat de fundal cu rezoluție mică); reducere opțională a eșantionării la `--output-dpi`; dimensiune de pagină fixă sau uniformă pentru toată cartea, cu aliniere |
 | PDF | scriitor propriu: JPEG (color/gri), CCITT Group 4 pentru 1-bit (revine la Flate când este mai mic), pagini stratificate (mască stencil + fundal + pete); dimensiunea reală a paginii din DPI |

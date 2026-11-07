@@ -99,6 +99,13 @@ pub struct UiSettings {
     pub auto_invert: bool,
     pub auto_levels: bool,
     pub sharpen: f32,
+    pub dewarp_margin: bool,
+    pub fold_shadow: bool,
+    pub fill_color: Option<[u8; 3]>,
+    pub right_to_left: bool,
+    pub remove_bg: bool,
+    pub denoise: f32,
+    pub deblur: f32,
     pub punch_holes: bool,
     pub fingers: bool,
     pub remove_lines: bool,
@@ -167,6 +174,13 @@ impl Default for UiSettings {
             auto_invert: false,
             auto_levels: false,
             sharpen: 0.0,
+            dewarp_margin: false,
+            fold_shadow: false,
+            fill_color: None,
+            right_to_left: false,
+            remove_bg: false,
+            denoise: 0.0,
+            deblur: 0.0,
             punch_holes: false,
             fingers: false,
             remove_lines: false,
@@ -323,6 +337,13 @@ impl UiSettings {
             auto_invert: self.auto_invert,
             auto_levels: self.auto_levels,
             sharpen: self.sharpen,
+            dewarp_margin: self.dewarp_margin,
+            fold_shadow: self.fold_shadow,
+            fill_color: self.fill_color,
+            right_to_left: self.right_to_left,
+            remove_bg: self.remove_bg,
+            denoise: self.denoise,
+            deblur: self.deblur,
             punch_holes: self.punch_holes,
             fingers: self.fingers,
             remove_lines: self.remove_lines,
@@ -424,6 +445,13 @@ impl UiSettings {
         self.auto_invert = c.auto_invert;
         self.auto_levels = c.auto_levels;
         self.sharpen = c.sharpen;
+        self.dewarp_margin = c.dewarp_margin;
+        self.fold_shadow = c.fold_shadow;
+        self.fill_color = c.fill_color;
+        self.right_to_left = c.right_to_left;
+        self.remove_bg = c.remove_bg;
+        self.denoise = c.denoise;
+        self.deblur = c.deblur;
         self.punch_holes = c.punch_holes;
         self.fingers = c.fingers;
         self.remove_lines = c.remove_lines;
@@ -645,6 +673,13 @@ mod tests {
             pdf_author: "Ana".into(),
             auto_invert: true,
             sharpen: 0.8,
+            dewarp_margin: false,
+            fold_shadow: false,
+            fill_color: None,
+            right_to_left: false,
+            remove_bg: false,
+            denoise: 0.0,
+            deblur: 0.0,
             punch_holes: true,
             remove_lines: true,
             erase: "10,20,30,15;0,0,5,5".into(),

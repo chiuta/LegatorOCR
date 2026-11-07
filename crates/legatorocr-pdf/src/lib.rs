@@ -123,6 +123,9 @@ pub struct Meta {
     /// Files embedded in the PDF (`/EmbeddedFiles`, each with `/AFRelationship /Source`), e.g. the
     /// original scans and the project (`--embed-project`). Sorted by name when written.
     pub attachments: Vec<Attachment>,
+    /// Reading direction right to left (`/ViewerPreferences /Direction /R2L`): a viewer in
+    /// two-page mode then puts the first page on the right.
+    pub right_to_left: bool,
 }
 
 /// One embedded file (PDF 1.7 file specification; with `--pdfa-part 3` an associated file).
@@ -941,7 +944,7 @@ impl PdfWriter {
                 root,
                 &format!("<< /Type /StructTreeRoot /K {doc} 0 R /ParentTree << /Nums [{parent_nums}] >> /ParentTreeNextKey {} >>", pages.len()),
             );
-            cat_extra.push_str(&format!(" /StructTreeRoot {root} 0 R /MarkInfo << /Marked true >> /ViewerPreferences << /DisplayDocTitle true >>"));
+            cat_extra.push_str(&format!(" /StructTreeRoot {root} 0 R /MarkInfo << /Marked true >> /ViewerPreferences << /DisplayDocTitle true{} >>", if self.meta.right_to_left { " /Direction /R2L" } else { "" }));
             if !lang.is_empty() {
                 cat_extra.push_str(&format!(" /Lang {}", pdf_text_string(&lang)));
             }
@@ -956,6 +959,9 @@ impl PdfWriter {
             cat_extra.push_str(&format!(
                 " /AcroForm << /Fields [{list}] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv {helv} 0 R >> >> /NeedAppearances true >>"
             ));
+        }
+        if self.meta.right_to_left && !cat_extra.contains("/ViewerPreferences") {
+            cat_extra.push_str(" /ViewerPreferences << /Direction /R2L >>");
         }
         self.plain_obj(
             CATALOG,
@@ -1149,6 +1155,28 @@ mod tests {
     }
 
     #[test]
+    fn right_to_left_is_declared_for_viewers() {
+        let make = |rtl: bool| {
+            let mut w = PdfWriter::new(Compress::Flate);
+            w.set_meta(Meta {
+                right_to_left: rtl,
+                ..Meta::default()
+            });
+            w.add_page(
+                &page(PageImage::Rgb(RgbImage::from_pixel(
+                    8,
+                    8,
+                    image::Rgb([255, 255, 255]),
+                ))),
+                &[],
+            );
+            String::from_utf8_lossy(&w.finish()).into_owned()
+        };
+        assert!(make(true).contains("/ViewerPreferences << /Direction /R2L >>"));
+        assert!(!make(false).contains("/Direction"));
+    }
+
+    #[test]
     fn tagged_pdf_has_structure_tree_marked_content_and_language() {
         let w = |t: &str, y: u32, line: u32| Word {
             text: t.into(),
@@ -1290,6 +1318,7 @@ mod tests {
             rights: None,
             provenance: Some("{\"software\":\"x\"}".into()),
             attachments: Vec::new(),
+            right_to_left: false,
         });
         w.add_page(
             &page(PageImage::Rgb(RgbImage::from_pixel(
@@ -1445,6 +1474,7 @@ mod unicode_file {
             rights: Some("© Biblioteca X, contract 12/2026".into()),
             provenance: Some("{\"software\":\"x\"}".into()),
             attachments: Vec::new(),
+            right_to_left: false,
         });
         let mut bw = BitImage::new(600, 300);
         bw.set(1, 1, true);

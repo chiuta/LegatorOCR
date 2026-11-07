@@ -98,6 +98,22 @@ pub struct Settings {
     pub auto_levels: bool,
     /// Unsharp-mask amount 0–2 (0 = off) for colour / gray / hybrid output.
     pub sharpen: f32,
+    /// Straighten a bent left margin of a justified text block (marginal dewarping).
+    pub dewarp_margin: bool,
+    /// Lift the darkening toward the spine of a book page (fold shadow), column by column.
+    pub fold_shadow: bool,
+    /// Colour for the `erase_zones` rectangles instead of the paper tone (fill zones: white, black
+    /// or any colour).
+    pub fill_color: Option<[u8; 3]>,
+    /// Right-to-left book: a sheet cut in two yields the right-hand page first.
+    pub right_to_left: bool,
+    /// Make the paper pure white (colour / gray / hybrid output): evens the lighting out and
+    /// pushes everything close to the paper tone to 255, so the page compresses and prints clean.
+    pub remove_bg: bool,
+    /// Edge-preserving noise smoothing 0–1 (0 = off): flat areas are smoothed, strokes are kept.
+    pub denoise: f32,
+    /// Deconvolution against a mild blur 0–1 (0 = off), for soft or out-of-focus scans.
+    pub deblur: f32,
     /// Erase binder / punch holes near the page edge.
     pub punch_holes: bool,
     /// Erase fingers holding the page at the border (skin-coloured regions).
@@ -192,6 +208,13 @@ impl Default for Settings {
             auto_invert: false,
             auto_levels: false,
             sharpen: 0.0,
+            dewarp_margin: false,
+            fold_shadow: false,
+            fill_color: None,
+            right_to_left: false,
+            remove_bg: false,
+            denoise: 0.0,
+            deblur: 0.0,
             punch_holes: false,
             fingers: false,
             remove_lines: false,
@@ -404,6 +427,8 @@ impl Settings {
         s.picture_sensitivity = fin(s.picture_sensitivity, 0.0, 1.0, d.picture_sensitivity);
         s.hybrid_bg_dpi = s.hybrid_bg_dpi.clamp(36, 300);
         s.sharpen = fin(s.sharpen, 0.0, 2.0, 0.0);
+        s.denoise = fin(s.denoise, 0.0, 1.0, 0.0);
+        s.deblur = fin(s.deblur, 0.0, 1.0, 0.0);
         s.despeckle_strength = fin(s.despeckle_strength, 0.25, 4.0, 1.0);
         s.sheet_erase_zones = s
             .sheet_erase_zones
@@ -575,6 +600,14 @@ fn turn_rect(z: &mut [f32; 5], w: u32, h: u32, rad: f32) {
 }
 
 fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
+    let mut parts = split_sheet_left_first(src, s);
+    if s.right_to_left && parts.len() == 2 {
+        parts.reverse();
+    }
+    parts
+}
+
+fn split_sheet_left_first(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
     let base = crate::stage("sheet/to-rgb", || src.to_rgb8());
     let (w0, h0) = base.dimensions();
     let px = |mm: f32| mm / 25.4 * s.dpi as f32;
@@ -874,12 +907,20 @@ fn prepare(
     if s.descreen {
         cleanup::descreen(&mut img, s.dpi);
     }
+    if s.fold_shadow {
+        crate::stage("clean-up/fold-shadow", || {
+            cleanup::flatten_fold_shadow(&mut img)
+        });
+    }
     if s.show_through {
         let paper = transform::estimate_background(&img);
         img = cleanup::show_through(&img, s.dpi, paper);
     }
     if !s.erase_zones.is_empty() {
-        let paper = transform::estimate_background(&img);
+        let paper = s
+            .fill_color
+            .map(Rgb)
+            .unwrap_or_else(|| transform::estimate_background(&img));
         cleanup::erase_zones(&mut img, s.dpi, &s.erase_zones, paper);
     }
     if s.punch_holes {
@@ -980,6 +1021,14 @@ fn prepare(
     }
     if !guided && s.dewarp {
         if let Some(flat) = dewarp::dewarp(&img, s.dpi, bg) {
+            img = flat;
+        }
+    }
+
+    if s.dewarp_margin {
+        if let Some(flat) = crate::stage("clean-up/margin-dewarp", || {
+            dewarp::straighten_margins(&img, s.dpi, bg)
+        }) {
             img = flat;
         }
     }
@@ -1204,10 +1253,11 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
             ((v as f32 * f).round() as u32).max(1)
         }
     };
-    let paper = if matches!(
-        s.mode,
-        OutputMode::Gray | OutputMode::BlackWhite | OutputMode::Mixed
-    ) {
+    let paper = if s.remove_bg
+        || matches!(
+            s.mode,
+            OutputMode::Gray | OutputMode::BlackWhite | OutputMode::Mixed
+        ) {
         Rgb([255, 255, 255])
     } else {
         bg
@@ -1303,14 +1353,27 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
         }
         // the strip beyond the scan's edge is paper, not (possibly tinted) page colour
         let mut window = transform::crop_pad(&img, win.0, win.1, win.2, win.3, paper);
-        if s.normalize_bg && window.width() > 8 && window.height() > 8 {
-            let target = if s.mode == OutputMode::Gray {
+        if (s.normalize_bg || s.remove_bg) && window.width() > 8 && window.height() > 8 {
+            let target = if s.mode == OutputMode::Gray || s.remove_bg {
                 Rgb([255, 255, 255])
             } else {
                 bg
             };
             window = crate::stage("output/normalize", || {
                 transform::normalize_background(&window, s.dpi, target)
+            });
+            if s.remove_bg {
+                cleanup::whiten_paper(&mut window);
+            }
+        }
+        if s.denoise > 0.0 {
+            window = crate::stage("output/denoise", || {
+                cleanup::denoise(&window, s.dpi, s.denoise)
+            });
+        }
+        if s.deblur > 0.0 {
+            window = crate::stage("output/deblur", || {
+                cleanup::deblur(&window, s.dpi, s.deblur)
             });
         }
         if s.sharpen > 0.0 {
@@ -1610,6 +1673,37 @@ mod tests {
             want,
             (0.4 * parts[0].0.width() as f32 + 0.4 * parts[1].0.width() as f32) as u32
         );
+    }
+
+    #[test]
+    fn right_to_left_gives_the_right_hand_page_first() {
+        // text only on the left half
+        let mut flat = RgbImage::from_pixel(800, 400, Rgb([240, 240, 240]));
+        for y in (60..340).step_by(20) {
+            for x in 60..340 {
+                for dy in 0..6 {
+                    flat.put_pixel(x, y + dy, Rgb([20, 20, 20]));
+                }
+            }
+        }
+        let img = DynamicImage::ImageRgb8(flat);
+        let dark = |p: &SheetPart| p.0.pixels().filter(|q| q.0[0] < 100).count();
+        let base = Settings {
+            split: SplitMode::Middle,
+            ..Settings::default()
+        };
+        let ltr = split_sheet(&img, &base.clone().sanitized());
+        assert_eq!(ltr.len(), 2);
+        assert!(dark(&ltr[0]) > 1000 && dark(&ltr[1]) == 0);
+        let rtl = split_sheet(
+            &img,
+            &Settings {
+                right_to_left: true,
+                ..base
+            }
+            .sanitized(),
+        );
+        assert!(dark(&rtl[0]) == 0 && dark(&rtl[1]) > 1000);
     }
 
     #[test]
@@ -2553,6 +2647,13 @@ mod tests {
                 auto_invert: rnd(2) == 0,
                 auto_levels: rnd(2) == 0,
                 sharpen: rnd(300) as f32 / 100.0 - 0.5,
+                dewarp_margin: rnd(2) == 1,
+                fold_shadow: rnd(2) == 1,
+                fill_color: (rnd(2) == 1).then(|| [rnd(256) as u8, rnd(256) as u8, rnd(256) as u8]),
+                right_to_left: rnd(2) == 1,
+                remove_bg: rnd(2) == 1,
+                denoise: rnd(150) as f32 / 100.0 - 0.25,
+                deblur: rnd(150) as f32 / 100.0 - 0.25,
                 punch_holes: rnd(2) == 0,
                 fingers: rnd(2) == 0,
                 remove_lines: rnd(2) == 0,
