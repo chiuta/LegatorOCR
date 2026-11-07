@@ -4,6 +4,7 @@
 mod alloptions;
 mod app;
 mod i18n;
+mod proof;
 mod settings;
 mod worker;
 

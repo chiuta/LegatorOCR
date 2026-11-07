@@ -51,6 +51,7 @@ enum Cmd {
     ExportPdf,
     ExportImages,
     Modules,
+    Proof,
     FirstPage,
     LastPage,
     NextAttention,
@@ -71,6 +72,7 @@ const CMDS: &[(Cmd, &str)] = &[
     (Cmd::ExportPdf, "menu.export_pdf"),
     (Cmd::ExportImages, "menu.export_images"),
     (Cmd::Modules, "menu.modules"),
+    (Cmd::Proof, "menu.proof"),
     (Cmd::FirstPage, "cmd.first_page"),
     (Cmd::LastPage, "cmd.last_page"),
     (Cmd::NextAttention, "cmd.next_attention"),
@@ -215,6 +217,7 @@ pub struct App {
     ocr_info: String,
     show_about: bool,
     modules: ModulesWindow,
+    proof: crate::proof::ProofWindow,
     allopts: crate::alloptions::AllOptions,
     draw_zones: bool,
     /// With `draw_zones`: the mouse draws dewarp guide lines (freehand along a bent text line).
@@ -291,6 +294,7 @@ impl App {
             ocr_info: String::new(),
             show_about: false,
             modules: ModulesWindow::default(),
+            proof: crate::proof::ProofWindow::default(),
             allopts: Default::default(),
             draw_zones: false,
             draw_guide: false,
@@ -1171,6 +1175,10 @@ impl App {
                     self.modules.open();
                     ui.close();
                 }
+                if ui.button(self.tr("menu.proof")).clicked() {
+                    self.proof.open();
+                    ui.close();
+                }
                 ui.separator();
                 if ui.button(self.tr("menu.quit")).clicked() {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1864,6 +1872,7 @@ impl App {
             Cmd::ExportPdf if idle => self.start_export(ctx, JobKind::Pdf),
             Cmd::ExportImages if idle => self.start_export(ctx, JobKind::Images),
             Cmd::Modules => self.modules.open(),
+            Cmd::Proof => self.proof.open(),
             Cmd::FirstPage if !self.sheets.is_empty() => {
                 self.selected = Some(0);
                 self.scroll_to_selected = true;
@@ -4006,6 +4015,10 @@ impl eframe::App for App {
                 });
         }
         self.modules_window(&ctx);
+        {
+            let lang = self.lang;
+            self.proof.ui(&ctx, &|k| t(lang, k));
+        }
         self.all_options_window(&ctx);
         if self.show_about {
             let mut open = true;
