@@ -98,6 +98,9 @@ pub struct Settings {
     pub auto_levels: bool,
     /// Unsharp-mask amount 0–2 (0 = off) for colour / gray / hybrid output.
     pub sharpen: f32,
+    /// Make the paper pure white (colour / gray / hybrid output): evens the lighting out and
+    /// pushes everything close to the paper tone to 255, so the page compresses and prints clean.
+    pub remove_bg: bool,
     /// Edge-preserving noise smoothing 0–1 (0 = off): flat areas are smoothed, strokes are kept.
     pub denoise: f32,
     /// Deconvolution against a mild blur 0–1 (0 = off), for soft or out-of-focus scans.
@@ -196,6 +199,7 @@ impl Default for Settings {
             auto_invert: false,
             auto_levels: false,
             sharpen: 0.0,
+            remove_bg: false,
             denoise: 0.0,
             deblur: 0.0,
             punch_holes: false,
@@ -1212,10 +1216,11 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
             ((v as f32 * f).round() as u32).max(1)
         }
     };
-    let paper = if matches!(
-        s.mode,
-        OutputMode::Gray | OutputMode::BlackWhite | OutputMode::Mixed
-    ) {
+    let paper = if s.remove_bg
+        || matches!(
+            s.mode,
+            OutputMode::Gray | OutputMode::BlackWhite | OutputMode::Mixed
+        ) {
         Rgb([255, 255, 255])
     } else {
         bg
@@ -1311,8 +1316,8 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
         }
         // the strip beyond the scan's edge is paper, not (possibly tinted) page colour
         let mut window = transform::crop_pad(&img, win.0, win.1, win.2, win.3, paper);
-        if s.normalize_bg && window.width() > 8 && window.height() > 8 {
-            let target = if s.mode == OutputMode::Gray {
+        if (s.normalize_bg || s.remove_bg) && window.width() > 8 && window.height() > 8 {
+            let target = if s.mode == OutputMode::Gray || s.remove_bg {
                 Rgb([255, 255, 255])
             } else {
                 bg
@@ -1320,6 +1325,9 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
             window = crate::stage("output/normalize", || {
                 transform::normalize_background(&window, s.dpi, target)
             });
+            if s.remove_bg {
+                cleanup::whiten_paper(&mut window);
+            }
         }
         if s.denoise > 0.0 {
             window = crate::stage("output/denoise", || {
@@ -2571,6 +2579,7 @@ mod tests {
                 auto_invert: rnd(2) == 0,
                 auto_levels: rnd(2) == 0,
                 sharpen: rnd(300) as f32 / 100.0 - 0.5,
+                remove_bg: rnd(2) == 1,
                 denoise: rnd(150) as f32 / 100.0 - 0.25,
                 deblur: rnd(150) as f32 / 100.0 - 0.25,
                 punch_holes: rnd(2) == 0,

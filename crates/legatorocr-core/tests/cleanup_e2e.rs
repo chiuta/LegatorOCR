@@ -143,6 +143,7 @@ fn sharpen_and_levels_keep_geometry() {
             mode: OutputMode::Color,
             auto_levels: true,
             sharpen: 1.0,
+            remove_bg: true,
             denoise: 0.5,
             deblur: 0.5,
             ..base()

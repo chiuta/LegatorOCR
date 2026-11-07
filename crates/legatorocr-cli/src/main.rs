@@ -1027,6 +1027,12 @@ struct Cli {
     #[arg(long, default_value_t = 0.0)]
     sharpen: f32,
 
+    /// Make the paper pure white in colour / gray / hybrid output: the lighting is evened out and
+    /// every tone close to the paper's goes to 255 (smaller files, clean print). Strokes and
+    /// pictures keep their tones. Implies the effect of --normalize.
+    #[arg(long)]
+    remove_background: bool,
+
     /// Edge-preserving noise smoothing, 0–1 (0 = off): grain and scanner noise in flat areas are
     /// smoothed, strokes and edges are left alone. Colour / gray / hybrid output.
     #[arg(long, default_value_t = 0.0)]
@@ -1182,6 +1188,13 @@ struct Cli {
     /// Straighten curved text lines (page curl).
     #[arg(long)]
     dewarp: bool,
+
+    /// Size / quality trade-off in the style of OCRmyPDF: 0 = lossless pages (JPEG off), 1 =
+    /// as set (default), 2 = JPEG quality at most 70 and hybrid background at most 100 dpi,
+    /// 3 = JPEG quality at most 50, hybrid background at most 72 dpi and pages at most 200 dpi.
+    /// Levels 2 and 3 only lower what the other options set, never raise it.
+    #[arg(long, value_parser = clap::value_parser!(u8).range(0..=3))]
+    optimize: Option<u8>,
 
     /// Downsample output to this dpi (never upsamples).
     #[arg(long)]
@@ -1620,6 +1633,12 @@ fn real_main() -> Result<()> {
                 cli.pdfa_part = n;
             }
         }
+    }
+    match cli.optimize {
+        Some(0) => cli.pdf_quality = 0,
+        Some(2) => apply_optimize_caps(&mut cli, 70, 100, None),
+        Some(3) => apply_optimize_caps(&mut cli, 50, 72, Some(200)),
+        _ => {}
     }
     if let Some(n) = cli.jobs.filter(|&n| n > 0) {
         // the global pool is built once, before any parallel work
@@ -2410,6 +2429,7 @@ fn real_main() -> Result<()> {
         auto_invert: cli.invert,
         auto_levels: cli.auto_levels,
         sharpen: cli.sharpen,
+        remove_bg: cli.remove_background,
         denoise: cli.denoise,
         deblur: cli.deblur,
         punch_holes: cli.punch_holes,
@@ -2489,6 +2509,7 @@ fn real_main() -> Result<()> {
             "--threshold",
             "--sauvola-k",
             "--sharpen",
+            "--remove-background",
             "--denoise",
             "--deblur",
             "--despeckle-strength",
@@ -4003,5 +4024,55 @@ mod tests {
         for bad in ["0x0", "100000x100000", "nanx5", "5", "axb"] {
             assert!(parse_page_size(bad).is_err(), "{bad}");
         }
+    }
+}
+
+/// `--optimize` 2 and 3: lower the JPEG quality, the hybrid background resolution and (level 3)
+/// the page resolution to these limits. A lossless setting (`--pdf-quality 0`) and any value
+/// already below the limit are left alone.
+fn apply_optimize_caps(cli: &mut Cli, quality: u8, hybrid_dpi: u32, page_dpi: Option<u32>) {
+    if cli.pdf_quality > quality {
+        cli.pdf_quality = quality;
+    }
+    cli.hybrid_dpi = cli.hybrid_dpi.min(hybrid_dpi);
+    if let Some(cap) = page_dpi {
+        cli.output_dpi = Some(cli.output_dpi.map_or(cap, |d| d.min(cap)));
+    }
+}
+
+#[cfg(test)]
+mod optimize_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn optimize_levels_only_lower_things() {
+        let mut c = Cli::parse_from([
+            "legatorocr",
+            "x.png",
+            "--optimize",
+            "3",
+            "--hybrid-dpi",
+            "60",
+        ]);
+        apply_optimize_caps(&mut c, 50, 72, Some(200));
+        assert_eq!(
+            (c.pdf_quality, c.hybrid_dpi, c.output_dpi),
+            (50, 60, Some(200))
+        );
+        let mut c = Cli::parse_from([
+            "legatorocr",
+            "x.png",
+            "--pdf-quality",
+            "0",
+            "--output-dpi",
+            "150",
+        ]);
+        apply_optimize_caps(&mut c, 70, 100, None);
+        assert_eq!(
+            (c.pdf_quality, c.hybrid_dpi, c.output_dpi),
+            (0, 100, Some(150))
+        );
+        assert!(Cli::try_parse_from(["legatorocr", "x.png", "--optimize", "4"]).is_err());
     }
 }

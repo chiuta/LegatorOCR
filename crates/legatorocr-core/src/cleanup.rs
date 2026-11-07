@@ -252,6 +252,21 @@ pub fn deblur(img: &RgbImage, dpi: u32, amount: f32) -> RgbImage {
     x
 }
 
+/// Push the paper tone to pure white after the lighting has been evened out: a pixel whose
+/// darkest channel is at least 215 is blended toward 255 (fully at 240), so noise and faint
+/// stains on the paper vanish; darker tones (print, pictures) are left as they are.
+pub fn whiten_paper(img: &mut RgbImage) {
+    for p in img.pixels_mut() {
+        let lo = p.0[0].min(p.0[1]).min(p.0[2]) as f32;
+        let t = ((lo - 215.0) / 25.0).clamp(0.0, 1.0);
+        if t > 0.0 {
+            for c in p.0.iter_mut() {
+                *c = (*c as f32 + t * (255.0 - *c as f32)).round() as u8;
+            }
+        }
+    }
+}
+
 /// Replace pixels that are strongly of the chosen primary with `paper`.
 pub fn dropout(img: &mut RgbImage, which: Dropout, paper: Rgb<u8>) {
     if which == Dropout::Off {
@@ -1011,6 +1026,20 @@ pub fn remove_lines(bw: &mut BitImage, dpi: u32) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn whiten_paper_clears_paper_noise_but_not_print_or_tint() {
+        let mut img = RgbImage::from_pixel(4, 1, Rgb([244, 243, 245]));
+        img.put_pixel(1, 0, Rgb([120, 120, 120])); // print
+        img.put_pixel(2, 0, Rgb([200, 230, 230])); // light tint (a red channel at 200)
+        img.put_pixel(3, 0, Rgb([225, 225, 225])); // faint stain, partly cleared
+        whiten_paper(&mut img);
+        assert_eq!(img.get_pixel(0, 0).0, [255, 255, 255]);
+        assert_eq!(img.get_pixel(1, 0).0, [120, 120, 120]);
+        assert_eq!(img.get_pixel(2, 0).0, [200, 230, 230]);
+        let g = img.get_pixel(3, 0).0[0];
+        assert!(g > 225 && g < 255, "{g}");
+    }
+
     #[test]
     fn denoise_calms_grain_but_keeps_a_stroke() {
         let mut img = RgbImage::from_pixel(80, 60, Rgb([230, 230, 230]));
