@@ -49,6 +49,7 @@ pub mod naming;
 pub mod ocfl;
 pub mod ocrcache;
 pub mod offline;
+pub mod pdfapreflight;
 pub mod runninghead;
 pub mod textrules;
 

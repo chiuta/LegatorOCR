@@ -45,7 +45,7 @@ enum Fmt {
 #[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "install_modules", "scan_escl", "watch", "verify_bag", "verify_ocfl", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "decode_worker", "fuse_frames", "verify_document", "integrity_hints", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "extract_project", "search_preset", "search_help"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "install_modules", "scan_escl", "watch", "verify_bag", "verify_ocfl", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "pdfa_check", "decode_worker", "fuse_frames", "verify_document", "integrity_hints", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "extract_project", "search_preset", "search_help"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -807,6 +807,17 @@ struct Cli {
     /// certificate chain). Exit 1 when one fails or the file has no signature.
     #[arg(long, value_name = "FILE")]
     verify_pdf_signatures: Option<PathBuf>,
+
+    /// PDF/A preflight of FILE, then exit: the built-in checks (XMP identification, output
+    /// intent, no encryption / JavaScript / LZW, embedded fonts, file identifier) and, when a
+    /// `verapdf` command is found, veraPDF's verdict too (flavour from the file's own XMP). A
+    /// subset of the standard, not a validation: veraPDF decides. Exit 1 when anything fails.
+    #[arg(long, value_name = "FILE")]
+    pdfa_check: Option<PathBuf>,
+
+    /// veraPDF command for --pdfa-check (default: `verapdf` on the PATH).
+    #[arg(long, value_name = "CMD", default_value = "verapdf")]
+    verapdf: String,
 
     /// CA / signer certificate (PEM) for --verify-pdf-signatures.
     #[arg(long, value_name = "PEM")]
@@ -2158,6 +2169,52 @@ fn real_main() -> Result<()> {
         println!("wrote {}", out.display());
         return Ok(());
     }
+    if let Some(f) = &cli.pdfa_check {
+        let bytes = std::fs::read(f).with_context(|| format!("cannot read {}", f.display()))?;
+        let findings = legatorocr_engine::pdfapreflight::check_bytes(&bytes);
+        let mut bad = false;
+        for x in &findings {
+            println!("{} {}", if x.ok { "ok  " } else { "FAIL" }, x.what);
+            bad |= !x.ok;
+        }
+        if legatorocr_engine::pdfapreflight::have_verapdf(&cli.verapdf) {
+            let flavour = String::from_utf8_lossy(&bytes);
+            let part = flavour
+                .split("pdfaid:part")
+                .nth(1)
+                .and_then(|s| s.chars().find(|c| c.is_ascii_digit()))
+                .unwrap_or('2');
+            match legatorocr_engine::pdfapreflight::run_verapdf(
+                &cli.verapdf,
+                f,
+                &format!("{part}b"),
+            ) {
+                Ok((pass, line)) => {
+                    println!("{} veraPDF: {line}", if pass { "ok  " } else { "FAIL" });
+                    bad |= !pass;
+                }
+                Err(e) => {
+                    println!("FAIL veraPDF: {e}");
+                    bad = true;
+                }
+            }
+        } else {
+            println!(
+                "note veraPDF not found ({}): only the built-in subset was checked",
+                cli.verapdf
+            );
+        }
+        println!(
+            "{}: {}",
+            f.display(),
+            if bad {
+                "problems found"
+            } else {
+                "no problem found by these checks (not a PDF/A validation)"
+            }
+        );
+        std::process::exit(if bad { 1 } else { 0 });
+    }
     if let Some(f) = &cli.verify_pdf_signatures {
         let rs =
             legatorocr_engine::sign::verify_pdf(f, cli.sign_ca.as_deref(), cli.tsa_ca.as_deref())?;
@@ -2586,6 +2643,8 @@ fn real_main() -> Result<()> {
             "--threshold",
             "--sauvola-k",
             "--sharpen",
+            "--pdfa-check",
+            "--verapdf",
             "--dewarp-margin",
             "--classify",
             "--classify-out",

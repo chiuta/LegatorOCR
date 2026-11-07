@@ -161,6 +161,7 @@ pub fn category(long: &str) -> Cat {
         "invert",
         "auto-levels",
         "sharpen",
+        "pdfa-check",
         "dewarp-margin",
         "classify",
         "sort-originals",

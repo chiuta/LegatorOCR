@@ -80,6 +80,14 @@ for k, a in CASES.items():
     ok = r.returncode == 0
     if not ok: fail.append((k, r.returncode, (r.stderr or r.stdout)[-160:].strip()))
     print(("ok   " if ok else "FAIL ") + k)
+# --pdfa-check: a --pdfa file passes the built-in preflight, a plain one does not
+subprocess.run([exe, str(d / "p.png"), "--pdf", str(d / "a.pdf"), "--pdfa", "--split", "off"], capture_output=True)
+subprocess.run([exe, str(d / "p.png"), "--pdf", str(d / "n.pdf"), "--split", "off"], capture_output=True)
+r1 = subprocess.run([exe, "--pdfa-check", str(d / "a.pdf")], capture_output=True, text=True)
+r2 = subprocess.run([exe, "--pdfa-check", str(d / "n.pdf")], capture_output=True, text=True)
+ok = r1.returncode == 0 and r2.returncode == 1
+print(("ok   " if ok else "FAIL ") + "pdfa-check")
+if not ok: fail.append(("pdfa-check", (r1.returncode, r2.returncode), (r1.stdout + r2.stdout)[-200:]))
 # --compare-text with --diff-html: two texts merged word by word
 (d / "ref.txt").write_text("Aceasta este o linie de text de proba.\n")
 (d / "ocr.txt").write_text("Aceasta este o linie de test de proba.\n")
@@ -105,6 +113,6 @@ if r.returncode == 77: print("skip onnx bridge (needs onnx + onnxruntime)")
 else:
     print(("ok   " if r.returncode == 0 else "FAIL ") + "onnx bridge (synthetic models)")
     if r.returncode: fail.append(("onnx-bridge", r.returncode, (r.stdout + r.stderr)[-200:]))
-print(f"{len(CASES) - len(fail)}/{len(CASES)} cases passed")
+print(f"{len(CASES) + 1 - len(fail)}/{len(CASES) + 1} cases passed")
 for f_ in fail: print("  ", f_)
 sys.exit(1 if fail else 0)
