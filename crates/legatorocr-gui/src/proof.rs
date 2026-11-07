@@ -339,7 +339,16 @@ impl ProofWindow {
                             .pick_file()
                         {
                             self.message = Some(match self.load_text(&f) {
-                                Ok(n) => (format!("{n} · {}", f.display()), false),
+                                Ok(n) => {
+                                    // the hOCR of the same run sits beside the text: take it too
+                                    let h = f.with_extension("hocr");
+                                    let extra = if h.is_file() && self.load_hocr(&h).is_ok() {
+                                        " + hOCR"
+                                    } else {
+                                        ""
+                                    };
+                                    (format!("{n}{extra} · {}", f.display()), false)
+                                }
                                 Err(e) => (e, true),
                             });
                         }
@@ -434,19 +443,19 @@ impl ProofWindow {
                 let hocr_on = !self.hocr.is_empty();
                 let tex = self.texture(ctx).map(|t| (t.id(), t.size_vec2()));
                 // box of the selected doubtful word, in page pixels, with the page size
-                let mark: Option<Mark> = self
-                    .selected
-                    .filter(|(p, _)| *p == index)
-                    .and_then(|(_, k)| {
-                        let (pw, ph, words) = self.hocr.get(index)?;
-                        let w = words.get(k)?;
-                        (*pw > 0 && *ph > 0).then_some((
-                            (w.x0, w.y0),
-                            (w.x1, w.y1),
-                            *pw as f32,
-                            *ph as f32,
-                        ))
-                    });
+                let mark: Option<Mark> =
+                    self.selected
+                        .filter(|(p, _)| *p == index)
+                        .and_then(|(_, k)| {
+                            let (pw, ph, words) = self.hocr.get(index)?;
+                            let w = words.get(k)?;
+                            (*pw > 0 && *ph > 0).then_some((
+                                (w.x0, w.y0),
+                                (w.x1, w.y1),
+                                *pw as f32,
+                                *ph as f32,
+                            ))
+                        });
                 ui.columns(2, |cols| {
                     egui::ScrollArea::both()
                         .id_salt("proof_img")
