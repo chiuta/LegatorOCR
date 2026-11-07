@@ -51,6 +51,7 @@ enum Cmd {
     ExportPdf,
     ExportImages,
     Modules,
+    Proof,
     FirstPage,
     LastPage,
     NextAttention,
@@ -71,6 +72,7 @@ const CMDS: &[(Cmd, &str)] = &[
     (Cmd::ExportPdf, "menu.export_pdf"),
     (Cmd::ExportImages, "menu.export_images"),
     (Cmd::Modules, "menu.modules"),
+    (Cmd::Proof, "menu.proof"),
     (Cmd::FirstPage, "cmd.first_page"),
     (Cmd::LastPage, "cmd.last_page"),
     (Cmd::NextAttention, "cmd.next_attention"),
@@ -215,6 +217,11 @@ pub struct App {
     ocr_info: String,
     show_about: bool,
     modules: ModulesWindow,
+    proof: crate::proof::ProofWindow,
+    /// The corrected text is loaded into the engine for the running export.
+    apply_pending: bool,
+    /// Pages written by the last finished export (to compare with the corrected text).
+    last_pages: usize,
     allopts: crate::alloptions::AllOptions,
     draw_zones: bool,
     /// With `draw_zones`: the mouse draws dewarp guide lines (freehand along a bent text line).
@@ -291,6 +298,9 @@ impl App {
             ocr_info: String::new(),
             show_about: false,
             modules: ModulesWindow::default(),
+            proof: crate::proof::ProofWindow::default(),
+            apply_pending: false,
+            last_pages: 0,
             allopts: Default::default(),
             draw_zones: false,
             draw_guide: false,
@@ -701,6 +711,11 @@ impl App {
                     self.job = None;
                     match r {
                         Ok(d) => {
+                            self.last_pages = d.pages;
+                            // a single PDF with its text sidecars can be proofread in the window
+                            if d.kind == JobKind::Pdf && d.docs == 0 && self.s.ocr {
+                                self.proof.last_export = Some(d.target.clone());
+                            }
                             let key = if d.docs > 0 {
                                 "status.split_saved"
                             } else if d.kind == JobKind::Pdf {
@@ -1169,6 +1184,10 @@ impl App {
                 }
                 if ui.button(self.tr("menu.modules")).clicked() {
                     self.modules.open();
+                    ui.close();
+                }
+                if ui.button(self.tr("menu.proof")).clicked() {
+                    self.proof.open();
                     ui.close();
                 }
                 ui.separator();
@@ -1864,6 +1883,7 @@ impl App {
             Cmd::ExportPdf if idle => self.start_export(ctx, JobKind::Pdf),
             Cmd::ExportImages if idle => self.start_export(ctx, JobKind::Images),
             Cmd::Modules => self.modules.open(),
+            Cmd::Proof => self.proof.open(),
             Cmd::FirstPage if !self.sheets.is_empty() => {
                 self.selected = Some(0);
                 self.scroll_to_selected = true;
@@ -4006,6 +4026,50 @@ impl eframe::App for App {
                 });
         }
         self.modules_window(&ctx);
+        {
+            let lang = self.lang;
+            self.proof.ui(&ctx, &|k| t(lang, k));
+        }
+        if std::mem::take(&mut self.proof.apply_requested) {
+            if !self.s.ocr {
+                let m = self.tr("proof.need_ocr").to_string();
+                self.say(m, true);
+            } else if self.job.is_none() && !self.sheets.is_empty() {
+                legatorocr_engine::corrections::set(&self.proof.corrected_text());
+                self.start_export(&ctx, JobKind::Pdf);
+                if self.job.is_some() {
+                    self.apply_pending = true;
+                } else {
+                    // the file dialog was closed: nothing runs, nothing to apply
+                    legatorocr_engine::corrections::clear();
+                }
+            }
+        }
+        // the corrected text belongs to one export: forget it when that export is over
+        if self.apply_pending && self.job.is_none() {
+            self.apply_pending = false;
+            let c = legatorocr_engine::corrections::totals();
+            let text_pages = legatorocr_engine::corrections::page_count();
+            legatorocr_engine::corrections::clear();
+            let mut m = format!(
+                "{}: {} / {} / {}",
+                self.tr("proof.applied"),
+                c.changed,
+                c.added,
+                c.removed
+            );
+            // pages are matched by position: a different count means the order has shifted
+            let differ = self.last_pages != 0 && text_pages != self.last_pages;
+            if differ {
+                m += &format!(
+                    " — {}: {} ≠ {}",
+                    self.tr("proof.pages_differ"),
+                    text_pages,
+                    self.last_pages
+                );
+            }
+            self.say(m, differ);
+        }
         self.all_options_window(&ctx);
         if self.show_about {
             let mut open = true;

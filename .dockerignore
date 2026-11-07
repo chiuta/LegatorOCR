@@ -1,0 +1,6 @@
+target
+.git
+docs/video
+docs/*.pdf
+packaging
+web

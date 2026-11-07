@@ -12,7 +12,7 @@ codegen-units = 1
 opt-level = 3
 
 [workspace.package]
-version = "0.2.0-pre.31"
+version = "0.2.0-pre.32"
 edition = "2021"
 rust-version = "1.95"
 license = "MIT"

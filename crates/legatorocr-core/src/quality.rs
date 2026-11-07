@@ -175,6 +175,8 @@ const EDGE_FRAME_FRACTION: f32 = 0.5;
 /// Longest stroke-like run, as a fraction of the side length (a glyph or a
 /// short word block; longer runs are rules, frames or shadows).
 const EDGE_MAX_RUN: f32 = 0.12;
+/// Share of the way from the darkest pixel to the Otsu threshold that still counts as ink.
+const EDGE_STRICT: f32 = 0.6;
 
 /// Does ink touch the outermost border on two or more sides (text cut off)?
 ///
@@ -196,7 +198,10 @@ pub fn edge_text_cut(img: &GrayImage) -> bool {
     if hi - lo < 40 {
         return false; // blank or flat: no ink to speak of
     }
+    // Otsu on aged paper puts the browned edges and the shadow of the spine on the ink side;
+    // only the darker part of the ink side counts (text is near black, those shadows are not).
     let t = otsu_threshold(&g);
+    let t = lo + ((t.saturating_sub(lo)) as f32 * EDGE_STRICT) as u8;
     let ink = |x: u32, y: u32| g.get_pixel(x, y).0[0] <= t;
     let band = ((w.min(h) as f32 * EDGE_BAND).round() as u32).max(2);
     if band * 4 >= w.min(h) {
@@ -272,6 +277,37 @@ pub fn perceptual_hash(img: &GrayImage) -> u64 {
         }
     }
     hash
+}
+
+/// 32x32 grayscale thumbnail, row-major, for [`thumb_correlation`].
+pub fn thumbnail(img: &GrayImage) -> Vec<u8> {
+    if img.width() == 0 || img.height() == 0 {
+        return Vec::new();
+    }
+    imageops::resize(img, 32, 32, imageops::FilterType::Triangle).into_raw()
+}
+
+/// Pearson correlation (-1..1) of two thumbnails; 0 when either is empty, of another size or
+/// flat. The difference hash alone cannot tell two text pages apart (margins and columns
+/// dominate its 64 bits), so duplicates are confirmed with this.
+pub fn thumb_correlation(a: &[u8], b: &[u8]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let n = a.len() as f64;
+    let ma = a.iter().map(|&v| v as f64).sum::<f64>() / n;
+    let mb = b.iter().map(|&v| v as f64).sum::<f64>() / n;
+    let (mut ab, mut aa, mut bb) = (0.0, 0.0, 0.0);
+    for (&x, &y) in a.iter().zip(b) {
+        let (x, y) = (x as f64 - ma, y as f64 - mb);
+        ab += x * y;
+        aa += x * x;
+        bb += y * y;
+    }
+    if aa <= 0.0 || bb <= 0.0 {
+        return 0.0;
+    }
+    (ab / (aa.sqrt() * bb.sqrt())) as f32
 }
 
 /// All index pairs `(i, j)`, `i < j`, whose hashes differ in at most
@@ -660,6 +696,31 @@ mod tests {
     }
 
     #[test]
+    fn browned_page_edges_are_not_cut_text() {
+        // paper 215, edges and spine darkening to 110 (aged paper), text rows 25 inside the margins
+        let page = |cut: bool| {
+            GrayImage::from_fn(600, 800, |x, y| {
+                let d = x.min(599 - x).min(y).min(799 - y) as f32;
+                let paper = 215.0 - 105.0 * (1.0 - (d / 60.0).min(1.0));
+                let in_text = if cut {
+                    (0..600).contains(&x) && (y / 14) % 2 == 0 && (0..800).contains(&y)
+                } else {
+                    (80..520).contains(&x) && (80..720).contains(&y) && (y / 14) % 2 == 0
+                } && (x / 7) % 3 != 0;
+                Luma([if in_text { 25 } else { paper as u8 }])
+            })
+        };
+        assert!(
+            !edge_text_cut(&page(false)),
+            "shadowed margins, text inside: not cut"
+        );
+        assert!(
+            edge_text_cut(&page(true)),
+            "text running off every side: cut"
+        );
+    }
+
+    #[test]
     fn edge_cut_degenerate_images() {
         assert!(!edge_text_cut(&GrayImage::new(0, 0)));
         assert!(!edge_text_cut(&GrayImage::new(5, 5)));
@@ -692,6 +753,36 @@ mod tests {
         assert!((ha ^ hc).count_ones() > 6);
         assert_eq!(near_duplicates(&[ha, hc, hb], 6), vec![(0, 2)]);
         assert_eq!(perceptual_hash(&a), perceptual_hash(&a.clone()));
+    }
+
+    #[test]
+    fn correlation_separates_pages_the_hash_cannot() {
+        let a = stripes(800, 1100);
+        let mut b = GrayImage::from_pixel(800, 1100, Luma([235]));
+        imageops::replace(&mut b, &a, 4, 3);
+        // same layout, other text: stripes of another phase inside the same margins
+        let c = GrayImage::from_fn(800, 1100, |x, y| {
+            if (60..1040).contains(&y) && (80..720).contains(&x) && ((y + 7) / 11 + x / 23) % 2 == 0
+            {
+                Luma([20])
+            } else {
+                Luma([235])
+            }
+        });
+        let (ta, tb, tc) = (thumbnail(&a), thumbnail(&b), thumbnail(&c));
+        assert!(
+            thumb_correlation(&ta, &tb) > 0.9,
+            "{}",
+            thumb_correlation(&ta, &tb)
+        );
+        assert!(
+            thumb_correlation(&ta, &tc) < 0.9,
+            "{}",
+            thumb_correlation(&ta, &tc)
+        );
+        assert_eq!(thumb_correlation(&[], &[]), 0.0);
+        assert_eq!(thumb_correlation(&[5; 4], &[5; 4]), 0.0, "flat images");
+        assert_eq!(thumb_correlation(&ta, &ta[1..]), 0.0);
     }
 
     #[test]
