@@ -175,6 +175,8 @@ const EDGE_FRAME_FRACTION: f32 = 0.5;
 /// Longest stroke-like run, as a fraction of the side length (a glyph or a
 /// short word block; longer runs are rules, frames or shadows).
 const EDGE_MAX_RUN: f32 = 0.12;
+/// Share of the way from the darkest pixel to the Otsu threshold that still counts as ink.
+const EDGE_STRICT: f32 = 0.6;
 
 /// Does ink touch the outermost border on two or more sides (text cut off)?
 ///
@@ -196,7 +198,10 @@ pub fn edge_text_cut(img: &GrayImage) -> bool {
     if hi - lo < 40 {
         return false; // blank or flat: no ink to speak of
     }
+    // Otsu on aged paper puts the browned edges and the shadow of the spine on the ink side;
+    // only the darker part of the ink side counts (text is near black, those shadows are not).
     let t = otsu_threshold(&g);
+    let t = lo + ((t.saturating_sub(lo)) as f32 * EDGE_STRICT) as u8;
     let ink = |x: u32, y: u32| g.get_pixel(x, y).0[0] <= t;
     let band = ((w.min(h) as f32 * EDGE_BAND).round() as u32).max(2);
     if band * 4 >= w.min(h) {
@@ -688,6 +693,31 @@ mod tests {
         fill(&mut g, 300, 0, 303, 2, 0);
         fill(&mut g, 0, 500, 2, 503, 0);
         assert!(!edge_text_cut(&g));
+    }
+
+    #[test]
+    fn browned_page_edges_are_not_cut_text() {
+        // paper 215, edges and spine darkening to 110 (aged paper), text rows 25 inside the margins
+        let page = |cut: bool| {
+            GrayImage::from_fn(600, 800, |x, y| {
+                let d = x.min(599 - x).min(y).min(799 - y) as f32;
+                let paper = 215.0 - 105.0 * (1.0 - (d / 60.0).min(1.0));
+                let in_text = if cut {
+                    (0..600).contains(&x) && (y / 14) % 2 == 0 && (0..800).contains(&y)
+                } else {
+                    (80..520).contains(&x) && (80..720).contains(&y) && (y / 14) % 2 == 0
+                } && (x / 7) % 3 != 0;
+                Luma([if in_text { 25 } else { paper as u8 }])
+            })
+        };
+        assert!(
+            !edge_text_cut(&page(false)),
+            "shadowed margins, text inside: not cut"
+        );
+        assert!(
+            edge_text_cut(&page(true)),
+            "text running off every side: cut"
+        );
     }
 
     #[test]
