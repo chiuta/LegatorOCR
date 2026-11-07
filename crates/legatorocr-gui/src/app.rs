@@ -495,10 +495,24 @@ impl App {
     fn open_project(&mut self) {
         let Some(path) = self.pick(|| {
             rfd::FileDialog::new()
-                .add_filter("LegatorOCR", &["lgr"])
+                .add_filter("LegatorOCR", &["lgr", "pdf"])
                 .pick_file()
         }) else {
             return;
+        };
+        // a PDF made with --embed-project carries its originals and project.lgr: unpack it into a
+        // new folder next to it (never overwriting) and open that project
+        let path = if legatorocr_engine::files::is_pdf(&path) {
+            let dir = fresh_folder(&path);
+            match legatorocr_engine::embedproject::extract(&path, &dir) {
+                Ok((project, _)) => project,
+                Err(e) => {
+                    self.say(format!("{}: {e:#}", self.tr("status.error")), true);
+                    return;
+                }
+            }
+        } else {
+            path
         };
         match legatorocr_engine::project::Project::load(&path) {
             Ok(p) => {
@@ -4433,5 +4447,45 @@ mod tests {
         // folder expanded in natural order, explicit image kept, non-image dropped
         assert_eq!(got, ["p1.jpg", "p2.png", "p10.png", "p2.png"]);
         let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+/// A folder that does not exist yet next to `pdf`: `name-project`, `name-project-2`, …
+fn fresh_folder(pdf: &std::path::Path) -> PathBuf {
+    let stem = pdf
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("project");
+    let base = pdf.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let mut n = 1;
+    loop {
+        let name = if n == 1 {
+            format!("{stem}-project")
+        } else {
+            format!("{stem}-project-{n}")
+        };
+        let p = base.join(name);
+        if !p.exists() {
+            return p;
+        }
+        n += 1;
+    }
+}
+
+#[cfg(test)]
+mod fresh_folder_tests {
+    use super::*;
+
+    #[test]
+    fn the_folder_next_to_the_pdf_is_new_every_time() {
+        let d = std::env::temp_dir().join(format!("lgr-ff-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let pdf = d.join("book.pdf");
+        assert_eq!(fresh_folder(&pdf), d.join("book-project"));
+        std::fs::create_dir(d.join("book-project")).unwrap();
+        assert_eq!(fresh_folder(&pdf), d.join("book-project-2"));
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
