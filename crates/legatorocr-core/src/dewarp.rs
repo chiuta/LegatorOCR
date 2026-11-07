@@ -369,6 +369,158 @@ pub fn guides_to_string(g: &[Vec<(f32, f32)>]) -> String {
         .join(";")
 }
 
+/// Robust quadratic `a + b·t + c·t²` through `(t, e)` points (t in 0–1): least squares, then
+/// three rounds of Tukey reweighting around the current fit. Returns the coefficients and the
+/// share of points within `tol` of the final curve.
+fn robust_quadratic(pts: &[(f32, f32)], tol: f32) -> Option<([f64; 3], f32)> {
+    if pts.len() < 6 {
+        return None;
+    }
+    let mut wt = vec![1.0f64; pts.len()];
+    let mut coef = [0.0f64; 3];
+    for round in 0..4 {
+        // normal equations 3x3
+        let (mut m, mut v) = ([[0.0f64; 3]; 3], [0.0f64; 3]);
+        for (&(t, e), &w) in pts.iter().zip(&wt) {
+            let b = [1.0, t as f64, (t * t) as f64];
+            for r in 0..3 {
+                for c in 0..3 {
+                    m[r][c] += w * b[r] * b[c];
+                }
+                v[r] += w * b[r] * e as f64;
+            }
+        }
+        // solve by Gauss-Jordan with partial pivoting
+        for c in 0..3 {
+            let p = (c..3).max_by(|&a, &b| m[a][c].abs().total_cmp(&m[b][c].abs()))?;
+            if m[p][c].abs() < 1e-9 {
+                return None;
+            }
+            m.swap(c, p);
+            v.swap(c, p);
+            for r in 0..3 {
+                if r != c {
+                    let f = m[r][c] / m[c][c];
+                    for k in c..3 {
+                        m[r][k] -= f * m[c][k];
+                    }
+                    v[r] -= f * v[c];
+                }
+            }
+        }
+        coef = [v[0] / m[0][0], v[1] / m[1][1], v[2] / m[2][2]];
+        if round < 3 {
+            let res: Vec<f64> = pts
+                .iter()
+                .map(|&(t, e)| {
+                    (e as f64 - (coef[0] + coef[1] * t as f64 + coef[2] * (t * t) as f64)).abs()
+                })
+                .collect();
+            let mut sorted = res.clone();
+            sorted.sort_by(|a, b| a.total_cmp(b));
+            let cut = (6.0 * sorted[sorted.len() / 2]).max(tol as f64 * 2.0);
+            for (w, r) in wt.iter_mut().zip(&res) {
+                let u = r / cut;
+                *w = if u < 1.0 { (1.0 - u * u).powi(2) } else { 0.0 };
+            }
+        }
+    }
+    let inl = pts
+        .iter()
+        .filter(|&&(t, e)| {
+            (e as f64 - (coef[0] + coef[1] * t as f64 + coef[2] * (t * t) as f64)).abs()
+                <= tol as f64
+        })
+        .count();
+    Some((coef, inl as f32 / pts.len() as f32))
+}
+
+/// Marginal dewarping: straighten a justified text block whose *left margin* is bent (the other
+/// direction of [`dewarp`], which straightens bent text lines). Every text line's left edge is
+/// measured, a robust parabola is fitted through them, and each pixel row is moved sideways so the
+/// parabola becomes a vertical line. Applied only when at least 8 lines agree on a smooth curve
+/// that moves the margin between 0.8 % and 8 % of the page width; ragged or indented text, and a
+/// margin that is already straight, leave the page alone (`None`).
+pub fn straighten_margins(img: &RgbImage, dpi: u32, fill: Rgb<u8>) -> Option<RgbImage> {
+    let f = (dpi / 150).max(1);
+    let small = transform::downscale_gray(&imageops::grayscale(img), f);
+    let eff = (dpi / f).max(36) as usize;
+    let (w, h) = (small.width() as usize, small.height() as usize);
+    if w < 100 || h < 100 {
+        return None;
+    }
+    let ink = binarize::sauvola(&small, (eff / 8).max(15) as u32, 0.3);
+    // rows with enough ink form text lines
+    let rowink: Vec<usize> = (0..h)
+        .map(|y| (0..w).filter(|&x| ink.get(x as u32, y as u32)).count())
+        .collect();
+    let floor = (w / 80).max(3);
+    let mut pts: Vec<(f32, f32)> = Vec::new(); // (y / h, left edge in small px)
+    let mut y = 0;
+    while y < h {
+        if rowink[y] < floor {
+            y += 1;
+            continue;
+        }
+        let y0 = y;
+        while y < h && rowink[y] >= floor {
+            y += 1;
+        }
+        if y - y0 < (eff / 40).max(2) || y - y0 > eff / 3 {
+            continue; // a speck or a picture, not a text line
+        }
+        let mut lefts: Vec<usize> = (y0..y)
+            .filter_map(|yy| (0..w).find(|&x| ink.get(x as u32, yy as u32)))
+            .collect();
+        lefts.sort_unstable();
+        pts.push((
+            (y0 + y) as f32 / 2.0 / h as f32,
+            lefts[lefts.len() / 2] as f32,
+        ));
+    }
+    if pts.len() < 8 {
+        return None;
+    }
+    let tol = (w as f32 * 0.004).max(1.5);
+    let (c, inliers) = robust_quadratic(&pts, tol)?;
+    if inliers < 0.6 {
+        return None;
+    }
+    let at = |t: f64| c[0] + c[1] * t + c[2] * t * t;
+    let (mut lo, mut hi) = (f64::MAX, f64::MIN);
+    for k in 0..=20 {
+        let v = at(k as f64 / 20.0);
+        lo = lo.min(v);
+        hi = hi.max(v);
+    }
+    let swing = (hi - lo) / w as f64;
+    if !(0.008..=0.08).contains(&swing) {
+        return None;
+    }
+    // is the curve really a curve of the margin, or only the first lines of a short block?
+    // the fitted line must also describe most of the page height
+    let (tmin, tmax) = pts
+        .iter()
+        .fold((1.0f32, 0.0f32), |a, p| (a.0.min(p.0), a.1.max(p.0)));
+    if tmax - tmin < 0.5 {
+        return None;
+    }
+    let (iw, ih) = (img.width() as usize, img.height() as usize);
+    let reference = at(0.5);
+    let mut out = RgbImage::from_pixel(iw as u32, ih as u32, fill);
+    for yy in 0..ih {
+        let t = (yy as f64 / ih as f64).clamp(tmin as f64, tmax as f64);
+        let shift = ((reference - at(t)) * f as f64).round() as i64; // + = move right
+        for xx in 0..iw {
+            let sx = xx as i64 - shift;
+            if (0..iw as i64).contains(&sx) {
+                out.put_pixel(xx as u32, yy as u32, *img.get_pixel(sx as u32, yy as u32));
+            }
+        }
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -515,5 +667,89 @@ mod tests {
         let _ = dewarp(&noise, 150, Rgb([240; 3]));
         let tiny = RgbImage::from_pixel(20, 20, Rgb([0; 3]));
         assert!(dewarp(&tiny, 150, Rgb([0; 3])).is_none());
+    }
+
+    fn margin_page(left: impl Fn(u32) -> u32, ragged: bool) -> RgbImage {
+        let (w, h) = (900u32, 1200u32);
+        let mut img = RgbImage::from_pixel(w, h, Rgb([240, 240, 240]));
+        let mut seed = 5u32;
+        for (n, y) in (120..1080).step_by(36).enumerate() {
+            let x0 = left(y) + if ragged && n % 3 == 0 { 40 } else { 0 };
+            for yy in y..y + 12 {
+                for x in x0..x0 + 640 {
+                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                    if ((x - x0) / 5) % 3 != 2 || (seed >> 28) == 0 {
+                        img.put_pixel(x, yy, Rgb([25, 25, 25]));
+                    }
+                }
+            }
+        }
+        img
+    }
+
+    fn left_edges(img: &RgbImage) -> Vec<u32> {
+        let mut v = Vec::new();
+        for (n, y) in (120..1080).step_by(36).enumerate() {
+            let _ = n;
+            let probe = y + 6;
+            if let Some(x) = (0..img.width()).find(|&x| img.get_pixel(x, probe).0[0] < 120) {
+                v.push(x);
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn a_bent_left_margin_is_straightened() {
+        // margin bows 24 px to the right in the middle of the page (parabola)
+        let bent = margin_page(
+            |y| 100 + (24.0 * (1.0 - ((y as f32 - 600.0) / 480.0).powi(2))).max(0.0) as u32,
+            false,
+        );
+        let before = left_edges(&bent);
+        let spread = |v: &[u32]| v.iter().max().unwrap() - v.iter().min().unwrap();
+        assert!(spread(&before) >= 18);
+        let fixed = straighten_margins(&bent, 150, Rgb([240, 240, 240])).expect("curve found");
+        let after = left_edges(&fixed);
+        assert!(
+            spread(&after) <= 4,
+            "spread {} -> {}\n{:?}\n{:?}",
+            spread(&before),
+            spread(&after),
+            before,
+            after
+        );
+    }
+
+    #[test]
+    fn a_straight_or_ragged_margin_is_left_alone() {
+        let straight = margin_page(|_| 100, false);
+        assert!(straight_none(&straight));
+        // every third line indented: no smooth curve
+        let ragged = margin_page(|_| 100, true);
+        assert!(straight_none(&ragged));
+    }
+
+    fn straight_none(img: &RgbImage) -> bool {
+        straighten_margins(img, 150, Rgb([240, 240, 240])).is_none()
+    }
+
+    #[test]
+    fn robust_quadratic_ignores_outliers() {
+        let mut pts: Vec<(f32, f32)> = (0..30)
+            .map(|k| {
+                let t = k as f32 / 29.0;
+                (t, 50.0 + 10.0 * t - 30.0 * t * t)
+            })
+            .collect();
+        pts[3].1 += 80.0;
+        pts[17].1 -= 60.0;
+        let (c, inl) = robust_quadratic(&pts, 1.0).unwrap();
+        assert!(
+            (c[2] + 30.0).abs() < 1.0 && (c[0] - 50.0).abs() < 1.0,
+            "{c:?}"
+        );
+        assert!(inl > 0.9);
+        assert!(robust_quadratic(&pts[..3], 1.0).is_none());
     }
 }

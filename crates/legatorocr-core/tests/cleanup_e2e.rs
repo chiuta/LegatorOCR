@@ -143,6 +143,7 @@ fn sharpen_and_levels_keep_geometry() {
             mode: OutputMode::Color,
             auto_levels: true,
             sharpen: 1.0,
+            dewarp_margin: true,
             fold_shadow: true,
             fill_color: Some([0, 0, 0]),
             right_to_left: false,

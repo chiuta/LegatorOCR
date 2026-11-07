@@ -98,6 +98,8 @@ pub struct Settings {
     pub auto_levels: bool,
     /// Unsharp-mask amount 0–2 (0 = off) for colour / gray / hybrid output.
     pub sharpen: f32,
+    /// Straighten a bent left margin of a justified text block (marginal dewarping).
+    pub dewarp_margin: bool,
     /// Lift the darkening toward the spine of a book page (fold shadow), column by column.
     pub fold_shadow: bool,
     /// Colour for the `erase_zones` rectangles instead of the paper tone (fill zones: white, black
@@ -206,6 +208,7 @@ impl Default for Settings {
             auto_invert: false,
             auto_levels: false,
             sharpen: 0.0,
+            dewarp_margin: false,
             fold_shadow: false,
             fill_color: None,
             right_to_left: false,
@@ -1018,6 +1021,14 @@ fn prepare(
     }
     if !guided && s.dewarp {
         if let Some(flat) = dewarp::dewarp(&img, s.dpi, bg) {
+            img = flat;
+        }
+    }
+
+    if s.dewarp_margin {
+        if let Some(flat) = crate::stage("clean-up/margin-dewarp", || {
+            dewarp::straighten_margins(&img, s.dpi, bg)
+        }) {
             img = flat;
         }
     }
@@ -2636,6 +2647,7 @@ mod tests {
                 auto_invert: rnd(2) == 0,
                 auto_levels: rnd(2) == 0,
                 sharpen: rnd(300) as f32 / 100.0 - 0.5,
+                dewarp_margin: rnd(2) == 1,
                 fold_shadow: rnd(2) == 1,
                 fill_color: (rnd(2) == 1).then(|| [rnd(256) as u8, rnd(256) as u8, rnd(256) as u8]),
                 right_to_left: rnd(2) == 1,

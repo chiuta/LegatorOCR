@@ -1222,6 +1222,12 @@ struct Cli {
     #[arg(long)]
     sort_move: bool,
 
+    /// Marginal dewarping: straighten a bent left margin of a justified text block (the other
+    /// direction of --dewarp, which straightens bent lines). Needs at least 8 text lines that
+    /// agree on a smooth curve; ragged, indented or already straight text is left alone.
+    #[arg(long)]
+    dewarp_margin: bool,
+
     /// Right-to-left book (Arabic, Hebrew, manga): when a two-page spread is cut in two, the
     /// right-hand page comes first, and the PDF asks viewers for right-to-left reading.
     #[arg(long)]
@@ -2496,6 +2502,7 @@ fn real_main() -> Result<()> {
         auto_invert: cli.invert,
         auto_levels: cli.auto_levels,
         sharpen: cli.sharpen,
+        dewarp_margin: cli.dewarp_margin,
         fold_shadow: cli.fold_shadow,
         fill_color,
         right_to_left: cli.right_to_left,
@@ -2579,6 +2586,7 @@ fn real_main() -> Result<()> {
             "--threshold",
             "--sauvola-k",
             "--sharpen",
+            "--dewarp-margin",
             "--classify",
             "--classify-out",
             "--sort-originals",
