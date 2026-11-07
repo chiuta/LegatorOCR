@@ -139,6 +139,10 @@ pub struct Settings {
     /// until the gutter is vertical. The canvas grows so nothing is clipped; hand-drawn zones and
     /// guide points follow the turn (a zone becomes the box around its turned corners).
     pub sheet_turn_deg: f32,
+    /// Find the fine turn of every sheet by itself (see [`detect_sheet_turn`]) when the sheet has no
+    /// turn of its own: for batches of spreads scanned crooked. Costs one extra text-line analysis
+    /// per sheet.
+    pub auto_sheet_turn: bool,
     /// Where to cut a two-page sheet: a fraction (0-1) of the loaded sheet's width, set by dragging
     /// a line on the original. With a fine turn (`sheet_turn_deg`) the cut goes through the middle
     /// of that line as the turn carries it, and is vertical on the turned sheet. Used when splitting is on, at any rotation (on a sheet turned by
@@ -201,6 +205,7 @@ impl Default for Settings {
             sheet_work_mm: None,
             sheet_orient_locked: false,
             sheet_turn_deg: 0.0,
+            auto_sheet_turn: false,
             sheet_split_frac: None,
             dropout: Dropout::Off,
             despeckle_strength: 1.0,
@@ -521,7 +526,11 @@ pub fn detect_sheet_turn(src: &DynamicImage, s: &Settings) -> Option<f32> {
     if !s.rotate_quarters.is_multiple_of(4) {
         rgb = transform::rot90(&rgb, s.rotate_quarters);
     }
-    let a = analyse(&transform::gray_of(&rgb), s.dpi);
+    level_turn(&rgb, s.dpi)
+}
+
+fn level_turn(rgb: &RgbImage, dpi: u32) -> Option<f32> {
+    let a = analyse(&transform::gray_of(rgb), dpi);
     let deg = deskew::detect_skew(&a.ink, 20.0)?.to_degrees();
     let deg = (deg * 10.0).round() / 10.0;
     (deg.abs() >= 0.1).then_some(deg)
@@ -599,8 +608,13 @@ fn split_sheet(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
     // (width, height, angle) of the sheet before the fine turn: the cut line the user dragged on the
     // original is placed through this
     let mut turned: Option<(u32, u32, f32)> = None;
-    if s.sheet_turn_deg.abs() >= 0.01 {
-        let rad = s.sheet_turn_deg.to_radians();
+    let turn_deg = if s.sheet_turn_deg.abs() < 0.01 && s.auto_sheet_turn {
+        crate::stage("sheet/auto-turn", || level_turn(&rgb, s.dpi)).unwrap_or(0.0)
+    } else {
+        s.sheet_turn_deg
+    };
+    if turn_deg.abs() >= 0.01 {
+        let rad = turn_deg.to_radians();
         let (w, h) = rgb.dimensions();
         if transform::rotation_fits(w, h, rad) {
             turned = Some((w, h, rad));
@@ -1475,6 +1489,72 @@ pub(crate) mod testutil {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn auto_sheet_turn_levels_each_sheet_but_leaves_a_manual_turn_alone() {
+        let mut flat = RgbImage::from_pixel(1200, 800, Rgb([240, 240, 240]));
+        for (x0, x1) in [(100u32, 560u32), (640, 1100)] {
+            for y in (100..700).step_by(24) {
+                for x in x0..x1 {
+                    for dy in 0..8 {
+                        if (x / 6) % 4 != 0 {
+                            flat.put_pixel(x, y + dy, Rgb([20, 20, 20]));
+                        }
+                    }
+                }
+            }
+        }
+        let img = DynamicImage::ImageRgb8(transform::rotate_cw(
+            &flat,
+            7f32.to_radians(),
+            Rgb([240; 3]),
+        ));
+        let base = Settings {
+            split: SplitMode::Auto,
+            auto_sheet_turn: true,
+            ..Settings::default()
+        };
+        // automatic: two pages cut at the gutter, like the manual -7 degrees
+        let auto = split_sheet(&img, &base.clone().sanitized());
+        assert_eq!(auto.len(), 2);
+        let by_hand = split_sheet(
+            &img,
+            &Settings {
+                sheet_turn_deg: -7.0,
+                auto_sheet_turn: false,
+                ..base.clone()
+            }
+            .sanitized(),
+        );
+        assert_eq!(by_hand.len(), 2);
+        let diff = auto[0].0.width() as i32 - by_hand[0].0.width() as i32;
+        assert!(
+            diff.abs() < 30,
+            "automatic {} vs by hand {}",
+            auto[0].0.width(),
+            by_hand[0].0.width()
+        );
+        // a turn set by hand is not replaced
+        let manual = split_sheet(
+            &img,
+            &Settings {
+                sheet_turn_deg: 3.0,
+                ..base
+            }
+            .sanitized(),
+        );
+        let same = split_sheet(
+            &img,
+            &Settings {
+                sheet_turn_deg: 3.0,
+                auto_sheet_turn: false,
+                split: SplitMode::Auto,
+                ..Settings::default()
+            }
+            .sanitized(),
+        );
+        assert_eq!(manual[0].0.dimensions(), same[0].0.dimensions());
+    }
+
     #[test]
     fn the_sheet_turn_is_found_and_levels_the_sheet() {
         let mut flat = RgbImage::from_pixel(1200, 800, Rgb([240, 240, 240]));
@@ -2493,6 +2573,7 @@ mod tests {
                 } else {
                     0.0
                 },
+                auto_sheet_turn: rnd(4) == 0,
                 sheet_work_mm: if rnd(4) == 0 {
                     Some([
                         rnd(100) as f32 - 20.0,

@@ -311,6 +311,7 @@ impl UiSettings {
             sheet_dewarp_guides: adj.dewarp_guides.clone(),
             sheet_orient_locked: adj.orient_locked,
             sheet_turn_deg: adj.sheet_turn_deg,
+            auto_sheet_turn: false,
             sheet_work_mm: adj.work_mm,
             sheet_split_frac: adj.split_frac,
             align: self.align,

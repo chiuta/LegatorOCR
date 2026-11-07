@@ -40,6 +40,11 @@ CASES = {
  "max-memory": ["--max-memory", "512"], "decoder": ["--isolate-decoders", "--decoder-memory", "512", "--decoder-timeout", "30"],
 "proof-sheet": ["--ocr", "--proof-sheet", "{o}.html"],
 "ocfl": ["--ocfl", "{d}/ocfl-obj"],
+ "sheet-turn": ["--sheet-turn", "-1.5", "--split", "auto"], "auto-sheet-turn": ["--auto-sheet-turn", "--split", "auto"],
+ "accurate": ["--ocr", "--accurate"], "cedilla": ["--ocr", "--clean-text", "--cedilla"],
+ "epub": ["--ocr", "--epub", "{o}.epub"],
+ "vectorize": ["--vectorize", "{d}/svg", "--vectorize-min-area", "20", "--vectorize-tolerance", "1.5"],
+ "verify-pack": ["--ocr", "--verify-pack", "{o}.vp.html", "--verify-conf", "95", "--verify-per-page", "10"],
  "skip-dup": ["--skip-duplicates"], "dewarp-guide": ["--dewarp", "--dewarp-guide", "0.1,0.5 0.5,0.5 0.9,0.5"],
 }
 fail = []
@@ -66,6 +71,18 @@ for k, a in CASES.items():
     ok = r.returncode == 0
     if not ok: fail.append((k, r.returncode, (r.stderr or r.stdout)[-160:].strip()))
     print(("ok   " if ok else "FAIL ") + k)
+# --compare-text with --diff-html: two texts merged word by word
+(d / "ref.txt").write_text("Aceasta este o linie de text de proba.\n")
+(d / "ocr.txt").write_text("Aceasta este o linie de test de proba.\n")
+r = subprocess.run([exe, "--compare-text", str(d / "ref.txt"), str(d / "ocr.txt"), "--diff-html", str(d / "diff.html")], capture_output=True, text=True)
+html = (d / "diff.html").read_text() if (d / "diff.html").exists() else ""
+ok = r.returncode == 0 and "test" in html and "text" in html
+print(("ok   " if ok else "FAIL ") + "diff-html")
+if not ok: fail.append(("diff-html", r.returncode, (r.stderr or r.stdout)[-160:]))
+# --scan-escl against a fake scanner (scripts/test-escl.py)
+r = subprocess.run([sys.executable, str(root / "scripts/test-escl.py"), exe], capture_output=True, text=True, timeout=600)
+print(("ok   " if r.returncode == 0 else "FAIL ") + "eSCL against a fake scanner")
+if r.returncode: fail.append(("escl", r.returncode, (r.stdout + r.stderr)[-200:]))
 # an external engine that speaks Tesseract's command line (docs/examples/external-ocr-engine.py)
 import json
 r = subprocess.run([exe, str(d / "p.png"), "--pdf", str(d / "ext.pdf"), "--ocr", "--lang", "ron", "--engine", "tesseract",
