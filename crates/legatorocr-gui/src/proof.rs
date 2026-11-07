@@ -163,6 +163,9 @@ pub fn replace_token(page: &mut String, old: &str, new: &str) -> bool {
     }
 }
 
+/// Box of a word (corners in page pixels) and the page size.
+type Mark = ((u32, u32), (u32, u32), f32, f32);
+
 /// One line of the doubtful-word list.
 struct DoubtRow {
     k: usize,
@@ -185,6 +188,8 @@ pub struct ProofWindow {
     limit: f32,
     fixes: HashMap<(usize, usize), String>,
     done: HashSet<(usize, usize)>,
+    selected: Option<(usize, usize)>,
+    pending_scroll: bool,
     crops: Option<(usize, Vec<(usize, TextureHandle)>)>,
 }
 
@@ -405,6 +410,7 @@ impl ProofWindow {
                         .clicked()
                     {
                         self.index -= 1;
+                        self.selected = None;
                     }
                     ui.label(format!("{} / {}", self.index + 1, n));
                     if ui
@@ -412,6 +418,7 @@ impl ProofWindow {
                         .clicked()
                     {
                         self.index += 1;
+                        self.selected = None;
                     }
                     if self.dirty {
                         ui.label("●");
@@ -426,6 +433,20 @@ impl ProofWindow {
                 let index = self.index;
                 let hocr_on = !self.hocr.is_empty();
                 let tex = self.texture(ctx).map(|t| (t.id(), t.size_vec2()));
+                // box of the selected doubtful word, in page pixels, with the page size
+                let mark: Option<Mark> = self
+                    .selected
+                    .filter(|(p, _)| *p == index)
+                    .and_then(|(_, k)| {
+                        let (pw, ph, words) = self.hocr.get(index)?;
+                        let w = words.get(k)?;
+                        (*pw > 0 && *ph > 0).then_some((
+                            (w.x0, w.y0),
+                            (w.x1, w.y1),
+                            *pw as f32,
+                            *ph as f32,
+                        ))
+                    });
                 ui.columns(2, |cols| {
                     egui::ScrollArea::both()
                         .id_salt("proof_img")
@@ -434,7 +455,33 @@ impl ProofWindow {
                             Some((id, size)) => {
                                 let w = ui.available_width().max(200.0);
                                 let k = (w / size.x).min(1.0);
-                                ui.image(egui::load::SizedTexture::new(id, size * k));
+                                let r = ui.image(egui::load::SizedTexture::new(id, size * k));
+                                if let Some(b) = mark {
+                                    let sx = r.rect.width() / b.2;
+                                    let sy = r.rect.height() / b.3;
+                                    let rect = egui::Rect::from_min_max(
+                                        r.rect.min
+                                            + egui::vec2(b.0 .0 as f32 * sx, b.0 .1 as f32 * sy),
+                                        r.rect.min
+                                            + egui::vec2(b.1 .0 as f32 * sx, b.1 .1 as f32 * sy),
+                                    )
+                                    .expand(3.0);
+                                    ui.painter().rect_stroke(
+                                        rect,
+                                        2.0,
+                                        egui::Stroke::new(
+                                            2.0,
+                                            egui::Color32::from_rgb(230, 40, 40),
+                                        ),
+                                        egui::StrokeKind::Outside,
+                                    );
+                                    if self.pending_scroll {
+                                        ui.scroll_to_rect(
+                                            rect.expand(80.0),
+                                            Some(egui::Align::Center),
+                                        );
+                                    }
+                                }
                             }
                             None => {
                                 ui.label(tr("proof.no_image"));
@@ -454,6 +501,7 @@ impl ProofWindow {
                             }
                         });
                 });
+                self.pending_scroll = false;
                 if !self.hocr.is_empty() {
                     ui.separator();
                     if self.limit <= 0.0 {
@@ -510,7 +558,13 @@ impl ProofWindow {
                                         let f = (40.0 / size.y).min(1.0).min(300.0 / size.x);
                                         ui.image(egui::load::SizedTexture::new(id, size * f));
                                     }
-                                    ui.label(format!("{text}  ({conf:.0})"));
+                                    let picked = self.selected == Some((index, k));
+                                    let lab =
+                                        ui.selectable_label(picked, format!("{text}  ({conf:.0})"));
+                                    if lab.clicked() {
+                                        self.selected = Some((index, k));
+                                        self.pending_scroll = true;
+                                    }
                                     let buf = self
                                         .fixes
                                         .entry((index, k))
