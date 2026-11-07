@@ -531,6 +531,7 @@ pub fn find_lines(ink: &BitImage, med_h: u32) -> Vec<Line> {
     let p = Prof { ink, med };
     let mut out = Vec::new();
     cut(&p, (0, 0, ink.w, ink.h), med, 0, &mut out);
+    recover_above(&p, &mut out, med);
     attach_floating_marks(&mut out, med);
     drop_duplicates(&mut out);
     // speckle: boxes that hold almost no ink are scanner dust, not text
@@ -543,6 +544,55 @@ pub fn find_lines(ink: &BitImage, med_h: u32) -> Vec<Line> {
         n * 12 > med as u64 * med as u64
     });
     out
+}
+
+/// A block of text sitting beside or over a picture may fail to be cut at all, while the
+/// column below it is found. Take the column that holds the most wide lines of one left edge and
+/// cut the strip above its first line again, over that column's width only; keep the pieces that
+/// have the height and width of text lines and overlap nothing found already.
+fn recover_above(p: &Prof, out: &mut Vec<Line>, med: u32) {
+    let wide: Vec<Line> = out
+        .iter()
+        .filter(|l| l.w >= med * 15 && l.h * 10 >= med * 6 && l.h * 10 <= med * 30)
+        .cloned()
+        .collect();
+    let mut best: Option<(usize, u32, u32, u32)> = None; // lines, left, right, first y
+    for a in &wide {
+        let group: Vec<&Line> = wide
+            .iter()
+            .filter(|b| b.x.abs_diff(a.x) <= med * 2 && b.w.abs_diff(a.w) <= med * 6)
+            .collect();
+        let n = group.len();
+        if n >= 3 && best.is_none_or(|b| n > b.0) {
+            let l = group.iter().map(|g| g.x).min().unwrap();
+            let r = group.iter().map(|g| g.x + g.w).max().unwrap();
+            let y = group.iter().map(|g| g.y).min().unwrap();
+            best = Some((n, l, r, y));
+        }
+    }
+    let Some((_, l, r, y)) = best else { return };
+    let (xa, xb) = (l.saturating_sub(med), (r + med).min(p.ink.w));
+    if y < med * 3 {
+        return;
+    }
+    let mut found = Vec::new();
+    let mut keep = Vec::new();
+    cut(p, (xa, 0, xb, y), med, 0, &mut found);
+    for f in found {
+        let fits = f.w >= med * 8 && f.h * 10 >= med * 6 && f.h * 10 <= med * 30;
+        let free = !out
+            .iter()
+            .any(|o| f.x < o.x + o.w && o.x < f.x + f.w && f.y < o.y + o.h && o.y < f.y + f.h);
+        if fits && free {
+            keep.push(f);
+        }
+    }
+    // reading order: the strip lies above the column, so its lines go before the column's first
+    let at = out
+        .iter()
+        .position(|o| o.y == y && o.x >= l && o.x <= r)
+        .unwrap_or(out.len());
+    out.splice(at..at, keep);
 }
 
 /// Two lines that cover mostly the same area are one line read twice (a curved block cut by two
@@ -1222,4 +1272,66 @@ pub fn extract(gray: &GrayImage, line: &Line, line_h: usize, invert: bool) -> Op
         y: y0,
         h: (y1 - y0),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fill(ink: &mut BitImage, x0: u32, y0: u32, x1: u32, y1: u32) {
+        for y in y0..y1 {
+            for x in x0..x1 {
+                ink.data[(y * ink.w + x) as usize] = 1;
+            }
+        }
+    }
+
+    #[test]
+    fn text_above_a_column_that_could_not_be_cut_is_recovered() {
+        let med = 10;
+        let mut ink = BitImage::new(600, 400);
+        // a column of five text lines, 300 px wide, left edge 100, lines 20 px apart
+        let lines: Vec<(u32, u32)> = (0..5).map(|k| (200 + k * 20, 0)).collect();
+        for &(y, _) in &lines {
+            for k in 0..30 {
+                fill(&mut ink, 100 + k * 10, y, 106 + k * 10, y + 10);
+            }
+        }
+        // three more lines above it, and a dark frame edge running down the right side that
+        // touches them, so no blank row crosses the page there
+        for k in 0..3u32 {
+            for j in 0..30 {
+                fill(
+                    &mut ink,
+                    100 + j * 10,
+                    60 + k * 20,
+                    106 + j * 10,
+                    70 + k * 20,
+                );
+            }
+        }
+        fill(&mut ink, 560, 0, 566, 400);
+        let mut out = vec![];
+        for &(y, _) in &lines {
+            out.push(Line {
+                x: 100,
+                y,
+                w: 296,
+                h: 10,
+                slope: 0.0,
+                curve: 0.0,
+            });
+        }
+        let p = Prof { ink: &ink, med };
+        recover_above(&p, &mut out, med);
+        assert_eq!(out.len(), 8, "the three lines above were added");
+        assert!(
+            out[..3].iter().all(|l| l.y < 200),
+            "and placed before the column"
+        );
+        assert!(
+            out.iter().all(|l| l.x < 400),
+            "the frame edge is not a line"
+        );
+    }
 }
