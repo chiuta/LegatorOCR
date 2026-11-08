@@ -123,6 +123,11 @@ fn seg(out: &mut Vec<u8>, number: u32, kind: u8, data: &[u8]) {
     out.extend_from_slice(data);
 }
 
+/// Pages with more connected components than this are coded without symbols.
+const MAX_COMPONENTS: usize = 60_000;
+/// Representatives compared per component (same size): bounds the matching to linear time.
+const MAX_REPS_PER_SIZE: usize = 48;
+
 const AT: [(i32, i32); 4] = [(3, -1), (-3, -1), (2, -2), (-2, -2)];
 
 /// Code a `w`×`h` bitmap (one byte per pixel, non-zero = black) as a generic region, template 0,
@@ -343,6 +348,10 @@ fn components(w: usize, h: usize, bm: &[u8]) -> Vec<Comp> {
 pub fn encode_symbols(w: usize, h: usize, bm: &[u8]) -> Option<Vec<u8>> {
     let bm: Vec<u8> = bm.iter().map(|&v| (v != 0) as u8).collect();
     let comps = components(w, h, &bm);
+    // speckle or halftone pages have no glyphs to share, and matching them would take forever
+    if comps.len() > MAX_COMPONENTS {
+        return None;
+    }
     // classes: representative = first member; same width and height, few differing pixels
     let mut reps: Vec<usize> = Vec::new(); // index into comps
     let mut class_of: Vec<usize> = Vec::with_capacity(comps.len());
@@ -350,7 +359,7 @@ pub fn encode_symbols(w: usize, h: usize, bm: &[u8]) -> Option<Vec<u8>> {
     for (i, c) in comps.iter().enumerate() {
         let limit = (c.w * c.h * 3 / 100).max(1);
         let list = by_size.entry((c.w, c.h)).or_default();
-        let hit = list.iter().copied().find(|&k| {
+        let hit = list.iter().take(MAX_REPS_PER_SIZE).copied().find(|&k| {
             let r = &comps[reps[k]];
             let mut d = 0;
             for (a, b) in c.px.iter().zip(&r.px) {
@@ -364,7 +373,9 @@ pub fn encode_symbols(w: usize, h: usize, bm: &[u8]) -> Option<Vec<u8>> {
         match hit {
             Some(k) => class_of.push(k),
             None => {
-                list.push(reps.len());
+                if list.len() < MAX_REPS_PER_SIZE {
+                    list.push(reps.len());
+                }
                 class_of.push(reps.len());
                 reps.push(i);
             }
@@ -610,6 +621,30 @@ mod tests {
                 plain.len()
             );
             assert!(encode_best(w, h, &bm).len() <= s.len());
+        }
+    }
+
+    #[test]
+    fn speckle_pages_are_not_matched_quadratically() {
+        // 20 000 random 8x8 blobs of one size: all different, none repeats
+        let n = 142usize;
+        let (w, h) = (n * 12, n * 12);
+        let mut bm = vec![0u8; w * h];
+        let mut s = 11;
+        for i in 0..n {
+            for j in 0..n {
+                for y in 0..8 {
+                    for x in 0..8 {
+                        bm[(i * 12 + 2 + y) * w + j * 12 + 2 + x] = (lcg(&mut s) & 1) as u8;
+                    }
+                }
+            }
+        }
+        let t = std::time::Instant::now();
+        let e = encode_symbols(w, h, &bm);
+        assert!(t.elapsed().as_secs() < 20, "took {:?}", t.elapsed());
+        if let Some(e) = e {
+            assert_eq!(crate::jbig2::decode(&e, None, w, h).unwrap(), bm);
         }
     }
 

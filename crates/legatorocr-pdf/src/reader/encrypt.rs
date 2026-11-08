@@ -523,6 +523,42 @@ mod tests {
     }
 
     #[test]
+    fn sparse_object_numbers_are_refused_not_allocated() {
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offs = Vec::new();
+        for (n, body) in [
+            (
+                4_000_000_000u32,
+                "<< /Type /Catalog /Pages 4000000001 0 R >>",
+            ),
+            (
+                4_000_000_001,
+                "<< /Type /Pages /Kids [4000000002 0 R] /Count 1 >>",
+            ),
+            (
+                4_000_000_002,
+                "<< /Type /Page /Parent 4000000001 0 R /MediaBox [0 0 9 9] >>",
+            ),
+        ] {
+            offs.push((n, out.len()));
+            out.extend_from_slice(format!("{n} 0 obj\n{body}\nendobj\n").as_bytes());
+        }
+        let x = out.len();
+        out.extend_from_slice(b"xref\n0 1\n0000000000 65535 f \n");
+        for (n, o) in &offs {
+            out.extend_from_slice(format!("{n} 1\n{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(
+            format!(
+                "trailer\n<< /Size 4000000003 /Root 4000000000 0 R >>\nstartxref\n{x}\n%%EOF\n"
+            )
+            .as_bytes(),
+        );
+        let d = PdfDoc::open(out).expect("the file itself is valid");
+        assert!(d.flattened().is_err());
+    }
+
+    #[test]
     fn a_compact_file_can_be_flattened_for_signing() {
         let c = rewrite(&sample(), true, None, &mut counter()).unwrap();
         let doc = PdfDoc::open(c).unwrap();
