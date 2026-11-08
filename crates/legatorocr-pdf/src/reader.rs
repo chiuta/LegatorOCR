@@ -1127,6 +1127,20 @@ impl PdfDoc {
     }
 
     /// Object number and generation of the object whose stream data starts at `s`.
+    /// True when the last cross-reference section is a stream (PDF 1.5 object streams).
+    pub fn uses_xref_stream(&self) -> bool {
+        let d = &self.data;
+        let Some(i) = d.windows(9).rposition(|w| w == b"startxref") else {
+            return false;
+        };
+        let n: usize = String::from_utf8_lossy(&d[i + 9..d.len().min(i + 30)])
+            .split_whitespace()
+            .next()
+            .and_then(|t| t.parse().ok())
+            .unwrap_or(0);
+        d.get(n..n + 4).is_some_and(|x| x != b"xref")
+    }
+
     /// True when the file was encrypted (and opened with a password that worked).
     pub fn is_encrypted(&self) -> bool {
         self.crypt.is_some()
@@ -1135,22 +1149,34 @@ impl PdfDoc {
     /// An unencrypted copy of an encrypted file: every string and stream decrypted, written as a
     /// classic file without object streams. The result carries no trace of the encryption.
     pub fn decrypted(&self) -> R<Vec<u8>> {
-        use std::fmt::Write as _;
-        let Some(c) = &self.crypt else {
+        if self.crypt.is_none() {
             return fail("the file is not encrypted");
-        };
+        }
+        self.flattened()
+    }
+
+    /// The same document as a classic file: all objects at top level (object streams unpacked),
+    /// a plain cross-reference table, strings and streams decrypted if the file was encrypted.
+    pub fn flattened(&self) -> R<Vec<u8>> {
+        use std::fmt::Write as _;
+        let c = self.crypt.as_ref();
         let Some(root) = self.root_obj else {
             return fail("the file has no catalog");
         };
-        fn plain(c: &crate::crypt::Crypt, n: u32, v: Val) -> Val {
+        fn plain(c: Option<&crate::crypt::Crypt>, n: u32, v: Val) -> Val {
+            let Some(c) = c else { return v };
             match v {
                 Val::Str(s) => Val::Str(c.decrypt_string(n, 0, &s)),
-                Val::Arr(a) => Val::Arr(a.into_iter().map(|x| plain(c, n, x)).collect()),
-                Val::Dict(d) => {
-                    Val::Dict(d.into_iter().map(|(k, x)| (k, plain(c, n, x))).collect())
-                }
+                Val::Arr(a) => Val::Arr(a.into_iter().map(|x| plain(Some(c), n, x)).collect()),
+                Val::Dict(d) => Val::Dict(
+                    d.into_iter()
+                        .map(|(k, x)| (k, plain(Some(c), n, x)))
+                        .collect(),
+                ),
                 Val::Stream(d, a, b) => Val::Stream(
-                    d.into_iter().map(|(k, x)| (k, plain(c, n, x))).collect(),
+                    d.into_iter()
+                        .map(|(k, x)| (k, plain(Some(c), n, x)))
+                        .collect(),
                     a,
                     b,
                 ),
@@ -1199,11 +1225,12 @@ impl PdfDoc {
                                 .get("Name")
                                 .is_none_or(|v| self.resolve(v).name() == Some("Identity"))
                     });
-                    let raw = if identity {
-                        raw
-                    } else {
-                        let (num, gen) = self.owner_of(s);
-                        c.decrypt_stream(num, gen, &raw)
+                    let raw = match c {
+                        Some(c) if !identity => {
+                            let (num, gen) = self.owner_of(s);
+                            c.decrypt_stream(num, gen, &raw)
+                        }
+                        _ => raw,
                     };
                     cx.dict(&d, Some(raw.len()), &mut b);
                     b.extend_from_slice(b"\nstream\n");

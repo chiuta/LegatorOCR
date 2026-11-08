@@ -508,6 +508,19 @@ mod tests {
     }
 
     #[test]
+    fn a_compact_file_can_be_flattened_for_signing() {
+        let c = rewrite(&sample(), true, None, &mut counter()).unwrap();
+        let doc = PdfDoc::open(c).unwrap();
+        assert!(doc.uses_xref_stream());
+        let flat = doc.flattened().unwrap();
+        let t = String::from_utf8_lossy(&flat);
+        assert!(t.contains("\ntrailer") && !t.contains("/ObjStm"));
+        assert!(!PdfDoc::open(flat.clone()).unwrap().uses_xref_stream());
+        // a classic file is signable now
+        assert!(super::super::sign::prepare(&flat, 0, None, None).is_ok());
+    }
+
+    #[test]
     fn compact_and_encrypt_together() {
         let src = sample();
         let p = Protect {

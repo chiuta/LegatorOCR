@@ -131,6 +131,14 @@ pub fn sign_pdf(
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs();
+    // a file whose last cross-reference is a stream (object streams) cannot take an incremental
+    // update in this layout: rewrite it as a classic file first (the signature covers the result)
+    let data = match legatorocr_pdf::reader::PdfDoc::open(data.clone()) {
+        Ok(d) if !d.is_encrypted() && d.uses_xref_stream() => {
+            d.flattened().map_err(|e| anyhow::anyhow!("{e}"))?
+        }
+        _ => data,
+    };
     let prepared = sign::prepare_visible(&data, now, name, reason, visible)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     let tmp = TempDir::new()?;
