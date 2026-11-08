@@ -790,6 +790,9 @@ pub struct PdfDoc {
     password: Vec<u8>,
     /// (file offset of `N G obj`, N) sorted, to find the object a stream belongs to.
     by_off: Vec<(usize, u32)>,
+    root_obj: Option<u32>,
+    info_obj: Option<u32>,
+    enc_obj: Option<u32>,
 }
 
 /// What [`PdfDoc::page_info`] reports without decoding the image.
@@ -850,6 +853,9 @@ impl PdfDoc {
             stm_offs: Vec::new(),
             pages: Vec::new(),
             crypt: None,
+            root_obj: None,
+            info_obj: None,
+            enc_obj: None,
             password: password.to_vec(),
             by_off: Vec::new(),
         };
@@ -860,6 +866,7 @@ impl PdfDoc {
         let mut id0: Vec<u8> = Vec::new();
         let mut root: Option<u32> = None;
         let mut catalog: Option<u32> = None;
+        let mut info: Option<u32> = None;
         let mut page_objs: Vec<u32> = Vec::new();
         let mut objstms: Vec<u32> = Vec::new();
         let mut nums: Vec<u32> = doc.offs.keys().copied().collect();
@@ -871,6 +878,9 @@ impl PdfDoc {
             };
             if let Some(e) = d.get("Encrypt") {
                 enc_val = Some(e.clone());
+                if let Val::Ref(r) = e {
+                    doc.enc_obj = Some(*r);
+                }
                 if let Some(Val::Arr(a)) = d.get("ID") {
                     if let Some(Val::Str(s)) = a.first() {
                         id0 = s.clone();
@@ -879,6 +889,9 @@ impl PdfDoc {
             }
             if let Some(Val::Ref(r)) = d.get("Root") {
                 root = Some(*r);
+                if let Some(Val::Ref(i)) = d.get("Info") {
+                    info = Some(*i);
+                }
             }
             match d.get("Type").and_then(|t| t.name()) {
                 Some("ObjStm") => objstms.push(*n),
@@ -899,6 +912,12 @@ impl PdfDoc {
             if let Some(Val::Dict(d)) = P::new(&doc.data, at).val(0) {
                 if let Some(e) = d.get("Encrypt") {
                     enc_val = Some(e.clone());
+                    if let Val::Ref(r) = e {
+                        doc.enc_obj = Some(*r);
+                    }
+                    if let Val::Ref(r) = e {
+                        doc.enc_obj = Some(*r);
+                    }
                     if let Some(Val::Arr(a)) = d.get("ID") {
                         if let Some(Val::Str(s)) = a.first() {
                             id0 = s.clone();
@@ -907,9 +926,13 @@ impl PdfDoc {
                 }
                 if let Some(Val::Ref(r)) = d.get("Root") {
                     root = Some(*r);
+                    if let Some(Val::Ref(i)) = d.get("Info") {
+                        info = Some(*i);
+                    }
                 }
             }
         }
+        doc.info_obj = info;
         if let Some(ev) = enc_val {
             doc.crypt = Some(doc.setup_crypt(&ev, &id0)?);
         }
@@ -931,6 +954,7 @@ impl PdfDoc {
             }
         }
         let root = root.or(catalog);
+        doc.root_obj = root;
         let mut pages = Vec::new();
         if let Some(r) = root {
             if let Some(Val::Dict(cat)) = doc.get(r) {
@@ -1103,6 +1127,121 @@ impl PdfDoc {
     }
 
     /// Object number and generation of the object whose stream data starts at `s`.
+    /// True when the file was encrypted (and opened with a password that worked).
+    pub fn is_encrypted(&self) -> bool {
+        self.crypt.is_some()
+    }
+
+    /// An unencrypted copy of an encrypted file: every string and stream decrypted, written as a
+    /// classic file without object streams. The result carries no trace of the encryption.
+    pub fn decrypted(&self) -> R<Vec<u8>> {
+        use std::fmt::Write as _;
+        let Some(c) = &self.crypt else {
+            return fail("the file is not encrypted");
+        };
+        let Some(root) = self.root_obj else {
+            return fail("the file has no catalog");
+        };
+        fn plain(c: &crate::crypt::Crypt, n: u32, v: Val) -> Val {
+            match v {
+                Val::Str(s) => Val::Str(c.decrypt_string(n, 0, &s)),
+                Val::Arr(a) => Val::Arr(a.into_iter().map(|x| plain(c, n, x)).collect()),
+                Val::Dict(d) => {
+                    Val::Dict(d.into_iter().map(|(k, x)| (k, plain(c, n, x))).collect())
+                }
+                Val::Stream(d, a, b) => Val::Stream(
+                    d.into_iter().map(|(k, x)| (k, plain(c, n, x))).collect(),
+                    a,
+                    b,
+                ),
+                o => o,
+            }
+        }
+        let mut nums: Vec<u32> = self.offs.keys().chain(self.comp.keys()).copied().collect();
+        nums.sort_unstable();
+        nums.dedup();
+        let size = nums.last().map_or(1, |n| n + 1);
+        let mut rng = |_: &mut [u8]| {};
+        let mut cx = encrypt::Ctx {
+            key: None,
+            rand: &mut rng,
+            map: None,
+        };
+        let mut out: Vec<u8> = b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n".to_vec();
+        let mut offs = vec![0usize; size as usize];
+        for &n in &nums {
+            if self.enc_obj == Some(n) {
+                continue;
+            }
+            let Some(v) = self.get(n) else { continue };
+            let packed = self.comp.get(&n).is_some_and(|&(i, _)| {
+                self.offs
+                    .get(&n)
+                    .is_none_or(|&off| self.stm_offs.get(i).is_some_and(|&so| so > off))
+            });
+            let mut b: Vec<u8> = Vec::new();
+            match v {
+                Val::Stream(d, s, e) => {
+                    if matches!(
+                        d.get("Type").and_then(|t| t.name()),
+                        Some("XRef" | "ObjStm")
+                    ) {
+                        continue;
+                    }
+                    let d = match plain(c, n, Val::Dict(d)) {
+                        Val::Dict(d) => d,
+                        _ => continue,
+                    };
+                    let raw = self.data[s.min(self.data.len())..e.min(self.data.len())].to_vec();
+                    let identity = self.filters(&d).iter().any(|(nm, parms)| {
+                        nm == "Crypt"
+                            && parms
+                                .get("Name")
+                                .is_none_or(|v| self.resolve(v).name() == Some("Identity"))
+                    });
+                    let raw = if identity {
+                        raw
+                    } else {
+                        let (num, gen) = self.owner_of(s);
+                        c.decrypt_stream(num, gen, &raw)
+                    };
+                    cx.dict(&d, Some(raw.len()), &mut b);
+                    b.extend_from_slice(b"\nstream\n");
+                    b.extend_from_slice(&raw);
+                    b.extend_from_slice(b"\nendstream");
+                }
+                v => {
+                    let v = if packed { v } else { plain(c, n, v) };
+                    cx.ser(&v, &mut b);
+                }
+            }
+            offs[n as usize] = out.len();
+            let _ = writeln!(encrypt::Hex(&mut out), "{n} 0 obj");
+            out.extend_from_slice(&b);
+            out.extend_from_slice(b"\nendobj\n");
+        }
+        let x = out.len();
+        let _ = write!(
+            encrypt::Hex(&mut out),
+            "xref\n0 {size}\n0000000000 65535 f \n"
+        );
+        for n in 1..size as usize {
+            if offs[n] == 0 {
+                out.extend_from_slice(b"0000000000 65535 f \n");
+            } else {
+                let _ = writeln!(encrypt::Hex(&mut out), "{:010} 00000 n ", offs[n]);
+            }
+        }
+        let info = self
+            .info_obj
+            .map_or(String::new(), |i| format!(" /Info {i} 0 R"));
+        let _ = write!(
+            encrypt::Hex(&mut out),
+            "trailer\n<< /Size {size} /Root {root} 0 R{info} >>\nstartxref\n{x}\n%%EOF\n"
+        );
+        Ok(out)
+    }
+
     fn owner_of(&self, s: usize) -> (u32, u32) {
         let i = self.by_off.partition_point(|(o, _)| *o < s);
         let Some(&(off, num)) = i.checked_sub(1).and_then(|k| self.by_off.get(k)) else {

@@ -540,6 +540,23 @@ fn encrypt_pdf_protects_the_output() {
     assert!(!t.contains("/Producer (LegatorOCR") || t.contains("/Encrypt "));
     let r = run(&d, &["e.pdf", "--extract-pages", "1", "-o", "x"]);
     assert!(!r.status.success());
+    // with the password the toolbox takes the file apart and writes it back unencrypted
+    let r = Command::new(env!("CARGO_BIN_EXE_legatorocr"))
+        .current_dir(&d)
+        .args([
+            "e.pdf",
+            "--pdf-password",
+            "open",
+            "--extract-pages",
+            "1",
+            "-o",
+            "dec",
+        ])
+        .output()
+        .unwrap();
+    assert!(r.status.success(), "{}", text(&r));
+    let pb = std::fs::read(d.join("dec/e.pdf")).unwrap();
+    assert!(!String::from_utf8_lossy(&pb).contains("/Encrypt "));
     // an unknown permission and a missing password are refused
     let bad = run(
         &d,

@@ -429,6 +429,24 @@ mod tests {
     }
 
     #[test]
+    fn decrypting_gives_back_a_plain_file_with_the_same_content() {
+        let src = sample();
+        let enc = encrypt(&src, "open", "boss", perm::PRINT, &mut counter()).unwrap();
+        let doc = PdfDoc::open_with_password(enc, b"open").unwrap();
+        assert!(doc.is_encrypted());
+        let plain = doc.decrypted().unwrap();
+        let t = String::from_utf8_lossy(&plain);
+        assert!(!t.contains("/Encrypt"), "still encrypted");
+        assert!(
+            t.contains(&hex(b"Secret title")) && t.contains("0 0 50 50 re f"),
+            "{t}"
+        );
+        let again = PdfDoc::open(plain).unwrap();
+        assert!(!again.is_encrypted());
+        assert_eq!(again.page_count(), 1);
+    }
+
+    #[test]
     fn empty_user_password_opens_freely_and_keeps_restrictions_in_p() {
         let enc = encrypt(&sample(), "", "boss", perm::PRINT, &mut counter()).unwrap();
         assert!(PdfDoc::open(enc.clone()).is_ok());
