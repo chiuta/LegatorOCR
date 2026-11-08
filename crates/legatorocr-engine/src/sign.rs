@@ -106,6 +106,7 @@ pub fn parse_visible(spec: &str, name: Option<&str>, reason: Option<&str>) -> Re
 
 /// Sign `input` into `output`. The PKCS#12 password is read from the environment variable
 /// `pass_env` (never from the command line).
+#[allow(clippy::too_many_arguments)]
 pub fn sign_pdf(
     input: &Path,
     output: &Path,
