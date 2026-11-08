@@ -4453,6 +4453,16 @@ mod optimize_tests {
 
     #[test]
     fn optimize_levels_only_lower_things() {
+        // the option struct is large: parse it on a thread with a roomy stack, as `main` does
+        std::thread::Builder::new()
+            .stack_size(64 << 20)
+            .spawn(optimize_levels_only_lower_things_body)
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    fn optimize_levels_only_lower_things_body() {
         let mut c = Cli::parse_from([
             "legatorocr",
             "x.png",
