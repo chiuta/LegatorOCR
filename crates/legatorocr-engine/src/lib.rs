@@ -60,6 +60,7 @@ pub mod textrules;
 pub fn set_accurate(on: bool) {
     legatorocr_nocr::set_accurate(on);
 }
+pub mod figures;
 pub mod package;
 pub mod pagelang;
 pub mod pagenum;
@@ -1038,6 +1039,7 @@ pub fn run_export(
                     if legatorocr_pdf::DEFAULT_TAGGED_STRUCT.load(Ordering::Relaxed) {
                         w.set_next_structure(tagstruct::plan(&words, pg.image.height()));
                     }
+                    w.set_next_figures(figures::for_page(w.page_count() + 1));
                     w.add_page(&pg, &words);
                 }
                 if djvu::enabled() {

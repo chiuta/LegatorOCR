@@ -141,6 +141,10 @@ pub struct UiSettings {
     pub sidecar_txt: bool,
     pub sidecar_hocr: bool,
     pub pdf_author: String,
+    /// OCR zones `X,Y,W,H[=LANG]` in mm, separated by `;`; empty = whole page.
+    pub ocr_zones: String,
+    /// Rectangles `X,Y,W,H` in mm, separated by `;`, whose words are dropped.
+    pub ocr_ignore: String,
     pub ocr: bool,
     pub ocr_langs: Vec<String>,
     pub psm: u32,
@@ -211,6 +215,8 @@ impl Default for UiSettings {
             sidecar_txt: false,
             sidecar_hocr: false,
             pdf_author: String::new(),
+            ocr_zones: String::new(),
+            ocr_ignore: String::new(),
             ocr: false,
             ocr_langs: vec!["eng".into()],
             psm: 3,
@@ -388,6 +394,8 @@ impl UiSettings {
         e.push(("sidecar_txt".into(), self.sidecar_txt.to_string()));
         e.push(("sidecar_hocr".into(), self.sidecar_hocr.to_string()));
         e.push(("pdf_author".into(), self.pdf_author.clone()));
+        e.push(("ocr_zones".into(), self.ocr_zones.clone()));
+        e.push(("ocr_ignore".into(), self.ocr_ignore.clone()));
         e.push(("use_osd".into(), self.use_osd.to_string()));
         e.push(("ocr".into(), self.ocr.to_string()));
         e.push(("ocr_langs".into(), self.ocr_langs.join("+")));
@@ -489,6 +497,12 @@ impl UiSettings {
         }
         self.sidecar_txt = flag("sidecar_txt").unwrap_or(self.sidecar_txt);
         self.sidecar_hocr = flag("sidecar_hocr").unwrap_or(self.sidecar_hocr);
+        if let Some(a) = p.get("ocr_zones") {
+            self.ocr_zones = a.chars().take(400).collect();
+        }
+        if let Some(a) = p.get("ocr_ignore") {
+            self.ocr_ignore = a.chars().take(400).collect();
+        }
         if let Some(a) = p.get("pdf_author") {
             self.pdf_author = a.chars().take(200).collect();
         }
@@ -537,6 +551,40 @@ impl UiSettings {
         } else {
             self.ocr_langs.join("+")
         }
+    }
+
+    /// The zones and ignored rectangles typed in the window, parsed. Empty fields give no zones.
+    pub fn ocr_regions(
+        &self,
+    ) -> Result<
+        (
+            Vec<legatorocr_engine::ocrzones::Zone>,
+            Vec<legatorocr_engine::ocrzones::Rect>,
+        ),
+        String,
+    > {
+        let split = |t: &str| -> Vec<String> {
+            t.split(';')
+                .map(|x| x.trim().to_string())
+                .filter(|x| !x.is_empty())
+                .collect()
+        };
+        if !self.ocr {
+            return Ok((vec![], vec![]));
+        }
+        let z = split(&self.ocr_zones)
+            .iter()
+            .map(|z| {
+                legatorocr_engine::ocrzones::parse_zone(z).map_err(|e| format!("OCR zone {e}"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let i = split(&self.ocr_ignore)
+            .iter()
+            .map(|z| {
+                legatorocr_engine::ocrzones::parse_rect(z).map_err(|e| format!("OCR ignore {e}"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((z, i))
     }
 
     pub fn ocr_options(&self) -> OcrOptions {
@@ -675,6 +723,8 @@ mod tests {
             pdfa: true,
             front_matter: 4,
             pdf_author: "Ana".into(),
+            ocr_zones: "10,20,100,50=ron;120,20,70,50".into(),
+            ocr_ignore: "0,0,210,25".into(),
             auto_invert: true,
             sharpen: 0.8,
             dewarp_margin: false,
@@ -736,6 +786,8 @@ mod tests {
             ),
             (true, false, true, true)
         );
+        assert_eq!(back.ocr_zones, "10,20,100,50=ron;120,20,70,50");
+        assert_eq!(back.ocr_ignore, "0,0,210,25");
         assert_eq!(
             (
                 back.sidecar_txt,
@@ -860,6 +912,23 @@ mod tests {
             s.to_core(&SheetAdjust::default()).mode,
             OutputMode::BlackWhite
         );
+    }
+
+    #[test]
+    fn ocr_zones_typed_in_the_window_are_parsed_or_refused() {
+        let mut s = UiSettings {
+            ocr: true,
+            ocr_zones: "10,20,100,50=ron; 120,20,70,50".into(),
+            ocr_ignore: "0,0,210,25".into(),
+            ..UiSettings::default()
+        };
+        let (z, i) = s.ocr_regions().unwrap();
+        assert_eq!((z.len(), i.len()), (2, 1));
+        assert_eq!(z[0].lang.as_deref(), Some("ron"));
+        s.ocr_zones = "10,20,oops".into();
+        assert!(s.ocr_regions().is_err());
+        s.ocr = false;
+        assert!(s.ocr_regions().unwrap().0.is_empty());
     }
 
     #[test]

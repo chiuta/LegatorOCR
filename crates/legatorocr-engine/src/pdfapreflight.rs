@@ -92,6 +92,11 @@ pub fn check_bytes(b: &[u8]) -> Vec<Finding> {
                 has(b, "/StructTreeRoot") && has(b, "/Marked true"),
                 "level A: a structure tree and /MarkInfo /Marked true".into(),
             );
+            let figs = count(b, "/S /Figure");
+            add(
+                count(b, "/Alt ") + count(b, "/Alt(") >= figs,
+                format!("level A: every figure has alternative text ({figs} figures)"),
+            );
             add(
                 has(b, "/Lang ") || has(b, "/Lang("),
                 "level A: the document language (/Lang) is set".into(),
@@ -178,6 +183,18 @@ mod tests {
         assert!(f.iter().filter(|x| !x.ok).count() >= 2, "{f:?}");
         let f =
             check_bytes(format!("{a}\n/StructTreeRoot 4 0 R /Marked true /Lang (en)").as_bytes());
+        assert!(f.iter().all(|x| x.ok), "{f:?}");
+        let f = check_bytes(
+            format!("{a}\n/StructTreeRoot 4 0 R /Marked true /Lang (en) /S /Figure /P 3 0 R")
+                .as_bytes(),
+        );
+        assert!(f
+            .iter()
+            .any(|x| !x.ok && x.what.contains("alternative text")));
+        let f = check_bytes(
+            format!("{a}\n/StructTreeRoot 4 0 R /Marked true /Lang (en) /S /Figure /Alt (x)")
+                .as_bytes(),
+        );
         assert!(f.iter().all(|x| x.ok), "{f:?}");
     }
 

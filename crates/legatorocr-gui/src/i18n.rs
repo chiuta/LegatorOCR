@@ -226,6 +226,8 @@ const TABLE: &[(&str, [&str; 8])] = &[
     ("dropout.red", ["roșu", "red", "rouge", "rosso", "rojo", "vermelho", "rot", "piros"]),
     ("dropout.green", ["verde", "green", "vert", "verde", "verde", "verde", "grün", "zöld"]),
     ("dropout.blue", ["albastru", "blue", "bleu", "blu", "azul", "azul", "blau", "kék"]),
+    ("set.ocr_zones", ["Zone OCR (mm X,Y,L,H[=limba]; …)", "OCR zones (mm X,Y,W,H[=lang]; …)", "Zones OCR (mm X,Y,L,H[=langue] ; …)", "Zone OCR (mm X,Y,L,A[=lingua]; …)", "Zonas OCR (mm X,Y,A,H[=idioma]; …)", "Zonas OCR (mm X,Y,L,A[=idioma]; …)", "OCR-Zonen (mm X,Y,B,H[=Sprache]; …)", "OCR-zónák (mm X,Y,Sz,M[=nyelv]; …)"]),
+    ("set.ocr_ignore", ["Ignoră în OCR (mm X,Y,L,H; …)", "Ignore in OCR (mm X,Y,W,H; …)", "Ignorer en OCR (mm X,Y,L,H ; …)", "Ignora nell'OCR (mm X,Y,L,A; …)", "Ignorar en OCR (mm X,Y,A,H; …)", "Ignorar no OCR (mm X,Y,L,A; …)", "Im OCR ignorieren (mm X,Y,B,H; …)", "OCR-ben kihagy (mm X,Y,Sz,M; …)"]),
     ("set.author", ["Autor PDF", "PDF author", "Auteur du PDF", "Autore PDF", "Autor del PDF", "Autor do PDF", "PDF-Autor", "PDF szerzője"]),
     ("set.sidecar_txt", ["Salvează și text .txt", "Also save text (.txt)", "Enregistrer aussi le texte (.txt)", "Salva anche il testo (.txt)", "Guardar también texto (.txt)", "Guardar também texto (.txt)", "Text zusätzlich speichern (.txt)", "Szöveg mentése is (.txt)"]),
     ("set.sidecar_hocr", ["Salvează și hOCR", "Also save hOCR", "Enregistrer aussi l’hOCR", "Salva anche hOCR", "Guardar también hOCR", "Guardar também hOCR", "hOCR zusätzlich speichern", "hOCR mentése is"]),

@@ -105,6 +105,18 @@ fn collect_pages(
 }
 
 pub fn linearize(data: &[u8]) -> R<Vec<u8>> {
+    linearize_with(data, None, &mut |_| {})
+}
+
+/// Like [`linearize`], and with `protect` the output is encrypted (AES-256) as it is written: the
+/// Encrypt dictionary follows the catalog, every string and stream (the hint stream too) is
+/// encrypted, the layout offsets are computed on the encrypted sizes.
+pub fn linearize_with(
+    data: &[u8],
+    protect: Option<&super::encrypt::Protect>,
+    rand: &mut dyn FnMut(&mut [u8]),
+) -> R<Vec<u8>> {
+    let setup = protect.map(|p| super::encrypt::setup_for(p, rand));
     let doc = PdfDoc::open(data.to_vec())?;
     let Some(t) = data.windows(7).rposition(|w| w == b"trailer") else {
         return fail("only files with a classic cross-reference table can be linearized");
@@ -113,7 +125,7 @@ pub fn linearize(data: &[u8]) -> R<Vec<u8>> {
         return fail("the trailer cannot be read");
     };
     if tr.contains_key("Encrypt") {
-        return fail("an encrypted file cannot be linearized (linearize first, or not at all)");
+        return fail("the file is already encrypted");
     }
     let size = match tr.get("Size") {
         Some(Val::Int(n)) if (2..=5_000_000).contains(n) => *n as u32,
@@ -219,19 +231,22 @@ pub fn linearize(data: &[u8]) -> R<Vec<u8>> {
     main_order.extend(&others);
     let m = main_order.len() as u32;
     let (lin_n, cat_n, hint_n) = (m + 1, m + 2, m + 3);
+    // the Encrypt dictionary sits between the catalog and the hint stream
+    let enc_n = setup.as_ref().map(|_| hint_n + 1);
+    let shift = enc_n.is_some() as u32;
     let mut map = vec![0u32; size as usize];
     for (i, &o) in main_order.iter().enumerate() {
         map[o as usize] = i as u32 + 1;
     }
     map[root as usize] = cat_n;
     for (k, &o) in f1.iter().enumerate() {
-        map[o as usize] = hint_n + 1 + k as u32;
+        map[o as usize] = hint_n + 1 + shift + k as u32;
     }
-    let total = hint_n + 1 + f1.len() as u32;
+    let total = hint_n + 1 + shift + f1.len() as u32;
     // object bytes under their new numbers
     let mut cx = Ctx {
-        key: None,
-        rand: &mut |_| {},
+        key: setup.as_ref().map(|s| s.key),
+        rand,
         map: Some(&map),
     };
     let mut body = |old: u32| -> Vec<u8> {
@@ -239,10 +254,10 @@ pub fn linearize(data: &[u8]) -> R<Vec<u8>> {
         let _ = writeln!(Hex(&mut b), "{} 0 obj", map_of(&cx, old));
         match doc.get(old) {
             Some(Val::Stream(d, a, e)) => {
-                let raw = data.get(a..e).unwrap_or_default();
+                let raw = cx.enc(data.get(a..e).unwrap_or_default());
                 cx.dict(&d, Some(raw.len()), &mut b);
                 b.extend_from_slice(b"\nstream\n");
-                b.extend_from_slice(raw);
+                b.extend_from_slice(&raw);
                 b.extend_from_slice(b"\nendstream");
             }
             Some(v) => cx.ser(&v, &mut b),
@@ -325,11 +340,18 @@ pub fn linearize(data: &[u8]) -> R<Vec<u8>> {
     };
     let lin_len = lin_text(0, 0, 0, 0, 0).len();
     let id = hex(&md5(data));
-    let cnt_f = 2 + f1.len() as u32 + 1; // lin, catalog, hint, first page objects
+    let cnt_f = 2 + shift + f1.len() as u32 + 1; // lin, catalog, [encrypt], hint, first page objects
+    let enc_s = enc_n.map_or(String::new(), |n| format!(" /Encrypt {n} 0 R"));
+    let enc_b: Vec<u8> = match (&setup, protect) {
+        (Some(s), Some(p)) => {
+            super::encrypt::encrypt_object(enc_n.unwrap_or(0), p.allowed, s).into_bytes()
+        }
+        _ => Vec::new(),
+    };
     let info_s = info.map_or(String::new(), |n| format!(" /Info {} 0 R", map[n as usize]));
     let first_trailer = |prev: usize| {
         format!(
-            "trailer << /Size {total} /Root {cat_n} 0 R{info_s} /Prev {prev:<10} /ID [{id} {id}] >>\nstartxref\n0\n%%EOF\n"
+            "trailer << /Size {total} /Root {cat_n} 0 R{info_s}{enc_s} /Prev {prev:<10} /ID [{id} {id}] >>\nstartxref\n0\n%%EOF\n"
         )
     };
     let xref1_head = format!("xref\n{lin_n} {cnt_f}\n");
@@ -409,6 +431,7 @@ pub fn linearize(data: &[u8]) -> R<Vec<u8>> {
         (w.out, shared_at)
     };
     let hint_obj = |hd: &[u8], s: usize| -> Vec<u8> {
+        // the payload is encrypted before it gets here (AES-CBC: IV + padded data)
         let mut b = format!(
             "{hint_n} 0 obj\n<< /S {s} /Length {} >>\nstream\n",
             hd.len()
@@ -419,20 +442,24 @@ pub fn linearize(data: &[u8]) -> R<Vec<u8>> {
         b
     };
     let (hd0, s0) = hint_data(0, 0);
-    let hint_len = hint_obj(&hd0, s0).len();
+    let hint_len = hint_obj(&cx.enc(&hd0), s0).len();
     // offsets
     let pos_lin = header.len();
     let pos_xref1 = pos_lin + lin_len;
     let pos_cat = pos_xref1 + xref1_len;
-    let pos_hint = pos_cat + cat_b.len();
+    let pos_enc = pos_cat + cat_b.len();
+    let pos_hint = pos_enc + enc_b.len();
     let pos_f1 = pos_hint + hint_len;
     let mut offs = vec![0usize; total as usize];
     offs[lin_n as usize] = pos_lin;
     offs[cat_n as usize] = pos_cat;
     offs[hint_n as usize] = pos_hint;
+    if let Some(n) = enc_n {
+        offs[n as usize] = pos_enc;
+    }
     let mut at = pos_f1;
     for (k, b) in f1_b.iter().enumerate() {
-        offs[(hint_n + 1) as usize + k] = at;
+        offs[(hint_n + 1 + shift) as usize + k] = at;
         at += b.len();
     }
     let end_first = at;
@@ -447,13 +474,13 @@ pub fn linearize(data: &[u8]) -> R<Vec<u8>> {
     let pos_xref2 = at;
     let xref2_head = format!("xref\n0 {}\n0000000000 65535 f \n", m + 1);
     let xref2_trailer = format!(
-        "trailer << /Size {} /ID [{id} {id}] >>\nstartxref\n{pos_xref1}\n%%EOF\n",
+        "trailer << /Size {} /ID [{id} {id}]{enc_s} >>\nstartxref\n{pos_xref1}\n%%EOF\n",
         m + 1
     );
     let file_len = pos_xref2 + xref2_head.len() + 20 * m as usize + xref2_trailer.len();
     // offsets in the hint tables do not count the hint stream itself
     let (hd, s) = hint_data(pos_f1 - hint_len, first_shared_off.saturating_sub(hint_len));
-    let hint_b = hint_obj(&hd, s);
+    let hint_b = hint_obj(&cx.enc(&hd), s);
     debug_assert_eq!(hint_b.len(), hint_len);
     // write
     let mut out: Vec<u8> = Vec::with_capacity(file_len);
@@ -467,6 +494,7 @@ pub fn linearize(data: &[u8]) -> R<Vec<u8>> {
     }
     out.extend_from_slice(first_trailer(pos_xref2).as_bytes());
     out.extend_from_slice(&cat_b);
+    out.extend_from_slice(&enc_b);
     out.extend_from_slice(&hint_b);
     for b in &f1_b {
         out.extend_from_slice(b);
@@ -596,6 +624,60 @@ mod tests {
             super::super::encrypt::encrypt(&sample(2), "a", "b", 0, &mut |b: &mut [u8]| b.fill(3))
                 .unwrap();
         assert!(linearize(&enc).is_err());
+    }
+
+    #[test]
+    fn a_linearized_file_can_be_encrypted_as_it_is_written() {
+        use super::super::encrypt::Protect;
+        let p = Protect {
+            user: "open",
+            owner: "boss",
+            allowed: 0,
+        };
+        let mut n = 0u8;
+        let mut rng = |b: &mut [u8]| {
+            for x in b.iter_mut() {
+                n = n.wrapping_add(7);
+                *x = n;
+            }
+        };
+        for pages in [1usize, 3, 5] {
+            let l = linearize_with(&sample(pages), Some(&p), &mut rng).unwrap();
+            let t = String::from_utf8_lossy(&l[..300]).into_owned();
+            assert!(t.contains("/Linearized 1"));
+            let all = String::from_utf8_lossy(&l).into_owned();
+            assert!(all.contains("/Encrypt ") && all.contains("/CFM /AESV3"));
+            assert!(!all.contains("0 0 50 50 re f"), "content is readable");
+            assert!(PdfDoc::open(l.clone()).is_err());
+            assert!(PdfDoc::open_with_password(l.clone(), b"wrong").is_err());
+            let d = PdfDoc::open_with_password(l.clone(), b"open").unwrap();
+            assert_eq!(d.page_count(), pages);
+            // the declared length is the real length and the hint stream offset points at an object
+            let len = num_after(&t, "/L ");
+            assert_eq!(len, l.len());
+            let h = t.split("/H [").nth(1).unwrap();
+            let off: usize = h.split_whitespace().next().unwrap().parse().unwrap();
+            assert!(String::from_utf8_lossy(&l[off..off + 20]).contains(" 0 obj"));
+            // every entry of the first-page cross-reference table points at its object
+            let x = all.find("\nxref\n").unwrap() + 6;
+            let mut lines = all[x..].lines();
+            let head: Vec<usize> = lines
+                .next()
+                .unwrap()
+                .split(' ')
+                .map(|v| v.parse().unwrap())
+                .collect();
+            for k in 0..head[1] {
+                let e = lines.next().unwrap();
+                let o: usize = e[..10].parse().unwrap();
+                let want = format!("{} 0 obj", head[0] + k);
+                assert!(
+                    String::from_utf8_lossy(&l[o..o + want.len()]) == want,
+                    "entry {k} of {pages} pages points at {:?}, not {want}",
+                    String::from_utf8_lossy(&l[o..o + want.len()])
+                );
+            }
+        }
     }
 }
 

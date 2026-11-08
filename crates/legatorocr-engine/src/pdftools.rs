@@ -177,7 +177,14 @@ pub fn run(
         .iter()
         .map(|p| {
             let data = std::fs::read(p).with_context(|| format!("reading {}", p.display()))?;
-            let d = PdfDoc::open(data).map_err(|e| anyhow::anyhow!("{}: {}", p.display(), e.0))?;
+            let err =
+                |e: legatorocr_pdf::reader::ReadError| anyhow::anyhow!("{}: {}", p.display(), e.0);
+            let mut d = PdfDoc::open_with_password(data, &crate::pdf_password()).map_err(err)?;
+            if d.is_encrypted() {
+                // the toolbox works on plain objects: take the encryption off first (the result is
+                // not encrypted again unless --encrypt-pdf says so)
+                d = PdfDoc::open(d.decrypted().map_err(err)?).map_err(err)?;
+            }
             Ok((p.clone(), d))
         })
         .collect::<Result<_>>()?;

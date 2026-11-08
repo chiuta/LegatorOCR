@@ -425,6 +425,13 @@ struct Cli {
     #[arg(long, value_name = "X,Y,W,H")]
     ocr_ignore: Vec<String>,
 
+    /// Mark a picture in the tagged PDF as a figure with alternative text: `PAGE,X,Y,W,H=TEXT`
+    /// (page of the whole PDF from 1; mm from the top left). Repeatable. You write the
+    /// description, the program does not look at the picture. PDF/A level A needs one for every
+    /// picture. Needs --tagged-pdf (or --pdfa-level A).
+    #[arg(long, value_name = "PAGE,X,Y,W,H=TEXT")]
+    figure: Vec<String>,
+
     /// Choose the OCR language of every page from this list, e.g. `ron,eng,fra`: each candidate
     /// reads the page and the one with the most confidently read characters wins. Time grows
     /// with the length of the list (use --ocr-cache for repeated runs). Pages named by
@@ -1835,6 +1842,20 @@ fn real_main() -> Result<()> {
             cli.tagged.clone()
         };
     }
+    if !cli.figure.is_empty() {
+        if !cli.tagged_pdf {
+            bail!("--figure belongs in a tagged PDF: add --tagged-pdf (or --pdfa-level A)");
+        }
+        legatorocr_engine::figures::set(
+            cli.figure
+                .iter()
+                .map(|f| {
+                    legatorocr_engine::figures::parse(f)
+                        .map_err(|e| anyhow::anyhow!("--figure {e}"))
+                })
+                .collect::<Result<Vec<_>>>()?,
+        );
+    }
     legatorocr_engine::DEFAULT_TAGGED_STRUCT
         .store(cli.tagged_pdf, std::sync::atomic::Ordering::Relaxed);
     legatorocr_engine::DEFAULT_PDFA_PART.store(cli.pdfa_part, std::sync::atomic::Ordering::Relaxed);
@@ -2096,8 +2117,8 @@ fn real_main() -> Result<()> {
     if cli.sign_pdf.is_some() && cli.object_streams {
         bail!("--sign-pdf needs a classic cross-reference table: leave out --object-streams (sign first, or sign a file written without it)");
     }
-    if cli.linearize && (cli.encrypt_pdf || cli.object_streams) {
-        bail!("--linearize cannot be combined with --encrypt-pdf or --object-streams");
+    if cli.linearize && cli.object_streams {
+        bail!("--linearize cannot be combined with --object-streams");
     }
     legatorocr_engine::pdfcrypt::set_linearize(cli.linearize);
     legatorocr_engine::pdfcrypt::set_jbig2(cli.jbig2);
@@ -2815,6 +2836,7 @@ fn real_main() -> Result<()> {
             "--lang-auto",
             "--ocr-zone",
             "--ocr-ignore",
+            "--figure",
             "--header",
             "--footer",
             "--bates",

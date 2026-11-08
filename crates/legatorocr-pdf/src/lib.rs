@@ -69,6 +69,21 @@ pub struct PdfWriter {
     page_kinds: Vec<StructKind>,
     /// Paragraph/heading ranges for the next page (`set_next_structure`).
     next_struct: Option<Vec<StructPara>>,
+    /// Figures of the next page (`set_next_figures`).
+    next_figures: Vec<Figure>,
+    /// Alternative texts of all figures written, by `StructKind::Figure` index.
+    fig_alts: Vec<String>,
+}
+
+/// A picture on a page that gets a `/Figure` structure element with alternative text. The box is
+/// in points from the top left corner of the page.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Figure {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    pub alt: String,
 }
 
 /// Tag of a structure element.
@@ -78,6 +93,8 @@ pub enum StructKind {
     Para,
     /// `/H1` .. `/H3` (the level is clamped to 1..=3)
     Heading(u8),
+    /// `/Figure` with the alternative text number `n` of the writer
+    Figure(u32),
 }
 
 impl StructKind {
@@ -85,6 +102,7 @@ impl StructKind {
         match self {
             StructKind::Para => "P".into(),
             StructKind::Heading(n) => format!("H{}", n.clamp(1, 3)),
+            StructKind::Figure(_) => "Figure".into(),
         }
     }
 }
@@ -197,6 +215,8 @@ impl PdfWriter {
             struct_pages: Vec::new(),
             page_kinds: Vec::new(),
             next_struct: None,
+            next_figures: Vec::new(),
+            fig_alts: Vec::new(),
             field_ids: Vec::new(),
         };
         w.buf.extend_from_slice(b"%PDF-1.5\n%\xE2\xE3\xCF\xD3\n");
@@ -316,6 +336,13 @@ impl PdfWriter {
     /// elements (paragraphs and headings) instead of one `/P` per OCR line. The ranges index the
     /// word slice passed to `add_page`; words outside every range are tagged line by line.
     /// Ignored when the writer is not tagged.
+    /// Mark rectangles of the next page as figures with alternative text (PDF/A level A, PDF/UA).
+    /// The picture is painted again inside the rectangle as tagged content, so the figure is a real
+    /// part of the page; the page looks the same. Ignored when the writer is not tagged.
+    pub fn set_next_figures(&mut self, figs: Vec<Figure>) {
+        self.next_figures = figs;
+    }
+
     pub fn set_next_structure(&mut self, paras: Vec<StructPara>) {
         self.next_struct = Some(paras);
     }
@@ -433,6 +460,21 @@ impl PdfWriter {
 
         let mut cs = format!("q {wpt:.3} 0 0 {hpt:.3} 0 0 cm /Im0 Do Q\n");
         self.text_ops(&mut cs, words, dpi, wpt, hpt);
+        let figs = std::mem::take(&mut self.next_figures);
+        if self.tagged.is_some() {
+            for f in figs {
+                let (x, w) = (f.x.clamp(0.0, wpt), f.w.min(wpt));
+                let (h, y) = (f.h.min(hpt), (hpt - f.y - f.h).clamp(0.0, hpt));
+                self.fig_alts.push(f.alt);
+                let id = self.fig_alts.len() as u32 - 1;
+                cs.push_str(&format!(
+                    "/Figure <</MCID {}>> BDC\nq {x:.2} {y:.2} {w:.2} {h:.2} re W n {wpt:.3} 0 0 {hpt:.3} 0 0 cm /Im0 Do Q\nEMC\n",
+                    self.page_mc
+                ));
+                self.page_kinds.push(StructKind::Figure(id));
+                self.page_mc += 1;
+            }
+        }
         self.finish_page(cs, &format!("/Im0 {img_id} 0 R"), wpt, hpt);
     }
 
@@ -953,10 +995,17 @@ impl PdfWriter {
             for (k, (pg, ids)) in pages.iter().enumerate() {
                 let mut arr = String::new();
                 for (mc, (id, kind)) in ids.iter().enumerate() {
+                    let alt = match kind {
+                        StructKind::Figure(n) => format!(
+                            " /Alt {}",
+                            pdf_text_string(self.fig_alts.get(*n as usize).map_or("", |s| s))
+                        ),
+                        _ => String::new(),
+                    };
                     self.plain_obj(
                         *id,
                         &format!(
-                            "<< /Type /StructElem /S /{} /P {doc} 0 R /Pg {pg} 0 R /K {mc} >>",
+                            "<< /Type /StructElem /S /{} /P {doc} 0 R /Pg {pg} 0 R{alt} /K {mc} >>",
                             kind.tag()
                         ),
                     );
@@ -1124,7 +1173,7 @@ fn encode_1bit(b: &BitImage) -> (String, Vec<u8>) {
     );
     let flate = deflate(&pack_1bit_up_predicted(b));
     if JBIG2_OUT.load(std::sync::atomic::Ordering::Relaxed) {
-        let j = jbig2enc::encode(w, b.h as usize, &b.data);
+        let j = jbig2enc::encode_best(w, b.h as usize, &b.data);
         if j.len() < g4.len().min(flate.len()) {
             return ("/Filter /JBIG2Decode".to_string(), j);
         }
@@ -1216,6 +1265,33 @@ mod tests {
         };
         assert!(make(true).contains("/ViewerPreferences << /Direction /R2L >>"));
         assert!(!make(false).contains("/Direction"));
+    }
+
+    #[test]
+    fn figures_get_alternative_text_and_tagged_content() {
+        let mut pw = PdfWriter::new(Compress::Flate);
+        pw.set_tagged(Some("en"));
+        let mut b = BitImage::new(600, 400);
+        b.set(1, 1, true);
+        pw.set_next_figures(vec![Figure {
+            x: 10.0,
+            y: 20.0,
+            w: 100.0,
+            h: 50.0,
+            alt: "Chart of rain (mm)".into(),
+        }]);
+        pw.add_page(&page(PageImage::Bw(b.clone())), &[]);
+        pw.add_page(&page(PageImage::Bw(b)), &[]); // no figures here
+        let pdf = pw.finish();
+        let text = String::from_utf8_lossy(&pdf);
+        assert_eq!(text.matches("/S /Figure ").count(), 1);
+        let hex: String = "Chart of rain (mm)"
+            .encode_utf16()
+            .map(|u| format!("{u:04X}"))
+            .collect();
+        assert!(text.contains(&format!("/Alt <FEFF{hex}>")));
+        let doc = reader::PdfDoc::open(pdf).unwrap();
+        assert_eq!(doc.page_count(), 2);
     }
 
     #[test]

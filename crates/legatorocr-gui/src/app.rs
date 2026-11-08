@@ -977,6 +977,14 @@ impl App {
                 return;
             }
         }
+        // OCR zones and ignored areas of the settings (global state read by the OCR step)
+        match self.s.ocr_regions() {
+            Ok((z, i)) => legatorocr_engine::ocrzones::set(z, i),
+            Err(e) => {
+                self.say(e, true);
+                return;
+            }
+        }
         let sheets = self.sheet_inputs();
         let names: Vec<String> = self
             .sheets
@@ -2701,6 +2709,17 @@ impl App {
                                     }
                                 }
                             });
+                            for (label, field) in [("set.ocr_zones", 0), ("set.ocr_ignore", 1)] {
+                                ui.label(tr(label));
+                                let buf = if field == 0 {
+                                    &mut self.s.ocr_zones
+                                } else {
+                                    &mut self.s.ocr_ignore
+                                };
+                                self.config_dirty |= ui
+                                    .add(egui::TextEdit::singleline(buf).desired_width(220.0))
+                                    .changed();
+                            }
                             ui.horizontal(|ui| {
                                 ui.label(tr("set.psm"));
                                 let psm0 = self.s.psm;
