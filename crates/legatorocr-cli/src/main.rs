@@ -968,6 +968,13 @@ struct Cli {
     #[arg(long, default_value_t = 2, value_parser = clap::value_parser!(u8).range(1..=3))]
     pdfa_part: u8,
 
+    /// PDF/A conformance level to declare with --pdfa: B (default), U (also: every piece of text
+    /// maps to Unicode; parts 2 and 3) or A (also: tagged structure with paragraphs, headings and
+    /// the language; every part). A needs --ocr (the structure is the recognised text) and turns
+    /// on --tagged-pdf. Preflight with --pdfa-check; **not validated with veraPDF here**.
+    #[arg(long, default_value = "B", value_parser = ["A", "B", "U", "a", "b", "u"], value_name = "LEVEL")]
+    pdfa_level: String,
+
     /// OCRmyPDF compatibility: same as `--ocr-mode force`.
     #[arg(long, hide = true)]
     force_ocr: bool,
@@ -1796,6 +1803,25 @@ fn real_main() -> Result<()> {
             .num_threads(n)
             .build_global();
     }
+    let pdfa_level = cli.pdfa_level.to_ascii_uppercase();
+    if pdfa_level != "B" {
+        if !cli.pdfa {
+            bail!("--pdfa-level {pdfa_level} needs --pdfa");
+        }
+        if pdfa_level == "U" && cli.pdfa_part == 1 {
+            bail!("PDF/A-1 has no level U: use --pdfa-part 2 or 3, or --pdfa-level A or B");
+        }
+        if pdfa_level == "A" {
+            if !cli.ocr {
+                bail!("--pdfa-level A needs --ocr: the structure tree is the recognised text");
+            }
+            cli.tagged_pdf = true;
+        }
+    }
+    legatorocr_engine::DEFAULT_PDFA_LEVEL.store(
+        pdfa_level.as_bytes()[0],
+        std::sync::atomic::Ordering::Relaxed,
+    );
     if cli.tagged_pdf && !cli.ocr {
         bail!("--tagged-pdf tags the recognised text; add --ocr");
     }

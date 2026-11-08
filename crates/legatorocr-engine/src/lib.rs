@@ -97,7 +97,9 @@ pub use legatorocr_ocr as ocr;
 pub use legatorocr_pdf::g4;
 pub use legatorocr_pdf::LabelStyle;
 pub use legatorocr_pdf::Meta as PdfMeta;
-pub use legatorocr_pdf::{DEFAULT_PDFA_PART, DEFAULT_TAGGED, DEFAULT_TAGGED_STRUCT};
+pub use legatorocr_pdf::{
+    DEFAULT_PDFA_LEVEL, DEFAULT_PDFA_PART, DEFAULT_TAGGED, DEFAULT_TAGGED_STRUCT,
+};
 
 #[derive(Debug, Clone)]
 pub struct PdfExport {

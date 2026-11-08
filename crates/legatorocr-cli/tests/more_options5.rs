@@ -766,3 +766,62 @@ fn smooth_glyphs_enlarges_black_and_white_pages() {
     assert!(!run(&d, &["a.png", "--smooth-glyphs", "4"]).status.success());
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// `--pdfa-level`: U and A are declared in the XMP packet only when their requirements are met;
+/// the preflight (`--pdfa-check`) knows the extra requirements; impossible combinations are refused.
+#[test]
+fn pdfa_level_declares_u_and_a() {
+    let d = dir("pdfalevel");
+    let mut g = image::GrayImage::from_pixel(600, 400, image::Luma([245]));
+    for y in 100..120u32 {
+        for x in 80..500u32 {
+            g.put_pixel(x, y, image::Luma([20]));
+        }
+    }
+    g.save(d.join("a.png")).unwrap();
+    let make = |level: &str, extra: &[&str]| {
+        let out = format!("{level}.pdf");
+        let mut a = vec![
+            "a.png",
+            "--dpi",
+            "150",
+            "--mode",
+            "bw",
+            "--format",
+            "none",
+            "--pdfa",
+            "--pdfa-level",
+            level,
+            "--pdf",
+            &out,
+        ];
+        a.extend_from_slice(extra);
+        let o = run(&d, &a);
+        (o, out)
+    };
+    let declared = |f: &str| -> String {
+        let b = std::fs::read(d.join(f)).unwrap();
+        let t = String::from_utf8_lossy(&b).into_owned();
+        t.split("<pdfaid:conformance>")
+            .nth(1)
+            .and_then(|r| r.chars().next())
+            .map(String::from)
+            .unwrap_or_default()
+    };
+    let (o, f) = make("U", &[]);
+    assert!(o.status.success(), "{}", text(&o));
+    assert_eq!(declared(&f), "U");
+    let chk = run(&d, &["--pdfa-check", &f]);
+    assert!(text(&chk).contains("ToUnicode"), "{}", text(&chk));
+    let (o, f) = make("A", &["--ocr", "--lang", "eng"]);
+    assert!(o.status.success(), "{}", text(&o));
+    assert_eq!(declared(&f), "A");
+    let b = std::fs::read(d.join(&f)).unwrap();
+    assert!(String::from_utf8_lossy(&b).contains("/StructTreeRoot"));
+    // refusals
+    assert!(!make("A", &[]).0.status.success());
+    assert!(!make("U", &["--pdfa-part", "1"]).0.status.success());
+    let o = run(&d, &["a.png", "--pdfa-level", "U", "--pdf", "z.pdf"]);
+    assert!(!o.status.success());
+    let _ = std::fs::remove_dir_all(&d);
+}

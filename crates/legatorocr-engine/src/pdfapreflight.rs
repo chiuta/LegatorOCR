@@ -66,12 +66,37 @@ pub fn check_bytes(b: &[u8]) -> Vec<Finding> {
         b.starts_with(b"%PDF-"),
         "starts with the %PDF- header".into(),
     );
-    match declared(b) {
+    let decl = declared(b);
+    match &decl {
         Some((p, c)) => add(true, format!("XMP declares PDF/A-{p}{}", c.to_lowercase())),
         None => add(
             false,
             "no pdfaid:part / pdfaid:conformance in an XMP packet".into(),
         ),
+    }
+    if let Some((p, c)) = &decl {
+        let c = c.to_ascii_uppercase();
+        if c == "U" || c == "A" {
+            let type0 = count(b, "/Subtype /Type0") + count(b, "/Subtype/Type0");
+            let tou = count(b, "/ToUnicode");
+            add(
+                tou >= type0,
+                format!("every composite font has a ToUnicode map ({tou} of {type0}), as level {c} requires"),
+            );
+        }
+        if c == "U" {
+            add(p != "1", "level U exists in PDF/A-2 and -3 only".into());
+        }
+        if c == "A" {
+            add(
+                has(b, "/StructTreeRoot") && has(b, "/Marked true"),
+                "level A: a structure tree and /MarkInfo /Marked true".into(),
+            );
+            add(
+                has(b, "/Lang ") || has(b, "/Lang("),
+                "level A: the document language (/Lang) is set".into(),
+            );
+        }
     }
     add(
         has(b, "/OutputIntents") && has(b, "/GTS_PDFA1"),
@@ -132,6 +157,28 @@ mod tests {
         let f = check_bytes(GOOD.as_bytes());
         assert!(f.iter().all(|x| x.ok), "{f:?}");
         assert!(f.iter().any(|x| x.what == "XMP declares PDF/A-2b"));
+    }
+
+    #[test]
+    fn levels_u_and_a_have_their_own_checks() {
+        let u = GOOD.replace(">B<", ">U<");
+        let f = check_bytes(format!("{u}\n/Subtype /Type0").as_bytes());
+        assert!(
+            f.iter().any(|x| !x.ok && x.what.contains("ToUnicode")),
+            "{f:?}"
+        );
+        let f = check_bytes(format!("{u}\n/Subtype /Type0 /ToUnicode 9 0 R").as_bytes());
+        assert!(f.iter().all(|x| x.ok), "{f:?}");
+        let u1 = u.replace(">2<", ">1<");
+        assert!(check_bytes(u1.as_bytes())
+            .iter()
+            .any(|x| !x.ok && x.what.contains("level U")));
+        let a = GOOD.replace(">B<", ">A<");
+        let f = check_bytes(a.as_bytes());
+        assert!(f.iter().filter(|x| !x.ok).count() >= 2, "{f:?}");
+        let f =
+            check_bytes(format!("{a}\n/StructTreeRoot 4 0 R /Marked true /Lang (en)").as_bytes());
+        assert!(f.iter().all(|x| x.ok), "{f:?}");
     }
 
     #[test]
