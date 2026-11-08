@@ -19,3 +19,11 @@ Folosește fluxul din acest kit (1-analiza → 2-filtru → 3-implementare). Ori
 
 ## Recomandare
 Pentru lansări comerciale sau donații semnificative, cere o opinie de la un avocat de proprietate intelectuală și fă căutare de mărci (EUIPO), cum ai făcut pentru OSATURA.
+
+## Constatări din audit automat (2026-11-08, doar observații)
+- `legatorocr-engine/src/scantailor.rs` citește fișierele de proiect `.ScanTailor` (XML), pentru interoperabilitate. Antetul spune că formatul a fost reconstruit din descrierea publicată și citește doar câteva elemente/atribute. Nu s-a identificat cod ScanTailor în sursă, dar comparația cu codul GPL al ScanTailor nu a fost făcută (nu a existat acces la el în audit).
+- ABBYY FineReader și Agent Ransack apar doar în comentarii și documentație, ca referințe de flux de lucru.
+- 346 de dependențe. Expresiile cu GPL/LGPL sunt duale cu alternativă permisivă (`self_cell`, `r-efi`).
+- **De verificat:** `THIRD_PARTY_LICENSES.md` listează fonturi incluse sub GPL-3+ cu excepție pentru fonturi (GNU FreeFont) și AGPL-3 cu excepție pentru fonturi (URW base35). Confirmă că excepția acoperă distribuirea fonturilor în aplicație și încorporarea în PDF-urile produse.
+
+**Limite ale auditului:** căutarea după nume nu poate detecta cod copiat fără nume. Rămân de răspuns întrebările din secțiunea „Ce a existat până acum".
