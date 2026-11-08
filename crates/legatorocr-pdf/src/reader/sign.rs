@@ -273,9 +273,9 @@ pub fn prepare_visible(
             h - 1.0
         );
         for (i, l) in v.lines.iter().enumerate() {
-            let _ = write!(
+            let _ = writeln!(
                 c,
-                "1 0 0 1 4 {:.2} Tm {} Tj\n",
+                "1 0 0 1 4 {:.2} Tm {} Tj",
                 h - 3.0 - size_pt * (i as f64 + 1.0),
                 pdf_ascii(l)
             );
