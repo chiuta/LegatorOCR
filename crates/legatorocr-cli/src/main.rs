@@ -841,6 +841,12 @@ struct Cli {
     #[arg(long)]
     linearize: bool,
 
+    /// Also try lossless JBIG2 (arithmetic-coded generic region) for black & white pages and
+    /// masks and keep it where it is smaller than CCITT G4 or Flate; usually 20-40 % on text.
+    /// Slower to write (about a second per 600 dpi A4 page); PDF 1.4 viewers read it.
+    #[arg(long)]
+    jbig2: bool,
+
     /// What the user password may do in an --encrypt-pdf file: a list of print, highres, modify, copy,
     /// annotate, forms, accessibility, assemble, or all / none (default: print,highres,accessibility).
     #[arg(long, value_name = "LIST", default_value = "")]
@@ -2060,6 +2066,7 @@ fn real_main() -> Result<()> {
         bail!("--linearize cannot be combined with --encrypt-pdf or --object-streams");
     }
     legatorocr_engine::pdfcrypt::set_linearize(cli.linearize);
+    legatorocr_engine::pdfcrypt::set_jbig2(cli.jbig2);
     legatorocr_engine::pdfcrypt::set_compact(cli.object_streams);
     if cli.encrypt_pdf {
         legatorocr_engine::pdfcrypt::set(

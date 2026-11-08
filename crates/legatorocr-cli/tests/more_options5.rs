@@ -671,3 +671,48 @@ fn linearize_puts_the_first_page_first() {
     assert!(!bad.status.success());
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// `--jbig2`: a noisy black & white page is written with /JBIG2Decode when that is smaller, and the
+/// toolbox can still take the file apart (the decoder reads what the encoder wrote).
+#[test]
+fn jbig2_output_is_smaller_and_readable() {
+    let d = dir("jbig2");
+    let mut g = image::GrayImage::from_pixel(900, 700, image::Luma([255]));
+    let mut s = 12345u64;
+    for y in 40..660u32 {
+        for x in 40..860u32 {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            // blobs of ink that vary from row to row
+            if (x / 5 + (y / 7) * 3) % 4 == 0 && (s >> 40) % 9 != 0 {
+                g.put_pixel(x, y, image::Luma([0]));
+            }
+        }
+    }
+    g.save(d.join("a.png")).unwrap();
+    let base = run(
+        &d,
+        &[
+            "a.png", "--dpi", "150", "--mode", "bw", "--format", "none", "--pdf", "n.pdf",
+        ],
+    );
+    assert!(base.status.success(), "{}", text(&base));
+    let j = run(
+        &d,
+        &[
+            "a.png", "--dpi", "150", "--mode", "bw", "--format", "none", "--pdf", "j.pdf",
+            "--jbig2",
+        ],
+    );
+    assert!(j.status.success(), "{}", text(&j));
+    let (n, jb) = (
+        std::fs::read(d.join("n.pdf")).unwrap(),
+        std::fs::read(d.join("j.pdf")).unwrap(),
+    );
+    assert!(jb.len() <= n.len(), "{} vs {}", jb.len(), n.len());
+    assert!(String::from_utf8_lossy(&jb).contains("/JBIG2Decode"));
+    let r = run(&d, &["j.pdf", "--extract-pages", "1", "-o", "x"]);
+    assert!(r.status.success(), "{}", text(&r));
+    let _ = std::fs::remove_dir_all(&d);
+}

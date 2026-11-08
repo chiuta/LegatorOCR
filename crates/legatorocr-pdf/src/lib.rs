@@ -9,6 +9,7 @@
 pub mod crypt;
 pub mod g4;
 pub mod jbig2;
+pub mod jbig2enc;
 pub mod jbig2huff;
 pub mod jpx;
 pub mod pdfa;
@@ -1079,6 +1080,13 @@ fn deflate(data: &[u8]) -> Vec<u8> {
     e.finish().unwrap()
 }
 
+static JBIG2_OUT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Also try lossless JBIG2 for 1-bit images and keep it when it is the smallest.
+pub fn set_jbig2_output(on: bool) {
+    JBIG2_OUT.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Best encoding of a 1-bit page: (extra image-dict entries, bytes).
 fn encode_1bit(b: &BitImage) -> (String, Vec<u8>) {
     let w = b.w as usize;
@@ -1087,6 +1095,12 @@ fn encode_1bit(b: &BitImage) -> (String, Vec<u8>) {
         (0..b.h as usize).map(|y| b.data[y * w..(y + 1) * w].iter().map(|&v| v != 0).collect()),
     );
     let flate = deflate(&pack_1bit_up_predicted(b));
+    if JBIG2_OUT.load(std::sync::atomic::Ordering::Relaxed) {
+        let j = jbig2enc::encode(w, b.h as usize, &b.data);
+        if j.len() < g4.len().min(flate.len()) {
+            return ("/Filter /JBIG2Decode".to_string(), j);
+        }
+    }
     if g4.len() <= flate.len() {
         (
             format!("/Filter /CCITTFaxDecode /DecodeParms << /K -1 /Columns {} /Rows {} /BlackIs1 false >>", b.w, b.h),

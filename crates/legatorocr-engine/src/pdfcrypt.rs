@@ -11,6 +11,11 @@ use std::sync::Mutex;
 static COMPACT: AtomicBool = AtomicBool::new(false);
 static LINEAR: AtomicBool = AtomicBool::new(false);
 
+/// `--jbig2`: lossless JBIG2 for 1-bit images where it is the smallest.
+pub fn set_jbig2(on: bool) {
+    legatorocr_pdf::set_jbig2_output(on);
+}
+
 /// `--linearize`: Fast Web View order (first page first, hint tables).
 pub fn set_linearize(on: bool) {
     LINEAR.store(on, Ordering::Relaxed);
