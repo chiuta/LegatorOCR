@@ -37,7 +37,13 @@ def run(*a, env=None, must=True):
 
 
 fonts = glob.glob("/usr/share/fonts/**/*.ttf", recursive=True)
-font = ImageFont.truetype(fonts[0], 24) if fonts else ImageFont.load_default()
+font = ImageFont.load_default()
+for cand in sorted(fonts, key=lambda x: "DejaVuSans." not in x):  # scalable fonts only
+    try:
+        font = ImageFont.truetype(cand, 24)
+        break
+    except OSError:
+        continue
 for n in range(3):
     im = Image.new("L", (1654, 2339), 255)
     d = ImageDraw.Draw(im)
