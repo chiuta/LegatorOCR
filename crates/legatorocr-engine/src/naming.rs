@@ -22,6 +22,15 @@ fn civil_ymd(when: u64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
+/// Today's date (UTC) as `YYYY-MM-DD`.
+pub fn today_iso() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let (y, m, d) = civil_ymd(now);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
 /// Keep a value usable as one path component on every system.
 fn safe(s: &str) -> String {
     let t: String = s

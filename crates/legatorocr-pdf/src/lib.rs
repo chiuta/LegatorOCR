@@ -9,6 +9,7 @@
 pub mod crypt;
 pub mod g4;
 pub mod jbig2;
+pub mod jbig2enc;
 pub mod jbig2huff;
 pub mod jpx;
 pub mod pdfa;
@@ -21,6 +22,9 @@ pub static DEFAULT_TAGGED: std::sync::Mutex<Option<String>> = std::sync::Mutex::
 pub static DEFAULT_TAGGED_STRUCT: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 pub static DEFAULT_PDFA_PART: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
+/// PDF/A conformance level for new writers: `b'B'` (default), `b'U'` or `b'A'` (see
+/// [`PdfWriter::set_pdfa_level`]).
+pub static DEFAULT_PDFA_LEVEL: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(b'B');
 pub mod reader;
 
 use flate2::{write::ZlibEncoder, Compression};
@@ -50,6 +54,7 @@ pub struct PdfWriter {
     labels: Vec<(usize, LabelStyle, String, u32)>,
     pdfa: bool,
     pdfa_part: u8,
+    pdfa_level: u8,
     /// Form fields for the next page: (checkbox?, [x0, y0, x1, y1] in points).
     next_fields: Vec<(bool, [f32; 4])>,
     /// Widget object ids of all fields written so far (for /AcroForm).
@@ -185,6 +190,7 @@ impl PdfWriter {
             labels: Vec::new(),
             pdfa: false,
             pdfa_part: DEFAULT_PDFA_PART.load(std::sync::atomic::Ordering::Relaxed),
+            pdfa_level: DEFAULT_PDFA_LEVEL.load(std::sync::atomic::Ordering::Relaxed),
             next_fields: Vec::new(),
             tagged: DEFAULT_TAGGED.lock().ok().and_then(|g| g.clone()),
             page_mc: 0,
@@ -246,6 +252,28 @@ impl PdfWriter {
     pub fn set_pdfa_part(&mut self, part: u8) {
         self.pdfa_part = part.clamp(1, 3);
         self.apply_part();
+    }
+
+    /// Conformance level to declare with `set_pdfa`: `'B'` (visual reproducibility), `'U'` (adds
+    /// Unicode for all text, parts 2 and 3 only) or `'A'` (adds the tagged structure: needs
+    /// `set_tagged` with a language). A level whose requirements are not met is **not claimed**:
+    /// the file then declares `B`.
+    pub fn set_pdfa_level(&mut self, level: char) {
+        self.pdfa_level = match level.to_ascii_uppercase() {
+            'A' => b'A',
+            'U' => b'U',
+            _ => b'B',
+        };
+    }
+
+    /// The level the file really declares (see [`PdfWriter::set_pdfa_level`]).
+    fn conformance(&self) -> char {
+        match self.pdfa_level {
+            b'A' if self.tagged.as_ref().is_some_and(|l| !l.is_empty()) => 'A',
+            // every font this writer embeds carries a ToUnicode map
+            b'U' if self.pdfa_part >= 2 => 'U',
+            _ => 'B',
+        }
     }
 
     fn apply_part(&mut self) {
@@ -886,6 +914,7 @@ impl PdfWriter {
         if self.pdfa {
             let xmp = pdfa::Xmp {
                 part: self.pdfa_part,
+                level: self.conformance(),
                 title: self.title.as_deref(),
                 author: self.meta.author.as_deref().filter(|v| !v.trim().is_empty()),
                 subject: self
@@ -1079,6 +1108,13 @@ fn deflate(data: &[u8]) -> Vec<u8> {
     e.finish().unwrap()
 }
 
+static JBIG2_OUT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Also try lossless JBIG2 for 1-bit images and keep it when it is the smallest.
+pub fn set_jbig2_output(on: bool) {
+    JBIG2_OUT.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Best encoding of a 1-bit page: (extra image-dict entries, bytes).
 fn encode_1bit(b: &BitImage) -> (String, Vec<u8>) {
     let w = b.w as usize;
@@ -1087,6 +1123,12 @@ fn encode_1bit(b: &BitImage) -> (String, Vec<u8>) {
         (0..b.h as usize).map(|y| b.data[y * w..(y + 1) * w].iter().map(|&v| v != 0).collect()),
     );
     let flate = deflate(&pack_1bit_up_predicted(b));
+    if JBIG2_OUT.load(std::sync::atomic::Ordering::Relaxed) {
+        let j = jbig2enc::encode(w, b.h as usize, &b.data);
+        if j.len() < g4.len().min(flate.len()) {
+            return ("/Filter /JBIG2Decode".to_string(), j);
+        }
+    }
     if g4.len() <= flate.len() {
         (
             format!("/Filter /CCITTFaxDecode /DecodeParms << /K -1 /Columns {} /Rows {} /BlackIs1 false >>", b.w, b.h),
@@ -1544,6 +1586,54 @@ mod unicode_file {
         );
         let big = w.finish();
         assert!(big.windows(10).any(|x| x == b"/FontFile2"));
+    }
+
+    #[test]
+    fn pdfa_levels_are_declared_only_when_their_requirements_are_met() {
+        let mk = |part: u8, level: char, tagged: Option<&str>| {
+            let mut w = PdfWriter::new(Compress::Flate);
+            w.set_pdfa(true);
+            w.set_pdfa_part(part);
+            w.set_pdfa_level(level);
+            if let Some(l) = tagged {
+                w.set_tagged(Some(l));
+            }
+            w.add_page(
+                &Page {
+                    image: PageImage::Bw(BitImage::new(8, 8)),
+                    dpi: 150,
+                    skew_deg: 0.0,
+                    blank: false,
+                    split_index: None,
+                    content_box: None,
+                    layers: None,
+                },
+                &[],
+            );
+            String::from_utf8_lossy(&w.finish()).into_owned()
+        };
+        let c = |s: &str| {
+            s.contains("<pdfaid:conformance>").then(|| {
+                s.split("<pdfaid:conformance>")
+                    .nth(1)
+                    .unwrap()
+                    .chars()
+                    .next()
+                    .unwrap()
+            })
+        };
+        assert_eq!(c(&mk(2, 'B', None)), Some('B'));
+        assert_eq!(c(&mk(2, 'U', None)), Some('U'));
+        assert_eq!(c(&mk(3, 'u', None)), Some('U'));
+        // PDF/A-1 has no level U
+        assert_eq!(c(&mk(1, 'U', None)), Some('B'));
+        // level A needs the structure tree and a language
+        assert_eq!(c(&mk(2, 'A', None)), Some('B'));
+        assert_eq!(c(&mk(2, 'A', Some(""))), Some('B'));
+        let a = mk(2, 'A', Some("ro"));
+        assert_eq!(c(&a), Some('A'));
+        assert!(a.contains("/StructTreeRoot") && a.contains("/Lang (ro)"));
+        assert_eq!(c(&mk(1, 'A', Some("ro"))), Some('A'));
     }
 
     #[test]

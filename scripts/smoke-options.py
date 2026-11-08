@@ -29,6 +29,10 @@ CASES = {
  "fold-shadow": ["--mode", "color", "--fold-shadow"],
  "classify": ["--ocr", "--classify", "{d}/rules.txt", "--classify-out", "{o}.tags.json", "--sort-originals", "{d}/sorted"],
  "dewarp-margin": ["--dewarp-margin"],
+ "smooth-glyphs": ["--mode", "bw", "--smooth-glyphs", "2"],
+ "ocr-zone": ["--ocr", "--ocr-zone", "0,0,500,500"], "ocr-ignore": ["--ocr", "--ocr-ignore", "0,0,10,10"],
+ "lang-auto": ["--ocr", "--lang-auto", "eng,eng+eng"],
+ "object-streams": ["--object-streams"], "linearize": ["--linearize"], "pdfa-level": ["--pdfa", "--pdfa-level", "U"], "jbig2": ["--mode", "bw", "--jbig2"], "encrypt-pdf": ["--encrypt-pdf"], "pdf-permissions": ["--encrypt-pdf", "--pdf-permissions", "print,copy"],
  "bernsen": ["--threshold", "bernsen"], "phansalkar": ["--threshold", "phansalkar"], "edgeplus": ["--threshold", "edgeplus"],
  "despeckle": ["--despeckle-strength", "2"], "no-despeckle": ["--no-despeckle"], "no-deskew": ["--no-deskew"],
  "no-auto-orient": ["--no-auto-orient"], "max-skew": ["--max-skew", "5"], "jpeg": ["--format", "jpeg", "--jpeg-quality", "80", "--out-dir", "{d}/o"],
@@ -56,12 +60,17 @@ CASES = {
  "verify-pack": ["--ocr", "--verify-pack", "{o}.vp.html", "--verify-conf", "95", "--verify-per-page", "10"],
  "skip-dup": ["--skip-duplicates"], "dewarp-guide": ["--dewarp", "--dewarp-guide", "0.1,0.5 0.5,0.5 0.9,0.5"],
 }
+import os
+os.environ.setdefault("LEGATOROCR_PDF_USER_PASSWORD", "smoke")
+os.environ.setdefault("LEGATOROCR_PDF_OWNER_PASSWORD", "smoke-owner")
 fail = []
 # PDF toolbox options work on an existing PDF
 base = str(d / "base.pdf")
 subprocess.run([exe, str(d / "p.png"), "--pdf", base, "--dpi", "150"], capture_output=True)
 subprocess.run([exe, str(d / "p.png"), "--pdf", str(d / "base2.pdf"), "--dpi", "150"], capture_output=True)
 TOOLBOX = {"watermark": ["--watermark", "COPIE"], "number-pages": ["--number-pages"], "extract-pages": ["--extract-pages", "1"],
+           "header": ["--header", "{n}/{total}"], "footer": ["--footer", "{date}"], "bates": ["--bates", "A-:1:4"],
+           "sanitize": ["--sanitize"], "rotate-pdf": ["--rotate-pdf", "90:1"], "crop-pdf": ["--crop-pdf", "5,5,5,5"], "booklet": ["--booklet"],
            "merge-pdf": ["--merge-pdf"], "verify-text": ["--verify-text"]}
 for k, a in TOOLBOX.items():
     if k == "merge-pdf": cmd = [exe, base, str(d / "base2.pdf"), "--merge-pdf", "--pdf", str(d / "m.pdf")]

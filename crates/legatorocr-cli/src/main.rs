@@ -413,6 +413,25 @@ struct Cli {
     #[arg(long)]
     explain: bool,
 
+    /// OCR only this rectangle, X,Y,W,H in mm on the processed page (origin top-left, like
+    /// --picture-zone), optionally in its own language: `20,30,170,40=eng`. Repeatable: the
+    /// zones are read in the order given, which is the reading order. Without any zone the whole
+    /// page is read. Needs --ocr.
+    #[arg(long, value_name = "X,Y,W,H[=LANG]")]
+    ocr_zone: Vec<String>,
+
+    /// Leave out the words whose centre lies in this rectangle (X,Y,W,H mm): a stamp, a running
+    /// header, a margin note. Repeatable. Needs --ocr.
+    #[arg(long, value_name = "X,Y,W,H")]
+    ocr_ignore: Vec<String>,
+
+    /// Choose the OCR language of every page from this list, e.g. `ron,eng,fra`: each candidate
+    /// reads the page and the one with the most confidently read characters wins. Time grows
+    /// with the length of the list (use --ocr-cache for repeated runs). Pages named by
+    /// --page-lang and zones with their own language are left alone. Needs --ocr.
+    #[arg(long, value_name = "LANGS", value_delimiter = ',')]
+    lang_auto: Vec<String>,
+
     /// OCR language per input page, e.g. `1-40=ron,41-44=eng+fra,45-=ron` (pages counted from 1
     /// in input order; the last matching rule wins; other pages use --lang). Needs --ocr.
     #[arg(long, value_name = "RULES")]
@@ -798,6 +817,41 @@ struct Cli {
     #[arg(long, value_name = "TEXT")]
     sign_reason: Option<String>,
 
+    /// Show the signature as a box on a page: PAGE,X,Y,WIDTH,HEIGHT in millimetres from the
+    /// top-left corner (--sign-pdf). Without it the signature is invisible.
+    #[arg(long, value_name = "PAGE,X,Y,W,H")]
+    sign_visible: Option<String>,
+
+    /// Password-protect every PDF written (AES-256). The passwords come from the environment, never
+    /// the command line: LEGATOROCR_PDF_USER_PASSWORD opens the file (empty: opens freely, only the
+    /// restrictions apply), LEGATOROCR_PDF_OWNER_PASSWORD lifts the restrictions. With input PDFs
+    /// and no other option this just protects them.
+    #[arg(long)]
+    encrypt_pdf: bool,
+
+    /// Write PDFs with compressed object streams and a cross-reference stream (PDF 1.5): the
+    /// structure objects shrink to a fraction, mostly visible in files with many pages. Not for
+    /// PDF/A-1 (which forbids them) and not for --sign-pdf (it needs a classic table).
+    #[arg(long)]
+    object_streams: bool,
+
+    /// Write PDFs in Fast Web View order: the first page and what it needs come first, followed by
+    /// hint tables, so a viewer can show page 1 while the rest still downloads. Not with
+    /// --encrypt-pdf or --object-streams; --sign-pdf on the result breaks the layout (sign first).
+    #[arg(long)]
+    linearize: bool,
+
+    /// Also try lossless JBIG2 (arithmetic-coded generic region) for black & white pages and
+    /// masks and keep it where it is smaller than CCITT G4 or Flate; usually 20-40 % on text.
+    /// Slower to write (about a second per 600 dpi A4 page); PDF 1.4 viewers read it.
+    #[arg(long)]
+    jbig2: bool,
+
+    /// What the user password may do in an --encrypt-pdf file: a list of print, highres, modify, copy,
+    /// annotate, forms, accessibility, assemble, or all / none (default: print,highres,accessibility).
+    #[arg(long, value_name = "LIST", default_value = "")]
+    pdf_permissions: String,
+
     /// Put an RFC 3161 time stamp from --tsa-url inside the signature (--sign-pdf): PAdES-B-T.
     /// The authority sees only the hash of the signature.
     #[arg(long, requires = "tsa_url")]
@@ -868,6 +922,39 @@ struct Cli {
     #[arg(long, value_name = "TEXT")]
     watermark: Option<String>,
 
+    /// PDF toolbox: text at the top centre of every page; {n}, {total}, {date}, {file} are replaced.
+    #[arg(long, value_name = "TEXT")]
+    header: Option<String>,
+
+    /// PDF toolbox: text at the bottom left of every page; same fields as --header.
+    #[arg(long, value_name = "TEXT")]
+    footer: Option<String>,
+
+    /// PDF toolbox: remove the document information (also the producer), annotations (links,
+    /// actions), page actions, per-page metadata, thumbnails and transitions from the result.
+    #[arg(long)]
+    sanitize: bool,
+
+    /// PDF toolbox: turn pages clockwise, DEG (a multiple of 90) or DEG:RANGES of the output
+    /// pages, e.g. 90 or 180:2,4-6.
+    #[arg(long, value_name = "DEG[:RANGES]", allow_negative_numbers = true)]
+    rotate_pdf: Option<String>,
+
+    /// PDF toolbox: cut LEFT,BOTTOM,RIGHT,TOP millimetres off every page, as displayed. The
+    /// page box shrinks; the content outside it stays in the file.
+    #[arg(long, value_name = "L,B,R,T")]
+    crop_pdf: Option<String>,
+
+    /// PDF toolbox: impose as a booklet: two pages per landscape sheet side in folding order,
+    /// blank pages added to a multiple of 4. Print double-sided, flip on the short edge, fold.
+    #[arg(long)]
+    booklet: bool,
+
+    /// PDF toolbox: Bates number at the bottom right, PREFIX[:START[:DIGITS]], e.g. ACME-:1:6
+    /// gives ACME-000001, ACME-000002, … and continues across the files of one run.
+    #[arg(long, value_name = "SPEC")]
+    bates: Option<String>,
+
     /// PDF toolbox: number the pages at the bottom; FORMAT uses {n} and {total} (default {n}).
     #[arg(long, value_name = "FORMAT", num_args = 0..=1, default_missing_value = "{n}")]
     number_pages: Option<String>,
@@ -880,6 +967,13 @@ struct Cli {
     /// PDF/A part to declare with --pdfa: 1 (PDF 1.4), 2 (default) or 3. Level is always B.
     #[arg(long, default_value_t = 2, value_parser = clap::value_parser!(u8).range(1..=3))]
     pdfa_part: u8,
+
+    /// PDF/A conformance level to declare with --pdfa: B (default), U (also: every piece of text
+    /// maps to Unicode; parts 2 and 3) or A (also: tagged structure with paragraphs, headings and
+    /// the language; every part). A needs --ocr (the structure is the recognised text) and turns
+    /// on --tagged-pdf. Preflight with --pdfa-check; **not validated with veraPDF here**.
+    #[arg(long, default_value = "B", value_parser = ["A", "B", "U", "a", "b", "u"], value_name = "LEVEL")]
+    pdfa_level: String,
 
     /// OCRmyPDF compatibility: same as `--ocr-mode force`.
     #[arg(long, hide = true)]
@@ -1238,6 +1332,14 @@ struct Cli {
     /// agree on a smooth curve; ragged, indented or already straight text is left alone.
     #[arg(long)]
     dewarp_margin: bool,
+
+    /// Smooth glyph edges in black & white / mixed / hybrid output: the scan is read at FACTOR (2 or
+    /// 3) times its resolution by smooth interpolation of the gray values before thresholding, so
+    /// letters get curved outlines instead of pixel staircases (the idea of ABBYY PreciseScan, for
+    /// low-resolution scans). The output has FACTOR times the dpi: use --output-dpi to cap it.
+    /// Costs FACTOR squared the time and memory per page; skipped when that would pass 1200 dpi.
+    #[arg(long, value_name = "FACTOR", value_parser = clap::value_parser!(u8).range(2..=3))]
+    smooth_glyphs: Option<u8>,
 
     /// Right-to-left book (Arabic, Hebrew, manga): when a two-page spread is cut in two, the
     /// right-hand page comes first, and the PDF asks viewers for right-to-left reading.
@@ -1701,6 +1803,25 @@ fn real_main() -> Result<()> {
             .num_threads(n)
             .build_global();
     }
+    let pdfa_level = cli.pdfa_level.to_ascii_uppercase();
+    if pdfa_level != "B" {
+        if !cli.pdfa {
+            bail!("--pdfa-level {pdfa_level} needs --pdfa");
+        }
+        if pdfa_level == "U" && cli.pdfa_part == 1 {
+            bail!("PDF/A-1 has no level U: use --pdfa-part 2 or 3, or --pdfa-level A or B");
+        }
+        if pdfa_level == "A" {
+            if !cli.ocr {
+                bail!("--pdfa-level A needs --ocr: the structure tree is the recognised text");
+            }
+            cli.tagged_pdf = true;
+        }
+    }
+    legatorocr_engine::DEFAULT_PDFA_LEVEL.store(
+        pdfa_level.as_bytes()[0],
+        std::sync::atomic::Ordering::Relaxed,
+    );
     if cli.tagged_pdf && !cli.ocr {
         bail!("--tagged-pdf tags the recognised text; add --ocr");
     }
@@ -1964,14 +2085,50 @@ fn real_main() -> Result<()> {
         }
         return Ok(());
     }
+    if cli.pdfa && cli.encrypt_pdf {
+        bail!("PDF/A forbids encryption: use --pdfa or --encrypt-pdf, not both");
+    }
+    if cli.pdfa && cli.object_streams && cli.pdfa_part == 1 {
+        bail!(
+            "PDF/A-1 forbids object streams: use --pdfa-part 2 or 3, or leave out --object-streams"
+        );
+    }
+    if cli.sign_pdf.is_some() && cli.object_streams {
+        bail!("--sign-pdf needs a classic cross-reference table: leave out --object-streams (sign first, or sign a file written without it)");
+    }
+    if cli.linearize && (cli.encrypt_pdf || cli.object_streams) {
+        bail!("--linearize cannot be combined with --encrypt-pdf or --object-streams");
+    }
+    legatorocr_engine::pdfcrypt::set_linearize(cli.linearize);
+    legatorocr_engine::pdfcrypt::set_jbig2(cli.jbig2);
+    legatorocr_engine::pdfcrypt::set_compact(cli.object_streams);
+    if cli.encrypt_pdf {
+        legatorocr_engine::pdfcrypt::set(
+            &std::env::var("LEGATOROCR_PDF_USER_PASSWORD").unwrap_or_default(),
+            &std::env::var("LEGATOROCR_PDF_OWNER_PASSWORD").unwrap_or_default(),
+            legatorocr_engine::pdfcrypt::parse_perms(&cli.pdf_permissions)?,
+        )?;
+    }
     let plan = legatorocr_engine::pdftools::Plan {
         merge: cli.merge_pdf,
         pages: cli.extract_pages.clone(),
         split_every: cli.split_pdf_every,
         watermark: cli.watermark.clone(),
         number_format: cli.number_pages.clone(),
+        header: cli.header.clone(),
+        footer: cli.footer.clone(),
+        bates: cli.bates.clone(),
+        sanitize: cli.sanitize,
+        rotate: cli.rotate_pdf.clone(),
+        crop_mm: cli.crop_pdf.clone(),
+        booklet: cli.booklet,
     };
-    if plan.active() {
+    let only_pdfs = !cli.inputs.is_empty()
+        && cli
+            .inputs
+            .iter()
+            .all(|i| i.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")));
+    if plan.active() || ((cli.encrypt_pdf || cli.object_streams || cli.linearize) && only_pdfs) {
         let written =
             legatorocr_engine::pdftools::run(&cli.inputs, &cli.out_dir, cli.pdf.as_deref(), &plan)?;
         for w in &written {
@@ -2165,6 +2322,17 @@ fn real_main() -> Result<()> {
             cli.sign_name.as_deref(),
             cli.sign_reason.as_deref(),
             cli.tsa_url.as_deref().filter(|_| cli.sign_timestamp),
+            cli.sign_visible
+                .as_deref()
+                .map(|v| {
+                    legatorocr_engine::sign::parse_visible(
+                        v,
+                        cli.sign_name.as_deref(),
+                        cli.sign_reason.as_deref(),
+                    )
+                })
+                .transpose()?
+                .as_ref(),
         )?;
         println!("wrote {}", out.display());
         return Ok(());
@@ -2560,6 +2728,7 @@ fn real_main() -> Result<()> {
         auto_levels: cli.auto_levels,
         sharpen: cli.sharpen,
         dewarp_margin: cli.dewarp_margin,
+        smooth_glyphs: cli.smooth_glyphs.unwrap_or(0),
         fold_shadow: cli.fold_shadow,
         fill_color,
         right_to_left: cli.right_to_left,
@@ -2643,9 +2812,20 @@ fn real_main() -> Result<()> {
             "--threshold",
             "--sauvola-k",
             "--sharpen",
+            "--lang-auto",
+            "--ocr-zone",
+            "--ocr-ignore",
+            "--header",
+            "--footer",
+            "--bates",
+            "--sanitize",
+            "--rotate-pdf",
+            "--crop-pdf",
+            "--booklet",
             "--pdfa-check",
             "--verapdf",
             "--dewarp-margin",
+            "--smooth-glyphs",
             "--classify",
             "--classify-out",
             "--sort-originals",
@@ -3291,6 +3471,54 @@ fn real_main() -> Result<()> {
         legatorocr_engine::ocrcache::set(dir.clone(), &v)
             .with_context(|| format!("{}: cannot create the cache folder", dir.display()))?;
     }
+    if !cli.lang_auto.is_empty() {
+        if !cli.ocr {
+            bail!("--lang-auto needs --ocr");
+        }
+        let cands = legatorocr_engine::autolang::candidates(&cli.lang_auto)?;
+        for c in &cands {
+            check_ocr(&OcrOptions {
+                lang: c.clone(),
+                ..ocr_opts.clone()
+            })
+            .with_context(|| format!("--lang-auto: language {c}"))?;
+        }
+        legatorocr_engine::autolang::set(&ocr_opts.lang, cands);
+    }
+    if !cli.ocr_zone.is_empty() || !cli.ocr_ignore.is_empty() {
+        if !cli.ocr {
+            bail!("--ocr-zone and --ocr-ignore need --ocr");
+        }
+        let zones = cli
+            .ocr_zone
+            .iter()
+            .map(|z| {
+                legatorocr_engine::ocrzones::parse_zone(z)
+                    .map_err(|e| anyhow::anyhow!("--ocr-zone {e}"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let ignores = cli
+            .ocr_ignore
+            .iter()
+            .map(|z| {
+                legatorocr_engine::ocrzones::parse_rect(z)
+                    .map_err(|e| anyhow::anyhow!("--ocr-ignore {e}"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for l in zones
+            .iter()
+            .filter_map(|z| z.lang.as_deref())
+            .flat_map(|l| l.split('+'))
+            .collect::<std::collections::BTreeSet<_>>()
+        {
+            check_ocr(&OcrOptions {
+                lang: l.into(),
+                ..ocr_opts.clone()
+            })
+            .with_context(|| format!("--ocr-zone: language {l}"))?;
+        }
+        legatorocr_engine::ocrzones::set(zones, ignores);
+    }
     if let Some(spec) = &cli.page_lang {
         if !cli.ocr {
             bail!("--page-lang needs --ocr");
@@ -3602,7 +3830,7 @@ fn real_main() -> Result<()> {
         for (i, bytes) in res.docs.iter().enumerate() {
             let name = res.doc_names.get(i).and_then(|n| n.as_deref());
             let p = pdf_path.with_file_name(legatorocr_engine::doc_file_name(&stem, i, name));
-            write_atomic(&p, bytes)?;
+            write_atomic(&p, &legatorocr_engine::pdfcrypt::apply(bytes.clone())?)?;
             eprintln!("wrote {}", p.display());
             written.push(p);
         }
@@ -3611,7 +3839,10 @@ fn real_main() -> Result<()> {
         }
     }
     if let (Some(pdf_path), Some(bytes)) = (&cli.pdf, &res.pdf) {
-        write_atomic(pdf_path, bytes)?;
+        write_atomic(
+            pdf_path,
+            &legatorocr_engine::pdfcrypt::apply(bytes.clone())?,
+        )?;
         written.push(pdf_path.clone());
         if let (true, Some(t)) = (cli.txt_each, &res.text) {
             let tp = pdf_path.with_extension("txt");
@@ -4222,6 +4453,16 @@ mod optimize_tests {
 
     #[test]
     fn optimize_levels_only_lower_things() {
+        // the option struct is large: parse it on a thread with a roomy stack, as `main` does
+        std::thread::Builder::new()
+            .stack_size(64 << 20)
+            .spawn(optimize_levels_only_lower_things_body)
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    fn optimize_levels_only_lower_things_body() {
         let mut c = Cli::parse_from([
             "legatorocr",
             "x.png",

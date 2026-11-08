@@ -2,7 +2,7 @@
 //! page numbers. Works on page objects, nothing is rasterised or re-compressed.
 
 use anyhow::{bail, Context, Result};
-use legatorocr_pdf::reader::edit::{assemble, parse_ranges, Anchor, Stamp};
+use legatorocr_pdf::reader::edit::{assemble_opts, booklet, parse_ranges, Anchor, Opts, Stamp};
 use legatorocr_pdf::reader::PdfDoc;
 use std::path::{Path, PathBuf};
 
@@ -17,6 +17,70 @@ pub struct Plan {
     pub watermark: Option<String>,
     /// Page number format, `{n}` and `{total}` replaced.
     pub number_format: Option<String>,
+    /// Text at the top centre of every page; `{n}`, `{total}`, `{date}`, `{file}` are replaced.
+    pub header: Option<String>,
+    /// Text at the bottom left of every page; same fields.
+    pub footer: Option<String>,
+    /// Bates number at the bottom right: `PREFIX[:START[:DIGITS]]`, e.g. `ACME-:1:6` gives
+    /// ACME-000001, ACME-000002, … continuing across the files of one run.
+    pub bates: Option<String>,
+    /// Remove metadata, annotations and the producer from the result.
+    pub sanitize: bool,
+    /// `DEG` or `DEG:RANGES` (output pages): turn clockwise by a multiple of 90.
+    pub rotate: Option<String>,
+    /// `L,B,R,T` in millimetres, as displayed: cut this off every page.
+    pub crop_mm: Option<String>,
+    /// Impose as a booklet: two pages per sheet side, in folding order.
+    pub booklet: bool,
+}
+
+/// `DEG[:RANGES]` → (degrees mod 360, the ranges text).
+pub fn parse_rotate(spec: &str) -> Result<(i64, Option<String>)> {
+    let (d, r) = match spec.split_once(':') {
+        Some((d, r)) => (d, Some(r.to_string())),
+        None => (spec, None),
+    };
+    let deg: i64 = d
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("--rotate-pdf: `{d}` is not a number of degrees"))?;
+    if deg % 90 != 0 {
+        bail!("--rotate-pdf: the angle must be a multiple of 90, not {deg}");
+    }
+    Ok((deg.rem_euclid(360), r))
+}
+
+/// `L,B,R,T` (mm) → points.
+pub fn parse_crop(spec: &str) -> Result<[f64; 4]> {
+    let v: Vec<f64> = spec
+        .split(',')
+        .map(|x| x.trim().parse::<f64>())
+        .collect::<Result<_, _>>()
+        .map_err(|_| anyhow::anyhow!("--crop-pdf wants four numbers L,B,R,T in mm"))?;
+    if v.len() != 4 || v.iter().any(|x| !x.is_finite() || *x < 0.0) {
+        bail!("--crop-pdf wants four numbers L,B,R,T in mm, none negative");
+    }
+    Ok([v[0], v[1], v[2], v[3]].map(|mm| mm / 25.4 * 72.0))
+}
+
+/// `PREFIX[:START[:DIGITS]]` → (prefix, first number, digits).
+pub fn parse_bates(spec: &str) -> Result<(String, u64, usize)> {
+    let parts: Vec<&str> = spec.rsplitn(3, ':').collect();
+    let (prefix, start, digits) = match parts.as_slice() {
+        [d, s, p] => (*p, *s, *d),
+        [s, p] => (*p, *s, "6"),
+        _ => (spec, "1", "6"),
+    };
+    // `ACME-` alone has one part; `ACME-:5` has two; a lone number is a prefix-less start
+    let start: u64 = start
+        .parse()
+        .map_err(|_| anyhow::anyhow!("--bates: START must be a number in `{spec}`"))?;
+    let digits: usize = digits
+        .parse()
+        .ok()
+        .filter(|d| (1..=12).contains(d))
+        .ok_or_else(|| anyhow::anyhow!("--bates: DIGITS must be 1 to 12 in `{spec}`"))?;
+    Ok((prefix.to_string(), start, digits))
 }
 
 impl Plan {
@@ -26,11 +90,48 @@ impl Plan {
             || self.split_every.is_some()
             || self.watermark.is_some()
             || self.number_format.is_some()
+            || self.header.is_some()
+            || self.footer.is_some()
+            || self.bates.is_some()
+            || self.sanitize
+            || self.rotate.is_some()
+            || self.crop_mm.is_some()
+            || self.booklet
     }
 }
 
-fn stamps(plan: &Plan, i: usize, total: usize) -> Vec<Stamp> {
+fn fields(t: &str, n: usize, total: usize, file: &str) -> String {
+    t.replace("{n}", &n.to_string())
+        .replace("{total}", &total.to_string())
+        .replace("{date}", &crate::naming::today_iso())
+        .replace("{file}", file)
+}
+
+/// `bates_no`: the Bates number of this page (already counted across the run).
+fn stamps(plan: &Plan, i: usize, total: usize, file: &str, bates_no: u64) -> Vec<Stamp> {
     let mut v = Vec::new();
+    let plain = |text: String, anchor: Anchor| Stamp {
+        text,
+        size: 10.0,
+        anchor,
+        gray: 0.0,
+        angle: 0.0,
+        opacity: 1.0,
+    };
+    if let Some(h) = &plan.header {
+        v.push(plain(fields(h, i + 1, total, file), Anchor::TopCenter));
+    }
+    if let Some(f) = &plan.footer {
+        v.push(plain(fields(f, i + 1, total, file), Anchor::BottomLeft));
+    }
+    if let Some(b) = &plan.bates {
+        if let Ok((prefix, _, digits)) = parse_bates(b) {
+            v.push(plain(
+                format!("{prefix}{bates_no:0digits$}"),
+                Anchor::BottomRight,
+            ));
+        }
+    }
     if let Some(w) = &plan.watermark {
         v.push(Stamp {
             text: w.clone(),
@@ -66,6 +167,12 @@ pub fn run(
     if let Some(0) = plan.split_every {
         bail!("--split-pdf-every needs a number above 0");
     }
+    let rotate = plan.rotate.as_deref().map(parse_rotate).transpose()?;
+    let crop_pt = plan.crop_mm.as_deref().map(parse_crop).transpose()?;
+    let mut bates_next = match &plan.bates {
+        Some(b) => parse_bates(b)?.1,
+        None => 0,
+    };
     let docs: Vec<(PathBuf, PdfDoc)> = inputs
         .iter()
         .map(|p| {
@@ -128,8 +235,30 @@ pub fn run(
                 .iter()
                 .map(|(d, v)| (&docs[*d].1, v.clone()))
                 .collect();
-            let bytes =
-                assemble(&refs, &|i, t| stamps(plan, i, t)).map_err(|e| anyhow::anyhow!(e.0))?;
+            let first_bates = bates_next;
+            bates_next += chunk.len() as u64;
+            let opts = Opts {
+                sanitize: plan.sanitize,
+                rotate: match &rotate {
+                    None => None,
+                    Some((deg, None)) => Some((*deg, None)),
+                    Some((deg, Some(r))) => Some((
+                        *deg,
+                        Some(parse_ranges(r, chunk.len()).map_err(|e| anyhow::anyhow!(e))?),
+                    )),
+                },
+                crop_pt,
+            };
+            let mut bytes = assemble_opts(
+                &refs,
+                &|i, t| stamps(plan, i, t, &stem, first_bates + i as u64),
+                &opts,
+            )
+            .map_err(|e| anyhow::anyhow!(e.0))?;
+            if plan.booklet {
+                let doc = PdfDoc::open(bytes).map_err(|e| anyhow::anyhow!(e.0))?;
+                bytes = booklet(&doc).map_err(|e| anyhow::anyhow!(e.0))?;
+            }
             let name = if many {
                 format!("{stem}_{:03}.pdf", ci + 1)
             } else {
@@ -145,7 +274,7 @@ pub fn run(
                     path.display()
                 );
             }
-            std::fs::write(&path, bytes)?;
+            std::fs::write(&path, crate::pdfcrypt::apply(bytes)?)?;
             written.push(path);
         }
     }
@@ -171,7 +300,41 @@ mod tests {
             },
             2,
             9,
+            "f",
+            0,
         );
         assert_eq!(s[0].text, "3/9");
+    }
+
+    #[test]
+    fn rotate_and_crop_specs() {
+        assert_eq!(parse_rotate("90").unwrap(), (90, None));
+        assert_eq!(parse_rotate("-90:2-3").unwrap(), (270, Some("2-3".into())));
+        assert!(parse_rotate("45").is_err());
+        assert!(parse_rotate("x").is_err());
+        let c = parse_crop("25.4,0,0,12.7").unwrap();
+        assert!((c[0] - 72.0).abs() < 1e-9 && (c[3] - 36.0).abs() < 1e-9);
+        assert!(parse_crop("1,2,3").is_err());
+        assert!(parse_crop("1,2,3,-4").is_err());
+    }
+
+    #[test]
+    fn bates_specs_and_header_fields() {
+        assert_eq!(parse_bates("ACME-:7:4").unwrap(), ("ACME-".into(), 7, 4));
+        assert_eq!(parse_bates("ACME-:7").unwrap(), ("ACME-".into(), 7, 6));
+        assert_eq!(parse_bates("ACME-").unwrap(), ("ACME-".into(), 1, 6));
+        assert!(parse_bates("A:x").is_err());
+        assert!(parse_bates("A:1:0").is_err());
+        let plan = Plan {
+            header: Some("{file} {n}/{total}".into()),
+            footer: Some("© {date}".into()),
+            bates: Some("B-:41:3".into()),
+            ..Plan::default()
+        };
+        let s = stamps(&plan, 1, 5, "doc", 42);
+        assert_eq!(s[0].text, "doc 2/5");
+        assert!(s[1].text.starts_with("© 20") && s[1].text.chars().count() == 2 + 10);
+        assert_eq!(s[2].text, "B-042");
+        assert!(s.iter().all(|x| x.size == 10.0));
     }
 }

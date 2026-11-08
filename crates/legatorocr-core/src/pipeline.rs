@@ -100,6 +100,10 @@ pub struct Settings {
     pub sharpen: f32,
     /// Straighten a bent left margin of a justified text block (marginal dewarping).
     pub dewarp_margin: bool,
+    /// Black & white / mixed / hybrid: read the scan at 2 or 3 times its resolution (smooth
+    /// interpolation of the gray values) before thresholding, so glyph edges come out as smooth
+    /// curves instead of pixel staircases; the output has that many times the dpi. 0 or 1 = off.
+    pub smooth_glyphs: u8,
     /// Lift the darkening toward the spine of a book page (fold shadow), column by column.
     pub fold_shadow: bool,
     /// Colour for the `erase_zones` rectangles instead of the paper tone (fill zones: white, black
@@ -209,6 +213,7 @@ impl Default for Settings {
             auto_levels: false,
             sharpen: 0.0,
             dewarp_margin: false,
+            smooth_glyphs: 0,
             fold_shadow: false,
             fill_color: None,
             right_to_left: false,
@@ -383,6 +388,7 @@ impl Settings {
         let mut s = self.clone();
         s.dpi = s.dpi.clamp(36, 2400);
         s.rotate_quarters %= 4;
+        s.smooth_glyphs = s.smooth_glyphs.min(3);
         s.dewarp_guides.truncate(64);
         s.sheet_dewarp_guides.truncate(64);
         for g in s.sheet_dewarp_guides.iter_mut() {
@@ -843,8 +849,36 @@ fn outside_work_area(work: [f32; 4], w: u32, h: u32, dpi: u32) -> Vec<[f32; 4]> 
     z
 }
 
+/// With `smooth_glyphs`: the scan enlarged by smooth interpolation and the settings for it
+/// (dpi times the factor). `None` when it does not apply.
+fn smoothed(src: &DynamicImage, s: &Settings) -> Option<(DynamicImage, Settings)> {
+    let k = s.smooth_glyphs as u32;
+    if k < 2
+        || !matches!(
+            s.mode,
+            OutputMode::BlackWhite | OutputMode::Mixed | OutputMode::Hybrid
+        )
+        || s.dpi * k > 1200
+        || (src.width() as u64 * src.height() as u64).saturating_mul((k * k) as u64) > 150_000_000
+    {
+        return None;
+    }
+    let big = src.resize_exact(
+        src.width() * k,
+        src.height() * k,
+        image::imageops::FilterType::CatmullRom,
+    );
+    let mut s2 = s.clone();
+    s2.dpi *= k;
+    s2.smooth_glyphs = 0;
+    Some((big, s2))
+}
+
 pub fn process_page(src: &DynamicImage, s: &Settings) -> Vec<Page> {
     let s = &s.sanitized();
+    if let Some((big, s2)) = smoothed(src, s) {
+        return process_page(&big, &s2);
+    }
     let src = &*erase_on_sheet(src, s);
     split_sheet(src, s)
         .into_iter()
@@ -857,6 +891,9 @@ pub fn process_page(src: &DynamicImage, s: &Settings) -> Vec<Page> {
 /// them in memory: measure first, render second.
 pub fn measure_page(src: &DynamicImage, s: &Settings) -> Vec<Option<(f32, f32)>> {
     let s = &s.sanitized();
+    if let Some((big, s2)) = smoothed(src, s) {
+        return measure_page(&big, &s2);
+    }
     let src = &*erase_on_sheet(src, s);
     split_sheet(src, s)
         .into_iter()
@@ -2488,6 +2525,138 @@ mod tests {
         assert!(matches!(p.image, PageImage::Bw(_)));
     }
 
+    /// A soft-edged disc, as a scanner at `dpi` would see it (box-filtered coverage).
+    fn soft_disc(dpi: f32, r_mm: f32) -> DynamicImage {
+        let px = dpi / 25.4;
+        let r = r_mm * px;
+        let n = (r * 2.0 + 40.0) as u32;
+        let c = n as f32 / 2.0 + 0.3;
+        let mut g = image::GrayImage::new(n, n);
+        for y in 0..n {
+            for x in 0..n {
+                // 4x4 supersampling
+                let mut cov = 0.0;
+                for sy in 0..4 {
+                    for sx in 0..4 {
+                        let (fx, fy) = (
+                            x as f32 + (sx as f32 + 0.5) / 4.0,
+                            y as f32 + (sy as f32 + 0.5) / 4.0,
+                        );
+                        if ((fx - c).powi(2) + (fy - c).powi(2)).sqrt() <= r {
+                            cov += 1.0 / 16.0;
+                        }
+                    }
+                }
+                g.put_pixel(x, y, Luma([(255.0 - 255.0 * cov) as u8]));
+            }
+        }
+        DynamicImage::ImageLuma8(g)
+    }
+
+    fn bw_of(pages: &[Page]) -> &BitImage {
+        match &pages[0].image {
+            PageImage::Bw(b) => b,
+            _ => panic!("not black and white"),
+        }
+    }
+
+    /// Ink bounding box of a bitmap: x0, y0, x1, y1 (exclusive).
+    fn ink_box(b: &BitImage) -> (u32, u32, u32, u32) {
+        let (mut x0, mut y0, mut x1, mut y1) = (b.w, b.h, 0, 0);
+        for y in 0..b.h {
+            for x in 0..b.w {
+                if b.get(x, y) {
+                    x0 = x0.min(x);
+                    y0 = y0.min(y);
+                    x1 = x1.max(x + 1);
+                    y1 = y1.max(y + 1);
+                }
+            }
+        }
+        (x0, y0, x1, y1)
+    }
+
+    #[test]
+    fn smooth_glyphs_doubles_the_dpi_and_follows_the_true_outline_closer() {
+        let base = Settings {
+            dpi: 100,
+            mode: OutputMode::BlackWhite,
+            margins_mm: [0.0; 4],
+            deskew: false,
+            auto_orient: false,
+            ..Settings::default()
+        };
+        let scan = soft_disc(100.0, 6.0);
+        let plain = process_page(&scan, &base);
+        let smooth = process_page(
+            &scan,
+            &Settings {
+                smooth_glyphs: 2,
+                ..base.clone()
+            },
+        );
+        assert_eq!(plain[0].dpi, 100);
+        assert_eq!(smooth[0].dpi, 200);
+        // the truth: the same disc at 200 dpi, hard-edged
+        let truth = process_page(
+            &soft_disc(200.0, 6.0),
+            &Settings {
+                dpi: 200,
+                ..base.clone()
+            },
+        );
+        let (t, s, p) = (bw_of(&truth), bw_of(&smooth), bw_of(&plain));
+        // plain, enlarged by pixel repetition to 200 dpi
+        let mut up = BitImage::new(p.w * 2, p.h * 2);
+        for y in 0..up.h {
+            for x in 0..up.w {
+                up.set(x, y, p.get(x / 2, y / 2));
+            }
+        }
+        // mismatches against the truth after aligning the ink boxes
+        let miss = |a: &BitImage| {
+            let (ta, tb) = (ink_box(t), ink_box(a));
+            let (w, h) = (
+                (ta.2 - ta.0).max(tb.2 - tb.0),
+                (ta.3 - ta.1).max(tb.3 - tb.1),
+            );
+            let mut n = 0u32;
+            for y in 0..h {
+                for x in 0..w {
+                    let g = |b: &BitImage, o: (u32, u32, u32, u32)| {
+                        b.w > o.0 + x && b.h > o.1 + y && b.get(o.0 + x, o.1 + y)
+                    };
+                    n += (g(t, ta) != g(a, tb)) as u32;
+                }
+            }
+            n
+        };
+        let (m_plain, m_smooth) = (miss(&up), miss(s));
+        assert!(
+            m_smooth * 10 < m_plain * 8,
+            "smoothed {m_smooth} px off, plain {m_plain} px off"
+        );
+        // it does nothing in colour mode or at a resolution that would pass 1200 dpi
+        let colour = process_page(
+            &scan,
+            &Settings {
+                mode: OutputMode::Color,
+                smooth_glyphs: 2,
+                ..base.clone()
+            },
+        );
+        assert_eq!(colour[0].dpi, 100);
+        let high = process_page(
+            &scan,
+            &Settings {
+                dpi: 700,
+                smooth_glyphs: 2,
+                ..base
+            },
+        );
+        assert_eq!(high[0].dpi, 700);
+    }
+
     #[test]
     fn sanitized_bounds_everything() {
         let wild = Settings {
@@ -2648,6 +2817,7 @@ mod tests {
                 auto_levels: rnd(2) == 0,
                 sharpen: rnd(300) as f32 / 100.0 - 0.5,
                 dewarp_margin: rnd(2) == 1,
+                smooth_glyphs: rnd(5) as u8,
                 fold_shadow: rnd(2) == 1,
                 fill_color: (rnd(2) == 1).then(|| [rnd(256) as u8, rnd(256) as u8, rnd(256) as u8]),
                 right_to_left: rnd(2) == 1,

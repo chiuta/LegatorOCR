@@ -23,7 +23,7 @@ fn fail<T>(m: impl Into<String>) -> R<T> {
 }
 
 /// (Qe, NMPS, NLPS, SWITCH)
-const QE: [(u32, u8, u8, bool); 47] = [
+pub(crate) const QE: [(u32, u8, u8, bool); 47] = [
     (0x5601, 1, 1, true),
     (0x3401, 2, 6, false),
     (0x1801, 3, 9, false),
@@ -174,7 +174,7 @@ impl<'a> Mq<'a> {
 }
 
 /// Template pixel offsets in context-bit order; `at` fills the adaptive positions.
-fn template(t: u8, at: &[(i32, i32); 4]) -> Vec<(i32, i32)> {
+pub(crate) fn template(t: u8, at: &[(i32, i32); 4]) -> Vec<(i32, i32)> {
     match t {
         0 => vec![
             (-1, 0),

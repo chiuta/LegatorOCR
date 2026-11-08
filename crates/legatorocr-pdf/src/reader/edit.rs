@@ -16,7 +16,10 @@ use std::fmt::Write as _;
 pub enum Anchor {
     BottomCenter,
     BottomRight,
+    BottomLeft,
     TopCenter,
+    TopLeft,
+    TopRight,
     Center,
 }
 
@@ -105,7 +108,10 @@ fn stamp_content(st: &Stamp, w: f64, h: f64, llx: f64, lly: f64, rot: i64, gs: b
     let (cx, cy) = match st.anchor {
         Anchor::BottomCenter => (dw / 2.0, margin),
         Anchor::BottomRight => (dw - margin - tw / 2.0, margin),
+        Anchor::BottomLeft => (margin + tw / 2.0, margin),
         Anchor::TopCenter => (dw / 2.0, dh - margin - st.size),
+        Anchor::TopLeft => (margin + tw / 2.0, dh - margin - st.size),
+        Anchor::TopRight => (dw - margin - tw / 2.0, dh - margin - st.size),
         Anchor::Center => (dw / 2.0, dh / 2.0),
     };
     // displayed frame -> unrotated page space
@@ -135,7 +141,7 @@ fn stamp_content(st: &Stamp, w: f64, h: f64, llx: f64, lly: f64, rot: i64, gs: b
     s
 }
 
-fn esc_name(n: &str) -> String {
+pub(super) fn esc_name(n: &str) -> String {
     let mut s = String::from("/");
     for &b in n.as_bytes() {
         if b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'+') {
@@ -267,7 +273,7 @@ impl PdfDoc {
         s.extend_from_slice(&tmp);
     }
 
-    fn page_box(&self, page: &Dict) -> (f64, f64, f64, f64) {
+    pub(super) fn page_box(&self, page: &Dict) -> (f64, f64, f64, f64) {
         if let Val::Arr(a) = self.resolve(page.get("MediaBox").unwrap_or(&Val::Null)) {
             let n: Vec<f64> = a.iter().filter_map(|v| self.resolve(v).num()).collect();
             if n.len() == 4 {
@@ -292,11 +298,34 @@ impl std::fmt::Write for UnsafeVec<'_> {
     }
 }
 
+/// What else may happen to the pages on the way through [`assemble_opts`].
+#[derive(Debug, Clone, Default)]
+pub struct Opts {
+    /// Drop everything that is not page content: the document information (also the producer),
+    /// annotations (links, actions), page actions, per-page metadata, thumbnails, transitions.
+    pub sanitize: bool,
+    /// Turn pages clockwise by this many degrees (a multiple of 90); `None` in the second slot
+    /// means every page, otherwise the output pages (0-based) listed.
+    pub rotate: Option<(i64, Option<Vec<usize>>)>,
+    /// Cut this much off each side of every page, in points, as the page is *displayed*:
+    /// `[left, bottom, right, top]`. The page box shrinks; content outside stays in the file.
+    pub crop_pt: Option<[f64; 4]>,
+}
+
 /// Write the chosen pages (`(file, page indices)` in order) as a new PDF. `stamps(i, total)`
 /// gives the stamps for output page `i` (0-based) of `total`.
 pub fn assemble(
     parts: &[(&PdfDoc, Vec<usize>)],
     stamps: &dyn Fn(usize, usize) -> Vec<Stamp>,
+) -> R<Vec<u8>> {
+    assemble_opts(parts, stamps, &Opts::default())
+}
+
+/// [`assemble`] with [`Opts`].
+pub fn assemble_opts(
+    parts: &[(&PdfDoc, Vec<usize>)],
+    stamps: &dyn Fn(usize, usize) -> Vec<Stamp>,
+    opts: &Opts,
 ) -> R<Vec<u8>> {
     let total: usize = parts.iter().map(|p| p.1.len()).sum();
     if total == 0 {
@@ -324,6 +353,60 @@ pub fn assemble(
                 ));
             };
             let mut page = page.clone();
+            if opts.sanitize {
+                for k in [
+                    "Annots",
+                    "AA",
+                    "PieceInfo",
+                    "Metadata",
+                    "Thumb",
+                    "B",
+                    "Dur",
+                    "Trans",
+                    "LastModified",
+                ] {
+                    page.remove(k);
+                }
+            }
+            if let Some([l, b, r, t]) = opts.crop_pt {
+                let (llx, lly, w, h) = doc.page_box(&page);
+                let rot = doc
+                    .resolve(page.get("Rotate").unwrap_or(&Val::Null))
+                    .int()
+                    .unwrap_or(0);
+                // displayed (left, bottom, right, top) -> the page as stored
+                let (sl, sb, sr, st_) = match rot.rem_euclid(360) {
+                    90 => (t, l, b, r),
+                    180 => (r, t, l, b),
+                    270 => (b, r, t, l),
+                    _ => (l, b, r, t),
+                };
+                if sl + sr >= w - 10.0 || sb + st_ >= h - 10.0 {
+                    return fail(format!(
+                        "page {}: the cut is as large as the page",
+                        n_out + 1
+                    ));
+                }
+                page.insert(
+                    "MediaBox".into(),
+                    Val::Arr(
+                        [llx + sl, lly + sb, llx + w - sr, lly + h - st_]
+                            .iter()
+                            .map(|x| Val::Real(*x))
+                            .collect(),
+                    ),
+                );
+                page.remove("CropBox");
+            }
+            if let Some((deg, which)) = &opts.rotate {
+                if which.as_ref().is_none_or(|v| v.contains(&n_out)) {
+                    let cur = doc
+                        .resolve(page.get("Rotate").unwrap_or(&Val::Null))
+                        .int()
+                        .unwrap_or(0);
+                    page.insert("Rotate".into(), Val::Int((cur + deg).rem_euclid(360)));
+                }
+            }
             let st = stamps(n_out, total);
             let mut stamp_ids: Vec<u32> = Vec::new();
             if !st.is_empty() {
@@ -422,9 +505,190 @@ pub fn assemble(
     );
     out.objs[catalog as usize - 1] =
         Some(format!("<< /Type /Catalog /Pages {pages_id} 0 R >>").into_bytes());
+    let info = if opts.sanitize {
+        0
+    } else {
+        let info = out.alloc();
+        out.objs[info as usize - 1] = Some(
+            format!("<< /Producer (LegatorOCR {}) >>", env!("CARGO_PKG_VERSION")).into_bytes(),
+        );
+        info
+    };
+    let mut buf: Vec<u8> = b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in out.objs.iter().enumerate() {
+        offs.push(buf.len());
+        let _ = writeln!(UnsafeVec(&mut buf), "{} 0 obj", i + 1);
+        buf.extend_from_slice(o.as_deref().unwrap_or(b"null"));
+        buf.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = buf.len();
+    let _ = write!(
+        UnsafeVec(&mut buf),
+        "xref\n0 {}\n0000000000 65535 f \n",
+        offs.len() + 1
+    );
+    for o in &offs {
+        let _ = writeln!(UnsafeVec(&mut buf), "{o:010} 00000 n ");
+    }
+    let _ = write!(
+        UnsafeVec(&mut buf),
+        "trailer\n<< /Size {} /Root {catalog} 0 R{} >>\nstartxref\n{xref}\n%%EOF\n",
+        offs.len() + 1,
+        if info == 0 {
+            String::new()
+        } else {
+            format!(" /Info {info} 0 R")
+        }
+    );
+    Ok(buf)
+}
+
+/// Booklet order for `n` pages: the page count rounded up to a multiple of 4 (`None` = blank),
+/// and for each side of each sheet its `(left, right)` pages. Folded and stapled, the sheets read
+/// in order: front `(n-1, 0)`, back `(1, n-2)`, front `(n-3, 2)`, back `(3, n-4)`, …
+pub fn booklet_sides(n: usize) -> Vec<(Option<usize>, Option<usize>)> {
+    let n4 = n.div_ceil(4) * 4;
+    let pg = |i: usize| (i < n).then_some(i);
+    let mut v = Vec::new();
+    for k in 0..n4 / 4 {
+        v.push((pg(n4 - 1 - 2 * k), pg(2 * k)));
+        v.push((pg(2 * k + 1), pg(n4 - 2 - 2 * k)));
+    }
+    v
+}
+
+/// Impose `doc` as a booklet: every output page is a landscape sheet side that carries two of the
+/// source pages side by side (each centred in its half, scaled never), in the order
+/// [`booklet_sides`] gives. Pages become form XObjects with their content streams decoded and
+/// joined, so nothing else of the source (links, forms, outlines) survives. Rotated pages are
+/// refused: rotate them for real first.
+pub fn booklet(doc: &PdfDoc) -> R<Vec<u8>> {
+    use flate2::{write::ZlibEncoder, Compression};
+    use std::io::Write as _;
+    if doc.crypt.is_some() {
+        return fail("encrypted PDF: decrypt it first");
+    }
+    let n = doc.pages.len();
+    if n == 0 {
+        return fail("no pages");
+    }
+    let (mut sw, mut sh) = (0f64, 0f64);
+    for p in &doc.pages {
+        let rot = doc
+            .resolve(p.get("Rotate").unwrap_or(&Val::Null))
+            .int()
+            .unwrap_or(0);
+        if rot.rem_euclid(360) != 0 {
+            return fail(
+                "a page has /Rotate; use --rotate-pdf first (it cannot be imposed rotated)",
+            );
+        }
+        let (_, _, w, h) = doc.page_box(p);
+        sw = sw.max(w);
+        sh = sh.max(h);
+    }
+    let mut out = Out {
+        objs: Vec::new(),
+        map: HashMap::new(),
+        queue: Vec::new(),
+    };
+    let catalog = out.alloc();
+    let pages_id = out.alloc();
+    // one form XObject per source page
+    let mut forms: Vec<u32> = Vec::new();
+    for p in &doc.pages {
+        let (llx, lly, w, h) = doc.page_box(p);
+        let mut content = Vec::new();
+        let conts: Vec<Val> = match p.get("Contents").map(|c| doc.resolve(c)) {
+            Some(Val::Arr(a)) => a,
+            Some(Val::Null) | None => vec![],
+            Some(v) => vec![v],
+        };
+        for c in &conts {
+            // an array element may be a reference; resolve to the stream
+            let target = match c {
+                Val::Ref(num) => doc.get(*num),
+                other => Some(other.clone()),
+            };
+            if let Some(Val::Stream(d, a, b)) = target {
+                let bytes = doc.decode_stream(&d, a, b, &mut |_| {})?;
+                content.extend_from_slice(&bytes);
+                content.push(b'\n');
+            }
+        }
+        let mut z = ZlibEncoder::new(Vec::new(), Compression::default());
+        z.write_all(&content)
+            .map_err(|e| super::ReadError(e.to_string()))?;
+        let z = z.finish().map_err(|e| super::ReadError(e.to_string()))?;
+        let id = out.alloc();
+        let mut body = Vec::new();
+        let _ = write!(
+            UnsafeVec(&mut body),
+            "<< /Type /XObject /Subtype /Form /BBox [{llx} {lly} {} {}] /Filter /FlateDecode /Length {} ",
+            llx + w,
+            lly + h,
+            z.len()
+        );
+        if let Some(res) = p.get("Resources") {
+            body.extend_from_slice(b"/Resources ");
+            doc.ser(0, res, &mut out, &mut body);
+        }
+        body.extend_from_slice(b">>\nstream\n");
+        body.extend_from_slice(&z);
+        body.extend_from_slice(b"\nendstream");
+        out.objs[id as usize - 1] = Some(body);
+        forms.push(id);
+    }
+    let mut kids = Vec::new();
+    for (left, right) in booklet_sides(n) {
+        let mut res = String::from("<< /XObject <<");
+        let mut cs = String::new();
+        for (slot, pg) in [(0, left), (1, right)] {
+            let Some(i) = pg else { continue };
+            let (llx, lly, w, h) = doc.page_box(&doc.pages[i]);
+            let tx = slot as f64 * sw + (sw - w) / 2.0 - llx;
+            let ty = (sh - h) / 2.0 - lly;
+            let _ = write!(res, " /P{slot} {} 0 R", forms[i]);
+            let _ = writeln!(cs, "q 1 0 0 1 {tx:.3} {ty:.3} cm /P{slot} Do Q");
+        }
+        res.push_str(" >> >>");
+        let cid = out.alloc();
+        out.objs[cid as usize - 1] = Some(raw_stream(cs.as_bytes()));
+        let pid = out.alloc();
+        out.objs[pid as usize - 1] = Some(
+            format!(
+                "<< /Type /Page /Parent {pages_id} 0 R /MediaBox [0 0 {} {}] /Resources {res} /Contents {cid} 0 R >>",
+                sw * 2.0,
+                sh
+            )
+            .into_bytes(),
+        );
+        kids.push(pid);
+    }
+    // copy what the forms reached (fonts, images, …)
+    while let Some((qdi, num, id)) = out.queue.pop() {
+        let body = doc.ser_object(qdi, num, &mut out);
+        out.objs[id as usize - 1] = Some(body);
+    }
+    let kid_list: String = kids.iter().map(|k| format!("{k} 0 R ")).collect();
+    out.objs[pages_id as usize - 1] = Some(
+        format!(
+            "<< /Type /Pages /Count {} /Kids [{kid_list}] >>",
+            kids.len()
+        )
+        .into_bytes(),
+    );
+    out.objs[catalog as usize - 1] =
+        Some(format!("<< /Type /Catalog /Pages {pages_id} 0 R >>").into_bytes());
     let info = out.alloc();
     out.objs[info as usize - 1] =
         Some(format!("<< /Producer (LegatorOCR {}) >>", env!("CARGO_PKG_VERSION")).into_bytes());
+    Ok(write_file(&out, catalog, info))
+}
+
+/// Classic xref file from the numbered objects.
+fn write_file(out: &Out, catalog: u32, info: u32) -> Vec<u8> {
     let mut buf: Vec<u8> = b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n".to_vec();
     let mut offs = Vec::new();
     for (i, o) in out.objs.iter().enumerate() {
@@ -447,7 +711,7 @@ pub fn assemble(
         "trailer\n<< /Size {} /Root {catalog} 0 R /Info {info} 0 R >>\nstartxref\n{xref}\n%%EOF\n",
         offs.len() + 1
     );
-    Ok(buf)
+    buf
 }
 
 fn raw_stream(data: &[u8]) -> Vec<u8> {
@@ -518,6 +782,65 @@ mod tests {
             );
         }
         w.finish()
+    }
+
+    #[test]
+    fn booklet_order_is_the_folding_order() {
+        use super::booklet_sides as b;
+        assert_eq!(b(4), vec![(Some(3), Some(0)), (Some(1), Some(2))]);
+        assert_eq!(
+            b(6),
+            vec![
+                (None, Some(0)),
+                (Some(1), None),
+                (Some(5), Some(2)),
+                (Some(3), Some(4))
+            ]
+        );
+        assert_eq!(b(1).len(), 2);
+        // every page appears exactly once
+        let mut seen: Vec<usize> = b(11).iter().flat_map(|(l, r)| [*l, *r]).flatten().collect();
+        seen.sort_unstable();
+        assert_eq!(seen, (0..11).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn booklet_makes_half_as_many_double_wide_sides() {
+        let src = PdfDoc::open(sample(5)).unwrap();
+        let (_, _, w, h) = src.page_box(&src.pages[0]);
+        let out = PdfDoc::open(booklet(&src).unwrap()).unwrap();
+        assert_eq!(out.page_count(), 4); // 5 -> 8 pages -> 4 sides
+        let (_, _, ow, oh) = out.page_box(&out.pages[0]);
+        assert_eq!((ow, oh), (w * 2.0, h));
+    }
+
+    #[test]
+    fn sanitize_rotate_and_crop_change_the_page_not_the_picture() {
+        let src = PdfDoc::open(sample(3)).unwrap();
+        let (_, _, w, h) = src.page_box(&src.pages[0]);
+        let opts = Opts {
+            sanitize: true,
+            rotate: Some((90, Some(vec![1]))),
+            crop_pt: Some([4.0, 2.0, 6.0, 8.0]),
+        };
+        let bytes = assemble_opts(&[(&src, vec![0, 1, 2])], &|_, _| vec![], &opts).unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("/Info"));
+        assert!(!String::from_utf8_lossy(&bytes).contains("Producer"));
+        let o = PdfDoc::open(bytes).unwrap();
+        let (_, _, ow, oh) = o.page_box(&o.pages[0]);
+        assert_eq!((ow, oh), (w - 10.0, h - 10.0));
+        let rot = |i: usize| {
+            o.resolve(o.pages[i].get("Rotate").unwrap_or(&Val::Null))
+                .int()
+                .unwrap_or(0)
+        };
+        assert_eq!((rot(0), rot(1), rot(2)), (0, 90, 0));
+        // too large a cut is refused
+        let big = Opts {
+            crop_pt: Some([w, 0.0, 0.0, 0.0]),
+            ..Opts::default()
+        };
+        assert!(assemble_opts(&[(&src, vec![0])], &|_, _| vec![], &big).is_err());
     }
 
     #[test]

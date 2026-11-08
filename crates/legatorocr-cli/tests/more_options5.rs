@@ -411,3 +411,426 @@ fn sign_timestamp_gets_a_stamp_from_a_local_authority() {
     );
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// `--sign-visible`: the signature gets a box with text on the page, still verifies, and a box
+/// outside the page is refused.
+#[cfg(target_os = "linux")]
+#[test]
+fn sign_visible_puts_a_box_on_the_page() {
+    let ok = |c: &str, a: &str| {
+        Command::new(c)
+            .arg(a)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    };
+    if !ok("openssl", "version") {
+        eprintln!("openssl not found: sign-visible test skipped");
+        return;
+    }
+    let d = dir("signvis");
+    let ssl = |args: &[&str]| {
+        let o = Command::new("openssl")
+            .args(args)
+            .current_dir(&d)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    };
+    ssl(&[
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-keyout",
+        "k.pem",
+        "-out",
+        "c.pem",
+        "-subj",
+        "/CN=Test Signer",
+        "-days",
+        "3",
+    ]);
+    ssl(&[
+        "pkcs12", "-export", "-inkey", "k.pem", "-in", "c.pem", "-out", "t.p12", "-passout",
+        "pass:pw",
+    ]);
+    let g = image::GrayImage::from_pixel(1200, 1200, image::Luma([240]));
+    g.save(d.join("a.png")).unwrap();
+    let made = run(
+        &d,
+        &[
+            "a.png", "--dpi", "300", "--format", "none", "--pdf", "h.pdf",
+        ],
+    );
+    assert!(made.status.success(), "{}", text(&made));
+    let sign = |vis: &str, out: &str| {
+        Command::new(env!("CARGO_BIN_EXE_legatorocr"))
+            .current_dir(&d)
+            .env("LGR_TEST_PW", "pw")
+            .args([
+                "--sign-pdf",
+                "h.pdf",
+                "--sign-p12",
+                "t.p12",
+                "--sign-pass-env",
+                "LGR_TEST_PW",
+                "--sign-name",
+                "Ana",
+                "--sign-reason",
+                "Approved",
+                "--sign-visible",
+                vis,
+                "--pdf",
+                out,
+            ])
+            .output()
+            .unwrap()
+    };
+    let s = sign("1,10,10,60,20", "s.pdf");
+    assert!(s.status.success(), "{}", text(&s));
+    let bytes = std::fs::read(d.join("s.pdf")).unwrap();
+    let all = String::from_utf8_lossy(&bytes);
+    assert!(all.contains("(Digitally signed by Ana) Tj"));
+    assert!(all.contains("(Reason: Approved) Tj"));
+    let v = run(
+        &d,
+        &["--verify-pdf-signatures", "s.pdf", "--sign-ca", "c.pem"],
+    );
+    assert!(v.status.success(), "{}", text(&v));
+    let bad = sign("1,10,10,6000,20", "x.pdf");
+    assert!(!bad.status.success());
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// `--encrypt-pdf` and `--pdf-permissions`: the file gets an AES-256 Encrypt dictionary, the page
+/// content is not readable any more, and the toolbox refuses to take the result apart without
+/// the password.
+#[test]
+fn encrypt_pdf_protects_the_output() {
+    let d = dir("encpdf");
+    let g = image::GrayImage::from_pixel(600, 300, image::Luma([240]));
+    g.save(d.join("a.png")).unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_legatorocr"))
+        .current_dir(&d)
+        .env("LEGATOROCR_PDF_USER_PASSWORD", "open")
+        .env("LEGATOROCR_PDF_OWNER_PASSWORD", "boss")
+        .args([
+            "a.png",
+            "--dpi",
+            "100",
+            "--format",
+            "none",
+            "--pdf",
+            "e.pdf",
+            "--encrypt-pdf",
+            "--pdf-permissions",
+            "print,copy",
+        ])
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", text(&o));
+    let b = std::fs::read(d.join("e.pdf")).unwrap();
+    let t = String::from_utf8_lossy(&b);
+    assert!(
+        t.contains("/CFM /AESV3") && t.contains("/Encrypt "),
+        "no Encrypt dictionary"
+    );
+    assert!(!t.contains("/Producer (LegatorOCR") || t.contains("/Encrypt "));
+    let r = run(&d, &["e.pdf", "--extract-pages", "1", "-o", "x"]);
+    assert!(!r.status.success());
+    // an unknown permission and a missing password are refused
+    let bad = run(
+        &d,
+        &[
+            "a.png",
+            "--pdf",
+            "z.pdf",
+            "--encrypt-pdf",
+            "--pdf-permissions",
+            "fly",
+        ],
+    );
+    assert!(!bad.status.success());
+    let nopw = Command::new(env!("CARGO_BIN_EXE_legatorocr"))
+        .current_dir(&d)
+        .env_remove("LEGATOROCR_PDF_USER_PASSWORD")
+        .env_remove("LEGATOROCR_PDF_OWNER_PASSWORD")
+        .args(["a.png", "--pdf", "z.pdf", "--encrypt-pdf"])
+        .output()
+        .unwrap();
+    assert!(!nopw.status.success());
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// `--object-streams`: the structure objects go into compressed object streams behind a
+/// cross-reference stream; the toolbox can read the result again; PDF/A-1 and signing are refused.
+#[test]
+fn object_streams_pack_the_structure() {
+    let d = dir("objstm");
+    for i in 0..3 {
+        let mut g = image::GrayImage::from_pixel(600, 300, image::Luma([240]));
+        for x in 50..500 {
+            g.put_pixel(x, 100 + i * 20, image::Luma([20]));
+        }
+        g.save(d.join(format!("p{i}.png"))).unwrap();
+    }
+    let o = run(
+        &d,
+        &[
+            "p0.png",
+            "p1.png",
+            "p2.png",
+            "--dpi",
+            "100",
+            "--format",
+            "none",
+            "--pdf",
+            "c.pdf",
+            "--object-streams",
+        ],
+    );
+    assert!(o.status.success(), "{}", text(&o));
+    let b = std::fs::read(d.join("c.pdf")).unwrap();
+    let t = String::from_utf8_lossy(&b);
+    assert!(t.contains("/Type /ObjStm") && t.contains("/Type /XRef"));
+    assert!(!t.contains("\ntrailer"));
+    // readable again: take page 2 out of it
+    let r = run(&d, &["c.pdf", "--extract-pages", "2", "-o", "x"]);
+    assert!(r.status.success(), "{}", text(&r));
+    assert!(d.join("x/c.pdf").exists());
+    let bad = run(
+        &d,
+        &[
+            "p0.png",
+            "--pdf",
+            "z.pdf",
+            "--pdfa",
+            "--pdfa-part",
+            "1",
+            "--object-streams",
+        ],
+    );
+    assert!(!bad.status.success());
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// `--linearize`: Fast Web View. The file starts with the linearization dictionary; when qpdf is
+/// installed it must find no linearization errors. Combinations that cannot work are refused.
+#[test]
+fn linearize_puts_the_first_page_first() {
+    let d = dir("linear");
+    for i in 0..4 {
+        let mut g = image::GrayImage::from_pixel(600, 300, image::Luma([240]));
+        for x in 50..500 {
+            g.put_pixel(x, 100 + i * 20, image::Luma([20]));
+        }
+        g.save(d.join(format!("p{i}.png"))).unwrap();
+    }
+    let o = run(
+        &d,
+        &[
+            "p0.png",
+            "p1.png",
+            "p2.png",
+            "p3.png",
+            "--dpi",
+            "100",
+            "--format",
+            "none",
+            "--pdf",
+            "l.pdf",
+            "--linearize",
+        ],
+    );
+    assert!(o.status.success(), "{}", text(&o));
+    let b = std::fs::read(d.join("l.pdf")).unwrap();
+    assert!(String::from_utf8_lossy(&b[..200]).contains("/Linearized 1"));
+    if let Ok(q) = Command::new("qpdf")
+        .args(["--check-linearization", "l.pdf"])
+        .current_dir(&d)
+        .output()
+    {
+        assert!(
+            String::from_utf8_lossy(&q.stdout).contains("no linearization errors"),
+            "{}",
+            text(&q)
+        );
+    }
+    let bad = run(
+        &d,
+        &[
+            "p0.png",
+            "--pdf",
+            "z.pdf",
+            "--linearize",
+            "--object-streams",
+        ],
+    );
+    assert!(!bad.status.success());
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// `--jbig2`: a noisy black & white page is written with /JBIG2Decode when that is smaller, and the
+/// toolbox can still take the file apart (the decoder reads what the encoder wrote).
+#[test]
+fn jbig2_output_is_smaller_and_readable() {
+    let d = dir("jbig2");
+    let mut g = image::GrayImage::from_pixel(900, 700, image::Luma([255]));
+    let mut s = 12345u64;
+    for y in 40..660u32 {
+        for x in 40..860u32 {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            // blobs of ink that vary from row to row
+            if (x / 5 + (y / 7) * 3).is_multiple_of(4) && !(s >> 40).is_multiple_of(9) {
+                g.put_pixel(x, y, image::Luma([0]));
+            }
+        }
+    }
+    g.save(d.join("a.png")).unwrap();
+    let base = run(
+        &d,
+        &[
+            "a.png", "--dpi", "150", "--mode", "bw", "--format", "none", "--pdf", "n.pdf",
+        ],
+    );
+    assert!(base.status.success(), "{}", text(&base));
+    let j = run(
+        &d,
+        &[
+            "a.png", "--dpi", "150", "--mode", "bw", "--format", "none", "--pdf", "j.pdf",
+            "--jbig2",
+        ],
+    );
+    assert!(j.status.success(), "{}", text(&j));
+    let (n, jb) = (
+        std::fs::read(d.join("n.pdf")).unwrap(),
+        std::fs::read(d.join("j.pdf")).unwrap(),
+    );
+    assert!(jb.len() <= n.len(), "{} vs {}", jb.len(), n.len());
+    assert!(String::from_utf8_lossy(&jb).contains("/JBIG2Decode"));
+    let r = run(&d, &["j.pdf", "--extract-pages", "1", "-o", "x"]);
+    assert!(r.status.success(), "{}", text(&r));
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// `--smooth-glyphs`: the black & white page comes out at FACTOR times the pixels (and dpi);
+/// in colour mode it is ignored.
+#[test]
+fn smooth_glyphs_enlarges_black_and_white_pages() {
+    let d = dir("smoothg");
+    let mut g = image::GrayImage::from_pixel(300, 120, image::Luma([255]));
+    for y in 40..80u32 {
+        for x in 60..240u32 {
+            if (x / 6 + y / 5) % 2 == 0 {
+                g.put_pixel(x, y, image::Luma([20]));
+            }
+        }
+    }
+    g.save(d.join("a.png")).unwrap();
+    let dims = |sub: &str| -> (u32, u32) {
+        let f = std::fs::read_dir(d.join(sub))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        image::image_dimensions(f).unwrap()
+    };
+    let mk = |sub: &str, extra: &[&str]| {
+        let mut a = vec![
+            "a.png",
+            "--dpi",
+            "100",
+            "--split",
+            "off",
+            "--format",
+            "png",
+            "--out-dir",
+            sub,
+        ];
+        a.extend_from_slice(extra);
+        let o = run(&d, &a);
+        assert!(o.status.success(), "{}", text(&o));
+    };
+    mk("plain", &["--mode", "bw"]);
+    mk("smooth", &["--mode", "bw", "--smooth-glyphs", "2"]);
+    let (p, s) = (dims("plain"), dims("smooth"));
+    assert!(s.0 * 10 >= p.0 * 19 && s.0 * 10 <= p.0 * 21, "{p:?} {s:?}");
+    mk("colour", &["--mode", "color", "--smooth-glyphs", "2"]);
+    let c = dims("colour");
+    assert!(c.0 < s.0 - 20, "{c:?} {s:?}");
+    assert!(!run(&d, &["a.png", "--smooth-glyphs", "4"]).status.success());
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// `--pdfa-level`: U and A are declared in the XMP packet only when their requirements are met;
+/// the preflight (`--pdfa-check`) knows the extra requirements; impossible combinations are refused.
+#[test]
+fn pdfa_level_declares_u_and_a() {
+    let d = dir("pdfalevel");
+    let mut g = image::GrayImage::from_pixel(600, 400, image::Luma([245]));
+    for y in 100..120u32 {
+        for x in 80..500u32 {
+            g.put_pixel(x, y, image::Luma([20]));
+        }
+    }
+    g.save(d.join("a.png")).unwrap();
+    let make = |level: &str, extra: &[&str]| {
+        let out = format!("{level}.pdf");
+        let mut a = vec![
+            "a.png",
+            "--dpi",
+            "150",
+            "--mode",
+            "bw",
+            "--format",
+            "none",
+            "--pdfa",
+            "--pdfa-level",
+            level,
+            "--pdf",
+            &out,
+        ];
+        a.extend_from_slice(extra);
+        let o = run(&d, &a);
+        (o, out)
+    };
+    let declared = |f: &str| -> String {
+        let b = std::fs::read(d.join(f)).unwrap();
+        let t = String::from_utf8_lossy(&b).into_owned();
+        t.split("<pdfaid:conformance>")
+            .nth(1)
+            .and_then(|r| r.chars().next())
+            .map(String::from)
+            .unwrap_or_default()
+    };
+    let (o, f) = make("U", &[]);
+    assert!(o.status.success(), "{}", text(&o));
+    assert_eq!(declared(&f), "U");
+    let chk = run(&d, &["--pdfa-check", &f]);
+    assert!(text(&chk).contains("ToUnicode"), "{}", text(&chk));
+    let (o, f) = make("A", &["--ocr", "--lang", "eng"]);
+    if o.status.success() {
+        assert_eq!(declared(&f), "A");
+        let b = std::fs::read(d.join(&f)).unwrap();
+        assert!(String::from_utf8_lossy(&b).contains("/StructTreeRoot"));
+    } else {
+        // a build without a recognition model and no Tesseract on the machine cannot do level A
+        let t = text(&o);
+        assert!(
+            t.contains("tesseract not found") || t.contains("no native recognition model"),
+            "{t}"
+        );
+        eprintln!("no OCR engine here: the level A part of the test is skipped");
+    }
+    // refusals
+    assert!(!make("A", &[]).0.status.success());
+    assert!(!make("U", &["--pdfa-part", "1"]).0.status.success());
+    let o = run(&d, &["a.png", "--pdfa-level", "U", "--pdf", "z.pdf"]);
+    assert!(!o.status.success());
+    let _ = std::fs::remove_dir_all(&d);
+}

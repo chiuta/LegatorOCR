@@ -547,6 +547,16 @@ pub fn aes_cbc_encrypt_nopad(key: &[u8], iv: [u8; 16], data: &[u8]) -> Option<Ve
     Some(out)
 }
 
+/// CBC encryption with PKCS#7 padding; the result is `iv | ciphertext` (the PDF layout).
+pub fn aes_cbc_encrypt(key: &[u8], iv: [u8; 16], data: &[u8]) -> Option<Vec<u8>> {
+    let pad = 16 - data.len() % 16;
+    let mut v = data.to_vec();
+    v.extend(std::iter::repeat_n(pad as u8, pad));
+    let mut out = iv.to_vec();
+    out.extend(aes_cbc_encrypt_nopad(key, iv, &v)?);
+    Some(out)
+}
+
 // ---------------------------------------------------------------- PDF security handler
 const PAD: [u8; 32] = [
     0x28, 0xBF, 0x4E, 0x5E, 0x4E, 0x75, 0x8A, 0x41, 0x64, 0x00, 0x4E, 0x56, 0xFF, 0xFA, 0x01, 0x08,
@@ -624,6 +634,64 @@ fn hash_r6(pw: &[u8], salt: &[u8], udata: &[u8]) -> Vec<u8> {
     }
     k.truncate(32);
     k
+}
+
+/// The values of an AES-256 (V5, R6) Encrypt dictionary, plus the file key.
+pub struct V5Setup {
+    pub key: [u8; 32],
+    pub o: Vec<u8>,
+    pub u: Vec<u8>,
+    pub oe: Vec<u8>,
+    pub ue: Vec<u8>,
+    pub perms: Vec<u8>,
+}
+
+/// Make the Encrypt values for a new file (ISO 32000-2, algorithms 8, 9 and 10). `rand` fills
+/// a buffer with random bytes. Passwords are used as UTF-8, cut to 127 bytes.
+pub fn make_v5(
+    user: &[u8],
+    owner: &[u8],
+    p: i32,
+    encrypt_metadata: bool,
+    rand: &mut dyn FnMut(&mut [u8]),
+) -> V5Setup {
+    let user = &user[..user.len().min(127)];
+    let owner = &owner[..owner.len().min(127)];
+    let mut key = [0u8; 32];
+    rand(&mut key);
+    let mut salts = [0u8; 32];
+    rand(&mut salts);
+    let (uv, uk, ov, ok) = (&salts[..8], &salts[8..16], &salts[16..24], &salts[24..32]);
+    // user
+    let mut u = hash_r6(user, uv, b"");
+    u.extend_from_slice(uv);
+    u.extend_from_slice(uk);
+    let ik = hash_r6(user, uk, b"");
+    let ue = aes_cbc_encrypt_nopad(&ik, [0; 16], &key).unwrap_or_default();
+    // owner (binds to the 48 bytes of /U)
+    let mut o = hash_r6(owner, ov, &u);
+    o.extend_from_slice(ov);
+    o.extend_from_slice(ok);
+    let ik = hash_r6(owner, ok, &u);
+    let oe = aes_cbc_encrypt_nopad(&ik, [0; 16], &key).unwrap_or_default();
+    // /Perms: P, ones, T/F, "adb", four random bytes; one AES block in ECB mode
+    let mut b = [0u8; 16];
+    b[..4].copy_from_slice(&(p as u32).to_le_bytes());
+    b[4..8].copy_from_slice(&[0xFF; 4]);
+    b[8] = if encrypt_metadata { b'T' } else { b'F' };
+    b[9..12].copy_from_slice(b"adb");
+    rand(&mut b[12..16]);
+    if let Some(a) = Aes::new(&key) {
+        a.encrypt_block(&mut b);
+    }
+    V5Setup {
+        key,
+        o,
+        u,
+        oe,
+        ue,
+        perms: b.to_vec(),
+    }
 }
 
 impl Crypt {

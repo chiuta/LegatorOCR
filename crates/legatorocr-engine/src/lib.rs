@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 pub mod altbin;
 pub mod archive;
 pub mod audit;
+pub mod autolang;
 pub mod autoretry;
 pub mod backup;
 pub mod bagit;
@@ -48,8 +49,10 @@ pub mod mrz;
 pub mod naming;
 pub mod ocfl;
 pub mod ocrcache;
+pub mod ocrzones;
 pub mod offline;
 pub mod pdfapreflight;
+pub mod pdfcrypt;
 pub mod runninghead;
 pub mod textrules;
 
@@ -94,7 +97,9 @@ pub use legatorocr_ocr as ocr;
 pub use legatorocr_pdf::g4;
 pub use legatorocr_pdf::LabelStyle;
 pub use legatorocr_pdf::Meta as PdfMeta;
-pub use legatorocr_pdf::{DEFAULT_PDFA_PART, DEFAULT_TAGGED, DEFAULT_TAGGED_STRUCT};
+pub use legatorocr_pdf::{
+    DEFAULT_PDFA_LEVEL, DEFAULT_PDFA_PART, DEFAULT_TAGGED, DEFAULT_TAGGED_STRUCT,
+};
 
 #[derive(Debug, Clone)]
 pub struct PdfExport {

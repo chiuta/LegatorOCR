@@ -204,6 +204,7 @@ pub fn settings_to_pairs(s: &Settings) -> Vec<(&'static str, String)> {
         ("auto_levels", s.auto_levels.to_string()),
         ("sharpen", s.sharpen.to_string()),
         ("dewarp_margin", s.dewarp_margin.to_string()),
+        ("smooth_glyphs", s.smooth_glyphs.to_string()),
         ("fold_shadow", s.fold_shadow.to_string()),
         (
             "fill_color",
@@ -294,6 +295,7 @@ pub fn apply_pair(s: &mut Settings, k: &str, v: &str) -> Result<bool> {
         "auto_levels" => s.auto_levels = b(v).ok_or_else(bad)?,
         "sharpen" => s.sharpen = v.parse().map_err(|_| bad())?,
         "dewarp_margin" => s.dewarp_margin = v.parse().map_err(|_| bad())?,
+        "smooth_glyphs" => s.smooth_glyphs = v.parse().map_err(|_| bad())?,
         "fold_shadow" => s.fold_shadow = v.parse().map_err(|_| bad())?,
         "fill_color" => {
             s.fill_color = if v.trim().is_empty() {

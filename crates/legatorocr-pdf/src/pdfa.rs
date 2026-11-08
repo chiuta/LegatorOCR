@@ -342,8 +342,10 @@ pub fn xmp_date(pdf_date: &str) -> String {
 
 /// The XMP packet (PDF/A-2b identification plus the Info-dictionary values).
 pub struct Xmp<'a> {
-    /// PDF/A part: 1, 2 or 3 (conformance level is always B).
+    /// PDF/A part: 1, 2 or 3.
     pub part: u8,
+    /// Conformance level: `'A'`, `'B'` or `'U'`.
+    pub level: char,
     pub title: Option<&'a str>,
     pub author: Option<&'a str>,
     pub subject: Option<&'a str>,
@@ -361,9 +363,9 @@ impl Xmp<'_> {
              <x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n\
              <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n\
              <rdf:Description rdf:about=\"\" xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\">\
-             <pdfaid:part>{}</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance>\
+             <pdfaid:part>{}</pdfaid:part><pdfaid:conformance>{}</pdfaid:conformance>\
              </rdf:Description>\n",
-            self.part
+            self.part, self.level
         );
         let alt = |t: &str| {
             format!(
