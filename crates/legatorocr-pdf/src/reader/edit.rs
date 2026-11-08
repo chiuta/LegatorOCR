@@ -158,6 +158,9 @@ struct Out {
     objs: Vec<Option<Vec<u8>>>,
     map: HashMap<(usize, u32), u32>,
     queue: Vec<(usize, u32, u32)>,
+    /// (file, original page object) -> object number of the page in the output, so that links
+    /// between pages that are kept still point at the right page
+    pages: HashMap<(usize, u32), u32>,
 }
 
 impl Out {
@@ -207,9 +210,14 @@ impl PdfDoc {
             }
             Val::Dict(d) => self.ser_dict(di, d, out, s),
             Val::Ref(n) => {
-                // other pages (and page-tree nodes) are cut off
+                // other pages (and page-tree nodes) are cut off; pages that are kept are linked
                 if self.get(*n).is_some_and(|o| is_page_node(&o)) {
-                    s.extend_from_slice(b"null");
+                    match out.pages.get(&(di, *n)) {
+                        Some(id) => {
+                            let _ = write!(UnsafeVec(s), "{id} 0 R");
+                        }
+                        None => s.extend_from_slice(b"null"),
+                    }
                     return;
                 }
                 let id = match out.map.get(&(di, *n)) {
@@ -225,6 +233,34 @@ impl PdfDoc {
             }
             Val::Stream(d, _, _) => self.ser_dict(di, d, out, s),
         }
+    }
+
+    /// A link annotation whose destination is a page that is not part of the output, or a
+    /// named destination (the name tree is not carried over).
+    fn dead_link(&self, di: usize, annot: &Val, out: &Out) -> bool {
+        let Some(a) = self.dict_of(annot) else {
+            return false;
+        };
+        if a.get("Subtype").and_then(|t| t.name()) != Some("Link") {
+            return false;
+        }
+        let dest_dead = |v: &Val| match self.resolve(v) {
+            Val::Arr(d) => match d.first() {
+                Some(Val::Ref(n)) => !out.pages.contains_key(&(di, *n)),
+                _ => false,
+            },
+            Val::Str(_) | Val::Name(_) => true,
+            _ => false,
+        };
+        if let Some(d) = a.get("Dest") {
+            return dest_dead(d);
+        }
+        if let Some(act) = a.get("A").and_then(|v| self.dict_of(v)) {
+            if act.get("S").and_then(|t| t.name()) == Some("GoTo") {
+                return act.get("D").is_some_and(dest_dead);
+            }
+        }
+        false
     }
 
     fn ser_dict(&self, di: usize, d: &Dict, out: &mut Out, s: &mut Vec<u8>) {
@@ -338,9 +374,21 @@ pub fn assemble_opts(
         objs: Vec::new(),
         map: HashMap::new(),
         queue: Vec::new(),
+        pages: HashMap::new(),
     };
     let catalog = out.alloc();
     let pages_id = out.alloc();
+    // page objects get their numbers first: links may point forward
+    let mut page_ids: Vec<u32> = Vec::new();
+    for (di, (doc, idxs)) in parts.iter().enumerate() {
+        for &pi in idxs {
+            let id = out.alloc();
+            page_ids.push(id);
+            if let Some(Some(n)) = doc.page_nums.get(pi) {
+                out.pages.entry((di, *n)).or_insert(id);
+            }
+        }
+    }
     let mut kids = Vec::new();
     let mut n_out = 0usize;
     for (di, (doc, idxs)) in parts.iter().enumerate() {
@@ -459,6 +507,17 @@ pub fn assemble_opts(
                 out.objs[id as usize - 1] = Some(raw_stream(body.as_bytes()));
                 stamp_ids.push(id);
             }
+            // links to pages that are not in the output (or to named destinations, which are not
+            // carried) would point nowhere: leave those annotations out
+            if let Some(av) = page.get("Annots").cloned() {
+                if let Val::Arr(list) = doc.resolve(&av) {
+                    let keep: Vec<Val> = list
+                        .into_iter()
+                        .filter(|a| !doc.dead_link(di, a, &out))
+                        .collect();
+                    page.insert("Annots".into(), Val::Arr(keep));
+                }
+            }
             // Contents: [q] original... [Q] [stamp]
             let orig: Vec<Val> = match page.remove("Contents") {
                 Some(Val::Arr(a)) => a,
@@ -484,7 +543,7 @@ pub fn assemble_opts(
             if let [_, big_q, st_id] = stamp_ids[..] {
                 let _ = write!(UnsafeVec(&mut body), "{big_q} 0 R {st_id} 0 R");
             }
-            let pid = out.alloc();
+            let pid = page_ids[n_out];
             let _ = write!(UnsafeVec(&mut body), "] /Parent {pages_id} 0 R >>");
             out.objs[pid as usize - 1] = Some(body);
             kids.push(pid);
@@ -611,6 +670,7 @@ pub fn booklet(doc: &PdfDoc) -> R<Vec<u8>> {
         objs: Vec::new(),
         map: HashMap::new(),
         queue: Vec::new(),
+        pages: HashMap::new(),
     };
     let catalog = out.alloc();
     let pages_id = out.alloc();
@@ -803,6 +863,64 @@ mod tests {
         w.finish()
     }
 
+    /// Three pages; 1 links to 3, 2 links to 1 and by name to nowhere, 3 links to 2.
+    fn linked() -> Vec<u8> {
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 90 90] /Annots [6 0 R] >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 90 90] /Annots [7 0 R 8 0 R] >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 90 90] /Annots [9 0 R] >>",
+            "<< /Type /Annot /Subtype /Link /Rect [1 1 9 9] /Dest [5 0 R /Fit] >>",
+            "<< /Type /Annot /Subtype /Link /Rect [1 1 9 9] /Dest [3 0 R /Fit] >>",
+            "<< /Type /Annot /Subtype /Link /Rect [1 1 9 9] /Dest (chapter1) >>",
+            "<< /Type /Annot /Subtype /Link /Rect [1 1 9 9] /A << /S /GoTo /D [4 0 R /Fit] >> >>",
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offs = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offs.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let x = out.len();
+        out.extend_from_slice(
+            format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes(),
+        );
+        for o in &offs {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n",
+                objs.len() + 1
+            )
+            .as_bytes(),
+        );
+        out
+    }
+
+    #[test]
+    fn links_follow_their_pages_and_dead_ones_are_dropped() {
+        let doc = PdfDoc::open(linked()).unwrap();
+        // all pages kept: every link survives and points at an output page
+        let all = assemble(&[(&doc, vec![0, 1, 2])], &|_, _| vec![]).unwrap();
+        let t = String::from_utf8_lossy(&all).into_owned();
+        assert!(!t.contains("[null"), "dangling destination: {t}");
+        assert_eq!(
+            t.matches("/Subtype /Link").count(),
+            3,
+            "named destination is dropped"
+        );
+        // pages 1 and 2 only: the link from 1 to 3 and from 3 to 2 go away, 2 -> 1 stays
+        let two = assemble(&[(&doc, vec![0, 1])], &|_, _| vec![]).unwrap();
+        let t = String::from_utf8_lossy(&two).into_owned();
+        assert!(!t.contains("null"), "dangling destination: {t}");
+        assert_eq!(t.matches("/Subtype /Link").count(), 1);
+        // the surviving link points at the first page of the result
+        let d = PdfDoc::open(two).unwrap();
+        assert_eq!(d.page_count(), 2);
+    }
+
     #[test]
     fn booklet_order_is_the_folding_order() {
         use super::booklet_sides as b;
@@ -841,6 +959,7 @@ mod tests {
             sanitize: true,
             rotate: Some((90, Some(vec![1]))),
             crop_pt: Some([4.0, 2.0, 6.0, 8.0]),
+            ..Default::default()
         };
         let bytes = assemble_opts(&[(&src, vec![0, 1, 2])], &|_, _| vec![], &opts).unwrap();
         assert!(!String::from_utf8_lossy(&bytes).contains("/Info"));
