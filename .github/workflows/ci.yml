@@ -116,6 +116,26 @@ jobs:
       - name: CER regression gate
         run: python3 scripts/ocr-bench.py target/release/legatorocr --engine tesseract --max-cer 0.3
 
+  crossread:
+    # second opinion: poppler, pdfium, MuPDF, qpdf, pikepdf, pypdf and pyHanko read what we write
+    # (encrypted, linearized, object streams, JBIG2 symbols, signed, tagged PDF/A) and must agree
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y poppler-utils qpdf openssl tesseract-ocr tesseract-ocr-eng fonts-dejavu-core
+          pip install numpy==2.5.3 pillow==12.3.0 pikepdf==10.16.0 pypdf==6.17.0 pypdfium2==5.13.0 pymupdf==2.1 pyhanko==0.38.1 pyhanko-certvalidator==0.33.0
+      - name: Build
+        run: cargo build --locked --release -p legatorocr-cli
+      - name: Cross-reader checks
+        run: python3 scripts/crossread.py target/release/legatorocr
+
   msrv:
     # the declared minimum Rust version must really build the workspace
     runs-on: ubuntu-latest

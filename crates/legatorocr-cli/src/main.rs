@@ -805,7 +805,7 @@ struct Cli {
 
     /// Sign FILE with your PKCS#12 certificate (--sign-p12): CAdES detached, SHA-256, added as an
     /// incremental update (the earlier bytes stay unchanged). Output: --pdf NAME or FILE.signed.pdf.
-    /// Needs openssl and a PDF whose last xref is a classic table. The legal level (simple,
+    /// Needs openssl. A file with object streams is first rewritten as a classic file. The legal level (simple,
     /// advanced, qualified) is that of your certificate.
     #[arg(long, value_name = "FILE", requires = "sign_p12")]
     sign_pdf: Option<PathBuf>,
@@ -838,13 +838,14 @@ struct Cli {
 
     /// Write PDFs with compressed object streams and a cross-reference stream (PDF 1.5): the
     /// structure objects shrink to a fraction, mostly visible in files with many pages. Not for
-    /// PDF/A-1 (which forbids them) and not for --sign-pdf (it needs a classic table).
+    /// PDF/A-1 (which forbids them) and not with --linearize.
     #[arg(long)]
     object_streams: bool,
 
     /// Write PDFs in Fast Web View order: the first page and what it needs come first, followed by
     /// hint tables, so a viewer can show page 1 while the rest still downloads. Not with
-    /// --encrypt-pdf or --object-streams; --sign-pdf on the result breaks the layout (sign first).
+    /// --object-streams; --sign-pdf on the result breaks the layout (sign first). Works with
+    /// --encrypt-pdf.
     #[arg(long)]
     linearize: bool,
 
@@ -2115,7 +2116,7 @@ fn real_main() -> Result<()> {
         );
     }
     if cli.sign_pdf.is_some() && cli.object_streams {
-        bail!("--sign-pdf needs a classic cross-reference table: leave out --object-streams (sign first, or sign a file written without it)");
+        bail!("--object-streams does not apply to --sign-pdf: a file that already has object streams is rewritten as a classic file before it is signed");
     }
     if cli.linearize && cli.object_streams {
         bail!("--linearize cannot be combined with --object-streams");
