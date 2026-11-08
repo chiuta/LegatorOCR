@@ -851,3 +851,53 @@ fn pdfa_level_declares_u_and_a() {
     assert!(!o.status.success());
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// `--figure`: a described picture becomes a /Figure structure element with /Alt; refused without
+/// a tagged PDF, without a description, or with a bad box.
+#[test]
+fn figure_adds_alternative_text() {
+    let d = dir("figure");
+    image::GrayImage::from_pixel(600, 300, image::Luma([240]))
+        .save(d.join("a.png"))
+        .unwrap();
+    let make = |extra: &[&str]| {
+        let mut a = vec![
+            "a.png", "--dpi", "100", "--format", "none", "--pdf", "f.pdf",
+        ];
+        a.extend_from_slice(extra);
+        run(&d, &a)
+    };
+    let o = make(&[
+        "--ocr",
+        "--tagged-pdf",
+        "--figure",
+        "1,10,10,50,40=A diagram",
+    ]);
+    if o.status.success() {
+        let b = std::fs::read(d.join("f.pdf")).unwrap();
+        let t = String::from_utf8_lossy(&b);
+        assert!(
+            t.contains("/S /Figure") && t.contains("/Alt "),
+            "no figure element"
+        );
+    } else {
+        let t = text(&o);
+        assert!(
+            t.contains("tesseract not found") || t.contains("no native recognition model"),
+            "{t}"
+        );
+        eprintln!("no OCR engine here: the figure output part is skipped");
+    }
+    assert!(!make(&["--figure", "1,10,10,50,40=x"]).status.success());
+    assert!(
+        !make(&["--ocr", "--tagged-pdf", "--figure", "1,10,10,50,40"])
+            .status
+            .success()
+    );
+    assert!(
+        !make(&["--ocr", "--tagged-pdf", "--figure", "0,10,10,50,40=x"])
+            .status
+            .success()
+    );
+    let _ = std::fs::remove_dir_all(&d);
+}
