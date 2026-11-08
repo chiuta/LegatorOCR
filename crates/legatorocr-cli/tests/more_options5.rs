@@ -813,7 +813,7 @@ fn pdfa_level_declares_u_and_a() {
     assert_eq!(declared(&f), "U");
     let chk = run(&d, &["--pdfa-check", &f]);
     assert!(text(&chk).contains("ToUnicode"), "{}", text(&chk));
-    let (o, f) = make("A", &["--ocr", "--lang", "eng"]);
+    let (o, f) = make("A", &["--ocr", "--engine", "native", "--lang", "eng"]);
     assert!(o.status.success(), "{}", text(&o));
     assert_eq!(declared(&f), "A");
     let b = std::fs::read(d.join(&f)).unwrap();
