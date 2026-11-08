@@ -1173,7 +1173,7 @@ fn encode_1bit(b: &BitImage) -> (String, Vec<u8>) {
     );
     let flate = deflate(&pack_1bit_up_predicted(b));
     if JBIG2_OUT.load(std::sync::atomic::Ordering::Relaxed) {
-        let j = jbig2enc::encode(w, b.h as usize, &b.data);
+        let j = jbig2enc::encode_best(w, b.h as usize, &b.data);
         if j.len() < g4.len().min(flate.len()) {
             return ("/Filter /JBIG2Decode".to_string(), j);
         }
