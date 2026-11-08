@@ -1,11 +1,19 @@
-//! `--encrypt-pdf`: password-protect the PDFs this program writes (AES-256). The user password
+//! `--object-streams` (smaller files) and `--encrypt-pdf`: both rewrite the finished PDF. Encryption: password-protect the PDFs this program writes (AES-256). The user password
 //! opens the file; the owner password lifts the restrictions listed by `--pdf-permissions`.
 //! Passwords come from the environment (LEGATOROCR_PDF_USER_PASSWORD, LEGATOROCR_PDF_OWNER_PASSWORD),
 //! never from the command line.
 
 use anyhow::{bail, Result};
-use legatorocr_pdf::reader::encrypt::{encrypt, perm};
+use legatorocr_pdf::reader::encrypt::{perm, rewrite, Protect};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+
+static COMPACT: AtomicBool = AtomicBool::new(false);
+
+/// `--object-streams`: pack plain objects into compressed object streams (PDF 1.5).
+pub fn set_compact(on: bool) {
+    COMPACT.store(on, Ordering::Relaxed);
+}
 
 struct Cfg {
     user: String,
@@ -67,19 +75,25 @@ pub fn clear() {
 }
 
 pub fn active() -> bool {
-    CFG.lock().unwrap().is_some()
+    CFG.lock().unwrap().is_some() || COMPACT.load(Ordering::Relaxed)
 }
 
 /// Encrypt `bytes` when [`set`] was called, else hand them back unchanged.
 pub fn apply(bytes: Vec<u8>) -> Result<Vec<u8>> {
     let g = CFG.lock().unwrap();
-    let Some(c) = g.as_ref() else {
+    let compact = COMPACT.load(Ordering::Relaxed);
+    if g.is_none() && !compact {
         return Ok(bytes);
-    };
+    }
+    let p = g.as_ref().map(|c| Protect {
+        user: &c.user,
+        owner: &c.owner,
+        allowed: c.allowed,
+    });
     let mut rng = |b: &mut [u8]| {
         getrandom::fill(b).expect("no random numbers from the system");
     };
-    encrypt(&bytes, &c.user, &c.owner, c.allowed, &mut rng).map_err(|e| anyhow::anyhow!("{e}"))
+    rewrite(&bytes, compact, p.as_ref(), &mut rng).map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 #[cfg(test)]

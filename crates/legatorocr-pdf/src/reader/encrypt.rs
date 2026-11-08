@@ -1,12 +1,15 @@
-//! Password-protect a finished PDF (AES-256, standard security handler V5/R6): every string and
-//! stream is encrypted with the file key, an /Encrypt dictionary and a file /ID are added.
-//! Works on the files this program writes (classic cross-reference table, no object streams
-//! needed); an already encrypted file is refused.
+//! Rewrite a finished PDF: password-protect it (AES-256, standard security handler V5/R6: every
+//! string and stream is encrypted with the file key, an /Encrypt dictionary and a file /ID are
+//! added) and/or pack its plain objects into compressed object streams with a cross-reference
+//! stream (PDF 1.5, usually much smaller). Works on the files this program writes (classic
+//! cross-reference table); an already encrypted file is refused.
 
 use super::edit::esc_name;
 use super::{fail, Dict, PdfDoc, Val, P, R};
 use crate::crypt::{aes_cbc_encrypt, make_v5};
+use flate2::{write::ZlibEncoder, Compression};
 use std::fmt::Write as _;
+use std::io::Write as _;
 
 /// Permission bits of /P (ISO 32000-2, table 22).
 pub mod perm {
@@ -28,15 +31,19 @@ pub fn p_value(bits: i32) -> i32 {
 }
 
 struct Ctx<'a> {
-    key: &'a [u8; 32],
+    /// The file key; `None` writes strings and streams as they are.
+    key: Option<[u8; 32]>,
     rand: &'a mut dyn FnMut(&mut [u8]),
 }
 
 impl Ctx<'_> {
     fn enc(&mut self, data: &[u8]) -> Vec<u8> {
+        let Some(key) = self.key else {
+            return data.to_vec();
+        };
         let mut iv = [0u8; 16];
         (self.rand)(&mut iv);
-        aes_cbc_encrypt(self.key, iv, data).unwrap_or_default()
+        aes_cbc_encrypt(&key, iv, data).unwrap_or_default()
     }
 
     fn ser(&mut self, v: &Val, s: &mut Vec<u8>) {
@@ -112,6 +119,13 @@ fn hex(b: &[u8]) -> String {
     s
 }
 
+/// Who may open a file and what they may do (see [`encrypt`]).
+pub struct Protect<'a> {
+    pub user: &'a str,
+    pub owner: &'a str,
+    pub allowed: i32,
+}
+
 /// Encrypt `data` so that `user` opens it (an empty user password opens without asking, only the
 /// permissions then apply) and `owner` may do everything. `allowed` is the set of [`perm`] bits
 /// that the user password grants. `rand` fills a buffer with random bytes.
@@ -122,10 +136,39 @@ pub fn encrypt(
     allowed: i32,
     rand: &mut dyn FnMut(&mut [u8]),
 ) -> R<Vec<u8>> {
+    rewrite(
+        data,
+        false,
+        Some(&Protect {
+            user,
+            owner,
+            allowed,
+        }),
+        rand,
+    )
+}
+
+fn deflate(data: &[u8]) -> Vec<u8> {
+    let mut z = ZlibEncoder::new(Vec::new(), Compression::best());
+    let _ = z.write_all(data);
+    z.finish().unwrap_or_default()
+}
+
+/// Objects per object stream.
+const PER_OBJSTM: usize = 100;
+
+/// Rewrite `data`: with `compact`, plain objects go into compressed object streams and the file
+/// gets a cross-reference stream; with `protect`, everything is encrypted. Either or both.
+pub fn rewrite(
+    data: &[u8],
+    compact: bool,
+    protect: Option<&Protect>,
+    rand: &mut dyn FnMut(&mut [u8]),
+) -> R<Vec<u8>> {
     let doc = PdfDoc::open(data.to_vec())?;
     // the last trailer of our own classic file
     let Some(t) = data.windows(7).rposition(|w| w == b"trailer") else {
-        return fail("only files with a classic cross-reference table can be encrypted");
+        return fail("only files with a classic cross-reference table can be rewritten");
     };
     let Some(Val::Dict(tr)) = P::new(data, t + 7).val(0) else {
         return fail("the trailer cannot be read");
@@ -140,76 +183,171 @@ pub fn encrypt(
     let Some(root) = tr.get("Root").cloned() else {
         return fail("the trailer has no /Root");
     };
-    let p = p_value(allowed);
-    let owner = if owner.is_empty() { user } else { owner };
-    let setup = make_v5(user.as_bytes(), owner.as_bytes(), p, true, rand);
+    let setup = protect.map(|p| {
+        make_v5(
+            p.user.as_bytes(),
+            if p.owner.is_empty() { p.user } else { p.owner }.as_bytes(),
+            p_value(p.allowed),
+            true,
+            rand,
+        )
+    });
     let mut cx = Ctx {
-        key: &setup.key,
+        key: setup.as_ref().map(|s| s.key),
         rand,
     };
+    let mut plain = Ctx {
+        key: None,
+        rand: &mut |_| {},
+    };
     let mut buf: Vec<u8> = b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n".to_vec();
-    let mut offs = Vec::new();
+    // (object number, entry): offset of a top-level object, or (object stream, index)
+    #[derive(Clone, Copy)]
+    enum At {
+        Free,
+        Off(usize),
+        In(u32, usize),
+    }
+    let mut at: Vec<At> = vec![At::Free; size as usize];
+    // numbers that become members of object streams (non-stream objects), in order
+    let mut packed: Vec<(u32, Vec<u8>)> = Vec::new();
     for n in 1..size {
-        offs.push(buf.len());
-        let _ = writeln!(Hex(&mut buf), "{n} 0 obj");
         match doc.get(n) {
             Some(Val::Stream(d, a, b)) => {
+                at[n as usize] = At::Off(buf.len());
+                let _ = writeln!(Hex(&mut buf), "{n} 0 obj");
                 let raw = data.get(a..b).unwrap_or_default();
                 let body = cx.enc(raw);
                 cx.dict(&d, Some(body.len()), &mut buf);
                 buf.extend_from_slice(b"\nstream\n");
                 buf.extend_from_slice(&body);
-                buf.extend_from_slice(b"\nendstream");
+                buf.extend_from_slice(b"\nendstream\nendobj\n");
             }
-            Some(v) => cx.ser(&v, &mut buf),
-            None => buf.extend_from_slice(b"null"),
+            Some(v) if compact => {
+                let mut s = Vec::new();
+                plain.ser(&v, &mut s);
+                packed.push((n, s));
+            }
+            Some(v) => {
+                at[n as usize] = At::Off(buf.len());
+                let _ = writeln!(Hex(&mut buf), "{n} 0 obj");
+                cx.ser(&v, &mut buf);
+                buf.extend_from_slice(b"\nendobj\n");
+            }
+            None => {
+                at[n as usize] = At::Off(buf.len());
+                let _ = writeln!(Hex(&mut buf), "{n} 0 obj\nnull\nendobj");
+            }
         }
-        buf.extend_from_slice(b"\nendobj\n");
     }
-    // the Encrypt dictionary: its strings are not encrypted
-    let enc_n = size;
-    offs.push(buf.len());
-    let _ = write!(
-        Hex(&mut buf),
-        "{enc_n} 0 obj\n<< /Filter /Standard /V 5 /R 6 /Length 256 /P {p} /O {} /U {} /OE {} /UE {} /Perms {} /EncryptMetadata true /CF << /StdCF << /AuthEvent /DocOpen /CFM /AESV3 /Length 32 >> >> /StmF /StdCF /StrF /StdCF >>\nendobj\n",
-        hex(&setup.o),
-        hex(&setup.u),
-        hex(&setup.oe),
-        hex(&setup.ue),
-        hex(&setup.perms)
-    );
+    // numbers after the original objects: object streams, the Encrypt dictionary, the xref stream
+    let mut next = size;
+    let mut enc_n = None;
+    if let Some(s) = &setup {
+        // its strings are not encrypted
+        let n = next;
+        next += 1;
+        enc_n = Some(n);
+        at.push(At::Off(buf.len()));
+        let _ = write!(
+            Hex(&mut buf),
+            "{n} 0 obj\n<< /Filter /Standard /V 5 /R 6 /Length 256 /P {} /O {} /U {} /OE {} /UE {} /Perms {} /EncryptMetadata true /CF << /StdCF << /AuthEvent /DocOpen /CFM /AESV3 /Length 32 >> >> /StmF /StdCF /StrF /StdCF >>\nendobj\n",
+            p_value(protect.map_or(0, |p| p.allowed)),
+            hex(&s.o),
+            hex(&s.u),
+            hex(&s.oe),
+            hex(&s.ue),
+            hex(&s.perms)
+        );
+    }
+    for chunk in packed.chunks(PER_OBJSTM) {
+        let sn = next;
+        next += 1;
+        let mut head = String::new();
+        let mut body: Vec<u8> = Vec::new();
+        for (i, (n, s)) in chunk.iter().enumerate() {
+            let _ = write!(head, "{n} {} ", body.len());
+            body.extend_from_slice(s);
+            body.push(b'\n');
+            at[*n as usize] = At::In(sn, i);
+        }
+        let mut raw = head.clone().into_bytes();
+        raw.extend_from_slice(&body);
+        let z = cx.enc(&deflate(&raw));
+        at.push(At::Off(buf.len()));
+        let _ = write!(
+            Hex(&mut buf),
+            "{sn} 0 obj\n<< /Type /ObjStm /N {} /First {} /Filter /FlateDecode /Length {} >>\nstream\n",
+            chunk.len(),
+            head.len(),
+            z.len()
+        );
+        buf.extend_from_slice(&z);
+        buf.extend_from_slice(b"\nendstream\nendobj\n");
+    }
     let mut id = [0u8; 16];
-    (cx.rand)(&mut id);
-    let xref = buf.len();
-    let _ = write!(
-        Hex(&mut buf),
-        "xref\n0 {}\n0000000000 65535 f \n",
-        offs.len() + 1
-    );
-    for o in &offs {
-        let _ = writeln!(Hex(&mut buf), "{o:010} 00000 n ");
+    if setup.is_some() {
+        (cx.rand)(&mut id);
     }
-    let mut trailer = Vec::new();
-    cx_plain_ref(&root, &mut trailer);
-    let info = match tr.get("Info") {
-        Some(Val::Ref(n)) => format!(" /Info {n} 0 R"),
-        _ => String::new(),
+    let mut trailer = String::new();
+    let ent = |s: &mut String, k: &str, v: &Val| {
+        if let Val::Ref(n) = v {
+            let _ = write!(s, " /{k} {n} 0 R");
+        }
     };
-    let _ = write!(
-        Hex(&mut buf),
-        "trailer\n<< /Size {} /Root {} /Encrypt {enc_n} 0 R{info} /ID [{} {}] >>\nstartxref\n{xref}\n%%EOF\n",
-        offs.len() + 1,
-        String::from_utf8_lossy(&trailer),
-        hex(&id),
-        hex(&id)
-    );
-    Ok(buf)
-}
-
-fn cx_plain_ref(v: &Val, s: &mut Vec<u8>) {
-    if let Val::Ref(n) = v {
-        let _ = write!(Hex(s), "{n} 0 R");
+    ent(&mut trailer, "Root", &root);
+    if let Some(v) = tr.get("Info") {
+        ent(&mut trailer, "Info", v);
     }
+    if let Some(n) = enc_n {
+        let _ = write!(trailer, " /Encrypt {n} 0 R /ID [{} {}]", hex(&id), hex(&id));
+    }
+    let xref;
+    if compact {
+        // cross-reference stream: type(1) field2(4) field3(2)
+        let xn = next;
+        at.push(At::Off(buf.len()));
+        xref = buf.len();
+        let mut rows: Vec<u8> = Vec::new();
+        for e in &at {
+            let (t, a, b) = match *e {
+                At::Free => (0u8, 0u32, 0xFFFFu32),
+                At::Off(o) => (1, o as u32, 0),
+                At::In(sn, i) => (2, sn, i as u32),
+            };
+            rows.push(t);
+            rows.extend_from_slice(&a.to_be_bytes());
+            rows.extend_from_slice(&(b as u16).to_be_bytes());
+        }
+        let z = deflate(&rows);
+        let _ = write!(
+            Hex(&mut buf),
+            "{xn} 0 obj\n<< /Type /XRef /Size {} /W [1 4 2]{trailer} /Filter /FlateDecode /Length {} >>\nstream\n",
+            at.len(),
+            z.len()
+        );
+        buf.extend_from_slice(&z);
+        let _ = write!(
+            Hex(&mut buf),
+            "\nendstream\nendobj\nstartxref\n{xref}\n%%EOF\n"
+        );
+    } else {
+        xref = buf.len();
+        let _ = write!(Hex(&mut buf), "xref\n0 {}\n0000000000 65535 f \n", at.len());
+        for e in at.iter().skip(1) {
+            let o = match e {
+                At::Off(o) => *o,
+                _ => 0,
+            };
+            let _ = writeln!(Hex(&mut buf), "{o:010} 00000 n ");
+        }
+        let _ = write!(
+            Hex(&mut buf),
+            "trailer\n<< /Size {}{trailer} >>\nstartxref\n{xref}\n%%EOF\n",
+            at.len()
+        );
+    }
+    Ok(buf)
 }
 
 #[cfg(test)]
@@ -322,5 +460,43 @@ mod tests {
     fn an_encrypted_file_is_not_encrypted_twice() {
         let enc = encrypt(&sample(), "", "boss", perm::ALL, &mut counter()).unwrap();
         assert!(encrypt(&enc, "x", "y", 0, &mut counter()).is_err());
+    }
+
+    #[test]
+    fn compact_packs_plain_objects_and_still_opens() {
+        let src = sample();
+        let c = rewrite(&src, true, None, &mut counter()).unwrap();
+        let t = String::from_utf8_lossy(&c);
+        assert!(t.contains("/Type /ObjStm") && t.contains("/Type /XRef"));
+        assert!(
+            !t.contains("trailer"),
+            "xref stream files have no trailer keyword"
+        );
+        // the page dictionaries are inside the compressed stream, not readable in the file
+        assert!(!t.contains("/MediaBox"));
+        let doc = PdfDoc::open(c.clone()).unwrap();
+        assert_eq!(doc.page_count(), 1);
+        // the content stream and the info string survive
+        assert!(t.contains("/Length"));
+        // compacting a compact file is not supported, and says so
+        assert!(rewrite(&c, true, None, &mut counter()).is_err());
+    }
+
+    #[test]
+    fn compact_and_encrypt_together() {
+        let src = sample();
+        let p = Protect {
+            user: "open",
+            owner: "boss",
+            allowed: perm::PRINT,
+        };
+        let c = rewrite(&src, true, Some(&p), &mut counter()).unwrap();
+        let t = String::from_utf8_lossy(&c);
+        assert!(t.contains("/Type /ObjStm") && t.contains("/Encrypt "));
+        assert!(PdfDoc::open(c.clone()).is_err());
+        assert_eq!(
+            PdfDoc::open_with_password(c, b"open").unwrap().page_count(),
+            1
+        );
     }
 }

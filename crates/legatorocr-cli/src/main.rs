@@ -829,6 +829,12 @@ struct Cli {
     #[arg(long)]
     encrypt_pdf: bool,
 
+    /// Write PDFs with compressed object streams and a cross-reference stream (PDF 1.5): the
+    /// structure objects shrink to a fraction, mostly visible in files with many pages. Not for
+    /// PDF/A-1 (which forbids them) and not for --sign-pdf (it needs a classic table).
+    #[arg(long)]
+    object_streams: bool,
+
     /// What the user password may do in an --encrypt-pdf file: a list of print, highres, modify, copy,
     /// annotate, forms, accessibility, assemble, or all / none (default: print,highres,accessibility).
     #[arg(long, value_name = "LIST", default_value = "")]
@@ -2033,6 +2039,18 @@ fn real_main() -> Result<()> {
         }
         return Ok(());
     }
+    if cli.pdfa && cli.encrypt_pdf {
+        bail!("PDF/A forbids encryption: use --pdfa or --encrypt-pdf, not both");
+    }
+    if cli.pdfa && cli.object_streams && cli.pdfa_part == 1 {
+        bail!(
+            "PDF/A-1 forbids object streams: use --pdfa-part 2 or 3, or leave out --object-streams"
+        );
+    }
+    if cli.sign_pdf.is_some() && cli.object_streams {
+        bail!("--sign-pdf needs a classic cross-reference table: leave out --object-streams (sign first, or sign a file written without it)");
+    }
+    legatorocr_engine::pdfcrypt::set_compact(cli.object_streams);
     if cli.encrypt_pdf {
         legatorocr_engine::pdfcrypt::set(
             &std::env::var("LEGATOROCR_PDF_USER_PASSWORD").unwrap_or_default(),
@@ -2059,7 +2077,7 @@ fn real_main() -> Result<()> {
             .inputs
             .iter()
             .all(|i| i.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")));
-    if plan.active() || (cli.encrypt_pdf && only_pdfs) {
+    if plan.active() || ((cli.encrypt_pdf || cli.object_streams) && only_pdfs) {
         let written =
             legatorocr_engine::pdftools::run(&cli.inputs, &cli.out_dir, cli.pdf.as_deref(), &plan)?;
         for w in &written {

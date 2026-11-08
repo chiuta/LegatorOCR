@@ -31,7 +31,7 @@ CASES = {
  "dewarp-margin": ["--dewarp-margin"],
  "ocr-zone": ["--ocr", "--ocr-zone", "0,0,500,500"], "ocr-ignore": ["--ocr", "--ocr-ignore", "0,0,10,10"],
  "lang-auto": ["--ocr", "--lang-auto", "eng,eng+eng"],
- "encrypt-pdf": ["--encrypt-pdf"], "pdf-permissions": ["--encrypt-pdf", "--pdf-permissions", "print,copy"],
+ "object-streams": ["--object-streams"], "encrypt-pdf": ["--encrypt-pdf"], "pdf-permissions": ["--encrypt-pdf", "--pdf-permissions", "print,copy"],
  "bernsen": ["--threshold", "bernsen"], "phansalkar": ["--threshold", "phansalkar"], "edgeplus": ["--threshold", "edgeplus"],
  "despeckle": ["--despeckle-strength", "2"], "no-despeckle": ["--no-despeckle"], "no-deskew": ["--no-deskew"],
  "no-auto-orient": ["--no-auto-orient"], "max-skew": ["--max-skew", "5"], "jpeg": ["--format", "jpeg", "--jpeg-quality", "80", "--out-dir", "{d}/o"],

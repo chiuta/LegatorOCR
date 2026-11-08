@@ -563,3 +563,55 @@ fn encrypt_pdf_protects_the_output() {
     assert!(!nopw.status.success());
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// `--object-streams`: the structure objects go into compressed object streams behind a
+/// cross-reference stream; the toolbox can read the result again; PDF/A-1 and signing are refused.
+#[test]
+fn object_streams_pack_the_structure() {
+    let d = dir("objstm");
+    for i in 0..3 {
+        let mut g = image::GrayImage::from_pixel(600, 300, image::Luma([240]));
+        for x in 50..500 {
+            g.put_pixel(x, 100 + i * 20, image::Luma([20]));
+        }
+        g.save(d.join(format!("p{i}.png"))).unwrap();
+    }
+    let o = run(
+        &d,
+        &[
+            "p0.png",
+            "p1.png",
+            "p2.png",
+            "--dpi",
+            "100",
+            "--format",
+            "none",
+            "--pdf",
+            "c.pdf",
+            "--object-streams",
+        ],
+    );
+    assert!(o.status.success(), "{}", text(&o));
+    let b = std::fs::read(d.join("c.pdf")).unwrap();
+    let t = String::from_utf8_lossy(&b);
+    assert!(t.contains("/Type /ObjStm") && t.contains("/Type /XRef"));
+    assert!(!t.contains("\ntrailer"));
+    // readable again: take page 2 out of it
+    let r = run(&d, &["c.pdf", "--extract-pages", "2", "-o", "x"]);
+    assert!(r.status.success(), "{}", text(&r));
+    assert!(d.join("x/c.pdf").exists());
+    let bad = run(
+        &d,
+        &[
+            "p0.png",
+            "--pdf",
+            "z.pdf",
+            "--pdfa",
+            "--pdfa-part",
+            "1",
+            "--object-streams",
+        ],
+    );
+    assert!(!bad.status.success());
+    let _ = std::fs::remove_dir_all(&d);
+}
