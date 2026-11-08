@@ -425,6 +425,13 @@ struct Cli {
     #[arg(long, value_name = "X,Y,W,H")]
     ocr_ignore: Vec<String>,
 
+    /// Choose the OCR language of every page from this list, e.g. `ron,eng,fra`: each candidate
+    /// reads the page and the one with the most confidently read characters wins. Time grows
+    /// with the length of the list (use --ocr-cache for repeated runs). Pages named by
+    /// --page-lang and zones with their own language are left alone. Needs --ocr.
+    #[arg(long, value_name = "LANGS", value_delimiter = ',')]
+    lang_auto: Vec<String>,
+
     /// OCR language per input page, e.g. `1-40=ron,41-44=eng+fra,45-=ron` (pages counted from 1
     /// in input order; the last matching rule wins; other pages use --lang). Needs --ocr.
     #[arg(long, value_name = "RULES")]
@@ -2695,6 +2702,7 @@ fn real_main() -> Result<()> {
             "--threshold",
             "--sauvola-k",
             "--sharpen",
+            "--lang-auto",
             "--ocr-zone",
             "--ocr-ignore",
             "--header",
@@ -3351,6 +3359,20 @@ fn real_main() -> Result<()> {
         let v = check_ocr(&ocr_opts).context("no OCR engine is available")?;
         legatorocr_engine::ocrcache::set(dir.clone(), &v)
             .with_context(|| format!("{}: cannot create the cache folder", dir.display()))?;
+    }
+    if !cli.lang_auto.is_empty() {
+        if !cli.ocr {
+            bail!("--lang-auto needs --ocr");
+        }
+        let cands = legatorocr_engine::autolang::candidates(&cli.lang_auto)?;
+        for c in &cands {
+            check_ocr(&OcrOptions {
+                lang: c.clone(),
+                ..ocr_opts.clone()
+            })
+            .with_context(|| format!("--lang-auto: language {c}"))?;
+        }
+        legatorocr_engine::autolang::set(&ocr_opts.lang, cands);
     }
     if !cli.ocr_zone.is_empty() || !cli.ocr_ignore.is_empty() {
         if !cli.ocr {

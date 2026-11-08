@@ -100,10 +100,17 @@ pub fn recognize(
     dpi: u32,
     o: &OcrOptions,
 ) -> Result<Vec<Word>, legatorocr_ocr::OcrError> {
-    if crate::ocrzones::active() {
-        return crate::ocrzones::recognize(page, dpi, o, &recognize_cached);
+    let zoned = |p: &PageImage, d: u32, op: &OcrOptions| {
+        if crate::ocrzones::active() {
+            crate::ocrzones::recognize(p, d, op, &recognize_cached)
+        } else {
+            recognize_cached(p, d, op)
+        }
+    };
+    if crate::autolang::active() {
+        return crate::autolang::recognize(page, dpi, o, &zoned);
     }
-    recognize_cached(page, dpi, o)
+    zoned(page, dpi, o)
 }
 
 fn recognize_cached(
