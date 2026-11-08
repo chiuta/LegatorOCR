@@ -76,6 +76,34 @@ fn openssl() -> Command {
     Command::new(openssl_program().unwrap_or("openssl"))
 }
 
+pub use legatorocr_pdf::reader::sign::Visible;
+
+/// Parse `PAGE,X,Y,WIDTH,HEIGHT` (millimetres from the top-left) and fill the box with the
+/// signer, the reason and the date.
+pub fn parse_visible(spec: &str, name: Option<&str>, reason: Option<&str>) -> Result<Visible> {
+    let p: Vec<&str> = spec.split(',').map(str::trim).collect();
+    if p.len() != 5 {
+        bail!("--sign-visible wants PAGE,X,Y,WIDTH,HEIGHT (millimetres from the top-left corner)");
+    }
+    let page: usize = p[0]
+        .parse()
+        .map_err(|_| anyhow::anyhow!("bad page number {:?}", p[0]))?;
+    let mut rect_mm = [0.0; 4];
+    for (i, v) in p[1..].iter().enumerate() {
+        rect_mm[i] = v.parse().map_err(|_| anyhow::anyhow!("bad number {v:?}"))?;
+    }
+    let mut lines = vec![format!("Digitally signed by {}", name.unwrap_or("signer"))];
+    if let Some(r) = reason {
+        lines.push(format!("Reason: {r}"));
+    }
+    lines.push(format!("Date: {}", crate::naming::today_iso()));
+    Ok(Visible {
+        page,
+        rect_mm,
+        lines,
+    })
+}
+
 /// Sign `input` into `output`. The PKCS#12 password is read from the environment variable
 /// `pass_env` (never from the command line).
 pub fn sign_pdf(
@@ -86,6 +114,7 @@ pub fn sign_pdf(
     name: Option<&str>,
     reason: Option<&str>,
     tsa_url: Option<&str>,
+    visible: Option<&Visible>,
 ) -> Result<()> {
     let data = std::fs::read(input).with_context(|| format!("reading {}", input.display()))?;
     if openssl_program().is_none() {
@@ -101,7 +130,8 @@ pub fn sign_pdf(
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs();
-    let prepared = sign::prepare(&data, now, name, reason).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let prepared = sign::prepare_visible(&data, now, name, reason, visible)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     let tmp = TempDir::new()?;
     let pem = tmp.0.join("key.pem");
     let st = openssl()
@@ -495,6 +525,7 @@ mod tests {
             Some("Test"),
             Some("Approved"),
             None,
+            None,
         )
         .unwrap();
         let r = verify_pdf(&d.join("out.pdf"), Some(&d.join("c.pem")), None).unwrap();
@@ -514,6 +545,7 @@ mod tests {
             &d.join("x.pdf"),
             &d.join("t.p12"),
             "LGR_TEST_P12",
+            None,
             None,
             None,
             None

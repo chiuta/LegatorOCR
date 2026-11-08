@@ -817,6 +817,11 @@ struct Cli {
     #[arg(long, value_name = "TEXT")]
     sign_reason: Option<String>,
 
+    /// Show the signature as a box on a page: PAGE,X,Y,WIDTH,HEIGHT in millimetres from the
+    /// top-left corner (--sign-pdf). Without it the signature is invisible.
+    #[arg(long, value_name = "PAGE,X,Y,W,H")]
+    sign_visible: Option<String>,
+
     /// Put an RFC 3161 time stamp from --tsa-url inside the signature (--sign-pdf): PAdES-B-T.
     /// The authority sees only the hash of the signature.
     #[arg(long, requires = "tsa_url")]
@@ -2224,6 +2229,17 @@ fn real_main() -> Result<()> {
             cli.sign_name.as_deref(),
             cli.sign_reason.as_deref(),
             cli.tsa_url.as_deref().filter(|_| cli.sign_timestamp),
+            cli.sign_visible
+                .as_deref()
+                .map(|v| {
+                    legatorocr_engine::sign::parse_visible(
+                        v,
+                        cli.sign_name.as_deref(),
+                        cli.sign_reason.as_deref(),
+                    )
+                })
+                .transpose()?
+                .as_ref(),
         )?;
         println!("wrote {}", out.display());
         return Ok(());

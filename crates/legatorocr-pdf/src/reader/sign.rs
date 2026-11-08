@@ -12,6 +12,17 @@ use std::fmt::Write as _;
 /// Space reserved for the signature, in bytes (twice that in hex digits).
 pub const RESERVED: usize = 20000;
 
+/// Where and how the signature is shown on a page (a signature without it is invisible).
+#[derive(Debug, Clone)]
+pub struct Visible {
+    /// Page number from 1.
+    pub page: usize,
+    /// `[x, y, width, height]` in millimetres from the top-left corner of the page as stored.
+    pub rect_mm: [f64; 4],
+    /// Lines of text in the box, top to bottom.
+    pub lines: Vec<String>,
+}
+
 pub struct Prepared {
     /// The file with the update appended and a zero-filled `/Contents`.
     pub bytes: Vec<u8>,
@@ -100,6 +111,23 @@ fn ser_dict(d: &Dict, out: &mut String) {
     out.push_str(">>");
 }
 
+/// ASCII text as a PDF literal string; anything else becomes `?`.
+fn pdf_ascii(s: &str) -> String {
+    let mut o = String::from("(");
+    for c in s.chars() {
+        match c {
+            '(' | ')' | '\\' => {
+                o.push('\\');
+                o.push(c);
+            }
+            c if c.is_ascii() && !c.is_control() => o.push(c),
+            _ => o.push('?'),
+        }
+    }
+    o.push(')');
+    o
+}
+
 fn last_startxref(d: &[u8]) -> Option<usize> {
     let tail = d.len().saturating_sub(2048);
     let i = d[tail..].windows(9).rposition(|w| w == b"startxref")? + tail;
@@ -110,6 +138,28 @@ fn last_startxref(d: &[u8]) -> Option<usize> {
 impl PdfDoc {
     fn dict_val(&self, v: &Val) -> Dict {
         self.dict_of(v).unwrap_or_default()
+    }
+
+    /// Object number of the `n`-th page (from 0) under `node`.
+    fn nth_page(&self, node: &Val, n: &mut usize, depth: u32) -> Option<u32> {
+        if depth > 32 {
+            return None;
+        }
+        let Val::Ref(num) = node else { return None };
+        let d = self.dict_of(node)?;
+        match self.resolve(d.get("Kids").unwrap_or(&Val::Null)) {
+            Val::Arr(kids) if d.get("Type").and_then(|t| t.name()) != Some("Page") => {
+                kids.iter().find_map(|k| self.nth_page(k, n, depth + 1))
+            }
+            _ => {
+                if *n == 0 {
+                    Some(*num)
+                } else {
+                    *n -= 1;
+                    None
+                }
+            }
+        }
     }
 
     fn first_page(&self, node: &Val, depth: u32) -> Option<u32> {
@@ -130,6 +180,17 @@ impl PdfDoc {
 /// Append an unsigned signature field (and its signature dictionary with a zero `/Contents`)
 /// to `data` as an incremental update. `when` is Unix seconds for `/M`.
 pub fn prepare(data: &[u8], when: u64, name: Option<&str>, reason: Option<&str>) -> R<Prepared> {
+    prepare_visible(data, when, name, reason, None)
+}
+
+/// [`prepare`], optionally with a visible appearance: a box with `lines` of text on a page.
+pub fn prepare_visible(
+    data: &[u8],
+    when: u64,
+    name: Option<&str>,
+    reason: Option<&str>,
+    visible: Option<&Visible>,
+) -> R<Prepared> {
     let doc = PdfDoc::open(data.to_vec())?;
     if doc.crypt.is_some() {
         return fail("encrypted PDF: a signature cannot be added");
@@ -160,12 +221,74 @@ pub fn prepare(data: &[u8], when: u64, name: Option<&str>, reason: Option<&str>)
     };
     let root = *root;
     let mut catalog = doc.dict_val(&Val::Ref(root));
-    let Some(page_n) = catalog.get("Pages").and_then(|p| doc.first_page(p, 0)) else {
+    let page_n = match visible {
+        Some(v) => {
+            if v.page == 0 || v.page > doc.page_count() {
+                return fail(format!(
+                    "the signature page {} does not exist (the file has {} pages)",
+                    v.page,
+                    doc.page_count()
+                ));
+            }
+            let mut k = v.page - 1;
+            catalog
+                .get("Pages")
+                .and_then(|p| doc.nth_page(p, &mut k, 0))
+        }
+        None => catalog.get("Pages").and_then(|p| doc.first_page(p, 0)),
+    };
+    let Some(page_n) = page_n else {
         return fail("no page to attach the signature to");
     };
     let mut page = doc.dict_val(&Val::Ref(page_n));
+    // the box in page space, and the appearance stream
+    let mut rect = [0.0f64; 4];
+    let mut appearance: Option<String> = None;
+    if let Some(v) = visible {
+        let (llx, lly, pw, ph) = doc.page_box(&page);
+        let rot = doc
+            .resolve(page.get("Rotate").unwrap_or(&Val::Null))
+            .int()
+            .unwrap_or(0);
+        if rot.rem_euclid(360) != 0 {
+            return fail(
+                "the signature page is rotated; rotate it for real before signing visibly",
+            );
+        }
+        let mm = 72.0 / 25.4;
+        let (x, y, w, h) = (
+            v.rect_mm[0] * mm,
+            v.rect_mm[1] * mm,
+            v.rect_mm[2] * mm,
+            v.rect_mm[3] * mm,
+        );
+        if w < 30.0 || h < 14.0 || x < 0.0 || y < 0.0 || x + w > pw + 0.5 || y + h > ph + 0.5 {
+            return fail("the signature box must be at least 11 x 5 mm and lie inside the page");
+        }
+        rect = [llx + x, lly + ph - y - h, llx + x + w, lly + ph - y];
+        let size_pt = (h / (v.lines.len().max(1) as f64 + 0.6)).clamp(5.0, 9.0);
+        let mut c = format!(
+            "0.5 w 0 G 0.5 0.5 {} {} re S\nBT /F1 {size_pt:.1} Tf 0 g\n",
+            w - 1.0,
+            h - 1.0
+        );
+        for (i, l) in v.lines.iter().enumerate() {
+            let _ = write!(
+                c,
+                "1 0 0 1 4 {:.2} Tm {} Tj\n",
+                h - 3.0 - size_pt * (i as f64 + 1.0),
+                pdf_ascii(l)
+            );
+        }
+        c.push_str("ET\n");
+        appearance = Some(format!(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 {w:.2} {h:.2}] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Length {} >>\nstream\n{c}endstream",
+            c.len()
+        ));
+    }
     // new object numbers
     let (sig_n, wid_n) = (size, size + 1);
+    let ap_n = size + 2;
     // page /Annots + widget
     let mut annots = match page.get("Annots").map(|a| doc.resolve(a)) {
         Some(Val::Arr(a)) => a,
@@ -236,9 +359,18 @@ pub fn prepare(data: &[u8], when: u64, name: Option<&str>, reason: Option<&str>)
     let contents_at = head_len;
     // widget
     offs.push((wid_n, buf.len()));
+    let ap_ref = if appearance.is_some() {
+        format!(" /AP << /N {ap_n} 0 R >>")
+    } else {
+        String::new()
+    };
     buf.extend_from_slice(
-        format!("{wid_n} 0 obj\n<< /Type /Annot /Subtype /Widget /FT /Sig /T (Signature1) /Rect [0 0 0 0] /F 132 /V {sig_n} 0 R /P {page_n} 0 R >>\nendobj\n").as_bytes(),
+        format!("{wid_n} 0 obj\n<< /Type /Annot /Subtype /Widget /FT /Sig /T (Signature1) /Rect [{:.2} {:.2} {:.2} {:.2}] /F 132 /V {sig_n} 0 R /P {page_n} 0 R{ap_ref} >>\nendobj\n", rect[0], rect[1], rect[2], rect[3]).as_bytes(),
     );
+    if let Some(ap) = &appearance {
+        offs.push((ap_n, buf.len()));
+        buf.extend_from_slice(format!("{ap_n} 0 obj\n{ap}\nendobj\n").as_bytes());
+    }
     // page
     offs.push((page_n, buf.len()));
     let mut t = String::new();
@@ -261,7 +393,10 @@ pub fn prepare(data: &[u8], when: u64, name: Option<&str>, reason: Option<&str>)
         buf.extend_from_slice(format!("{n} 1\n{off:010} 00000 n \n").as_bytes());
     }
     let mut tr = Dict::new();
-    tr.insert("Size".into(), Val::Int((wid_n + 1) as i64));
+    tr.insert(
+        "Size".into(),
+        Val::Int((if appearance.is_some() { ap_n } else { wid_n } + 1) as i64),
+    );
     tr.insert("Root".into(), Val::Ref(root));
     tr.insert("Prev".into(), Val::Int(prev as i64));
     for k in ["Info", "ID"] {
@@ -365,10 +500,14 @@ mod tests {
     use crate::{BitImage, Compress, Page, PageImage, PdfWriter};
 
     fn sample() -> Vec<u8> {
+        sample_px(32)
+    }
+
+    fn sample_px(px: u32) -> Vec<u8> {
         let mut w = PdfWriter::new(Compress::Flate);
         w.add_page(
             &Page {
-                image: PageImage::Bw(BitImage::new(32, 32)),
+                image: PageImage::Bw(BitImage::new(px, px)),
                 dpi: 72,
                 skew_deg: 0.0,
                 blank: false,
@@ -403,6 +542,40 @@ mod tests {
         assert_eq!(&sigs[0].contents[..5], &[0x30, 0x03, 0x02, 0x01, 0x05]);
         assert!(sigs[0].covers_whole_file(&embedded));
         assert_eq!(sigs[0].signed_data(&embedded).unwrap().len(), a1 + b1);
+    }
+
+    #[test]
+    fn a_visible_signature_has_a_box_and_an_appearance() {
+        let src = sample_px(595);
+        let vis = Visible {
+            page: 1,
+            rect_mm: [10.0, 10.0, 60.0, 20.0],
+            lines: vec!["Signed by Ana".into(), "2026-11-08".into()],
+        };
+        let p = prepare_visible(&src, 1_782_864_000, Some("Ana"), None, Some(&vis)).unwrap();
+        let text = String::from_utf8_lossy(&p.bytes[src.len()..]).into_owned();
+        assert!(text.contains("/AP << /N "), "{text}");
+        assert!(text.contains("(Signed by Ana) Tj"));
+        assert!(text.contains("/Subtype /Form"));
+        // the file still opens, has the widget, and keeps its signed range intact
+        let doc = PdfDoc::open(p.bytes.clone()).unwrap();
+        assert_eq!(doc.page_count(), 1);
+        let [_, a1, b0, b1] = p.byte_range;
+        assert_eq!(b0 + b1, p.bytes.len());
+        assert_eq!(p.bytes[a1], b'<');
+        // bad boxes and pages are refused
+        let too_small = Visible {
+            rect_mm: [10.0, 10.0, 5.0, 2.0],
+            ..vis.clone()
+        };
+        assert!(prepare_visible(&src, 0, None, None, Some(&too_small)).is_err());
+        let outside = Visible {
+            rect_mm: [10.0, 10.0, 6000.0, 20.0],
+            ..vis.clone()
+        };
+        assert!(prepare_visible(&src, 0, None, None, Some(&outside)).is_err());
+        let nopage = Visible { page: 4, ..vis };
+        assert!(prepare_visible(&src, 0, None, None, Some(&nopage)).is_err());
     }
 
     #[test]

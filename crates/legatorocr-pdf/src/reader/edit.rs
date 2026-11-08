@@ -273,7 +273,7 @@ impl PdfDoc {
         s.extend_from_slice(&tmp);
     }
 
-    fn page_box(&self, page: &Dict) -> (f64, f64, f64, f64) {
+    pub(super) fn page_box(&self, page: &Dict) -> (f64, f64, f64, f64) {
         if let Val::Arr(a) = self.resolve(page.get("MediaBox").unwrap_or(&Val::Null)) {
             let n: Vec<f64> = a.iter().filter_map(|v| self.resolve(v).num()).collect();
             if n.len() == 4 {

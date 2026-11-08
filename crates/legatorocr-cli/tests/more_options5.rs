@@ -411,3 +411,95 @@ fn sign_timestamp_gets_a_stamp_from_a_local_authority() {
     );
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// `--sign-visible`: the signature gets a box with text on the page, still verifies, and a box
+/// outside the page is refused.
+#[cfg(target_os = "linux")]
+#[test]
+fn sign_visible_puts_a_box_on_the_page() {
+    let ok = |c: &str, a: &str| {
+        Command::new(c)
+            .arg(a)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    };
+    if !ok("openssl", "version") {
+        eprintln!("openssl not found: sign-visible test skipped");
+        return;
+    }
+    let d = dir("signvis");
+    let ssl = |args: &[&str]| {
+        let o = Command::new("openssl")
+            .args(args)
+            .current_dir(&d)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    };
+    ssl(&[
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-keyout",
+        "k.pem",
+        "-out",
+        "c.pem",
+        "-subj",
+        "/CN=Test Signer",
+        "-days",
+        "3",
+    ]);
+    ssl(&[
+        "pkcs12", "-export", "-inkey", "k.pem", "-in", "c.pem", "-out", "t.p12", "-passout",
+        "pass:pw",
+    ]);
+    let g = image::GrayImage::from_pixel(1200, 1200, image::Luma([240]));
+    g.save(d.join("a.png")).unwrap();
+    let made = run(
+        &d,
+        &[
+            "a.png", "--dpi", "300", "--format", "none", "--pdf", "h.pdf",
+        ],
+    );
+    assert!(made.status.success(), "{}", text(&made));
+    let sign = |vis: &str, out: &str| {
+        Command::new(env!("CARGO_BIN_EXE_legatorocr"))
+            .current_dir(&d)
+            .env("LGR_TEST_PW", "pw")
+            .args([
+                "--sign-pdf",
+                "h.pdf",
+                "--sign-p12",
+                "t.p12",
+                "--sign-pass-env",
+                "LGR_TEST_PW",
+                "--sign-name",
+                "Ana",
+                "--sign-reason",
+                "Approved",
+                "--sign-visible",
+                vis,
+                "--pdf",
+                out,
+            ])
+            .output()
+            .unwrap()
+    };
+    let s = sign("1,10,10,60,20", "s.pdf");
+    assert!(s.status.success(), "{}", text(&s));
+    let bytes = std::fs::read(d.join("s.pdf")).unwrap();
+    let all = String::from_utf8_lossy(&bytes);
+    assert!(all.contains("(Digitally signed by Ana) Tj"));
+    assert!(all.contains("(Reason: Approved) Tj"));
+    let v = run(
+        &d,
+        &["--verify-pdf-signatures", "s.pdf", "--sign-ca", "c.pem"],
+    );
+    assert!(v.status.success(), "{}", text(&v));
+    let bad = sign("1,10,10,6000,20", "x.pdf");
+    assert!(!bad.status.success());
+    let _ = std::fs::remove_dir_all(&d);
+}
