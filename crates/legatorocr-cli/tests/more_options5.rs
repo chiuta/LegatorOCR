@@ -503,3 +503,63 @@ fn sign_visible_puts_a_box_on_the_page() {
     assert!(!bad.status.success());
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// `--encrypt-pdf` and `--pdf-permissions`: the file gets an AES-256 Encrypt dictionary, the page
+/// content is not readable any more, and the toolbox refuses to take the result apart without
+/// the password.
+#[test]
+fn encrypt_pdf_protects_the_output() {
+    let d = dir("encpdf");
+    let g = image::GrayImage::from_pixel(600, 300, image::Luma([240]));
+    g.save(d.join("a.png")).unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_legatorocr"))
+        .current_dir(&d)
+        .env("LEGATOROCR_PDF_USER_PASSWORD", "open")
+        .env("LEGATOROCR_PDF_OWNER_PASSWORD", "boss")
+        .args([
+            "a.png",
+            "--dpi",
+            "100",
+            "--format",
+            "none",
+            "--pdf",
+            "e.pdf",
+            "--encrypt-pdf",
+            "--pdf-permissions",
+            "print,copy",
+        ])
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", text(&o));
+    let b = std::fs::read(d.join("e.pdf")).unwrap();
+    let t = String::from_utf8_lossy(&b);
+    assert!(
+        t.contains("/CFM /AESV3") && t.contains("/Encrypt "),
+        "no Encrypt dictionary"
+    );
+    assert!(!t.contains("/Producer (LegatorOCR") || t.contains("/Encrypt "));
+    let r = run(&d, &["e.pdf", "--extract-pages", "1", "-o", "x"]);
+    assert!(!r.status.success());
+    // an unknown permission and a missing password are refused
+    let bad = run(
+        &d,
+        &[
+            "a.png",
+            "--pdf",
+            "z.pdf",
+            "--encrypt-pdf",
+            "--pdf-permissions",
+            "fly",
+        ],
+    );
+    assert!(!bad.status.success());
+    let nopw = Command::new(env!("CARGO_BIN_EXE_legatorocr"))
+        .current_dir(&d)
+        .env_remove("LEGATOROCR_PDF_USER_PASSWORD")
+        .env_remove("LEGATOROCR_PDF_OWNER_PASSWORD")
+        .args(["a.png", "--pdf", "z.pdf", "--encrypt-pdf"])
+        .output()
+        .unwrap();
+    assert!(!nopw.status.success());
+    let _ = std::fs::remove_dir_all(&d);
+}

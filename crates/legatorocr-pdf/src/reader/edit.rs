@@ -141,7 +141,7 @@ fn stamp_content(st: &Stamp, w: f64, h: f64, llx: f64, lly: f64, rot: i64, gs: b
     s
 }
 
-fn esc_name(n: &str) -> String {
+pub(super) fn esc_name(n: &str) -> String {
     let mut s = String::from("/");
     for &b in n.as_bytes() {
         if b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'+') {

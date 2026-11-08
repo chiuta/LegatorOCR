@@ -822,6 +822,18 @@ struct Cli {
     #[arg(long, value_name = "PAGE,X,Y,W,H")]
     sign_visible: Option<String>,
 
+    /// Password-protect every PDF written (AES-256). The passwords come from the environment, never
+    /// the command line: LEGATOROCR_PDF_USER_PASSWORD opens the file (empty: opens freely, only the
+    /// restrictions apply), LEGATOROCR_PDF_OWNER_PASSWORD lifts the restrictions. With input PDFs
+    /// and no other option this just protects them.
+    #[arg(long)]
+    encrypt_pdf: bool,
+
+    /// What the user password may do in an --encrypt-pdf file: a list of print, highres, modify, copy,
+    /// annotate, forms, accessibility, assemble, or all / none (default: print,highres,accessibility).
+    #[arg(long, value_name = "LIST", default_value = "")]
+    pdf_permissions: String,
+
     /// Put an RFC 3161 time stamp from --tsa-url inside the signature (--sign-pdf): PAdES-B-T.
     /// The authority sees only the hash of the signature.
     #[arg(long, requires = "tsa_url")]
@@ -2021,6 +2033,13 @@ fn real_main() -> Result<()> {
         }
         return Ok(());
     }
+    if cli.encrypt_pdf {
+        legatorocr_engine::pdfcrypt::set(
+            &std::env::var("LEGATOROCR_PDF_USER_PASSWORD").unwrap_or_default(),
+            &std::env::var("LEGATOROCR_PDF_OWNER_PASSWORD").unwrap_or_default(),
+            legatorocr_engine::pdfcrypt::parse_perms(&cli.pdf_permissions)?,
+        )?;
+    }
     let plan = legatorocr_engine::pdftools::Plan {
         merge: cli.merge_pdf,
         pages: cli.extract_pages.clone(),
@@ -2035,7 +2054,12 @@ fn real_main() -> Result<()> {
         crop_mm: cli.crop_pdf.clone(),
         booklet: cli.booklet,
     };
-    if plan.active() {
+    let only_pdfs = !cli.inputs.is_empty()
+        && cli
+            .inputs
+            .iter()
+            .all(|i| i.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")));
+    if plan.active() || (cli.encrypt_pdf && only_pdfs) {
         let written =
             legatorocr_engine::pdftools::run(&cli.inputs, &cli.out_dir, cli.pdf.as_deref(), &plan)?;
         for w in &written {
@@ -3735,7 +3759,7 @@ fn real_main() -> Result<()> {
         for (i, bytes) in res.docs.iter().enumerate() {
             let name = res.doc_names.get(i).and_then(|n| n.as_deref());
             let p = pdf_path.with_file_name(legatorocr_engine::doc_file_name(&stem, i, name));
-            write_atomic(&p, bytes)?;
+            write_atomic(&p, &legatorocr_engine::pdfcrypt::apply(bytes.clone())?)?;
             eprintln!("wrote {}", p.display());
             written.push(p);
         }
@@ -3744,7 +3768,10 @@ fn real_main() -> Result<()> {
         }
     }
     if let (Some(pdf_path), Some(bytes)) = (&cli.pdf, &res.pdf) {
-        write_atomic(pdf_path, bytes)?;
+        write_atomic(
+            pdf_path,
+            &legatorocr_engine::pdfcrypt::apply(bytes.clone())?,
+        )?;
         written.push(pdf_path.clone());
         if let (true, Some(t)) = (cli.txt_each, &res.text) {
             let tp = pdf_path.with_extension("txt");

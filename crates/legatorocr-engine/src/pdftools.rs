@@ -274,7 +274,7 @@ pub fn run(
                     path.display()
                 );
             }
-            std::fs::write(&path, bytes)?;
+            std::fs::write(&path, crate::pdfcrypt::apply(bytes)?)?;
             written.push(path);
         }
     }

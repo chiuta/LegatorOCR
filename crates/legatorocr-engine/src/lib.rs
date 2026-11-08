@@ -52,6 +52,7 @@ pub mod ocrcache;
 pub mod ocrzones;
 pub mod offline;
 pub mod pdfapreflight;
+pub mod pdfcrypt;
 pub mod runninghead;
 pub mod textrules;
 
