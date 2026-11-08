@@ -59,9 +59,11 @@ Pentru lansări comerciale sau donații semnificative, cere o opinie de la un av
 - Co-autorul Alexandru Dumbravă apare în `Cargo.toml` și README (cu ORCID); `LICENSE` numește doar „Alexio". Confirmă acordul pentru calitatea de co-autor și pentru publicarea ORCID.
 - Mărci (ScanTailor, ABBYY, Agent Ransack, DocFetcher, PDF24): doar referințe nominative; fără sigle sau texte de marketing. Verifică numele „LegatorOCR" într-o căutare de mărci.
 
-### De completat de către titular
-- Sesiunile de dezvoltare au avut vreodată acces la cod ScanTailor sau la descrierea formatului `.ScanTailor`? Sursa exactă a descrierii: ______
-- Drepturile pentru scanările folosite la antrenare (revista, manualul din 1960, cele patru PDF-uri „candidat"): ______
-- Originea imaginii ornamentale recurente din ghid (`02_spread_picture.jpg`): ______
+### Completat din istoricul conversațiilor Claude (2026-11-08)
+Sursa: conversația claude.ai 0f5714f8-… („Clon ScanTaylor în Rust", 856 ture; citită parțial).
+- **Acces la ScanTailor:** în ture citite, prima versiune a README a declarat că nu a fost consultat cod ScanTailor; sesiunea a pornit din cererea titularului. Importul `.ScanTailor` e doar un parser XML al fișierelor utilizatorului. Sesiunea de audit din acest PR (nu cea de dezvoltare) a citit fișiere publice ScanTailor doar pentru comparație, deci o eventuală sesiune viitoare de implementare trebuie să fie nouă și separată. Ture necitite: neconfirmat. Titularul confirmă: ______
+- **Date de antrenare (documentat în chat):** set de 5956 de linii: 2445 din revista nr. 06 (etichete ABBYY), 3085 din 98 de pagini ale manualului „Tehnologia producerii mobilei" (1960, zip încărcat de titular), 267 din revistele 04/05/07, etichete Tesseract/acord între motoare. Pagini de test din aceeași carte. Un fine-tuning ulterior a fost respins (ROADMAP 4.8), dar `multi.lnm` din build provine din antrenări anterioare. Drepturile asupra revistei și manualului: nedocumentate, de stabilit de titular: ______
+- **Co-autor/credit:** portofoliul și blogul lui Alexandru Dumbravă (dumbravaalex.github.io/Portofoliu) sunt creditate în README/site/About, la cererea titularului; au inspirat funcții (căutare, profiluri de flux, sume SHA-256), nu cod. Contribuția și acordul lui: ______
+- **Imaginea `02_spread_picture.jpg`:** origine nedeterminată în istoric: ______
 
 **Limite:** comparația cu ScanTailor a fost parțială (doar ramura `master` și doar fișiere selectate); nu s-a rulat test automat de similaritate; nu s-au citit toate cele 163 de fișiere `.rs`; videoclipurile și modelele nu au fost inspectate. Nu este opinie juridică.
