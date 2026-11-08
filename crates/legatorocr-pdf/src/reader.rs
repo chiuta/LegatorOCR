@@ -1127,6 +1127,26 @@ impl PdfDoc {
     }
 
     /// Object number and generation of the object whose stream data starts at `s`.
+    /// A text entry of the document information dictionary (`Title`, `Author`, …), decoded;
+    /// not for encrypted files (open the decrypted copy).
+    pub fn info_text(&self, key: &str) -> Option<String> {
+        if self.crypt.is_some() {
+            return None;
+        }
+        let Val::Dict(d) = self.get(self.info_obj?)? else {
+            return None;
+        };
+        let Val::Str(b) = self.resolve(d.get(key)?) else {
+            return None;
+        };
+        let t = if b.starts_with(&[0xFE, 0xFF]) {
+            utf16_be(&b[2..])
+        } else {
+            b.iter().map(|&c| c as char).collect()
+        };
+        Some(t.chars().filter(|c| !c.is_control()).take(2000).collect())
+    }
+
     /// True when the last cross-reference section is a stream (PDF 1.5 object streams).
     pub fn uses_xref_stream(&self) -> bool {
         let d = &self.data;
@@ -1187,6 +1207,10 @@ impl PdfDoc {
         nums.sort_unstable();
         nums.dedup();
         let size = nums.last().map_or(1, |n| n + 1);
+        // a hostile file can number one object 4000000000: the table would need gigabytes
+        if size as usize > nums.len().saturating_mul(16).max(100_000) {
+            return fail("object numbers are too sparse to write a table");
+        }
         let mut rng = |_: &mut [u8]| {};
         let mut cx = encrypt::Ctx {
             key: None,

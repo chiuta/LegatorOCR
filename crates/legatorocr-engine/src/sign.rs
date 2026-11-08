@@ -135,6 +135,13 @@ pub fn sign_pdf(
     // update in this layout: rewrite it as a classic file first (the signature covers the result)
     let data = match legatorocr_pdf::reader::PdfDoc::open(data.clone()) {
         Ok(d) if !d.is_encrypted() && d.uses_xref_stream() => {
+            // rewriting would silently break the signatures the file already carries
+            if data.windows(10).any(|w| w == b"/ByteRange") {
+                anyhow::bail!(
+                    "the file is already signed and uses object streams: it cannot be rewritten \
+                     without breaking its signatures, so it cannot take another one here"
+                );
+            }
             d.flattened().map_err(|e| anyhow::anyhow!("{e}"))?
         }
         _ => data,

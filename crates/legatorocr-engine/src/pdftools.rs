@@ -32,6 +32,9 @@ pub struct Plan {
     pub crop_mm: Option<String>,
     /// Impose as a booklet: two pages per sheet side, in folding order.
     pub booklet: bool,
+    /// Document information set from the command line: (`Author`|`Subject`|`Keywords`, text).
+    /// The first input's own entries are kept otherwise.
+    pub info: Vec<(String, String)>,
 }
 
 /// `DEG[:RANGES]` → (degrees mod 360, the ranges text).
@@ -255,6 +258,7 @@ pub fn run(
                     )),
                 },
                 crop_pt,
+                info: plan.info.clone(),
             };
             let mut bytes = assemble_opts(
                 &refs,

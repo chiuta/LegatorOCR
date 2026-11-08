@@ -137,6 +137,15 @@ if ok:
     check(same(poppler("dec/enc.pdf", ""), ref["poppler"][1:]), "toolbox output pages 2-3 are pixel-identical")
 check(run("enc.pdf", "--pdf-password", "wrong", "--extract-pages", "1", "-o", "dec2", must=False).returncode != 0, "wrong password is refused")
 
+# document information survives the toolbox, also out of an encrypted file with object streams
+run(*base, "--pdf", "meta.pdf", "--author", "Ana Păun", "--subject", "Subiect (test)", "--object-streams", "--encrypt-pdf", env=PW)
+run("meta.pdf", "--pdf-password", "upw", "--extract-pages", "1-2", "-o", "metadec")
+with pikepdf.open("metadec/meta.pdf") as d:
+    check(str(d.docinfo.get("/Author")) == "Ana Păun" and str(d.docinfo.get("/Subject")) == "Subiect (test)", "toolbox keeps Author and Subject from an encrypted object-stream file")
+run("meta.pdf", "--pdf-password", "upw", "--extract-pages", "1", "--author", "Nou", "-o", "metadec2")
+with pikepdf.open("metadec2/meta.pdf") as d:
+    check(str(d.docinfo.get("/Author")) == "Nou", "--author overrides in the toolbox")
+
 # signatures
 subprocess.run("openssl req -x509 -newkey rsa:2048 -nodes -keyout k.pem -out c.pem -days 30 -subj '/CN=Test Signer' 2>/dev/null && openssl pkcs12 -export -inkey k.pem -in c.pem -out s.p12 -passout pass:pp", shell=True, check=True)
 from pyhanko.keys import load_cert_from_pemder
@@ -153,6 +162,14 @@ for src, out, extra in (("plain.pdf", "sig_plain.pdf", []), ("objs.pdf", "sig_ob
         st = validate_pdf_signature(s, vc)
         check(st.intact and st.valid and st.trusted and st.coverage.name == "ENTIRE_FILE", f"{out}: pyHanko says intact, valid, trusted, whole file")
     check(subprocess.run(["pdfsig", out], capture_output=True, text=True).stdout.count("Signature is Valid") == 1, f"{out}: poppler pdfsig says valid")
+
+# a second and third signature: unique field names, the earlier ones stay valid
+run("--sign-pdf", "sig_plain.pdf", "--sign-p12", "s.p12", "--sign-pass-env", "SP", "--pdf", "sig2.pdf", env={"SP": "pp"})
+run("--sign-pdf", "sig2.pdf", "--sign-p12", "s.p12", "--sign-pass-env", "SP", "--sign-visible", "1,10,10,50,20", "--pdf", "sig3.pdf", env={"SP": "pp"})
+sigs = list(PdfFileReader(open("sig3.pdf", "rb")).embedded_signatures)
+check([s.field_name for s in sigs] == ["Signature1", "Signature2", "Signature3"], f"three signatures with distinct names: {[s.field_name for s in sigs]}")
+check(all(validate_pdf_signature(s, vc).valid for s in sigs), "all three signatures valid")
+check(all(validate_pdf_signature(s, vc).modification_level.name in ("NONE", "FORM_FILLING") for s in sigs), "only form-filling changes between them")
 
 # tagged PDF/A levels and figures (needs an OCR engine)
 r = run(*base, "--ocr", "--lang", "eng", "--pdfa", "--pdfa-level", "A", "--tagged-pdf", "--figure", "1,25,127,50,34=A rectangle frame", "--pdf", "aFig.pdf", must=False)

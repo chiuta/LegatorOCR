@@ -310,6 +310,9 @@ pub struct Opts {
     /// Cut this much off each side of every page, in points, as the page is *displayed*:
     /// `[left, bottom, right, top]`. The page box shrinks; content outside stays in the file.
     pub crop_pt: Option<[f64; 4]>,
+    /// Document information to set (`Author`, `Subject`, `Keywords`, `Title`); entries the first
+    /// source file has are kept unless listed here.
+    pub info: Vec<(String, String)>,
 }
 
 /// Write the chosen pages (`(file, page indices)` in order) as a new PDF. `stamps(i, total)`
@@ -509,8 +512,24 @@ pub fn assemble_opts(
         0
     } else {
         let info = out.alloc();
+        let mut text = String::new();
+        for key in ["Title", "Author", "Subject", "Keywords"] {
+            let v = opts
+                .info
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.clone())
+                .or_else(|| parts.first().and_then(|p| p.0.info_text(key)));
+            if let Some(v) = v.filter(|v| !v.trim().is_empty()) {
+                text.push_str(&format!(" /{key} {}", crate::pdf_text_string(&v)));
+            }
+        }
         out.objs[info as usize - 1] = Some(
-            format!("<< /Producer (LegatorOCR {}) >>", env!("CARGO_PKG_VERSION")).into_bytes(),
+            format!(
+                "<< /Producer (LegatorOCR {}){text} >>",
+                env!("CARGO_PKG_VERSION")
+            )
+            .into_bytes(),
         );
         info
     };
