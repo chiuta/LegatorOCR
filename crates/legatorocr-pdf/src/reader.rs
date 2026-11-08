@@ -1252,11 +1252,11 @@ impl PdfDoc {
             encrypt::Hex(&mut out),
             "xref\n0 {size}\n0000000000 65535 f \n"
         );
-        for n in 1..size as usize {
-            if offs[n] == 0 {
+        for &o in offs.iter().skip(1) {
+            if o == 0 {
                 out.extend_from_slice(b"0000000000 65535 f \n");
             } else {
-                let _ = writeln!(encrypt::Hex(&mut out), "{:010} 00000 n ", offs[n]);
+                let _ = writeln!(encrypt::Hex(&mut out), "{o:010} 00000 n ");
             }
         }
         let info = self

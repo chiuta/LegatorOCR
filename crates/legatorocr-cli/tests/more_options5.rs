@@ -686,6 +686,42 @@ fn linearize_puts_the_first_page_first() {
         ],
     );
     assert!(!bad.status.success());
+    // linearized and encrypted at once: qpdf finds no linearization errors with the password
+    let e = Command::new(env!("CARGO_BIN_EXE_legatorocr"))
+        .current_dir(&d)
+        .env("LEGATOROCR_PDF_USER_PASSWORD", "open")
+        .env("LEGATOROCR_PDF_OWNER_PASSWORD", "boss")
+        .args([
+            "p0.png",
+            "p1.png",
+            "p2.png",
+            "--dpi",
+            "100",
+            "--format",
+            "none",
+            "--pdf",
+            "le.pdf",
+            "--linearize",
+            "--encrypt-pdf",
+        ])
+        .output()
+        .unwrap();
+    assert!(e.status.success(), "{}", text(&e));
+    let b = std::fs::read(d.join("le.pdf")).unwrap();
+    let t = String::from_utf8_lossy(&b);
+    assert!(t[..300].contains("/Linearized 1") && t.contains("/CFM /AESV3"));
+    if let Ok(q) = Command::new("qpdf")
+        .args(["--password=open", "--check-linearization", "le.pdf"])
+        .current_dir(&d)
+        .output()
+    {
+        assert!(
+            String::from_utf8_lossy(&q.stdout).contains("no linearization errors")
+                && !text(&q).contains("WARNING"),
+            "{}",
+            text(&q)
+        );
+    }
     let _ = std::fs::remove_dir_all(&d);
 }
 

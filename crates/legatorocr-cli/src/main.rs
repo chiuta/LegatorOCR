@@ -2117,8 +2117,8 @@ fn real_main() -> Result<()> {
     if cli.sign_pdf.is_some() && cli.object_streams {
         bail!("--sign-pdf needs a classic cross-reference table: leave out --object-streams (sign first, or sign a file written without it)");
     }
-    if cli.linearize && (cli.encrypt_pdf || cli.object_streams) {
-        bail!("--linearize cannot be combined with --encrypt-pdf or --object-streams");
+    if cli.linearize && cli.object_streams {
+        bail!("--linearize cannot be combined with --object-streams");
     }
     legatorocr_engine::pdfcrypt::set_linearize(cli.linearize);
     legatorocr_engine::pdfcrypt::set_jbig2(cli.jbig2);

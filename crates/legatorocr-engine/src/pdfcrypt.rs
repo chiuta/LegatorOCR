@@ -96,10 +96,18 @@ pub fn apply(bytes: Vec<u8>) -> Result<Vec<u8>> {
     let g = CFG.lock().unwrap();
     let compact = COMPACT.load(Ordering::Relaxed);
     if LINEAR.load(Ordering::Relaxed) {
-        if g.is_some() || compact {
-            bail!("--linearize cannot be combined with --encrypt-pdf or --object-streams");
+        if compact {
+            bail!("--linearize cannot be combined with --object-streams");
         }
-        return legatorocr_pdf::reader::linearize::linearize(&bytes)
+        let p = g.as_ref().map(|c| Protect {
+            user: &c.user,
+            owner: &c.owner,
+            allowed: c.allowed,
+        });
+        let mut rng = |b: &mut [u8]| {
+            getrandom::fill(b).expect("no random numbers from the system");
+        };
+        return legatorocr_pdf::reader::linearize::linearize_with(&bytes, p.as_ref(), &mut rng)
             .map_err(|e| anyhow::anyhow!("{e}"));
     }
     if g.is_none() && !compact {

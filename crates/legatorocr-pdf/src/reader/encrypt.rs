@@ -39,7 +39,7 @@ pub(super) struct Ctx<'a> {
 }
 
 impl Ctx<'_> {
-    fn enc(&mut self, data: &[u8]) -> Vec<u8> {
+    pub(super) fn enc(&mut self, data: &[u8]) -> Vec<u8> {
         let Some(key) = self.key else {
             return data.to_vec();
         };
@@ -122,6 +122,30 @@ pub(super) fn hex(b: &[u8]) -> String {
     }
     s.push('>');
     s
+}
+
+/// The Encrypt dictionary as object `n` (its strings are not encrypted).
+pub(super) fn encrypt_object(n: u32, allowed: i32, s: &crate::crypt::V5Setup) -> String {
+    format!(
+        "{n} 0 obj\n<< /Filter /Standard /V 5 /R 6 /Length 256 /P {} /O {} /U {} /OE {} /UE {} /Perms {} /EncryptMetadata true /CF << /StdCF << /AuthEvent /DocOpen /CFM /AESV3 /Length 32 >> >> /StmF /StdCF /StrF /StdCF >>\nendobj\n",
+        p_value(allowed),
+        hex(&s.o),
+        hex(&s.u),
+        hex(&s.oe),
+        hex(&s.ue),
+        hex(&s.perms)
+    )
+}
+
+/// The setup of a V5/R6 security handler for `p`.
+pub(super) fn setup_for(p: &Protect, rand: &mut dyn FnMut(&mut [u8])) -> crate::crypt::V5Setup {
+    make_v5(
+        p.user.as_bytes(),
+        if p.owner.is_empty() { p.user } else { p.owner }.as_bytes(),
+        p_value(p.allowed),
+        true,
+        rand,
+    )
 }
 
 /// Who may open a file and what they may do (see [`encrypt`]).
@@ -256,16 +280,7 @@ pub fn rewrite(
         next += 1;
         enc_n = Some(n);
         at.push(At::Off(buf.len()));
-        let _ = write!(
-            Hex(&mut buf),
-            "{n} 0 obj\n<< /Filter /Standard /V 5 /R 6 /Length 256 /P {} /O {} /U {} /OE {} /UE {} /Perms {} /EncryptMetadata true /CF << /StdCF << /AuthEvent /DocOpen /CFM /AESV3 /Length 32 >> >> /StmF /StdCF /StrF /StdCF >>\nendobj\n",
-            p_value(protect.map_or(0, |p| p.allowed)),
-            hex(&s.o),
-            hex(&s.u),
-            hex(&s.oe),
-            hex(&s.ue),
-            hex(&s.perms)
-        );
+        buf.extend_from_slice(encrypt_object(n, protect.map_or(0, |p| p.allowed), s).as_bytes());
     }
     for chunk in packed.chunks(PER_OBJSTM) {
         let sn = next;
