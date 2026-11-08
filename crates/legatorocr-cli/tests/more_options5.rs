@@ -615,3 +615,59 @@ fn object_streams_pack_the_structure() {
     assert!(!bad.status.success());
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// `--linearize`: Fast Web View. The file starts with the linearization dictionary; when qpdf is
+/// installed it must find no linearization errors. Combinations that cannot work are refused.
+#[test]
+fn linearize_puts_the_first_page_first() {
+    let d = dir("linear");
+    for i in 0..4 {
+        let mut g = image::GrayImage::from_pixel(600, 300, image::Luma([240]));
+        for x in 50..500 {
+            g.put_pixel(x, 100 + i * 20, image::Luma([20]));
+        }
+        g.save(d.join(format!("p{i}.png"))).unwrap();
+    }
+    let o = run(
+        &d,
+        &[
+            "p0.png",
+            "p1.png",
+            "p2.png",
+            "p3.png",
+            "--dpi",
+            "100",
+            "--format",
+            "none",
+            "--pdf",
+            "l.pdf",
+            "--linearize",
+        ],
+    );
+    assert!(o.status.success(), "{}", text(&o));
+    let b = std::fs::read(d.join("l.pdf")).unwrap();
+    assert!(String::from_utf8_lossy(&b[..200]).contains("/Linearized 1"));
+    if let Ok(q) = Command::new("qpdf")
+        .args(["--check-linearization", "l.pdf"])
+        .current_dir(&d)
+        .output()
+    {
+        assert!(
+            String::from_utf8_lossy(&q.stdout).contains("no linearization errors"),
+            "{}",
+            text(&q)
+        );
+    }
+    let bad = run(
+        &d,
+        &[
+            "p0.png",
+            "--pdf",
+            "z.pdf",
+            "--linearize",
+            "--object-streams",
+        ],
+    );
+    assert!(!bad.status.success());
+    let _ = std::fs::remove_dir_all(&d);
+}

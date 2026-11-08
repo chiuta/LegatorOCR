@@ -25,6 +25,7 @@ impl std::error::Error for ReadError {}
 
 pub mod edit;
 pub mod encrypt;
+pub mod linearize;
 pub mod sign;
 
 type R<T> = Result<T, ReadError>;

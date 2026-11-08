@@ -30,10 +30,12 @@ pub fn p_value(bits: i32) -> i32 {
     (0xFFFF_F0C0u32 | (bits & perm::ALL) as u32) as i32
 }
 
-struct Ctx<'a> {
+pub(super) struct Ctx<'a> {
     /// The file key; `None` writes strings and streams as they are.
-    key: Option<[u8; 32]>,
-    rand: &'a mut dyn FnMut(&mut [u8]),
+    pub(super) key: Option<[u8; 32]>,
+    pub(super) rand: &'a mut dyn FnMut(&mut [u8]),
+    /// New number of each old object number (references are renumbered); `None` keeps them.
+    pub(super) map: Option<&'a [u32]>,
 }
 
 impl Ctx<'_> {
@@ -46,7 +48,7 @@ impl Ctx<'_> {
         aes_cbc_encrypt(&key, iv, data).unwrap_or_default()
     }
 
-    fn ser(&mut self, v: &Val, s: &mut Vec<u8>) {
+    pub(super) fn ser(&mut self, v: &Val, s: &mut Vec<u8>) {
         match v {
             Val::Null => s.extend_from_slice(b"null"),
             Val::Bool(b) => s.extend_from_slice(if *b { b"true" } else { b"false" }),
@@ -77,12 +79,15 @@ impl Ctx<'_> {
             }
             Val::Dict(d) | Val::Stream(d, _, _) => self.dict(d, None, s),
             Val::Ref(n) => {
+                let n = self
+                    .map
+                    .map_or(*n, |m| m.get(*n as usize).copied().unwrap_or(*n));
                 let _ = write!(Hex(s), "{n} 0 R");
             }
         }
     }
 
-    fn dict(&mut self, d: &Dict, len: Option<usize>, s: &mut Vec<u8>) {
+    pub(super) fn dict(&mut self, d: &Dict, len: Option<usize>, s: &mut Vec<u8>) {
         s.extend_from_slice(b"<<");
         let mut keys: Vec<_> = d.keys().collect();
         keys.sort();
@@ -102,7 +107,7 @@ impl Ctx<'_> {
     }
 }
 
-struct Hex<'a>(&'a mut Vec<u8>);
+pub(super) struct Hex<'a>(pub(super) &'a mut Vec<u8>);
 impl std::fmt::Write for Hex<'_> {
     fn write_str(&mut self, t: &str) -> std::fmt::Result {
         self.0.extend_from_slice(t.as_bytes());
@@ -110,7 +115,7 @@ impl std::fmt::Write for Hex<'_> {
     }
 }
 
-fn hex(b: &[u8]) -> String {
+pub(super) fn hex(b: &[u8]) -> String {
     let mut s = String::from("<");
     for x in b {
         let _ = write!(s, "{x:02X}");
@@ -195,10 +200,12 @@ pub fn rewrite(
     let mut cx = Ctx {
         key: setup.as_ref().map(|s| s.key),
         rand,
+        map: None,
     };
     let mut plain = Ctx {
         key: None,
         rand: &mut |_| {},
+        map: None,
     };
     let mut buf: Vec<u8> = b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n".to_vec();
     // (object number, entry): offset of a top-level object, or (object stream, index)

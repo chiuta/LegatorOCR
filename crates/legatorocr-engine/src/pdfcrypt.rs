@@ -9,6 +9,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 static COMPACT: AtomicBool = AtomicBool::new(false);
+static LINEAR: AtomicBool = AtomicBool::new(false);
+
+/// `--linearize`: Fast Web View order (first page first, hint tables).
+pub fn set_linearize(on: bool) {
+    LINEAR.store(on, Ordering::Relaxed);
+}
 
 /// `--object-streams`: pack plain objects into compressed object streams (PDF 1.5).
 pub fn set_compact(on: bool) {
@@ -75,13 +81,22 @@ pub fn clear() {
 }
 
 pub fn active() -> bool {
-    CFG.lock().unwrap().is_some() || COMPACT.load(Ordering::Relaxed)
+    CFG.lock().unwrap().is_some()
+        || COMPACT.load(Ordering::Relaxed)
+        || LINEAR.load(Ordering::Relaxed)
 }
 
 /// Encrypt `bytes` when [`set`] was called, else hand them back unchanged.
 pub fn apply(bytes: Vec<u8>) -> Result<Vec<u8>> {
     let g = CFG.lock().unwrap();
     let compact = COMPACT.load(Ordering::Relaxed);
+    if LINEAR.load(Ordering::Relaxed) {
+        if g.is_some() || compact {
+            bail!("--linearize cannot be combined with --encrypt-pdf or --object-streams");
+        }
+        return legatorocr_pdf::reader::linearize::linearize(&bytes)
+            .map_err(|e| anyhow::anyhow!("{e}"));
+    }
     if g.is_none() && !compact {
         return Ok(bytes);
     }
