@@ -16,7 +16,10 @@ use std::fmt::Write as _;
 pub enum Anchor {
     BottomCenter,
     BottomRight,
+    BottomLeft,
     TopCenter,
+    TopLeft,
+    TopRight,
     Center,
 }
 
@@ -105,7 +108,10 @@ fn stamp_content(st: &Stamp, w: f64, h: f64, llx: f64, lly: f64, rot: i64, gs: b
     let (cx, cy) = match st.anchor {
         Anchor::BottomCenter => (dw / 2.0, margin),
         Anchor::BottomRight => (dw - margin - tw / 2.0, margin),
+        Anchor::BottomLeft => (margin + tw / 2.0, margin),
         Anchor::TopCenter => (dw / 2.0, dh - margin - st.size),
+        Anchor::TopLeft => (margin + tw / 2.0, dh - margin - st.size),
+        Anchor::TopRight => (dw - margin - tw / 2.0, dh - margin - st.size),
         Anchor::Center => (dw / 2.0, dh / 2.0),
     };
     // displayed frame -> unrotated page space

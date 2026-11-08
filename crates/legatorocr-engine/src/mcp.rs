@@ -301,6 +301,9 @@ fn tools() -> J {
                     ("split_every", "integer", "Cut into files of this many pages"),
                     ("watermark", "string", "Diagonal watermark text"),
                     ("number_pages", "string", "Page number format, e.g. {n} / {total}"),
+                    ("header", "string", "Top-centre text; {n} {total} {date} {file}"),
+                    ("footer", "string", "Bottom-left text; same fields"),
+                    ("bates", "string", "Bates number PREFIX[:START[:DIGITS]]"),
                 ],
                 &["inputs", "out_dir"],
             ),
@@ -376,6 +379,9 @@ pub fn build_args(name: &str, a: &J) -> Result<Vec<String>, String> {
                 ("pages", "--extract-pages"),
                 ("watermark", "--watermark"),
                 ("number_pages", "--number-pages"),
+                ("header", "--header"),
+                ("footer", "--footer"),
+                ("bates", "--bates"),
             ] {
                 if let Some(x) = s(k) {
                     v.push(format!("{f}={x}"));
@@ -388,7 +394,7 @@ pub fn build_args(name: &str, a: &J) -> Result<Vec<String>, String> {
             }
             if !any {
                 return Err(
-                    "choose at least one of merge, pages, split_every, watermark, number_pages"
+                    "choose at least one of merge, pages, split_every, watermark, number_pages, header, footer, bates"
                         .into(),
                 );
             }

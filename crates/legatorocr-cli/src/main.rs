@@ -868,6 +868,19 @@ struct Cli {
     #[arg(long, value_name = "TEXT")]
     watermark: Option<String>,
 
+    /// PDF toolbox: text at the top centre of every page; {n}, {total}, {date}, {file} are replaced.
+    #[arg(long, value_name = "TEXT")]
+    header: Option<String>,
+
+    /// PDF toolbox: text at the bottom left of every page; same fields as --header.
+    #[arg(long, value_name = "TEXT")]
+    footer: Option<String>,
+
+    /// PDF toolbox: Bates number at the bottom right, PREFIX[:START[:DIGITS]], e.g. ACME-:1:6
+    /// gives ACME-000001, ACME-000002, … and continues across the files of one run.
+    #[arg(long, value_name = "SPEC")]
+    bates: Option<String>,
+
     /// PDF toolbox: number the pages at the bottom; FORMAT uses {n} and {total} (default {n}).
     #[arg(long, value_name = "FORMAT", num_args = 0..=1, default_missing_value = "{n}")]
     number_pages: Option<String>,
@@ -1970,6 +1983,9 @@ fn real_main() -> Result<()> {
         split_every: cli.split_pdf_every,
         watermark: cli.watermark.clone(),
         number_format: cli.number_pages.clone(),
+        header: cli.header.clone(),
+        footer: cli.footer.clone(),
+        bates: cli.bates.clone(),
     };
     if plan.active() {
         let written =
@@ -2643,6 +2659,9 @@ fn real_main() -> Result<()> {
             "--threshold",
             "--sauvola-k",
             "--sharpen",
+            "--header",
+            "--footer",
+            "--bates",
             "--pdfa-check",
             "--verapdf",
             "--dewarp-margin",

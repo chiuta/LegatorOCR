@@ -62,6 +62,7 @@ base = str(d / "base.pdf")
 subprocess.run([exe, str(d / "p.png"), "--pdf", base, "--dpi", "150"], capture_output=True)
 subprocess.run([exe, str(d / "p.png"), "--pdf", str(d / "base2.pdf"), "--dpi", "150"], capture_output=True)
 TOOLBOX = {"watermark": ["--watermark", "COPIE"], "number-pages": ["--number-pages"], "extract-pages": ["--extract-pages", "1"],
+           "header": ["--header", "{n}/{total}"], "footer": ["--footer", "{date}"], "bates": ["--bates", "A-:1:4"],
            "merge-pdf": ["--merge-pdf"], "verify-text": ["--verify-text"]}
 for k, a in TOOLBOX.items():
     if k == "merge-pdf": cmd = [exe, base, str(d / "base2.pdf"), "--merge-pdf", "--pdf", str(d / "m.pdf")]

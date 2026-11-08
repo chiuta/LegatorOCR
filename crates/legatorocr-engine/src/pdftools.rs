@@ -17,6 +17,33 @@ pub struct Plan {
     pub watermark: Option<String>,
     /// Page number format, `{n}` and `{total}` replaced.
     pub number_format: Option<String>,
+    /// Text at the top centre of every page; `{n}`, `{total}`, `{date}`, `{file}` are replaced.
+    pub header: Option<String>,
+    /// Text at the bottom left of every page; same fields.
+    pub footer: Option<String>,
+    /// Bates number at the bottom right: `PREFIX[:START[:DIGITS]]`, e.g. `ACME-:1:6` gives
+    /// ACME-000001, ACME-000002, … continuing across the files of one run.
+    pub bates: Option<String>,
+}
+
+/// `PREFIX[:START[:DIGITS]]` → (prefix, first number, digits).
+pub fn parse_bates(spec: &str) -> Result<(String, u64, usize)> {
+    let parts: Vec<&str> = spec.rsplitn(3, ':').collect();
+    let (prefix, start, digits) = match parts.as_slice() {
+        [d, s, p] => (*p, *s, *d),
+        [s, p] => (*p, *s, "6"),
+        _ => (spec, "1", "6"),
+    };
+    // `ACME-` alone has one part; `ACME-:5` has two; a lone number is a prefix-less start
+    let start: u64 = start
+        .parse()
+        .map_err(|_| anyhow::anyhow!("--bates: START must be a number in `{spec}`"))?;
+    let digits: usize = digits
+        .parse()
+        .ok()
+        .filter(|d| (1..=12).contains(d))
+        .ok_or_else(|| anyhow::anyhow!("--bates: DIGITS must be 1 to 12 in `{spec}`"))?;
+    Ok((prefix.to_string(), start, digits))
 }
 
 impl Plan {
@@ -26,11 +53,44 @@ impl Plan {
             || self.split_every.is_some()
             || self.watermark.is_some()
             || self.number_format.is_some()
+            || self.header.is_some()
+            || self.footer.is_some()
+            || self.bates.is_some()
     }
 }
 
-fn stamps(plan: &Plan, i: usize, total: usize) -> Vec<Stamp> {
+fn fields(t: &str, n: usize, total: usize, file: &str) -> String {
+    t.replace("{n}", &n.to_string())
+        .replace("{total}", &total.to_string())
+        .replace("{date}", &crate::naming::today_iso())
+        .replace("{file}", file)
+}
+
+/// `bates_no`: the Bates number of this page (already counted across the run).
+fn stamps(plan: &Plan, i: usize, total: usize, file: &str, bates_no: u64) -> Vec<Stamp> {
     let mut v = Vec::new();
+    let plain = |text: String, anchor: Anchor| Stamp {
+        text,
+        size: 10.0,
+        anchor,
+        gray: 0.0,
+        angle: 0.0,
+        opacity: 1.0,
+    };
+    if let Some(h) = &plan.header {
+        v.push(plain(fields(h, i + 1, total, file), Anchor::TopCenter));
+    }
+    if let Some(f) = &plan.footer {
+        v.push(plain(fields(f, i + 1, total, file), Anchor::BottomLeft));
+    }
+    if let Some(b) = &plan.bates {
+        if let Ok((prefix, _, digits)) = parse_bates(b) {
+            v.push(plain(
+                format!("{prefix}{bates_no:0digits$}"),
+                Anchor::BottomRight,
+            ));
+        }
+    }
     if let Some(w) = &plan.watermark {
         v.push(Stamp {
             text: w.clone(),
@@ -66,6 +126,10 @@ pub fn run(
     if let Some(0) = plan.split_every {
         bail!("--split-pdf-every needs a number above 0");
     }
+    let mut bates_next = match &plan.bates {
+        Some(b) => parse_bates(b)?.1,
+        None => 0,
+    };
     let docs: Vec<(PathBuf, PdfDoc)> = inputs
         .iter()
         .map(|p| {
@@ -128,8 +192,12 @@ pub fn run(
                 .iter()
                 .map(|(d, v)| (&docs[*d].1, v.clone()))
                 .collect();
-            let bytes =
-                assemble(&refs, &|i, t| stamps(plan, i, t)).map_err(|e| anyhow::anyhow!(e.0))?;
+            let first_bates = bates_next;
+            bates_next += chunk.len() as u64;
+            let bytes = assemble(&refs, &|i, t| {
+                stamps(plan, i, t, &stem, first_bates + i as u64)
+            })
+            .map_err(|e| anyhow::anyhow!(e.0))?;
             let name = if many {
                 format!("{stem}_{:03}.pdf", ci + 1)
             } else {
@@ -171,7 +239,29 @@ mod tests {
             },
             2,
             9,
+            "f",
+            0,
         );
         assert_eq!(s[0].text, "3/9");
+    }
+
+    #[test]
+    fn bates_specs_and_header_fields() {
+        assert_eq!(parse_bates("ACME-:7:4").unwrap(), ("ACME-".into(), 7, 4));
+        assert_eq!(parse_bates("ACME-:7").unwrap(), ("ACME-".into(), 7, 6));
+        assert_eq!(parse_bates("ACME-").unwrap(), ("ACME-".into(), 1, 6));
+        assert!(parse_bates("A:x").is_err());
+        assert!(parse_bates("A:1:0").is_err());
+        let plan = Plan {
+            header: Some("{file} {n}/{total}".into()),
+            footer: Some("© {date}".into()),
+            bates: Some("B-:41:3".into()),
+            ..Plan::default()
+        };
+        let s = stamps(&plan, 1, 5, "doc", 42);
+        assert_eq!(s[0].text, "doc 2/5");
+        assert!(s[1].text.starts_with("© 20") && s[1].text.chars().count() == 2 + 10);
+        assert_eq!(s[2].text, "B-042");
+        assert!(s.iter().all(|x| x.size == 10.0));
     }
 }
