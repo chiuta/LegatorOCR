@@ -29,6 +29,7 @@ CASES = {
  "fold-shadow": ["--mode", "color", "--fold-shadow"],
  "classify": ["--ocr", "--classify", "{d}/rules.txt", "--classify-out", "{o}.tags.json", "--sort-originals", "{d}/sorted"],
  "dewarp-margin": ["--dewarp-margin"],
+ "smooth-glyphs": ["--mode", "bw", "--smooth-glyphs", "2"],
  "ocr-zone": ["--ocr", "--ocr-zone", "0,0,500,500"], "ocr-ignore": ["--ocr", "--ocr-ignore", "0,0,10,10"],
  "lang-auto": ["--ocr", "--lang-auto", "eng,eng+eng"],
  "object-streams": ["--object-streams"], "linearize": ["--linearize"], "jbig2": ["--mode", "bw", "--jbig2"], "encrypt-pdf": ["--encrypt-pdf"], "pdf-permissions": ["--encrypt-pdf", "--pdf-permissions", "print,copy"],

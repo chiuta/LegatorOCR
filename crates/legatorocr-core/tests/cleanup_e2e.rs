@@ -144,6 +144,7 @@ fn sharpen_and_levels_keep_geometry() {
             auto_levels: true,
             sharpen: 1.0,
             dewarp_margin: true,
+            smooth_glyphs: 2,
             fold_shadow: true,
             fill_color: Some([0, 0, 0]),
             right_to_left: false,

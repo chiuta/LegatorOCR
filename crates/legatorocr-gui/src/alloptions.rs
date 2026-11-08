@@ -163,6 +163,7 @@ pub fn category(long: &str) -> Cat {
         "sharpen",
         "pdfa-check",
         "dewarp-margin",
+        "smooth-glyphs",
         "classify",
         "sort-originals",
         "fold-shadow",

@@ -1326,6 +1326,14 @@ struct Cli {
     #[arg(long)]
     dewarp_margin: bool,
 
+    /// Smooth glyph edges in black & white / mixed / hybrid output: the scan is read at FACTOR (2 or
+    /// 3) times its resolution by smooth interpolation of the gray values before thresholding, so
+    /// letters get curved outlines instead of pixel staircases (the idea of ABBYY PreciseScan, for
+    /// low-resolution scans). The output has FACTOR times the dpi: use --output-dpi to cap it.
+    /// Costs FACTOR squared the time and memory per page; skipped when that would pass 1200 dpi.
+    #[arg(long, value_name = "FACTOR", value_parser = clap::value_parser!(u8).range(2..=3))]
+    smooth_glyphs: Option<u8>,
+
     /// Right-to-left book (Arabic, Hebrew, manga): when a two-page spread is cut in two, the
     /// right-hand page comes first, and the PDF asks viewers for right-to-left reading.
     #[arg(long)]
@@ -2694,6 +2702,7 @@ fn real_main() -> Result<()> {
         auto_levels: cli.auto_levels,
         sharpen: cli.sharpen,
         dewarp_margin: cli.dewarp_margin,
+        smooth_glyphs: cli.smooth_glyphs.unwrap_or(0),
         fold_shadow: cli.fold_shadow,
         fill_color,
         right_to_left: cli.right_to_left,
@@ -2790,6 +2799,7 @@ fn real_main() -> Result<()> {
             "--pdfa-check",
             "--verapdf",
             "--dewarp-margin",
+            "--smooth-glyphs",
             "--classify",
             "--classify-out",
             "--sort-originals",

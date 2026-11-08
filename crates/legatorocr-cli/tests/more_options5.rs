@@ -716,3 +716,53 @@ fn jbig2_output_is_smaller_and_readable() {
     assert!(r.status.success(), "{}", text(&r));
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// `--smooth-glyphs`: the black & white page comes out at FACTOR times the pixels (and dpi);
+/// in colour mode it is ignored.
+#[test]
+fn smooth_glyphs_enlarges_black_and_white_pages() {
+    let d = dir("smoothg");
+    let mut g = image::GrayImage::from_pixel(300, 120, image::Luma([255]));
+    for y in 40..80u32 {
+        for x in 60..240u32 {
+            if (x / 6 + y / 5) % 2 == 0 {
+                g.put_pixel(x, y, image::Luma([20]));
+            }
+        }
+    }
+    g.save(d.join("a.png")).unwrap();
+    let dims = |sub: &str| -> (u32, u32) {
+        let f = std::fs::read_dir(d.join(sub))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        image::image_dimensions(f).unwrap()
+    };
+    let mk = |sub: &str, extra: &[&str]| {
+        let mut a = vec![
+            "a.png",
+            "--dpi",
+            "100",
+            "--split",
+            "off",
+            "--format",
+            "png",
+            "--out-dir",
+            sub,
+        ];
+        a.extend_from_slice(extra);
+        let o = run(&d, &a);
+        assert!(o.status.success(), "{}", text(&o));
+    };
+    mk("plain", &["--mode", "bw"]);
+    mk("smooth", &["--mode", "bw", "--smooth-glyphs", "2"]);
+    let (p, s) = (dims("plain"), dims("smooth"));
+    assert!(s.0 * 10 >= p.0 * 19 && s.0 * 10 <= p.0 * 21, "{p:?} {s:?}");
+    mk("colour", &["--mode", "color", "--smooth-glyphs", "2"]);
+    let c = dims("colour");
+    assert!(c.0 < s.0 - 20, "{c:?} {s:?}");
+    assert!(!run(&d, &["a.png", "--smooth-glyphs", "4"]).status.success());
+    let _ = std::fs::remove_dir_all(&d);
+}
