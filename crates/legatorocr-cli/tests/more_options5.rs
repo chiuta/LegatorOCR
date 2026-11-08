@@ -685,7 +685,7 @@ fn jbig2_output_is_smaller_and_readable() {
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);
             // blobs of ink that vary from row to row
-            if (x / 5 + (y / 7) * 3) % 4 == 0 && (s >> 40) % 9 != 0 {
+            if (x / 5 + (y / 7) * 3).is_multiple_of(4) && !(s >> 40).is_multiple_of(9) {
                 g.put_pixel(x, y, image::Luma([0]));
             }
         }
