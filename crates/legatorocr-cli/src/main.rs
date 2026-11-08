@@ -876,6 +876,26 @@ struct Cli {
     #[arg(long, value_name = "TEXT")]
     footer: Option<String>,
 
+    /// PDF toolbox: remove the document information (also the producer), annotations (links,
+    /// actions), page actions, per-page metadata, thumbnails and transitions from the result.
+    #[arg(long)]
+    sanitize: bool,
+
+    /// PDF toolbox: turn pages clockwise, DEG (a multiple of 90) or DEG:RANGES of the output
+    /// pages, e.g. 90 or 180:2,4-6.
+    #[arg(long, value_name = "DEG[:RANGES]", allow_negative_numbers = true)]
+    rotate_pdf: Option<String>,
+
+    /// PDF toolbox: cut LEFT,BOTTOM,RIGHT,TOP millimetres off every page, as displayed. The
+    /// page box shrinks; the content outside it stays in the file.
+    #[arg(long, value_name = "L,B,R,T")]
+    crop_pdf: Option<String>,
+
+    /// PDF toolbox: impose as a booklet: two pages per landscape sheet side in folding order,
+    /// blank pages added to a multiple of 4. Print double-sided, flip on the short edge, fold.
+    #[arg(long)]
+    booklet: bool,
+
     /// PDF toolbox: Bates number at the bottom right, PREFIX[:START[:DIGITS]], e.g. ACME-:1:6
     /// gives ACME-000001, ACME-000002, … and continues across the files of one run.
     #[arg(long, value_name = "SPEC")]
@@ -1986,6 +2006,10 @@ fn real_main() -> Result<()> {
         header: cli.header.clone(),
         footer: cli.footer.clone(),
         bates: cli.bates.clone(),
+        sanitize: cli.sanitize,
+        rotate: cli.rotate_pdf.clone(),
+        crop_mm: cli.crop_pdf.clone(),
+        booklet: cli.booklet,
     };
     if plan.active() {
         let written =
@@ -2662,6 +2686,10 @@ fn real_main() -> Result<()> {
             "--header",
             "--footer",
             "--bates",
+            "--sanitize",
+            "--rotate-pdf",
+            "--crop-pdf",
+            "--booklet",
             "--pdfa-check",
             "--verapdf",
             "--dewarp-margin",
