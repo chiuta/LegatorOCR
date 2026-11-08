@@ -48,6 +48,7 @@ pub mod mrz;
 pub mod naming;
 pub mod ocfl;
 pub mod ocrcache;
+pub mod ocrzones;
 pub mod offline;
 pub mod pdfapreflight;
 pub mod runninghead;

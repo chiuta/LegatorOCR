@@ -413,6 +413,18 @@ struct Cli {
     #[arg(long)]
     explain: bool,
 
+    /// OCR only this rectangle, X,Y,W,H in mm on the processed page (origin top-left, like
+    /// --picture-zone), optionally in its own language: `20,30,170,40=eng`. Repeatable: the
+    /// zones are read in the order given, which is the reading order. Without any zone the whole
+    /// page is read. Needs --ocr.
+    #[arg(long, value_name = "X,Y,W,H[=LANG]")]
+    ocr_zone: Vec<String>,
+
+    /// Leave out the words whose centre lies in this rectangle (X,Y,W,H mm): a stamp, a running
+    /// header, a margin note. Repeatable. Needs --ocr.
+    #[arg(long, value_name = "X,Y,W,H")]
+    ocr_ignore: Vec<String>,
+
     /// OCR language per input page, e.g. `1-40=ron,41-44=eng+fra,45-=ron` (pages counted from 1
     /// in input order; the last matching rule wins; other pages use --lang). Needs --ocr.
     #[arg(long, value_name = "RULES")]
@@ -2683,6 +2695,8 @@ fn real_main() -> Result<()> {
             "--threshold",
             "--sauvola-k",
             "--sharpen",
+            "--ocr-zone",
+            "--ocr-ignore",
             "--header",
             "--footer",
             "--bates",
@@ -3337,6 +3351,40 @@ fn real_main() -> Result<()> {
         let v = check_ocr(&ocr_opts).context("no OCR engine is available")?;
         legatorocr_engine::ocrcache::set(dir.clone(), &v)
             .with_context(|| format!("{}: cannot create the cache folder", dir.display()))?;
+    }
+    if !cli.ocr_zone.is_empty() || !cli.ocr_ignore.is_empty() {
+        if !cli.ocr {
+            bail!("--ocr-zone and --ocr-ignore need --ocr");
+        }
+        let zones = cli
+            .ocr_zone
+            .iter()
+            .map(|z| {
+                legatorocr_engine::ocrzones::parse_zone(z)
+                    .map_err(|e| anyhow::anyhow!("--ocr-zone {e}"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let ignores = cli
+            .ocr_ignore
+            .iter()
+            .map(|z| {
+                legatorocr_engine::ocrzones::parse_rect(z)
+                    .map_err(|e| anyhow::anyhow!("--ocr-ignore {e}"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for l in zones
+            .iter()
+            .filter_map(|z| z.lang.as_deref())
+            .flat_map(|l| l.split('+'))
+            .collect::<std::collections::BTreeSet<_>>()
+        {
+            check_ocr(&OcrOptions {
+                lang: l.into(),
+                ..ocr_opts.clone()
+            })
+            .with_context(|| format!("--ocr-zone: language {l}"))?;
+        }
+        legatorocr_engine::ocrzones::set(zones, ignores);
     }
     if let Some(spec) = &cli.page_lang {
         if !cli.ocr {

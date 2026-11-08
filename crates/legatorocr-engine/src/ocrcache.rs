@@ -94,8 +94,19 @@ fn decode(s: &str) -> Option<Vec<Word>> {
     Some(out)
 }
 
-/// Recognise through the cache (or directly when it is off).
+/// Recognise through the cache (or directly when it is off), under the OCR zones if any.
 pub fn recognize(
+    page: &PageImage,
+    dpi: u32,
+    o: &OcrOptions,
+) -> Result<Vec<Word>, legatorocr_ocr::OcrError> {
+    if crate::ocrzones::active() {
+        return crate::ocrzones::recognize(page, dpi, o, &recognize_cached);
+    }
+    recognize_cached(page, dpi, o)
+}
+
+fn recognize_cached(
     page: &PageImage,
     dpi: u32,
     o: &OcrOptions,
