@@ -26,6 +26,8 @@ pub struct Zone {
 }
 
 type Config = (Vec<Zone>, Vec<Rect>);
+/// Recognises one image with the given options.
+pub type Inner<'a> = &'a dyn Fn(&PageImage, u32, &OcrOptions) -> Result<Vec<Word>, OcrError>;
 static CFG: Mutex<Option<Config>> = Mutex::new(None);
 
 pub fn parse_rect(s: &str) -> Result<Rect> {
@@ -107,7 +109,7 @@ pub fn recognize(
     page: &PageImage,
     dpi: u32,
     o: &OcrOptions,
-    inner: &dyn Fn(&PageImage, u32, &OcrOptions) -> Result<Vec<Word>, OcrError>,
+    inner: Inner,
 ) -> Result<Vec<Word>, OcrError> {
     let Some((zones, ignores)) = config() else {
         return inner(page, dpi, o);
