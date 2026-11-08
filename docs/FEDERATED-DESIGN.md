@@ -23,7 +23,7 @@ a new community model.
   been collected and measured (4.52). Averaging updates of models that each drift towards their own
   book may lower accuracy for everybody.
 - **Infrastructure and trust.** A server, a signing key for models, versioning, a way to roll back, and
-  someone who runs it. The project is clean-room and trade-free: the coordinator should be
+  someone who runs it. The project is an independent implementation and trade-free: the coordinator should be
   self-hostable.
 
 ## What would be a first, honest step

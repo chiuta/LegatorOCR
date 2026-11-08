@@ -39,7 +39,7 @@ enum Fmt {
     None,
 }
 
-/// LegatorOCR — clean-room scan post-processor: split, deskew, crop, clean,
+/// LegatorOCR — independently implemented scan post-processor: split, deskew, crop, clean,
 /// then export to PDF with optional OCR text layer.
 #[derive(Parser)]
 #[command(name = "legatorocr", version, about)]

@@ -5,7 +5,7 @@
 pkgname=legatorocr
 pkgver=0.2.0
 pkgrel=1
-pkgdesc='Clean-room scan post-processing (ScanTailor-like), PDF export and OCR'
+pkgdesc='Scan post-processing (ScanTailor-like), PDF export and OCR'
 arch=('x86_64' 'aarch64')
 url='https://github.com/chiuta/LegatorOCR'
 license=('MIT')

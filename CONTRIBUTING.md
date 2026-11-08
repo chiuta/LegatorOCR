@@ -1,6 +1,6 @@
 # Contributing
 
-LegatorOCR is a clean-room Rust tool (scan post-processing like ScanTailor, PDF export, OCR) with
+LegatorOCR is an independently implemented Rust tool (scan post-processing like ScanTailor, PDF export, OCR) with
 one main author. Help is welcome, in this order of usefulness:
 
 1. **Test on systems the author lacks** (Windows, macOS, arm64): see `docs/TESTER-REPORT.md`.
@@ -8,7 +8,7 @@ one main author. Help is welcome, in this order of usefulness:
 3. **Bug reports** with the smallest input that shows the problem.
 4. **Code**: open an issue first for anything bigger than a small fix.
 
-## Clean-room rule
+## Independent-implementation rule
 Do not copy code, data structures or wording from ScanTailor (GPL) or from other tools whose licence
 is incompatible with MIT, and do not paste text or images you have no right to publish. If a change is
 inspired by another project, say which, and describe the idea in your own words.

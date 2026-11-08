@@ -6,7 +6,7 @@ Versiune: 0.2.0-pre.38 · Ultima actualizare: 2026-11-08
 
 Site de prezentare: <https://legatorocr.chiuta.ro> (sursa în `docs/`).
 
-Post-procesor Rust „clean-room” pentru cărți scanate:
+Post-procesor Rust independent pentru cărți scanate:
 **separare → îndreptare (deskew) → decupare → margini → curățare / binarizare → PDF cu strat de text OCR în care se poate căuta.**
 Același *flux de lucru* ca instrumentele clasice de prelucrare a scanărilor, dar cod independent. Interfață grafică
 (Windows, macOS, Linux) și linie de comandă.
@@ -262,13 +262,17 @@ fluxul lui de lucru), exportul Word editabil (pentru ce se folosește ABBYY Fine
 fluxul de lucru și recomandările de instrumente publicate de el. Au fost preluate doar *ideile de flux de lucru*; nu a fost consultat niciun cod al ABBYY, Agent Ransack, DocFetcher
 sau PDF24.
 
-## Declarație clean-room
+## Declarație de proveniență
+
+LegatorOCR este o implementare independentă, nu una clean-room documentată: nu s-a aplicat o procedură cu două echipe, iar istoricul depozitului nu o dovedește. Vezi `docs/clean-room/PROVENANCE.md`.
 
 Algoritmii au fost scriși din cunoștințe generale de prelucrare a imaginilor (Sauvola, profiluri de proiecție,
 componente conexe) și din fluxul de lucru descris public. Pentru `COMPARISON.md` au fost citite doar
-listele publice de funcții și notele de versiune ale altor instrumente; nu a fost consultat sau copiat niciun cod sursă al vreunui
-instrument existent de prelucrare a scanărilor. Înainte de lansarea comercială, faceți-vă propria verificare
+listele publice de funcții și notele de versiune ale altor instrumente; sesiunile de dezvoltare verificate nu arată folosirea vreunui cod sursă al unui
+instrument existent de prelucrare a scanărilor, iar niciunul nu a fost copiat. Înainte de lansarea comercială, faceți-vă propria verificare
 prealabilă, inclusiv o căutare de marcă pentru nume.
+
+Modelul OCR încorporat (`multi.lnm`) a fost antrenat parțial pe scanări ale unei reviste și ale unui manual din 1960, ale căror drepturi nu sunt documentate; vezi `docs/clean-room/PROVENANCE.md` înainte de redistribuirea comercială a modelului.
 
 Licență MIT. Dependențe și fonturi încorporate: vedeți `THIRD_PARTY_LICENSES.md`. Motorul OCR încorporat livrează liste de cuvinte
 derivate din datele *wordfreq* (**CC BY-SA 4.0**, atribuire în `crates/legatorocr-nocr/lexicons/README.md` și în arhivele

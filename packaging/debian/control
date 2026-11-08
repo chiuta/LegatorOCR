@@ -12,6 +12,6 @@ Depends: ${shlibs:Depends}, ${misc:Depends}
 Recommends: tesseract-ocr, tesseract-ocr-ron, tesseract-ocr-eng, poppler-utils
 Suggests: openssl, curl, qpdf, ghostscript, mupdf-tools, tesseract-ocr-osd, tesseract-ocr-fra, tesseract-ocr-ita, tesseract-ocr-spa, tesseract-ocr-por, tesseract-ocr-deu, tesseract-ocr-hun
 Description: scan post-processing, PDF export and OCR
- Clean-room command-line tool: deskew, page split, content selection,
+ Command-line tool: deskew, page split, content selection,
  binarisation, PDF/A export and OCR. Skeleton only: not built as a package
  and not submitted to Debian.
