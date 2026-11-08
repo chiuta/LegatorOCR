@@ -650,7 +650,7 @@ pub fn booklet(doc: &PdfDoc) -> R<Vec<u8>> {
             let tx = slot as f64 * sw + (sw - w) / 2.0 - llx;
             let ty = (sh - h) / 2.0 - lly;
             let _ = write!(res, " /P{slot} {} 0 R", forms[i]);
-            let _ = write!(cs, "q 1 0 0 1 {tx:.3} {ty:.3} cm /P{slot} Do Q\n");
+            let _ = writeln!(cs, "q 1 0 0 1 {tx:.3} {ty:.3} cm /P{slot} Do Q");
         }
         res.push_str(" >> >>");
         let cid = out.alloc();
