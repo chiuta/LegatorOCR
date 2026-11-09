@@ -39,6 +39,59 @@ fn ossl(d: &Path, args: &[&str]) -> bool {
         .unwrap_or(false)
 }
 
+fn ossl_out(d: &Path, args: &[&str]) -> String {
+    let o = Command::new("openssl")
+        .current_dir(d)
+        .args(args)
+        .output()
+        .expect("openssl");
+    assert!(o.status.success(), "openssl {args:?}: {}", text(&o));
+    String::from_utf8_lossy(&o.stdout).into_owned()
+}
+
+fn find(h: &[u8], n: &[u8], from: usize) -> usize {
+    from + h[from..]
+        .windows(n.len())
+        .position(|w| w == n)
+        .unwrap_or_else(|| panic!("{:?} not found", String::from_utf8_lossy(n)))
+}
+
+/// The CMS blob of the (only) signature of `pdf` and the bytes its ByteRange covers.
+fn cms_and_covered(pdf: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let br = find(pdf, b"/ByteRange [", 0) + 12;
+    let end = find(pdf, b"]", br);
+    let n: Vec<usize> = std::str::from_utf8(&pdf[br..end])
+        .unwrap()
+        .split_whitespace()
+        .map(|x| x.parse().unwrap())
+        .collect();
+    assert_eq!(n.len(), 4);
+    let c = find(pdf, b"/Contents <", end) + 11;
+    let ce = find(pdf, b">", c);
+    let hex = std::str::from_utf8(&pdf[c..ce]).unwrap();
+    let cms: Vec<u8> = (0..hex.len() / 2)
+        .map(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).unwrap())
+        .collect();
+    let mut cov = pdf[n[0]..n[0] + n[1]].to_vec();
+    cov.extend_from_slice(&pdf[n[2]..n[2] + n[3]]);
+    (cms, cov)
+}
+
+/// First `[HEX DUMP]:` value on a line after line `from`, lowercased.
+fn hex_after(lines: &[&str], from: usize) -> String {
+    lines[from + 1..]
+        .iter()
+        .find_map(|l| l.split("[HEX DUMP]:").nth(1))
+        .expect("hex dump")
+        .trim()
+        .to_ascii_lowercase()
+}
+
+fn sha256_of(d: &Path, file: &str) -> String {
+    let o = ossl_out(d, &["dgst", "-sha256", "-r", file]);
+    o.split_whitespace().next().unwrap().to_ascii_lowercase()
+}
+
 #[test]
 fn lt_refusal_then_lt_and_level_report() {
     let d = tmp("lt");
@@ -214,7 +267,48 @@ fn sign_pades_has_no_signing_time_error() {
         assert!(!t.contains("ERROR"), "{t}");
         let v = run(&d, &["--verify-pdf-signatures", out, "--sign-ca", cert]);
         assert!(v.status.success(), "{}", text(&v));
-        let _ = cert;
+        // structure openssl does not check: attribute set and order, the digest the signature
+        // commits to, and the signing-certificate-v2 hash
+        let pdf = std::fs::read(d.join(out)).unwrap();
+        let (cms, cov) = cms_and_covered(&pdf);
+        std::fs::write(d.join("x.cms"), &cms).unwrap();
+        std::fs::write(d.join("x.cov"), &cov).unwrap();
+        let der = format!("{out}.cert.der");
+        ok(&["x509", "-in", cert, "-outform", "DER", "-out", &der]);
+        let dump = ossl_out(&d, &["asn1parse", "-inform", "DER", "-in", "x.cms"]);
+        assert!(!dump.contains("Error"), "{dump}");
+        let lines: Vec<&str> = dump.lines().collect();
+        let at = |what: &str| {
+            lines
+                .iter()
+                .position(|l| l.contains(what))
+                .unwrap_or_else(|| panic!("{what} missing in {out}:\n{dump}"))
+        };
+        let (ct, md, sc) = (
+            at(":contentType"),
+            at(":messageDigest"),
+            at(":id-smime-aa-signingCertificateV2"),
+        );
+        // DER SET OF order: by encoding, i.e. contentType, messageDigest, signingCertificateV2
+        assert!(ct < md && md < sc, "{out}: attribute order\n{dump}");
+        assert!(!dump.contains(":signingTime"), "{dump}");
+        assert!(!dump.contains("smimeCapabilities"), "{dump}");
+        assert_eq!(
+            lines.iter().filter(|l| l.contains("id-smime-aa-")).count(),
+            1,
+            "{dump}"
+        );
+        assert_eq!(
+            hex_after(&lines, md),
+            sha256_of(&d, "x.cov"),
+            "messageDigest"
+        );
+        assert_eq!(hex_after(&lines, sc), sha256_of(&d, &der), "certHash");
+        // issuerSerial follows the hash: [4] directoryName
+        assert!(
+            lines[sc..].iter().any(|l| l.contains("cont [ 4 ]")),
+            "{dump}"
+        );
     }
     let _ = std::fs::remove_dir_all(&d);
 }
