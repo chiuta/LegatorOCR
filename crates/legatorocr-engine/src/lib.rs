@@ -277,6 +277,9 @@ pub struct ExportResult {
     pub form_fields: usize,
     /// Per page, tables and paragraphs found from the word positions (for the Word export).
     pub docx_blocks: Option<Vec<Vec<docx::Block>>>,
+    /// With `tei::set_facsimile_dir`: per page, the image written for the facsimile and the
+    /// blocks with their rectangles (for `tei::render_facs`).
+    pub tei_facs: Vec<tei::FacsPage>,
     /// With `split_on_blank`: one PDF per document (then `pdf` is `None`).
     pub docs: Vec<Vec<u8>>,
     /// Bar-code text that opened each entry of `docs` (None before the first separator).
@@ -780,6 +783,8 @@ pub fn run_export(
     let mut page_xml_docs: Vec<String> = Vec::new();
     let mut json_pages: Vec<String> = Vec::new();
     let mut block_pages: Vec<Vec<docx::Block>> = Vec::new();
+    let mut facs_pages: Vec<tei::FacsPage> = Vec::new();
+    let facs_dir = tei::facsimile_dir();
     // Pass 1 (optional): a common page size for the whole book.
     let uniform = if job.uniform_size {
         measure_uniform_size(job.sheets, job.osd.as_ref(), cancel)?
@@ -982,7 +987,23 @@ pub fn run_export(
                 res.words += words.len();
                 if ocr_opts.is_some() {
                     texts.push(legatorocr_ocr::words_to_text(&words));
-                    block_pages.push(docx::blocks_from_words(&words));
+                    if let Some(dir) = &facs_dir {
+                        let geo = docx::blocks_from_words_geo(&words);
+                        block_pages.push(geo.iter().map(|g| g.block.clone()).collect());
+                        let name = format!("page-{:04}.png", res.pages);
+                        std::fs::create_dir_all(dir)
+                            .with_context(|| format!("{}: cannot create", dir.display()))?;
+                        save_page_image(&pg, &dir.join(&name))
+                            .with_context(|| format!("{name}: cannot write the page image"))?;
+                        facs_pages.push(tei::FacsPage {
+                            image: name,
+                            width: pg.image.width(),
+                            height: pg.image.height(),
+                            blocks: geo,
+                        });
+                    } else {
+                        block_pages.push(docx::blocks_from_words(&words));
+                    }
                     par_texts.push(legatorocr_ocr::words_to_paragraphs(&words));
                     json_pages.push(legatorocr_ocr::json_page(
                         &words,
@@ -1114,6 +1135,7 @@ pub fn run_export(
         res.page_xml = page_xml_docs;
         res.json = Some(legatorocr_ocr::json_document(&json_pages));
         res.docx_blocks = Some(block_pages);
+        res.tei_facs = facs_pages;
     }
     if job.split_on_blank || job.split_on_barcode {
         if let Some(w) = writer.filter(|w| w.page_count() > 0) {

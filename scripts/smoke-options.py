@@ -43,7 +43,7 @@ CASES = {
  "keep-going": ["--keep-going"], "min-conf": ["--ocr", "--min-conf", "50"], "clean-text": ["--ocr", "--clean-text"],
  "ocr-mode": ["--ocr", "--ocr-mode", "force"], "ocr-languages": ["--ocr", "--ocr-languages"],
  "page-labels": ["--ocr", "--page-labels"], "doubtful": ["--ocr", "--doubtful-words", "{o}.tsv", "--doubtful-conf", "90"],
- "tei": ["--ocr", "--tei", "{o}.tei.xml"], "tables": ["--ocr", "--tables-xlsx", "{o}.xlsx", "--tables-html", "{o}.html"],
+ "tei": ["--ocr", "--tei", "{o}.tei.xml"], "tei-facsimile": ["--ocr", "--tei", "{o}.tei.xml", "--tei-facsimile", "{d}/facs"], "tables": ["--ocr", "--tables-xlsx", "{o}.xlsx", "--tables-html", "{o}.html"],
  "mrz": ["--ocr", "--mrz"], "mrz-no-repair": ["--ocr", "--mrz", "--mrz-no-repair"], "verify-text": ["--ocr", "--verify-text"], "quality-report": ["--quality-report"],
  "report": ["--report", "{o}.r.json"], "outliers": ["--report-outliers"], "checksums": ["--checksums"],
   "profile": ["--profile", "diploma"], "save-profile": ["--save-profile", "smokeprof"], "save-project": ["--save-project", "{d}/x.lgr"],

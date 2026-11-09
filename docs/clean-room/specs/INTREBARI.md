@@ -34,3 +34,10 @@ Fiecare punct: spec, ce lipsește, ce s-a făcut în cod până la răspuns.
 4. Numele proprietății care declară sursa paginării: nespecificat; verificarea acceptă orice `dc:source` nevid ca declarație. Forma exactă a declarației `dcterms:conformsTo` (meta cu property) și a certificatorului (`a11y:certifiedBy`) este luată din textul spec-ului.
 5. Șirurile exacte de tipuri media pentru fiecare tip de bază nu sunt în spec (doar numele formatelor); s-au folosit numele IANA obișnuite. „Alternativă intrinsecă" (fără lanț în manifest) nu e implementată: o resursă străină fără `fallback` e eroare.
 6. Existența în container a fiecărui element din manifest este verificată (consecința „restul stau în container"); nu e regulă explicită în spec.
+
+## 06 tei-facsimil
+1. Numele elementelor și atributelor TEI nu sunt toate în spec (acolo: ulx, uly, lrx, lry și descrieri). Folosite: `facsimile`, `surface`, `zone`, `graphic` (cu atributul `url` pentru fișier), atributul de legătură `facs` (pagina att.global.facs citită confirmă existența clasei și `facsimile`/`graphic`), atributul de început al suprafeței `start`, `xml:id`. Numele `surface`, `zone`, `url`, `start` nu au putut fi confirmate din textul preluat; de reconfirmat cu documentul oficial.
+2. Axa y (origine sus-stânga): [necunoscut] în spec, aleasă ca decizie a implementării (pixelii imaginii scrise, origine sus-stânga).
+3. Validarea față de schema TEI nu s-a făcut; testele verifică bună-formare, unicitatea identificatorilor și rezolvarea legăturilor.
+4. Imaginea legată este pagina prelucrată (după îndreptare/decupare), scrisă ca PNG de program în DIR; nu originalul. Atribute de dimensiune pe `graphic` nu s-au scris (nu sunt în spec).
+5. Zone doar pentru paragrafe, titluri și tabele; figuri nu există în modelul de blocuri, deci nu au zone. Rectangle-ul unui bloc este încadrarea cuvintelor lui (reuniunea liniilor).

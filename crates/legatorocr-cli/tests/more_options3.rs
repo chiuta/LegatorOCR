@@ -263,3 +263,31 @@ fn install_modules_prints_commands_and_runs_them_only_with_yes() {
     assert_eq!(o.status.code(), Some(1));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn tei_facsimile_links_the_paragraph_to_a_zone_on_the_written_page_image() {
+    let d = setup("teifacs");
+    let o = ocr(&d, &["--tei", "o.tei.xml", "--tei-facsimile", "imgs"]);
+    assert!(o.status.success(), "{}", text(&o));
+    let x = std::fs::read_to_string(d.join("o.tei.xml")).unwrap();
+    let (w, h) = image::image_dimensions(d.join("imgs/page-0001.png")).unwrap();
+    assert!(
+        x.contains(&format!(
+            "ulx=\"0\" uly=\"0\" lrx=\"{w}\" lry=\"{h}\" start=\"#p1\""
+        )),
+        "{x}"
+    );
+    assert!(x.contains("<graphic url=\"imgs/page-0001.png\"/>"), "{x}");
+    assert!(x.contains("<pb n=\"1\" xml:id=\"p1\" facs=\"#s1\"/>"));
+    assert!(x.contains("<p facs=\"#z1-1\">"), "{x}");
+    assert!(
+        x.contains("<zone xml:id=\"z1-1\" ulx=\"120\" uly=\"10\" lrx=\"460\" lry=\"40\"/>"),
+        "{x}"
+    );
+    // without the option nothing links
+    let o = ocr(&d, &["--tei", "plain.tei.xml"]);
+    assert!(o.status.success(), "{}", text(&o));
+    let p = std::fs::read_to_string(d.join("plain.tei.xml")).unwrap();
+    assert!(!p.contains("facsimile") && !p.contains("facs="));
+    let _ = std::fs::remove_dir_all(&d);
+}

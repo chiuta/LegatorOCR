@@ -54,6 +54,40 @@ pub enum Block {
     Columns(Vec<Vec<Block>>),
 }
 
+/// A rectangle in pixels of the page image: top-left corner and size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rect {
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+}
+
+impl Rect {
+    /// Smallest rectangle holding both.
+    pub fn union(self, o: Rect) -> Rect {
+        let x0 = self.x.min(o.x);
+        let y0 = self.y.min(o.y);
+        let x1 = self.x.saturating_add(self.w).max(o.x.saturating_add(o.w));
+        let y1 = self.y.saturating_add(self.h).max(o.y.saturating_add(o.h));
+        Rect {
+            x: x0,
+            y: y0,
+            w: x1 - x0,
+            h: y1 - y0,
+        }
+    }
+}
+
+/// A block together with the rectangle its words cover. For a `Block::Columns`, `columns` holds
+/// the blocks of each column with their own rectangles.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GeoBlock {
+    pub block: Block,
+    pub rect: Option<Rect>,
+    pub columns: Vec<Vec<GeoBlock>>,
+}
+
 /// Tables and paragraphs from the positioned words of one page. Text is cut into cells where a
 /// gap exceeds 2.5 line heights; cells that sit on the same row of the page (even when the OCR
 /// put them in different blocks, as Tesseract does for table columns) are put side by side, and
@@ -61,15 +95,36 @@ pub enum Block {
 /// a table. Everything else is flowing text in the order the OCR gave. Nothing is invented: cell
 /// text is the recognised words, in order.
 pub fn blocks_from_words(words: &[legatorocr_core::text::Word]) -> Vec<Block> {
+    blocks_from_words_geo(words)
+        .into_iter()
+        .map(|g| g.block)
+        .collect()
+}
+
+/// Like [`blocks_from_words`], with the rectangle each block covers on the page image.
+pub fn blocks_from_words_geo(words: &[legatorocr_core::text::Word]) -> Vec<GeoBlock> {
     match split_columns(words) {
         Some((head, cols)) => {
-            let mut out = blocks_flat(&head);
-            out.push(Block::Columns(
-                cols.iter().map(|c| blocks_flat(c)).collect(),
-            ));
+            let mut out = blocks_flat_geo(&head);
+            let columns: Vec<Vec<GeoBlock>> = cols.iter().map(|c| blocks_flat_geo(c)).collect();
+            let rect = columns
+                .iter()
+                .flatten()
+                .filter_map(|g| g.rect)
+                .reduce(Rect::union);
+            out.push(GeoBlock {
+                block: Block::Columns(
+                    columns
+                        .iter()
+                        .map(|c| c.iter().map(|g| g.block.clone()).collect())
+                        .collect(),
+                ),
+                rect,
+                columns,
+            });
             out
         }
-        None => blocks_flat(words),
+        None => blocks_flat_geo(words),
     }
 }
 
@@ -207,7 +262,7 @@ fn fills_measure(col: &[legatorocr_core::text::Word], med: f32) -> bool {
     full * 2 >= lines.len()
 }
 
-fn blocks_flat(words: &[legatorocr_core::text::Word]) -> Vec<Block> {
+fn blocks_flat_geo(words: &[legatorocr_core::text::Word]) -> Vec<GeoBlock> {
     struct Cell {
         l: f32,
         r: f32,
@@ -217,6 +272,7 @@ fn blocks_flat(words: &[legatorocr_core::text::Word]) -> Vec<Block> {
         cells: Vec<Cell>,
         top: f32,
         h: f32,
+        rect: Rect,
     }
     let mut lines: Vec<Line> = Vec::new();
     let mut i = 0;
@@ -234,6 +290,7 @@ fn blocks_flat(words: &[legatorocr_core::text::Word]) -> Vec<Block> {
             continue;
         }
         g.sort_by_key(|w| w.x);
+        let g_all = g.clone();
         let top = g.iter().map(|w| w.y).min().unwrap_or(0) as f32;
         let h = g.iter().map(|w| w.h).max().unwrap_or(1).max(1) as f32;
         let mut cells: Vec<Cell> = Vec::new();
@@ -252,7 +309,32 @@ fn blocks_flat(words: &[legatorocr_core::text::Word]) -> Vec<Block> {
                 }),
             }
         }
-        lines.push(Line { cells, top, h });
+        let rect = {
+            let x0 = g_all.iter().map(|w| w.x).min().unwrap_or(0);
+            let y0 = g_all.iter().map(|w| w.y).min().unwrap_or(0);
+            let x1 = g_all
+                .iter()
+                .map(|w| w.x.saturating_add(w.w))
+                .max()
+                .unwrap_or(0);
+            let y1 = g_all
+                .iter()
+                .map(|w| w.y.saturating_add(w.h))
+                .max()
+                .unwrap_or(0);
+            Rect {
+                x: x0,
+                y: y0,
+                w: x1 - x0,
+                h: y1 - y0,
+            }
+        };
+        lines.push(Line {
+            cells,
+            top,
+            h,
+            rect,
+        });
     }
     if lines.is_empty() {
         return Vec::new();
@@ -293,7 +375,7 @@ fn blocks_flat(words: &[legatorocr_core::text::Word]) -> Vec<Block> {
         .collect();
 
     let mut consumed = vec![false; lines.len()];
-    let mut tables: Vec<(usize, Block)> = Vec::new(); // (first line index in reading order, table)
+    let mut tables: Vec<(usize, GeoBlock)> = Vec::new(); // (first line index in reading order, table)
     let mut k = 0;
     while k < rows.len() {
         let mut e = k;
@@ -320,10 +402,12 @@ fn blocks_flat(words: &[legatorocr_core::text::Word]) -> Vec<Block> {
         if e - k >= 3 && long_cells * 2 <= all_cells {
             let mut first = usize::MAX;
             let mut table: Vec<Vec<String>> = Vec::new();
+            let mut trect: Option<Rect> = None;
             for r in k..e {
                 for &li in &rows[r].0 {
                     consumed[li] = true;
                     first = first.min(li);
+                    trect = Some(trect.map_or(lines[li].rect, |t| t.union(lines[li].rect)));
                 }
                 table.push(
                     row_cells[r]
@@ -332,15 +416,23 @@ fn blocks_flat(words: &[legatorocr_core::text::Word]) -> Vec<Block> {
                         .collect(),
                 );
             }
-            tables.push((first, Block::Table(table)));
+            tables.push((
+                first,
+                GeoBlock {
+                    block: Block::Table(table),
+                    rect: trect,
+                    columns: Vec::new(),
+                },
+            ));
             k = e;
         } else {
             k += 1;
         }
     }
 
-    let mut out: Vec<Block> = Vec::new();
+    let mut out: Vec<GeoBlock> = Vec::new();
     let mut para = String::new();
+    let mut para_rect: Option<Rect> = None;
     let mut prev_bottom: Option<f32> = None;
     let page_top = lines.iter().map(|l| l.top).fold(f32::MAX, f32::min);
     let page_bottom = lines.iter().map(|l| l.top + l.h).fold(f32::MIN, f32::max);
@@ -352,14 +444,19 @@ fn blocks_flat(words: &[legatorocr_core::text::Word]) -> Vec<Block> {
             && l.top <= page_top + 0.4 * (page_bottom - page_top)
             && lines.len() >= 4
     };
-    let flush = |para: &mut String, out: &mut Vec<Block>| {
+    let flush = |para: &mut String, rect: &mut Option<Rect>, out: &mut Vec<GeoBlock>| {
         if !para.is_empty() {
-            out.push(Block::Para(std::mem::take(para)));
+            out.push(GeoBlock {
+                block: Block::Para(std::mem::take(para)),
+                rect: rect.take(),
+                columns: Vec::new(),
+            });
         }
+        *rect = None;
     };
     for (li, l) in lines.iter().enumerate() {
         if let Some(pos) = tables.iter().position(|t| t.0 == li) {
-            flush(&mut para, &mut out);
+            flush(&mut para, &mut para_rect, &mut out);
             out.push(tables.remove(pos).1);
             prev_bottom = None;
         }
@@ -373,21 +470,26 @@ fn blocks_flat(words: &[legatorocr_core::text::Word]) -> Vec<Block> {
             .collect::<Vec<_>>()
             .join(" ");
         if is_heading(l, &text) {
-            flush(&mut para, &mut out);
-            out.push(Block::Head(text));
+            flush(&mut para, &mut para_rect, &mut out);
+            out.push(GeoBlock {
+                block: Block::Head(text),
+                rect: Some(l.rect),
+                columns: Vec::new(),
+            });
             prev_bottom = None;
             continue;
         }
         if prev_bottom.is_some_and(|b| l.top - b > 0.9 * med) {
-            flush(&mut para, &mut out);
+            flush(&mut para, &mut para_rect, &mut out);
         }
         if !para.is_empty() && !para.ends_with('-') {
             para.push(' ');
         }
         para.push_str(&text);
+        para_rect = Some(para_rect.map_or(l.rect, |r| r.union(l.rect)));
         prev_bottom = Some(l.top + l.h);
     }
-    flush(&mut para, &mut out);
+    flush(&mut para, &mut para_rect, &mut out);
     out
 }
 
@@ -801,5 +903,27 @@ mod tests {
             plain.iter().all(|b| !matches!(b, Block::Head(_))),
             "{plain:?}"
         );
+    }
+
+    #[test]
+    fn paragraphs_carry_the_rectangle_of_their_lines() {
+        let words = vec![
+            w("alpha", 100, 200, 80, 0),
+            w("beta", 190, 200, 60, 0),
+            w("gamma", 102, 224, 90, 1),
+        ];
+        let g = blocks_from_words_geo(&words);
+        assert_eq!(g.len(), 1);
+        assert_eq!(g[0].block, Block::Para("alpha beta gamma".into()));
+        assert_eq!(
+            g[0].rect,
+            Some(Rect {
+                x: 100,
+                y: 200,
+                w: 150,
+                h: 44
+            })
+        );
+        assert_eq!(blocks_from_words(&words), vec![g[0].block.clone()]);
     }
 }

@@ -239,6 +239,14 @@ struct Cli {
     #[arg(long)]
     epub: Option<PathBuf>,
 
+    /// With --tei: also write a TEI facsimile. Each page image (the processed page, PNG) is
+    /// written into DIR, and the TEI file gets a facsimile element with one surface per page
+    /// (pixel extent) and one rectangular zone per paragraph, heading and table; page breaks
+    /// and those blocks point to their surface / zone. Coordinates are pixels of the written
+    /// image, origin at its top-left corner.
+    #[arg(long, value_name = "DIR", requires = "tei")]
+    tei_facsimile: Option<PathBuf>,
+
     /// Check an EPUB 3 file (one made by --epub or any other): container, package document,
     /// navigation document, XML well-formedness (no external entities, no XInclude), media types
     /// and fallback chains, resource locations, accessibility discovery metadata, the
@@ -1646,6 +1654,40 @@ fn main() -> Result<()> {
 
 /// Expand `{date}`, `{year}`, `{month}`, `{day}`, `{name}` in an output path and create the
 /// folders of a templated path.
+/// `to` as a `/`-separated path relative to the folder `from` (both may not exist yet: then the
+/// path as given is used). Empty when they are the same folder.
+fn relative_dir(from: &Path, to: &Path) -> String {
+    let abs = |p: &Path| -> Option<PathBuf> {
+        let p = if p.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            p
+        };
+        std::fs::canonicalize(p).ok()
+    };
+    let slash = |p: &Path| {
+        p.components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("/")
+    };
+    let (Some(a), Some(b)) = (abs(from), abs(to)) else {
+        return slash(to);
+    };
+    let (ac, bc): (Vec<_>, Vec<_>) = (a.components().collect(), b.components().collect());
+    let common = ac.iter().zip(&bc).take_while(|(x, y)| x == y).count();
+    if common == 0 {
+        return slash(to);
+    }
+    let mut parts: Vec<String> = vec!["..".to_string(); ac.len() - common];
+    parts.extend(
+        bc[common..]
+            .iter()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned()),
+    );
+    parts.join("/")
+}
+
 fn expand_path(p: &mut Option<PathBuf>, name: &str) -> Result<()> {
     let Some(path) = p.as_ref() else {
         return Ok(());
@@ -2218,6 +2260,7 @@ fn real_main() -> Result<()> {
     if cli.linearize && cli.object_streams {
         bail!("--linearize cannot be combined with --object-streams");
     }
+    legatorocr_engine::tei::set_facsimile_dir(cli.tei_facsimile.clone());
     legatorocr_engine::pdfcrypt::set_linearize(cli.linearize);
     legatorocr_engine::pdfcrypt::set_jbig2(cli.jbig2);
     legatorocr_engine::pdfcrypt::set_compact(cli.object_streams);
@@ -4224,10 +4267,28 @@ fn real_main() -> Result<()> {
             "hun" => "hu",
             other => other,
         });
-        write_atomic(
-            p,
-            legatorocr_engine::tei::render(b, title, lang, &[]).as_bytes(),
-        )?;
+        let xml = match &cli.tei_facsimile {
+            Some(dir) if !res.tei_facs.is_empty() => {
+                let rel = relative_dir(p.parent().unwrap_or(Path::new("")), dir);
+                let pages: Vec<legatorocr_engine::tei::FacsPage> = res
+                    .tei_facs
+                    .iter()
+                    .map(|f| legatorocr_engine::tei::FacsPage {
+                        image: if rel.is_empty() {
+                            f.image.clone()
+                        } else {
+                            format!("{rel}/{}", f.image)
+                        },
+                        width: f.width,
+                        height: f.height,
+                        blocks: f.blocks.clone(),
+                    })
+                    .collect();
+                legatorocr_engine::tei::render_facs(&pages, title, lang, &[])
+            }
+            _ => legatorocr_engine::tei::render(b, title, lang, &[]),
+        };
+        write_atomic(p, xml.as_bytes())?;
         eprintln!("wrote {}", p.display());
         written.push(p.clone());
     }
