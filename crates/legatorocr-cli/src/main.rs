@@ -432,8 +432,9 @@ struct Cli {
     /// OCR only this rectangle, X,Y,W,H in mm on the processed page (origin top-left, like
     /// --picture-zone), optionally in its own language: `20,30,170,40=eng`. Repeatable: the
     /// zones are read in the order given, which is the reading order. Without any zone the whole
-    /// page is read. Needs --ocr.
-    #[arg(long, value_name = "X,Y,W,H[=LANG]")]
+    /// page is read. Add `#table` (`20,30,170,80#table`) to read a zone as one block, row by row
+    /// (a table). Needs --ocr.
+    #[arg(long, value_name = "X,Y,W,H[=LANG][#table]")]
     ocr_zone: Vec<String>,
 
     /// Leave out the words whose centre lies in this rectangle (X,Y,W,H mm): a stamp, a running

@@ -2925,7 +2925,11 @@ impl App {
                 .on_hover_text(tr("zones.hint"));
             ui.checkbox(&mut self.edit_box, tr("box.edit"))
                 .on_hover_text(tr("box.hint"));
-            for (v, k) in [(1u8, "ocr.tool_zone"), (2u8, "ocr.tool_ignore")] {
+            for (v, k) in [
+                (1u8, "ocr.tool_zone"),
+                (2u8, "ocr.tool_ignore"),
+                (3u8, "ocr.tool_table"),
+            ] {
                 if ui
                     .selectable_label(self.ocr_tool == v, tr(k))
                     .on_hover_text(tr("ocr.tool_hint"))
@@ -3569,7 +3573,7 @@ impl App {
         let odrag = &mut self.ocr_drag;
         let mut new_ocr: Option<(u8, [f32; 4])> = None;
         // (zone, is-ignore, index) rectangles in mm to show on the processed pages
-        let ocr_rects: Vec<([f32; 4], bool)> = {
+        let ocr_rects: Vec<([f32; 4], u8)> = {
             let split = |t: &str| -> Vec<String> {
                 t.split(';')
                     .map(|x| x.trim().to_string())
@@ -3579,12 +3583,15 @@ impl App {
             let mut v = Vec::new();
             for z in split(&self.s.ocr_zones) {
                 if let Ok(z) = legatorocr_engine::ocrzones::parse_zone(&z) {
-                    v.push(([z.rect.x, z.rect.y, z.rect.w, z.rect.h], false));
+                    v.push((
+                        [z.rect.x, z.rect.y, z.rect.w, z.rect.h],
+                        u8::from(z.table) * 2,
+                    ));
                 }
             }
             for z in split(&self.s.ocr_ignore) {
                 if let Ok(r) = legatorocr_engine::ocrzones::parse_rect(&z) {
-                    v.push(([r.x, r.y, r.w, r.h], true));
+                    v.push(([r.x, r.y, r.w, r.h], 1));
                 }
             }
             v
@@ -4267,8 +4274,13 @@ impl App {
                                 )
                             };
                             let painter = ui.painter_at(rect);
-                            for (n, (r, ignore)) in ocr_rects.iter().enumerate() {
-                                let (fill, line) = if *ignore {
+                            for (n, (r, kind)) in ocr_rects.iter().enumerate() {
+                                let (fill, line) = if *kind == 2 {
+                                    (
+                                        Color32::from_rgba_unmultiplied(120, 70, 200, 50),
+                                        Color32::from_rgb(110, 60, 190),
+                                    )
+                                } else if *kind == 1 {
                                     (
                                         Color32::from_rgba_unmultiplied(230, 50, 80, 50),
                                         Color32::from_rgb(230, 50, 80),
@@ -4311,7 +4323,9 @@ impl App {
                                     (*odrag, ui.input(|i| i.pointer.latest_pos()))
                                 {
                                     let r = egui::Rect::from_two_pos(a, b).intersect(rect);
-                                    let col = if ocr_tool == 2 {
+                                    let col = if ocr_tool == 3 {
+                                        Color32::from_rgb(110, 60, 190)
+                                    } else if ocr_tool == 2 {
                                         Color32::from_rgb(230, 50, 80)
                                     } else {
                                         Color32::from_rgb(40, 170, 80)
@@ -4351,7 +4365,14 @@ impl App {
                 .show(ui, draw);
         }
         if let Some((kind, r)) = new_ocr {
-            let item = format!("{:.1},{:.1},{:.1},{:.1}", r[0], r[1], r[2], r[3]);
+            let item = format!(
+                "{:.1},{:.1},{:.1},{:.1}{}",
+                r[0],
+                r[1],
+                r[2],
+                r[3],
+                if kind == 3 { "#table" } else { "" }
+            );
             let field = if kind == 2 {
                 &mut self.s.ocr_ignore
             } else {
