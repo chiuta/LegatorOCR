@@ -45,7 +45,7 @@ enum Fmt {
 #[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "install_modules", "scan_escl", "watch", "verify_bag", "verify_ocfl", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "pdfa_check", "decode_worker", "fuse_frames", "verify_document", "integrity_hints", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "merkle_verify_consistency", "verify_sums", "extract_project", "search_preset", "search_help"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "install_modules", "scan_escl", "watch", "verify_bag", "verify_epub", "verify_ocfl", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "pdfa_check", "decode_worker", "fuse_frames", "verify_document", "integrity_hints", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "merkle_verify_consistency", "verify_sums", "extract_project", "search_preset", "search_help"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -238,6 +238,14 @@ struct Cli {
     /// stay tables. For screen readers, e-readers and audiobook tools. Not checked with EPUBCheck.
     #[arg(long)]
     epub: Option<PathBuf>,
+
+    /// Check an EPUB 3 file (one made by --epub or any other): container, package document,
+    /// navigation document, XML well-formedness (no external entities, no XInclude), media types
+    /// and fallback chains, resource locations, accessibility discovery metadata, the
+    /// accessibility conformance claim and page navigation. Prints errors and warnings with the
+    /// requirement; exit 1 on an error; then exit. Not a full EPUB validator.
+    #[arg(long, value_name = "FILE")]
+    verify_epub: Option<PathBuf>,
 
     /// Also write the recognised text as TEI P5 XML: a page break per scanned page, paragraphs,
     /// tables, columns (needs --ocr). Page structure only; no headings, notes or index markup.
@@ -2642,6 +2650,15 @@ fn real_main() -> Result<()> {
             dir.display(),
             proj.display()
         );
+        return Ok(());
+    }
+    if let Some(f) = &cli.verify_epub {
+        let data = std::fs::read(f).with_context(|| format!("{}: cannot read", f.display()))?;
+        let report = legatorocr_engine::epubverify::check(&data);
+        print!("{}", legatorocr_engine::epubverify::render(&report));
+        if report.errors() > 0 {
+            std::process::exit(1);
+        }
         return Ok(());
     }
     if let Some(bag) = &cli.verify_bag {

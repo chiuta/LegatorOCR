@@ -26,3 +26,11 @@ Fiecare punct: spec, ce lipsește, ce s-a făcut în cod până la răspuns.
 4. Corespondența BR-DEC-nn ↔ câmp: [necunoscut]; încălcarea se raportează ca `BR-DEC` cu câmpul BT. Zecimale numărate după valoare (zerourile finale nu contează).
 5. Reguli neimplementate: BR-CO-22/24 (taxe: motiv), BR-33/36/38/42/43/44 (corespondența exactă număr ↔ sumă/motiv taxă sau reducere nu e în spec; sunt implementate doar BR-31, BR-41, BR-CO-21, BR-CO-23 din testul 8), BR-CO-05..08 (liste de coduri), BR-49, BR-56, BR-65, regulile condiționale 19, 20, 48, 50, 53, 55, 61 (necitite), BR-CL-* (liste de coduri necitite).
 6. BR-CO-09: verificat doar că primele două caractere sunt litere; lista codurilor de țară nu a fost citită.
+
+## 05 epub3-structura-accesibilitate
+1. Poziția și compresia lui `mimetype`, regulile OCF, `dcterms:modified`, regulile de manifest/spină 5.6-5.7 și cerințele navigării: [necunoscut]; nu sunt verificate (doar prezența lui `mimetype`).
+2. Valorile admise pentru accessibilityHazard / accessMode / accessibilityFeature (vocabular Schema.org): necitite. Cartea scrisă de `--epub` nu are `accessibilityHazard`, deci `--verify-epub` o raportează cu o eroare; scriitorul nu a fost modificat, pentru că valoarea corectă nu e în spec. Nu s-a scris nici accessibilitySummary.
+3. Cum se identifică documentul de navigare (proprietatea `nav` în manifest) și marcajele de pagină (`epub:type="pagebreak"`) nu e în spec; s-a preluat din codul existent al scriitorului EPUB.
+4. Numele proprietății care declară sursa paginării: nespecificat; verificarea acceptă orice `dc:source` nevid ca declarație. Forma exactă a declarației `dcterms:conformsTo` (meta cu property) și a certificatorului (`a11y:certifiedBy`) este luată din textul spec-ului.
+5. Șirurile exacte de tipuri media pentru fiecare tip de bază nu sunt în spec (doar numele formatelor); s-au folosit numele IANA obișnuite. „Alternativă intrinsecă" (fără lanț în manifest) nu e implementată: o resursă străină fără `fallback` e eroare.
+6. Existența în container a fiecărui element din manifest este verificată (consecința „restul stau în container"); nu e regulă explicită în spec.

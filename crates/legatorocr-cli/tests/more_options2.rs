@@ -392,3 +392,13 @@ fn pdf_signing_round_trip_with_a_throw_away_certificate() {
     assert!(!t.status.success(), "{}", text(&t));
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn verify_epub_flags_a_missing_container_and_reads_a_plain_book() {
+    let d = tmp("verify_epub");
+    std::fs::write(d.join("bad.epub"), b"not a zip").unwrap();
+    let bad = run(&d, &["--verify-epub", "bad.epub"]);
+    assert!(!bad.status.success(), "{}", text(&bad));
+    assert!(text(&bad).contains("ZIP"), "{}", text(&bad));
+    let _ = std::fs::remove_dir_all(&d);
+}
