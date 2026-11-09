@@ -95,6 +95,66 @@ fn merkle_proof_verifies_and_a_wrong_root_does_not() {
 }
 
 #[test]
+fn merkle_consistency_proves_an_unchanged_start_and_a_rewrite_fails() {
+    let d = tmp("merkle_cons");
+    let h = |c: char| c.to_string().repeat(64);
+    let old = format!("{}  zeta\n{}  alpha\n{}  mid\n", h('1'), h('2'), h('3'));
+    std::fs::write(d.join("old.txt"), &old).unwrap();
+    std::fs::write(
+        d.join("new.txt"),
+        format!("{old}{}  late\n{}  last\n", h('4'), h('5')),
+    )
+    .unwrap();
+    let o = run(&d, &["--merkle-root", "old.txt", "--merkle-keep-order"]);
+    assert!(o.status.success(), "{}", text(&o));
+    let old_root = text(&o)
+        .lines()
+        .find_map(|l| l.strip_prefix("merkle root of 3 file(s): "))
+        .unwrap()
+        .trim()
+        .to_string();
+    let n = run(
+        &d,
+        &["--merkle-root", "new.txt", "--merkle-consistency", "3"],
+    );
+    assert!(n.status.success(), "{}", text(&n));
+    let t = text(&n);
+    let new_root = t
+        .lines()
+        .find_map(|l| l.strip_prefix("merkle root of 5 file(s): "))
+        .unwrap()
+        .trim()
+        .to_string();
+    assert!(t.contains(&old_root), "{t}");
+    let line = t
+        .lines()
+        .find(|l| l.starts_with("consistency: 3 5 "))
+        .unwrap()
+        .to_string();
+    let args = |line: &str, old: &str, new: &str| {
+        run(
+            &d,
+            &[
+                "--merkle-verify-consistency",
+                line,
+                "--merkle-old-root",
+                old,
+                "--merkle-expect",
+                new,
+            ],
+        )
+    };
+    let ok = args(&line, &old_root, &new_root);
+    assert!(ok.status.success(), "{}", text(&ok));
+    let wrong = "0".repeat(64);
+    assert!(!args(&line, &wrong, &new_root).status.success());
+    assert!(!args("consistency: 3 5 ", &old_root, &new_root)
+        .status
+        .success());
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
 fn verify_ocfl_accepts_an_object_and_rejects_a_changed_file() {
     let d = tmp("ocflv");
     let o = run(

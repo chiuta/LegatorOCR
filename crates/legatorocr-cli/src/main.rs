@@ -45,7 +45,7 @@ enum Fmt {
 #[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "install_modules", "scan_escl", "watch", "verify_bag", "verify_ocfl", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "pdfa_check", "decode_worker", "fuse_frames", "verify_document", "integrity_hints", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "extract_project", "search_preset", "search_help"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "install_modules", "scan_escl", "watch", "verify_bag", "verify_ocfl", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "pdfa_check", "decode_worker", "fuse_frames", "verify_document", "integrity_hints", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "merkle_verify_consistency", "verify_sums", "extract_project", "search_preset", "search_help"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -554,6 +554,29 @@ struct Cli {
     /// against the root given with --merkle-expect; exit 1 if it does not lead to that root.
     #[arg(long, value_name = "LINE", requires = "merkle_expect")]
     merkle_verify: Option<String>,
+
+    /// With --merkle-root: keep the files in the order of the lines (insertion order) instead of
+    /// sorting by name. Needed for a collection that grows at the end and is checked with
+    /// consistency proofs; roots differ from the sorted ones.
+    #[arg(long, requires = "merkle_root")]
+    merkle_keep_order: bool,
+
+    /// With --merkle-root: print the consistency proof that the first OLD_SIZE files of the list
+    /// (in line order, implies --merkle-keep-order) are still the unchanged start of the whole
+    /// collection, with the old root and the new root. The proof line is
+    /// "consistency: OLD_SIZE NEW_SIZE path,path,...".
+    #[arg(long, value_name = "OLD_SIZE", requires = "merkle_root")]
+    merkle_consistency: Option<usize>,
+
+    /// Root of the older, smaller collection (for --merkle-verify-consistency).
+    #[arg(long, value_name = "HEX")]
+    merkle_old_root: Option<String>,
+
+    /// Check a line printed by --merkle-consistency against the old root (--merkle-old-root) and
+    /// the new root (--merkle-expect); exit 1 if it does not prove that the old collection is
+    /// unchanged inside the new one.
+    #[arg(long, value_name = "LINE", requires_all = ["merkle_expect", "merkle_old_root"])]
+    merkle_verify_consistency: Option<String>,
 
     /// Also write the tables found on the pages as an Excel workbook (one sheet per table, named
     /// p<page>-t<n>); plain numbers become numbers, everything else stays text as printed.
@@ -2078,14 +2101,65 @@ fn real_main() -> Result<()> {
         );
         std::process::exit(if ok { 0 } else { 1 });
     }
+    if let Some(line) = &cli.merkle_verify_consistency {
+        use legatorocr_engine::merkle as mk;
+        let f: Vec<&str> = line
+            .split_whitespace()
+            .skip_while(|t| *t == "consistency:")
+            .collect();
+        let sizes = match (
+            f.first().and_then(|t| t.parse::<usize>().ok()),
+            f.get(1).and_then(|t| t.parse::<usize>().ok()),
+        ) {
+            (Some(m), Some(n)) if f.len() <= 3 => Some((m, n)),
+            _ => None,
+        };
+        let Some((m, n)) = sizes else {
+            bail!("expected a line like \"consistency: OLD_SIZE NEW_SIZE path,path,...\"");
+        };
+        let path: Vec<String> = f
+            .get(2)
+            .map(|p| p.split(',').map(str::to_string).collect())
+            .unwrap_or_default();
+        match mk::check_consistency_hex(
+            m,
+            n,
+            cli.merkle_old_root.as_deref().unwrap_or(""),
+            cli.merkle_expect.as_deref().unwrap_or(""),
+            &path,
+        ) {
+            Ok(()) => {
+                println!("proof is valid: the old collection is unchanged inside the new one")
+            }
+            Err(mk::ProofError::BadInput(e)) => bail!("{e}"),
+            Err(e) => {
+                println!("proof does NOT hold: {e}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
     if let Some(sums) = &cli.merkle_root {
         use legatorocr_engine::merkle as mk;
         let text = std::fs::read_to_string(sums)
             .with_context(|| format!("{}: cannot read", sums.display()))?;
-        let entries = mk::parse_sums(&text)?;
+        let entries = if cli.merkle_keep_order || cli.merkle_consistency.is_some() {
+            mk::parse_sums_in_order(&text)?
+        } else {
+            mk::parse_sums(&text)?
+        };
         let leaves = mk::leaves_of(&entries);
         let r = mk::hex(&mk::root(&leaves));
         println!("merkle root of {} file(s): {r}", entries.len());
+        if let Some(m) = cli.merkle_consistency {
+            let proof = mk::consistency_proof(&leaves, m).map_err(|e| anyhow::anyhow!("{e}"))?;
+            println!(
+                "old root of the first {m} file(s): {}",
+                mk::hex(&mk::root(&leaves[..m]))
+            );
+            let hexes: Vec<String> = proof.iter().map(|h| mk::hex(h)).collect();
+            println!("consistency: {m} {} {}", entries.len(), hexes.join(","));
+        }
         if let Some(name) = &cli.merkle_proof {
             let Some(i) = entries.iter().position(|(n, _)| n == name) else {
                 bail!("{name} is not listed in {}", sums.display());
