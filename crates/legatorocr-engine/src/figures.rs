@@ -15,6 +15,8 @@ pub struct Spec {
 }
 
 static CFG: Mutex<Vec<Spec>> = Mutex::new(Vec::new());
+/// Pages that `for_page` was asked about.
+static ASKED: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
 /// `PAGE,X,Y,W,H=DESCRIPTION` (mm from the top left of the page).
 pub fn parse(s: &str) -> Result<Spec> {
@@ -47,6 +49,9 @@ pub fn parse(s: &str) -> Result<Spec> {
 }
 
 pub fn set(specs: Vec<Spec>) {
+    if let Ok(mut a) = ASKED.lock() {
+        a.clear();
+    }
     if let Ok(mut g) = CFG.lock() {
         *g = specs;
     }
@@ -54,6 +59,9 @@ pub fn set(specs: Vec<Spec>) {
 
 /// The figures of page number `page` (1-based), in points from the top left.
 pub fn for_page(page: usize) -> Vec<legatorocr_pdf::Figure> {
+    if let Ok(mut a) = ASKED.lock() {
+        a.push(page);
+    }
     let k = 72.0 / 25.4;
     CFG.lock()
         .map(|g| {
@@ -66,6 +74,19 @@ pub fn for_page(page: usize) -> Vec<legatorocr_pdf::Figure> {
                     h: s.rect_mm[3] * k,
                     alt: s.alt.clone(),
                 })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Figures whose page never came up while writing (a typo in the page number).
+pub fn unmatched() -> Vec<Spec> {
+    let asked = ASKED.lock().map(|a| a.clone()).unwrap_or_default();
+    CFG.lock()
+        .map(|g| {
+            g.iter()
+                .filter(|s| !asked.contains(&s.page))
+                .cloned()
                 .collect()
         })
         .unwrap_or_default()
@@ -85,5 +106,15 @@ mod tests {
         assert!(parse("0,10,20,50,40=x").is_err());
         assert!(parse("1,10,20,0,40=x").is_err());
         assert!(parse("1,10,20,50=x").is_err());
+        set(vec![
+            parse("3,1,1,5,5=a").unwrap(),
+            parse("9,1,1,5,5=b").unwrap(),
+        ]);
+        assert_eq!(for_page(3).len(), 1);
+        assert_eq!(
+            unmatched().iter().map(|s| s.page).collect::<Vec<_>>(),
+            vec![9]
+        );
+        set(vec![]);
     }
 }

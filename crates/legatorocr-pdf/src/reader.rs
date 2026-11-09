@@ -786,6 +786,8 @@ pub struct PdfDoc {
     /// File offset of each object stream in `stms` (later revisions win over earlier ones).
     stm_offs: Vec<usize>,
     pages: Vec<Dict>,
+    /// Object number of each page in `pages` (when it is an indirect object).
+    page_nums: Vec<Option<u32>>,
     crypt: Option<crate::crypt::Crypt>,
     password: Vec<u8>,
     /// (file offset of `N G obj`, N) sorted, to find the object a stream belongs to.
@@ -852,6 +854,7 @@ impl PdfDoc {
             stms: Vec::new(),
             stm_offs: Vec::new(),
             pages: Vec::new(),
+            page_nums: Vec::new(),
             crypt: None,
             root_obj: None,
             info_obj: None,
@@ -868,6 +871,7 @@ impl PdfDoc {
         let mut catalog: Option<u32> = None;
         let mut info: Option<u32> = None;
         let mut page_objs: Vec<u32> = Vec::new();
+        let mut pnums: Vec<Option<u32>> = Vec::new();
         let mut objstms: Vec<u32> = Vec::new();
         let mut nums: Vec<u32> = doc.offs.keys().copied().collect();
         nums.sort_unstable();
@@ -960,7 +964,7 @@ impl PdfDoc {
             if let Some(Val::Dict(cat)) = doc.get(r) {
                 if let Some(pr) = cat.get("Pages") {
                     let mut seen = HashSet::new();
-                    doc.collect_pages(pr, &Dict::new(), 0, &mut seen, &mut pages);
+                    doc.collect_pages(pr, &Dict::new(), 0, &mut seen, &mut pages, &mut pnums);
                 }
             }
         }
@@ -971,6 +975,7 @@ impl PdfDoc {
             for n in page_objs.into_iter().take(MAX_PAGES) {
                 if let Some(Val::Dict(d)) = doc.get(n) {
                     pages.push(d);
+                    pnums.push(Some(n));
                 }
             }
         }
@@ -978,6 +983,7 @@ impl PdfDoc {
             return fail("no pages found in the PDF");
         }
         doc.pages = pages;
+        doc.page_nums = pnums;
         Ok(doc)
     }
 
@@ -1127,6 +1133,26 @@ impl PdfDoc {
     }
 
     /// Object number and generation of the object whose stream data starts at `s`.
+    /// A text entry of the document information dictionary (`Title`, `Author`, …), decoded;
+    /// not for encrypted files (open the decrypted copy).
+    pub fn info_text(&self, key: &str) -> Option<String> {
+        if self.crypt.is_some() {
+            return None;
+        }
+        let Val::Dict(d) = self.get(self.info_obj?)? else {
+            return None;
+        };
+        let Val::Str(b) = self.resolve(d.get(key)?) else {
+            return None;
+        };
+        let t = if b.starts_with(&[0xFE, 0xFF]) {
+            utf16_be(&b[2..])
+        } else {
+            b.iter().map(|&c| c as char).collect()
+        };
+        Some(t.chars().filter(|c| !c.is_control()).take(2000).collect())
+    }
+
     /// True when the last cross-reference section is a stream (PDF 1.5 object streams).
     pub fn uses_xref_stream(&self) -> bool {
         let d = &self.data;
@@ -1187,6 +1213,10 @@ impl PdfDoc {
         nums.sort_unstable();
         nums.dedup();
         let size = nums.last().map_or(1, |n| n + 1);
+        // a hostile file can number one object 4000000000: the table would need gigabytes
+        if size as usize > nums.len().saturating_mul(16).max(100_000) {
+            return fail("object numbers are too sparse to write a table");
+        }
         let mut rng = |_: &mut [u8]| {};
         let mut cx = encrypt::Ctx {
             key: None,
@@ -1471,6 +1501,7 @@ impl PdfDoc {
         depth: u32,
         seen: &mut HashSet<u32>,
         out: &mut Vec<Dict>,
+        nums: &mut Vec<Option<u32>>,
     ) {
         if depth > 64 || out.len() >= MAX_PAGES || !charge_visits(1 + inherited.len() as u64) {
             return;
@@ -1490,7 +1521,7 @@ impl PdfDoc {
         match self.resolve(d.get("Kids").unwrap_or(&Val::Null)) {
             Val::Arr(kids) if d.get("Type").and_then(|t| t.name()) != Some("Page") => {
                 for k in &kids {
-                    self.collect_pages(k, &inh, depth + 1, seen, out);
+                    self.collect_pages(k, &inh, depth + 1, seen, out, nums);
                 }
             }
             _ => {
@@ -1503,6 +1534,10 @@ impl PdfDoc {
                     page.entry(k).or_insert(v);
                 }
                 out.push(page);
+                nums.push(match node {
+                    Val::Ref(n) => Some(*n),
+                    _ => None,
+                });
             }
         }
     }

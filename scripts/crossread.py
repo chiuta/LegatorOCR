@@ -137,6 +137,51 @@ if ok:
     check(same(poppler("dec/enc.pdf", ""), ref["poppler"][1:]), "toolbox output pages 2-3 are pixel-identical")
 check(run("enc.pdf", "--pdf-password", "wrong", "--extract-pages", "1", "-o", "dec2", must=False).returncode != 0, "wrong password is refused")
 
+# the toolbox on files encrypted by qpdf (another producer): every standard security handler
+for k, (enc, objs) in enumerate((e, o) for e in (["40"], ["128", "--use-aes=n"], ["128", "--use-aes=y"], ["256"], ["256", "--force-R5"]) for o in ([], ["--object-streams=generate"])):
+    src = f"qe{k}.pdf"
+    q = subprocess.run(["qpdf", "--allow-weak-crypto", "--encrypt", "up", "ow", *enc, "--", *objs, "plain.pdf", src], capture_output=True, text=True)
+    if q.returncode:
+        print("note qpdf cannot make", enc, q.stderr[:60])
+        continue
+    for pwd in ("up", "ow"):
+        r = run(src, "--pdf-password", pwd, "--extract-pages", "1-3", "-o", f"qd{k}{pwd}", must=False)
+        out = f"qd{k}{pwd}/{src}"
+        good = r.returncode == 0 and os.path.exists(out) and same(poppler(out, ""), ref["poppler"])
+        check(good, f"toolbox opens qpdf-encrypted {' '.join(enc)} {' '.join(objs)} with the {'user' if pwd == 'up' else 'owner'} password, pixels identical")
+
+# links between pages: kept where both ends are kept, dropped otherwise (no dangling destinations)
+from pikepdf import Array, Dictionary, Name, Pdf
+
+src = Pdf.new()
+pgs = [src.make_indirect(Dictionary(Type=Name.Page, MediaBox=[0, 0, 200, 200], Contents=src.make_stream(b"0 0 50 50 re f"))) for _ in range(30)]
+tree = src.make_indirect(Dictionary(Type=Name.Pages, Kids=Array(pgs), Count=30))
+for p in pgs:
+    p.Parent = tree
+for i in range(0, 30, 3):
+    pgs[i].Annots = Array([src.make_indirect(Dictionary(Type=Name.Annot, Subtype=Name.Link, Rect=[1, 1, 20, 20], Dest=Array([pgs[(i + 5) % 30], Name.Fit])))])
+src.trailer.Root = src.make_indirect(Dictionary(Type=Name.Catalog, Pages=tree))
+src.save("links.pdf")
+for sel, flags in (("1-30", []), ("1-10", []), ("1-30", ["--linearize"])):
+    outd = f"lk_{sel}_{len(flags)}"
+    run("links.pdf", "--extract-pages", sel, *flags, "-o", outd)
+    with pikepdf.open(f"{outd}/links.pdf") as d:
+        ids = {p.objgen for p in d.pages}
+        ann = [a for p in d.pages for a in p.get("/Annots", [])]
+        ok = all(a.get("/Dest") is not None and a["/Dest"][0] is not None and a["/Dest"][0].objgen in ids for a in ann)
+        check(ok and (sel != "1-30" or len(ann) == 10), f"pages {sel} {' '.join(flags)}: {len(ann)} links, all pointing at pages of the output")
+    q = subprocess.run(["pdftoppm", "-r", "10", "-png", f"{outd}/links.pdf", "lkx"], capture_output=True, text=True)
+    check("Bad annotation" not in q.stderr, f"pages {sel} {' '.join(flags)}: poppler finds no bad destination")
+
+# document information survives the toolbox, also out of an encrypted file with object streams
+run(*base, "--pdf", "meta.pdf", "--author", "Ana Păun", "--subject", "Subiect (test)", "--object-streams", "--encrypt-pdf", env=PW)
+run("meta.pdf", "--pdf-password", "upw", "--extract-pages", "1-2", "-o", "metadec")
+with pikepdf.open("metadec/meta.pdf") as d:
+    check(str(d.docinfo.get("/Author")) == "Ana Păun" and str(d.docinfo.get("/Subject")) == "Subiect (test)", "toolbox keeps Author and Subject from an encrypted object-stream file")
+run("meta.pdf", "--pdf-password", "upw", "--extract-pages", "1", "--author", "Nou", "-o", "metadec2")
+with pikepdf.open("metadec2/meta.pdf") as d:
+    check(str(d.docinfo.get("/Author")) == "Nou", "--author overrides in the toolbox")
+
 # signatures
 subprocess.run("openssl req -x509 -newkey rsa:2048 -nodes -keyout k.pem -out c.pem -days 30 -subj '/CN=Test Signer' 2>/dev/null && openssl pkcs12 -export -inkey k.pem -in c.pem -out s.p12 -passout pass:pp", shell=True, check=True)
 from pyhanko.keys import load_cert_from_pemder
@@ -153,6 +198,14 @@ for src, out, extra in (("plain.pdf", "sig_plain.pdf", []), ("objs.pdf", "sig_ob
         st = validate_pdf_signature(s, vc)
         check(st.intact and st.valid and st.trusted and st.coverage.name == "ENTIRE_FILE", f"{out}: pyHanko says intact, valid, trusted, whole file")
     check(subprocess.run(["pdfsig", out], capture_output=True, text=True).stdout.count("Signature is Valid") == 1, f"{out}: poppler pdfsig says valid")
+
+# a second and third signature: unique field names, the earlier ones stay valid
+run("--sign-pdf", "sig_plain.pdf", "--sign-p12", "s.p12", "--sign-pass-env", "SP", "--pdf", "sig2.pdf", env={"SP": "pp"})
+run("--sign-pdf", "sig2.pdf", "--sign-p12", "s.p12", "--sign-pass-env", "SP", "--sign-visible", "1,10,10,50,20", "--pdf", "sig3.pdf", env={"SP": "pp"})
+sigs = list(PdfFileReader(open("sig3.pdf", "rb")).embedded_signatures)
+check([s.field_name for s in sigs] == ["Signature1", "Signature2", "Signature3"], f"three signatures with distinct names: {[s.field_name for s in sigs]}")
+check(all(validate_pdf_signature(s, vc).valid for s in sigs), "all three signatures valid")
+check(all(validate_pdf_signature(s, vc).modification_level.name in ("NONE", "FORM_FILLING") for s in sigs), "only form-filling changes between them")
 
 # tagged PDF/A levels and figures (needs an OCR engine)
 r = run(*base, "--ocr", "--lang", "eng", "--pdfa", "--pdfa-level", "A", "--tagged-pdf", "--figure", "1,25,127,50,34=A rectangle frame", "--pdf", "aFig.pdf", must=False)

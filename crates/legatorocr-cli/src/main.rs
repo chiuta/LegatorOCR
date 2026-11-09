@@ -2331,6 +2331,14 @@ fn real_main() -> Result<()> {
         rotate: cli.rotate_pdf.clone(),
         crop_mm: cli.crop_pdf.clone(),
         booklet: cli.booklet,
+        info: [
+            ("Author", &cli.author),
+            ("Subject", &cli.subject),
+            ("Keywords", &cli.keywords),
+        ]
+        .into_iter()
+        .filter_map(|(k, v)| v.as_ref().map(|v| (k.to_string(), v.clone())))
+        .collect(),
     };
     let only_pdfs = !cli.inputs.is_empty()
         && cli
@@ -4123,6 +4131,12 @@ fn real_main() -> Result<()> {
             "wrote {} page image(s) to {}",
             res.pages,
             cli.out_dir.display()
+        );
+    }
+    for f in legatorocr_engine::figures::unmatched() {
+        eprintln!(
+            "warning: --figure for page {} was not used: the PDF has no such page (or it is not written with text)",
+            f.page
         );
     }
     if let Some(path) = &cli.report {

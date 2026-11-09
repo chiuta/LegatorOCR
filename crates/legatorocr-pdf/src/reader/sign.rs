@@ -328,6 +328,19 @@ fn prepare_impl(
         Some(Val::Arr(a)) => a,
         _ => Vec::new(),
     };
+    // a second signature needs a field name of its own: viewers (and validators) treat two fields
+    // with one name as a forgery of the first
+    let taken: Vec<Vec<u8>> = fields
+        .iter()
+        .filter_map(|f| match doc.dict_val(f).get("T") {
+            Some(Val::Str(s)) => Some(s.clone()),
+            _ => None,
+        })
+        .collect();
+    let field_name = (1..)
+        .map(|i| format!("Signature{i}"))
+        .find(|n| !taken.iter().any(|t| t == n.as_bytes()))
+        .unwrap_or_else(|| "Signature".into());
     fields.push(Val::Ref(wid_n));
     acro.insert("Fields".into(), Val::Arr(fields));
     acro.insert("SigFlags".into(), Val::Int(3));
@@ -396,7 +409,7 @@ fn prepare_impl(
     let field = if doc_ts {
         format!("DocTimeStamp{sig_n}")
     } else {
-        "Signature1".to_string()
+        field_name.clone()
     };
     buf.extend_from_slice(
         format!("{wid_n} 0 obj\n<< /Type /Annot /Subtype /Widget /FT /Sig /T ({field}) /Rect [{:.2} {:.2} {:.2} {:.2}] /F 132 /V {sig_n} 0 R /P {page_n} 0 R{ap_ref} >>\nendobj\n", rect[0], rect[1], rect[2], rect[3]).as_bytes(),
