@@ -660,43 +660,50 @@ fn page_keystone_of(img: &RgbImage, dpi: u32) -> [f32; 2] {
         }
         _ => 0.0,
     };
-    // vertical: width of the ink in each band (without the 3 % stragglers at either end)
-    let extent = |b: &BitImage| -> Option<f32> {
-        let mut cols = vec![0u32; b.w as usize];
+    // vertical: where the text block starts and ends in each band. Real text is ragged (short
+    // lines, headings, pictures), so the margins are read from the lines themselves: the left
+    // margin is the 20th percentile of the line starts, the right one the 80th of the line ends.
+    // A keystone moves the two margins in opposite directions (the block narrows); a shift or a
+    // turn moves both the same way, and a ragged block moves them at random: only a clear,
+    // mirrored drift of both is believed.
+    let edges = |b: &BitImage| -> Option<(f32, f32)> {
+        let b = crate::orient::without_long_runs(b, 150);
+        let (mut lefts, mut rights) = (Vec::new(), Vec::new());
         for y in 0..b.h {
+            let (mut first, mut last, mut n) = (None, 0u32, 0u32);
             for x in 0..b.w {
                 if b.get(x, y) {
-                    cols[x as usize] += 1;
+                    first.get_or_insert(x);
+                    last = x;
+                    n += 1;
                 }
             }
+            if let (Some(f), true) = (first, n >= 8) {
+                lefts.push(f as f32);
+                rights.push(last as f32);
+            }
         }
-        let total: u32 = cols.iter().sum();
-        if total < 200 {
+        if lefts.len() < 40 {
             return None;
         }
-        let (mut acc, mut lo, mut hi) = (0u32, 0usize, cols.len() - 1);
-        for (x, n) in cols.iter().enumerate() {
-            acc += n;
-            if acc * 100 >= total * 3 {
-                lo = x;
-                break;
-            }
-        }
-        acc = 0;
-        for (x, n) in cols.iter().enumerate().rev() {
-            acc += n;
-            if acc * 100 >= total * 3 {
-                hi = x;
-                break;
-            }
-        }
-        Some((hi.saturating_sub(lo)) as f32)
+        let pick = |v: &mut Vec<f32>, q: f32| {
+            v.sort_by(|a, b| a.total_cmp(b));
+            v[((v.len() - 1) as f32 * q) as usize]
+        };
+        Some((pick(&mut lefts, 0.2), pick(&mut rights, 0.8)))
     };
-    let v = match (extent(&top), extent(&bottom)) {
-        (Some(wt), Some(wb)) if wt.min(wb) > 0.5 * ink.w as f32 => {
-            let v = 200.0 * (wb - wt) / ink.w as f32;
-            if v.abs() >= 1.5 {
-                v.clamp(-10.0, 10.0)
+    let v = match (edges(&top), edges(&bottom)) {
+        (Some((lt, rt)), Some((lb, rb))) => {
+            let (dl, dr) = (lb - lt, rb - rt);
+            let narrow = dr - dl; // the block is this much narrower (<0) or wider at the bottom
+            let w = ink.w as f32;
+            let mirrored = (dl + dr).abs() <= 0.5 * narrow.abs();
+            let both = dl.abs() >= 0.004 * w && dr.abs() >= 0.004 * w;
+            let v = 200.0 * narrow / w;
+            // a drift beyond 6 % is no keystone of a photographed page: it is a picture, a table
+            // or a heading skewing the margins, so it is not believed either
+            if mirrored && both && (1.5..=6.0).contains(&v.abs()) {
+                v
             } else {
                 0.0
             }
@@ -2513,7 +2520,7 @@ mod tests {
 
     #[test]
     fn auto_keystone_finds_the_bend_and_correcting_it_leaves_less() {
-        for (v, h) in [(0.0, 8.0), (0.0, -8.0), (8.0, 0.0), (-8.0, 0.0)] {
+        for (v, h) in [(0.0, 8.0), (0.0, -8.0), (4.0, 0.0), (-4.0, 0.0)] {
             let img = bent_page(v, h);
             let k = guess(&img);
             // the estimate has the sign of the correction that straightens the page
