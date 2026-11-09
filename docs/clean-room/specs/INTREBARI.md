@@ -29,7 +29,7 @@ Fiecare punct: spec, ce lipsește, ce s-a făcut în cod până la răspuns.
 
 ## 05 epub3-structura-accesibilitate
 1. Poziția și compresia lui `mimetype`, regulile OCF, `dcterms:modified`, regulile de manifest/spină 5.6-5.7 și cerințele navigării: [necunoscut]; nu sunt verificate (doar prezența lui `mimetype`).
-2. Valorile admise pentru accessibilityHazard / accessMode / accessibilityFeature (vocabular Schema.org): necitite. Cartea scrisă de `--epub` nu are `accessibilityHazard`, deci `--verify-epub` o raportează cu o eroare; scriitorul nu a fost modificat, pentru că valoarea corectă nu e în spec. Nu s-a scris nici accessibilitySummary.
+2. Valorile admise pentru accessibilityHazard / accessMode / accessibilityFeature (vocabular Schema.org): necitite. Cartea scrisă de `--epub` conține doar text (fără script, imagine, sunet sau video) și are acum `accessibilityHazard` cu valoarea `none` (valoare din vocabularul Schema.org / EPUB Accessibility 1.1, nu din spec), deci `--verify-epub` o acceptă. Nu s-a scris nici accessibilitySummary.
 3. Cum se identifică documentul de navigare (proprietatea `nav` în manifest) și marcajele de pagină (`epub:type="pagebreak"`) nu e în spec; s-a preluat din codul existent al scriitorului EPUB.
 4. Numele proprietății care declară sursa paginării: nespecificat; verificarea acceptă orice `dc:source` nevid ca declarație. Forma exactă a declarației `dcterms:conformsTo` (meta cu property) și a certificatorului (`a11y:certifiedBy`) este luată din textul spec-ului.
 5. Șirurile exacte de tipuri media pentru fiecare tip de bază nu sunt în spec (doar numele formatelor); s-au folosit numele IANA obișnuite. „Alternativă intrinsecă" (fără lanț în manifest) nu e implementată: o resursă străină fără `fallback` e eroare.

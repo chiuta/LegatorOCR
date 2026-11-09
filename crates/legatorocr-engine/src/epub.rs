@@ -99,7 +99,7 @@ pub fn from_blocks(pages: &[Vec<Block>], title: &str, lang: &str) -> Vec<u8> {
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" unique-identifier=\"bid\" xml:lang=\"{l}\">\
          <metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:identifier id=\"bid\">urn:legatorocr:{id}</dc:identifier><dc:title>{t}</dc:title><dc:language>{l}</dc:language>\
          <dc:creator>LegatorOCR</dc:creator><meta property=\"dcterms:modified\">1980-01-01T00:00:00Z</meta>\
-         <meta property=\"schema:accessMode\">textual</meta><meta property=\"schema:accessibilityFeature\">pageBreakMarkers</meta><meta property=\"schema:accessibilityFeature\">tableOfContents</meta></metadata>\
+         <meta property=\"schema:accessMode\">textual</meta><meta property=\"schema:accessibilityFeature\">pageBreakMarkers</meta><meta property=\"schema:accessibilityFeature\">tableOfContents</meta><meta property=\"schema:accessibilityHazard\">none</meta></metadata>\
          <manifest><item id=\"nav\" href=\"nav.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/><item id=\"c\" href=\"content.xhtml\" media-type=\"application/xhtml+xml\"/></manifest>\
          <spine><itemref idref=\"c\"/></spine></package>",
         l = esc(lang),

@@ -1014,9 +1014,9 @@ mod tests {
         let z = crate::epub::from_blocks(&pages, "Carte", "ro");
         let r = check(&z);
         let e = msgs(&r, Level::Error);
-        // known gap: the writer does not give accessibilityHazard (value list not in the spec)
-        assert_eq!(e.len(), 1, "{:?}", r.findings);
-        assert!(e[0].contains("accessibilityHazard"));
+        // the book holds text only (no script, image, audio or video), so the hazard value is
+        // `none`; --verify-epub accepts what --epub writes
+        assert!(e.is_empty(), "{:?}", r.findings);
         assert_eq!(r.conformance, Conformance::NotDeclared);
     }
 
