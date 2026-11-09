@@ -191,6 +191,27 @@ pub fn prepare_visible(
     reason: Option<&str>,
     visible: Option<&Visible>,
 ) -> R<Prepared> {
+    prepare_impl(data, when, name, reason, visible, false)
+}
+
+/// Append an invisible document time-stamp field (`/Type /DocTimeStamp`, `ETSI.RFC3161`) with a
+/// zero-filled `/Contents`, as an incremental update. The caller hashes [`Prepared::signed_data`],
+/// gets an RFC 3161 token for the hash and puts the token in with [`Prepared::embed`]. The
+/// dictionary carries none of the entries the PAdES rules forbid (no `/Cert`, `/Reference`,
+/// `/Changes`, `/R`, `/Prop_*`) and none they discourage (`/Name`, `/M`, `/Location`, `/Reason`,
+/// `/ContactInfo`).
+pub fn prepare_doc_timestamp(data: &[u8]) -> R<Prepared> {
+    prepare_impl(data, 0, None, None, None, true)
+}
+
+fn prepare_impl(
+    data: &[u8],
+    when: u64,
+    name: Option<&str>,
+    reason: Option<&str>,
+    visible: Option<&Visible>,
+    doc_ts: bool,
+) -> R<Prepared> {
     let doc = PdfDoc::open(data.to_vec())?;
     if doc.crypt.is_some() {
         return fail("encrypted PDF: a signature cannot be added");
@@ -342,17 +363,25 @@ pub fn prepare_visible(
     };
     // signature dictionary
     offs.push((sig_n, buf.len()));
+    let (ty, sub) = if doc_ts {
+        ("DocTimeStamp", "ETSI.RFC3161")
+    } else {
+        ("Sig", "ETSI.CAdES.detached")
+    };
     let mut s = format!(
-        "{sig_n} 0 obj\n<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /ETSI.CAdES.detached /ByteRange [0 0000000000 0000000000 0000000000] /Contents <"
+        "{sig_n} 0 obj\n<< /Type /{ty} /Filter /Adobe.PPKLite /SubFilter /{sub} /ByteRange [0 0000000000 0000000000 0000000000] /Contents <"
     );
     let head_len = buf.len() + s.len();
     s.push_str(&"0".repeat(RESERVED * 2));
-    let _ = write!(s, "> /M ({})", crate::pdf_date(when));
-    if let Some(n) = name {
-        let _ = write!(s, " /Name {}", esc(n));
-    }
-    if let Some(r) = reason {
-        let _ = write!(s, " /Reason {}", esc(r));
+    s.push('>');
+    if !doc_ts {
+        let _ = write!(s, " /M ({})", crate::pdf_date(when));
+        if let Some(n) = name {
+            let _ = write!(s, " /Name {}", esc(n));
+        }
+        if let Some(r) = reason {
+            let _ = write!(s, " /Reason {}", esc(r));
+        }
     }
     s.push_str(" >>\nendobj\n");
     buf.extend_from_slice(s.as_bytes());
@@ -364,8 +393,13 @@ pub fn prepare_visible(
     } else {
         String::new()
     };
+    let field = if doc_ts {
+        format!("DocTimeStamp{sig_n}")
+    } else {
+        "Signature1".to_string()
+    };
     buf.extend_from_slice(
-        format!("{wid_n} 0 obj\n<< /Type /Annot /Subtype /Widget /FT /Sig /T (Signature1) /Rect [{:.2} {:.2} {:.2} {:.2}] /F 132 /V {sig_n} 0 R /P {page_n} 0 R{ap_ref} >>\nendobj\n", rect[0], rect[1], rect[2], rect[3]).as_bytes(),
+        format!("{wid_n} 0 obj\n<< /Type /Annot /Subtype /Widget /FT /Sig /T ({field}) /Rect [{:.2} {:.2} {:.2} {:.2}] /F 132 /V {sig_n} 0 R /P {page_n} 0 R{ap_ref} >>\nendobj\n", rect[0], rect[1], rect[2], rect[3]).as_bytes(),
     );
     if let Some(ap) = &appearance {
         offs.push((ap_n, buf.len()));
@@ -431,9 +465,156 @@ pub fn prepare_visible(
     })
 }
 
+/// What the document security store of a PDF holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DssInfo {
+    pub certs: usize,
+    pub ocsps: usize,
+    pub crls: usize,
+    /// The store has a `/VRI` dictionary.
+    pub vri: bool,
+    /// Byte offset of the DSS dictionary object in the file (current cross-reference), when it
+    /// is an indirect object.
+    pub offset: Option<usize>,
+}
+
+/// The `/DSS` of the catalog, if there is one.
+pub fn dss_info(data: &[u8]) -> R<Option<DssInfo>> {
+    let doc = PdfDoc::open(data.to_vec())?;
+    let Some(trailer_root) = doc.root_obj else {
+        return fail("no /Root");
+    };
+    let catalog = doc.dict_val(&Val::Ref(trailer_root));
+    let Some(dss_v) = catalog.get("DSS") else {
+        return Ok(None);
+    };
+    let d = doc.dict_val(dss_v);
+    let count = |k: &str| match d.get(k).map(|v| doc.resolve(v)) {
+        Some(Val::Arr(a)) => a.len(),
+        _ => 0,
+    };
+    Ok(Some(DssInfo {
+        certs: count("Certs"),
+        ocsps: count("OCSPs"),
+        crls: count("CRLs"),
+        vri: d.contains_key("VRI"),
+        offset: match dss_v {
+            Val::Ref(n) => doc.offs.get(n).copied(),
+            _ => None,
+        },
+    }))
+}
+
+/// Add validation material (DER certificates, OCSP responses, CRLs) to the document security
+/// store as an incremental update: each value becomes a stream, the store's arrays are the
+/// earlier ones (kept as they are, with any `/VRI`) followed by the new streams, and the
+/// catalog points to the new store. The bytes before the update are unchanged, so signatures
+/// stay valid. Only classic cross-reference tables are supported.
+pub fn add_dss(data: &[u8], certs: &[Vec<u8>], ocsps: &[Vec<u8>], crls: &[Vec<u8>]) -> R<Vec<u8>> {
+    let doc = PdfDoc::open(data.to_vec())?;
+    if doc.crypt.is_some() {
+        return fail("encrypted PDF: validation material cannot be added");
+    }
+    let Some(prev) = last_startxref(data) else {
+        return fail("no startxref: not an updatable PDF");
+    };
+    if !data.get(prev..prev + 4).is_some_and(|s| s == b"xref") {
+        return fail(
+            "the file uses a cross-reference stream; only classic xref tables are supported here",
+        );
+    }
+    let Some(tpos) = data[prev..]
+        .windows(7)
+        .position(|w| w == b"trailer")
+        .map(|p| p + prev)
+    else {
+        return fail("no trailer dictionary");
+    };
+    let Some(Val::Dict(trailer)) = P::new(data, tpos + 7).val(0) else {
+        return fail("unreadable trailer");
+    };
+    let size = trailer
+        .get("Size")
+        .and_then(|v| v.int())
+        .unwrap_or(0)
+        .max(1) as u32;
+    let Some(Val::Ref(root)) = trailer.get("Root") else {
+        return fail("trailer without /Root");
+    };
+    let root = *root;
+    let mut catalog = doc.dict_val(&Val::Ref(root));
+    let mut dss = catalog
+        .get("DSS")
+        .map(|v| doc.dict_val(v))
+        .unwrap_or_default();
+    let mut buf = data.to_vec();
+    if !buf.ends_with(b"\n") {
+        buf.push(b'\n');
+    }
+    let mut offs: Vec<(u32, usize)> = Vec::new();
+    let mut next = size;
+    for (key, list) in [("Certs", certs), ("OCSPs", ocsps), ("CRLs", crls)] {
+        if list.is_empty() {
+            continue;
+        }
+        let mut arr = match dss.get(key).map(|v| doc.resolve(v)) {
+            Some(Val::Arr(a)) => a,
+            _ => Vec::new(),
+        };
+        for item in list {
+            offs.push((next, buf.len()));
+            buf.extend_from_slice(
+                format!("{next} 0 obj\n<< /Length {} >>\nstream\n", item.len()).as_bytes(),
+            );
+            buf.extend_from_slice(item);
+            buf.extend_from_slice(b"\nendstream\nendobj\n");
+            arr.push(Val::Ref(next));
+            next += 1;
+        }
+        dss.insert(key.into(), Val::Arr(arr));
+    }
+    dss.insert("Type".into(), Val::Name("DSS".into()));
+    let dss_n = next;
+    next += 1;
+    offs.push((dss_n, buf.len()));
+    let mut t = String::new();
+    ser_dict(&dss, &mut t);
+    buf.extend_from_slice(format!("{dss_n} 0 obj\n{t}\nendobj\n").as_bytes());
+    catalog.insert("DSS".into(), Val::Ref(dss_n));
+    offs.push((root, buf.len()));
+    let mut t = String::new();
+    ser_dict(&catalog, &mut t);
+    buf.extend_from_slice(format!("{root} 0 obj\n{t}\nendobj\n").as_bytes());
+    offs.sort();
+    let xref_at = buf.len();
+    buf.extend_from_slice(b"xref\n");
+    for (n, off) in &offs {
+        buf.extend_from_slice(format!("{n} 1\n{off:010} 00000 n \n").as_bytes());
+    }
+    let mut tr = Dict::new();
+    tr.insert("Size".into(), Val::Int(next as i64));
+    tr.insert("Root".into(), Val::Ref(root));
+    tr.insert("Prev".into(), Val::Int(prev as i64));
+    for k in ["Info", "ID"] {
+        if let Some(v) = trailer.get(k) {
+            tr.insert(k.into(), v.clone());
+        }
+    }
+    let mut t = String::new();
+    ser_dict(&tr, &mut t);
+    buf.extend_from_slice(format!("trailer\n{t}\nstartxref\n{xref_at}\n%%EOF\n").as_bytes());
+    Ok(buf)
+}
+
 /// One signature found in a file.
 #[derive(Debug, Clone)]
 pub struct SigInfo {
+    /// `/Type` of the dictionary (`Sig`, `DocTimeStamp`, ... or empty).
+    pub kind: String,
+    /// Every key of the signature dictionary.
+    pub keys: Vec<String>,
+    /// The value of `/V` when it is an integer.
+    pub v: Option<i64>,
     pub byte_range: Vec<usize>,
     /// DER CMS bytes (trailing zero padding included).
     pub contents: Vec<u8>,
@@ -477,7 +658,16 @@ pub fn signatures(data: &[u8]) -> R<Vec<SigInfo>> {
             .filter_map(|v| v.int())
             .map(|v| v.max(0) as usize)
             .collect();
+        let mut keys: Vec<String> = d.keys().cloned().collect();
+        keys.sort();
         out.push(SigInfo {
+            kind: d
+                .get("Type")
+                .and_then(|v| v.name())
+                .unwrap_or("")
+                .to_string(),
+            keys,
+            v: d.get("V").and_then(|v| v.int()),
             byte_range: range,
             contents: c.clone(),
             sub_filter: d

@@ -45,7 +45,7 @@ enum Fmt {
 #[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "install_modules", "scan_escl", "watch", "verify_bag", "verify_ocfl", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "pdfa_check", "decode_worker", "fuse_frames", "verify_document", "integrity_hints", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "verify_sums", "extract_project", "search_preset", "search_help"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "install_modules", "scan_escl", "watch", "verify_bag", "verify_epub", "verify_ocfl", "timestamp", "timestamp_verify", "sign_pdf", "pades_lt", "pades_lta", "pades_level", "verify_pdf_signatures", "pdfa_check", "decode_worker", "fuse_frames", "verify_document", "integrity_hints", "mcp", "measure_edge", "fadgi_levels", "backup_from", "efactura", "merkle_root", "merkle_verify", "merkle_verify_consistency", "verify_sums", "extract_project", "search_preset", "search_help"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -238,6 +238,22 @@ struct Cli {
     /// stay tables. For screen readers, e-readers and audiobook tools. Not checked with EPUBCheck.
     #[arg(long)]
     epub: Option<PathBuf>,
+
+    /// With --tei: also write a TEI facsimile. Each page image (the processed page, PNG) is
+    /// written into DIR, and the TEI file gets a facsimile element with one surface per page
+    /// (pixel extent) and one rectangular zone per paragraph, heading and table; page breaks
+    /// and those blocks point to their surface / zone. Coordinates are pixels of the written
+    /// image, origin at its top-left corner.
+    #[arg(long, value_name = "DIR", requires = "tei")]
+    tei_facsimile: Option<PathBuf>,
+
+    /// Check an EPUB 3 file (one made by --epub or any other): container, package document,
+    /// navigation document, XML well-formedness (no external entities, no XInclude), media types
+    /// and fallback chains, resource locations, accessibility discovery metadata, the
+    /// accessibility conformance claim and page navigation. Prints errors and warnings with the
+    /// requirement; exit 1 on an error; then exit. Not a full EPUB validator.
+    #[arg(long, value_name = "FILE")]
+    verify_epub: Option<PathBuf>,
 
     /// Also write the recognised text as TEI P5 XML: a page break per scanned page, paragraphs,
     /// tables, columns (needs --ocr). Page structure only; no headings, notes or index markup.
@@ -516,8 +532,10 @@ struct Cli {
     #[arg(long, value_name = "DIR")]
     verify_ocfl: Option<PathBuf>,
 
-    /// Check a BagIt bag (such as one made by --bagit): every file against its manifest, the
-    /// tag files, and files the manifest does not list; exit 1 on any problem; then exit.
+    /// Check a BagIt 1.0 bag (RFC 8493), such as one made by --bagit: declaration, manifests and
+    /// tag manifests, unsafe paths, files not listed, Payload-Oxum, every checksum (SHA-256,
+    /// SHA-512, SHA-1, MD5). Prints each finding with its category and "complete / valid";
+    /// exit 1 unless the bag is valid; then exit.
     #[arg(long, value_name = "DIR")]
     verify_bag: Option<PathBuf>,
 
@@ -552,6 +570,29 @@ struct Cli {
     /// against the root given with --merkle-expect; exit 1 if it does not lead to that root.
     #[arg(long, value_name = "LINE", requires = "merkle_expect")]
     merkle_verify: Option<String>,
+
+    /// With --merkle-root: keep the files in the order of the lines (insertion order) instead of
+    /// sorting by name. Needed for a collection that grows at the end and is checked with
+    /// consistency proofs; roots differ from the sorted ones.
+    #[arg(long, requires = "merkle_root")]
+    merkle_keep_order: bool,
+
+    /// With --merkle-root: print the consistency proof that the first OLD_SIZE files of the list
+    /// (in line order, implies --merkle-keep-order) are still the unchanged start of the whole
+    /// collection, with the old root and the new root. The proof line is
+    /// "consistency: OLD_SIZE NEW_SIZE path,path,...".
+    #[arg(long, value_name = "OLD_SIZE", requires = "merkle_root")]
+    merkle_consistency: Option<usize>,
+
+    /// Root of the older, smaller collection (for --merkle-verify-consistency).
+    #[arg(long, value_name = "HEX")]
+    merkle_old_root: Option<String>,
+
+    /// Check a line printed by --merkle-consistency against the old root (--merkle-old-root) and
+    /// the new root (--merkle-expect); exit 1 if it does not prove that the old collection is
+    /// unchanged inside the new one.
+    #[arg(long, value_name = "LINE", requires_all = ["merkle_expect", "merkle_old_root"])]
+    merkle_verify_consistency: Option<String>,
 
     /// Also write the tables found on the pages as an Excel workbook (one sheet per table, named
     /// p<page>-t<n>); plain numbers become numbers, everything else stays text as printed.
@@ -590,6 +631,13 @@ struct Cli {
     /// check that amounts add up and CUI check digits pass (exit 1 on a problem).
     #[arg(long, value_name = "FILE")]
     efactura: Option<PathBuf>,
+
+    /// With --efactura: also apply the EN 16931 business rules (calculation BR-CO-*, decimals
+    /// BR-DEC, mandatory fields BR-*) to the fields this program can read, and list each
+    /// violated rule with the fields, the value found and the value expected; exit 1 if any.
+    /// Not a full Schematron validation: code lists and national rules are not checked.
+    #[arg(long, requires = "efactura")]
+    efactura_rules: bool,
 
     /// Black-and-white pages (needs --ocr, --mode bw/mixed/hybrid): read each page with the chosen
     /// threshold and with a global Otsu threshold, keep the one Tesseract is more sure of. About
@@ -744,6 +792,12 @@ struct Cli {
     #[arg(long)]
     mrz: bool,
 
+    /// With --mrz: do not turn letters that look like digits (O for 0, I for 1, S for 5, B for 8,
+    /// Z for 2) into digits, or the reverse in letter fields; they are only reported as warnings.
+    /// Without this option every repair is applied and listed.
+    #[arg(long, requires = "mrz")]
+    mrz_no_repair: bool,
+
     /// Decode every input in a separate worker process with a memory limit, a CPU-time limit
     /// (Unix) and a timeout, so a hostile or corrupt file can crash only the worker, not the
     /// run. Process isolation, not a security sandbox (no seccomp or namespaces).
@@ -865,6 +919,37 @@ struct Cli {
     #[arg(long, requires = "tsa_url")]
     sign_timestamp: bool,
 
+    /// Add validation material to the signed PDF FILE as an incremental update (PAdES-B-LT):
+    /// the certificates (--dss-cert) and revocation values (--dss-ocsp / --dss-crl) go into the
+    /// document security store. Output: --pdf, else FILE with `.lt.pdf`. Refused without at least
+    /// one certificate and one OCSP response or CRL; the values are not fetched, nor checked.
+    #[arg(long, value_name = "FILE")]
+    pades_lt: Option<PathBuf>,
+
+    /// DER certificate to put in the store (--pades-lt); repeat for the chain.
+    #[arg(long, value_name = "FILE", requires = "pades_lt")]
+    dss_cert: Vec<PathBuf>,
+
+    /// DER OCSP response to put in the store (--pades-lt); repeat as needed.
+    #[arg(long, value_name = "FILE", requires = "pades_lt")]
+    dss_ocsp: Vec<PathBuf>,
+
+    /// DER CRL to put in the store (--pades-lt); repeat as needed.
+    #[arg(long, value_name = "FILE", requires = "pades_lt")]
+    dss_crl: Vec<PathBuf>,
+
+    /// Add a document time stamp from --tsa-url (PAdES-B-LTA) over FILE, which must already hold
+    /// a validation store (--pades-lt). Output: --pdf, else FILE with `.lta.pdf`. Call it again
+    /// later to renew.
+    #[arg(long, value_name = "FILE", requires = "tsa_url")]
+    pades_lta: Option<PathBuf>,
+
+    /// Report the PAdES level (B-B, B-T, B-LT, B-LTA) of each signature in FILE and what breaks
+    /// the baseline rules (signing-time attribute, MD5, /Cert entry, bad document time stamps).
+    /// Chain and revocation values are not validated. Exit 1 on any error.
+    #[arg(long, value_name = "FILE")]
+    pades_level: Option<PathBuf>,
+
     /// Check every signature in FILE (data matches the signature; with --sign-ca also the
     /// certificate chain). Exit 1 when one fails or the file has no signature.
     #[arg(long, value_name = "FILE")]
@@ -896,6 +981,15 @@ struct Cli {
     /// Use --edge-roi to select the edge; --dpi converts to line pairs per mm.
     #[arg(long, value_name = "IMAGE")]
     measure_edge: Option<PathBuf>,
+
+    /// Place measurements in the star levels (1 to 4) of one FADGI table (2016 edition, unbound
+    /// documents, general collections) and list the limiting rows. LIST is name=value pairs:
+    /// ppi, uniformity (%), deltae, efficiency (%), sfr-half, mtf50-pct, scale-error (%),
+    /// sharpening, noise. With --measure-edge the resolution (from --dpi), MTF50 as a percentage
+    /// of half the sampling frequency and the SFR at half the sampling frequency are taken from
+    /// the edge; values in LIST win. Measures nothing else; no overall level is given.
+    #[arg(long, value_name = "LIST", num_args = 0..=1, default_missing_value = "")]
+    fadgi_levels: Option<String>,
 
     /// Box around the edge for --measure-edge: x,y,width,height in pixels (default: whole image).
     #[arg(long, value_name = "X,Y,W,H")]
@@ -1600,6 +1694,40 @@ fn main() -> Result<()> {
 
 /// Expand `{date}`, `{year}`, `{month}`, `{day}`, `{name}` in an output path and create the
 /// folders of a templated path.
+/// `to` as a `/`-separated path relative to the folder `from` (both may not exist yet: then the
+/// path as given is used). Empty when they are the same folder.
+fn relative_dir(from: &Path, to: &Path) -> String {
+    let abs = |p: &Path| -> Option<PathBuf> {
+        let p = if p.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            p
+        };
+        std::fs::canonicalize(p).ok()
+    };
+    let slash = |p: &Path| {
+        p.components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("/")
+    };
+    let (Some(a), Some(b)) = (abs(from), abs(to)) else {
+        return slash(to);
+    };
+    let (ac, bc): (Vec<_>, Vec<_>) = (a.components().collect(), b.components().collect());
+    let common = ac.iter().zip(&bc).take_while(|(x, y)| x == y).count();
+    if common == 0 {
+        return slash(to);
+    }
+    let mut parts: Vec<String> = vec!["..".to_string(); ac.len() - common];
+    parts.extend(
+        bc[common..]
+            .iter()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned()),
+    );
+    parts.join("/")
+}
+
 fn expand_path(p: &mut Option<PathBuf>, name: &str) -> Result<()> {
     let Some(path) = p.as_ref() else {
         return Ok(());
@@ -2076,14 +2204,65 @@ fn real_main() -> Result<()> {
         );
         std::process::exit(if ok { 0 } else { 1 });
     }
+    if let Some(line) = &cli.merkle_verify_consistency {
+        use legatorocr_engine::merkle as mk;
+        let f: Vec<&str> = line
+            .split_whitespace()
+            .skip_while(|t| *t == "consistency:")
+            .collect();
+        let sizes = match (
+            f.first().and_then(|t| t.parse::<usize>().ok()),
+            f.get(1).and_then(|t| t.parse::<usize>().ok()),
+        ) {
+            (Some(m), Some(n)) if f.len() <= 3 => Some((m, n)),
+            _ => None,
+        };
+        let Some((m, n)) = sizes else {
+            bail!("expected a line like \"consistency: OLD_SIZE NEW_SIZE path,path,...\"");
+        };
+        let path: Vec<String> = f
+            .get(2)
+            .map(|p| p.split(',').map(str::to_string).collect())
+            .unwrap_or_default();
+        match mk::check_consistency_hex(
+            m,
+            n,
+            cli.merkle_old_root.as_deref().unwrap_or(""),
+            cli.merkle_expect.as_deref().unwrap_or(""),
+            &path,
+        ) {
+            Ok(()) => {
+                println!("proof is valid: the old collection is unchanged inside the new one")
+            }
+            Err(mk::ProofError::BadInput(e)) => bail!("{e}"),
+            Err(e) => {
+                println!("proof does NOT hold: {e}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
     if let Some(sums) = &cli.merkle_root {
         use legatorocr_engine::merkle as mk;
         let text = std::fs::read_to_string(sums)
             .with_context(|| format!("{}: cannot read", sums.display()))?;
-        let entries = mk::parse_sums(&text)?;
+        let entries = if cli.merkle_keep_order || cli.merkle_consistency.is_some() {
+            mk::parse_sums_in_order(&text)?
+        } else {
+            mk::parse_sums(&text)?
+        };
         let leaves = mk::leaves_of(&entries);
         let r = mk::hex(&mk::root(&leaves));
         println!("merkle root of {} file(s): {r}", entries.len());
+        if let Some(m) = cli.merkle_consistency {
+            let proof = mk::consistency_proof(&leaves, m).map_err(|e| anyhow::anyhow!("{e}"))?;
+            println!(
+                "old root of the first {m} file(s): {}",
+                mk::hex(&mk::root(&leaves[..m]))
+            );
+            let hexes: Vec<String> = proof.iter().map(|h| mk::hex(h)).collect();
+            println!("consistency: {m} {} {}", entries.len(), hexes.join(","));
+        }
         if let Some(name) = &cli.merkle_proof {
             let Some(i) = entries.iter().position(|(n, _)| n == name) else {
                 bail!("{name} is not listed in {}", sums.display());
@@ -2121,6 +2300,7 @@ fn real_main() -> Result<()> {
     if cli.linearize && cli.object_streams {
         bail!("--linearize cannot be combined with --object-streams");
     }
+    legatorocr_engine::tei::set_facsimile_dir(cli.tei_facsimile.clone());
     legatorocr_engine::pdfcrypt::set_linearize(cli.linearize);
     legatorocr_engine::pdfcrypt::set_jbig2(cli.jbig2);
     legatorocr_engine::pdfcrypt::set_compact(cli.object_streams);
@@ -2331,6 +2511,51 @@ fn real_main() -> Result<()> {
         );
         return Ok(());
     }
+    if let Some(f) = &cli.pades_level {
+        let data = std::fs::read(f)?;
+        let lv = legatorocr_engine::pades::analyse(&data)?;
+        print!("{}", legatorocr_engine::pades::render(&lv));
+        let bad = lv.is_empty()
+            || lv.iter().any(|l| {
+                l.findings
+                    .iter()
+                    .any(|x| x.severity == legatorocr_engine::pades::Severity::Error)
+            });
+        std::process::exit(if bad { 1 } else { 0 });
+    }
+    if let Some(f) = &cli.pades_lt {
+        let rd = |v: &[PathBuf]| -> Result<Vec<Vec<u8>>> {
+            v.iter()
+                .map(|p| Ok(std::fs::read(p).with_context(|| format!("reading {}", p.display()))?))
+                .collect()
+        };
+        let out = match &cli.pdf {
+            Some(n) => n.clone(),
+            None => f.with_extension("lt.pdf"),
+        };
+        let r = legatorocr_engine::pades::extend_lt(
+            &std::fs::read(f)?,
+            &rd(&cli.dss_cert)?,
+            &rd(&cli.dss_ocsp)?,
+            &rd(&cli.dss_crl)?,
+        )?;
+        std::fs::write(&out, r)?;
+        println!("{}: validation store added", out.display());
+        return Ok(());
+    }
+    if let Some(f) = &cli.pades_lta {
+        let url = cli.tsa_url.clone().unwrap_or_default();
+        let out = match &cli.pdf {
+            Some(n) => n.clone(),
+            None => f.with_extension("lta.pdf"),
+        };
+        let r = legatorocr_engine::pades::add_document_timestamp(&std::fs::read(f)?, &|d| {
+            Ok(legatorocr_engine::tsa::request(&url, d)?.0)
+        })?;
+        std::fs::write(&out, r)?;
+        println!("{}: document time stamp added", out.display());
+        return Ok(());
+    }
     if let Some(f) = &cli.sign_pdf {
         let out = match &cli.pdf {
             Some(n) => n.clone(),
@@ -2462,6 +2687,12 @@ fn real_main() -> Result<()> {
         legatorocr_engine::mcp::serve(&exe, std::io::stdin().lock(), std::io::stdout().lock())?;
         return Ok(());
     }
+    if let (Some(list), None) = (&cli.fadgi_levels, &cli.measure_edge) {
+        let m = legatorocr_engine::fadgi::parse_measurements(list)?;
+        let r = legatorocr_engine::fadgi::classify(legatorocr_engine::fadgi::CATEGORY, &m)?;
+        print!("{}", legatorocr_engine::fadgi::render(&r));
+        return Ok(());
+    }
     if let Some(f) = &cli.measure_edge {
         let img = image::open(f)
             .with_context(|| format!("reading {}", f.display()))?
@@ -2488,6 +2719,40 @@ fn real_main() -> Result<()> {
         println!("MTF10 {:.3} cycles/pixel", r.mtf10);
         if let Some(d) = cli.dpi {
             println!("MTF50 {:.1} lp/mm at {d} dpi", r.mtf50 * d as f64 / 25.4);
+        }
+        if let Some(list) = &cli.fadgi_levels {
+            // half the sampling frequency is 0.5 cycles per pixel
+            let at_half = r
+                .curve
+                .windows(2)
+                .find(|w| w[0].0 <= 0.5 && w[1].0 >= 0.5)
+                .map(|w| {
+                    let t = (0.5 - w[0].0) / (w[1].0 - w[0].0).max(1e-12);
+                    w[0].1 + t * (w[1].1 - w[0].1)
+                });
+            let mut m = legatorocr_engine::fadgi::Measurements {
+                ppi: cli.dpi.map(f64::from),
+                mtf50_pct_of_half_sampling: Some(r.mtf50 / 0.5 * 100.0),
+                sfr_at_half_sampling: at_half,
+                ..Default::default()
+            };
+            let given = legatorocr_engine::fadgi::parse_measurements(list)?;
+            macro_rules! over {
+                ($($f:ident),*) => { $(if given.$f.is_some() { m.$f = given.$f; })* };
+            }
+            over!(
+                ppi,
+                uniformity_pct,
+                delta_e_mean,
+                sampling_efficiency_pct,
+                sfr_at_half_sampling,
+                mtf50_pct_of_half_sampling,
+                scale_error_pct,
+                sharpening_max_mtf,
+                noise_levels
+            );
+            let rep = legatorocr_engine::fadgi::classify(legatorocr_engine::fadgi::CATEGORY, &m)?;
+            print!("{}", legatorocr_engine::fadgi::render(&rep));
         }
         return Ok(());
     }
@@ -2517,7 +2782,19 @@ fn real_main() -> Result<()> {
         let inv = legatorocr_engine::efactura::parse(&xml)?;
         let problems = legatorocr_engine::efactura::check(&inv);
         print!("{}", legatorocr_engine::efactura::render(&inv, &problems));
-        if !problems.is_empty() {
+        let mut broken = !problems.is_empty();
+        if cli.efactura_rules {
+            let violations =
+                legatorocr_engine::en16931::check(&legatorocr_engine::en16931::from_ubl(&xml)?);
+            for v in &violations {
+                println!("RULE {v}");
+            }
+            if violations.is_empty() {
+                println!("rules: no violation among the rules this program checks");
+            }
+            broken |= !violations.is_empty();
+        }
+        if broken {
             std::process::exit(1);
         }
         return Ok(());
@@ -2543,16 +2820,43 @@ fn real_main() -> Result<()> {
         );
         return Ok(());
     }
+    if let Some(f) = &cli.verify_epub {
+        let data = std::fs::read(f).with_context(|| format!("{}: cannot read", f.display()))?;
+        let report = legatorocr_engine::epubverify::check(&data);
+        print!("{}", legatorocr_engine::epubverify::render(&report));
+        if report.errors() > 0 {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if let Some(bag) = &cli.verify_bag {
-        let problems = legatorocr_engine::bagit::verify(bag)?;
-        if problems.is_empty() {
+        let report = legatorocr_engine::bagit::validate(bag)?;
+        for f in &report.findings {
+            let kind = match f.severity {
+                legatorocr_engine::bagit::Severity::Error => "problem",
+                legatorocr_engine::bagit::Severity::Warning => "warning",
+            };
+            println!(
+                "{}: {kind} [{}] {}: {}",
+                bag.display(),
+                f.category.label(),
+                f.path,
+                f.message
+            );
+        }
+        if report.valid && report.findings.is_empty() {
             println!("{}: bag is intact", bag.display());
-            return Ok(());
         }
-        for p in &problems {
-            println!("{}: {p}", bag.display());
+        println!(
+            "{}: complete: {}, valid: {}",
+            bag.display(),
+            if report.complete { "yes" } else { "no" },
+            if report.valid { "yes" } else { "no" }
+        );
+        if !report.valid {
+            std::process::exit(1);
         }
-        std::process::exit(1);
+        return Ok(());
     }
     if let Some(list) = &cli.install_modules {
         return install_modules(
@@ -4088,10 +4392,28 @@ fn real_main() -> Result<()> {
             "hun" => "hu",
             other => other,
         });
-        write_atomic(
-            p,
-            legatorocr_engine::tei::render(b, title, lang, &[]).as_bytes(),
-        )?;
+        let xml = match &cli.tei_facsimile {
+            Some(dir) if !res.tei_facs.is_empty() => {
+                let rel = relative_dir(p.parent().unwrap_or(Path::new("")), dir);
+                let pages: Vec<legatorocr_engine::tei::FacsPage> = res
+                    .tei_facs
+                    .iter()
+                    .map(|f| legatorocr_engine::tei::FacsPage {
+                        image: if rel.is_empty() {
+                            f.image.clone()
+                        } else {
+                            format!("{rel}/{}", f.image)
+                        },
+                        width: f.width,
+                        height: f.height,
+                        blocks: f.blocks.clone(),
+                    })
+                    .collect();
+                legatorocr_engine::tei::render_facs(&pages, title, lang, &[])
+            }
+            _ => legatorocr_engine::tei::render(b, title, lang, &[]),
+        };
+        write_atomic(p, xml.as_bytes())?;
         eprintln!("wrote {}", p.display());
         written.push(p.clone());
     }
@@ -4120,7 +4442,7 @@ fn real_main() -> Result<()> {
         match res.text.as_deref() {
             None => eprintln!("--mrz: no OCR text was produced"),
             Some(t) => {
-                let found = legatorocr_engine::mrz::find(t);
+                let found = legatorocr_engine::mrz::find_with(t, !cli.mrz_no_repair);
                 if found.is_empty() {
                     println!("mrz: none found");
                 }
@@ -4130,6 +4452,18 @@ fn real_main() -> Result<()> {
                         m.format, m.doc_type, m.country, m.surname, m.number, m.nationality, m.birth, m.sex, m.expiry,
                         if m.failed.is_empty() { "all check digits agree".to_string() } else { format!("CHECK FAILED: {}", m.failed.join(", ")) }
                     );
+                    for r in &m.repairs {
+                        println!("mrz {}: repaired {r}", m.format);
+                    }
+                    for w in &m.warnings {
+                        println!("mrz {}: warning {w}", m.format);
+                    }
+                    if m.name_truncated {
+                        println!(
+                            "mrz {}: the name field ends in a letter: the name was cut to fit",
+                            m.format
+                        );
+                    }
                 }
             }
         }

@@ -10,7 +10,7 @@ use flate2::{write::DeflateEncoder, Compression, Crc};
 use legatorocr_pdf::crypt::Aes;
 use std::io::Write;
 
-fn sha1(data: &[u8]) -> [u8; 20] {
+pub(crate) fn sha1(data: &[u8]) -> [u8; 20] {
     let mut h: [u32; 5] = [
         0x6745_2301,
         0xEFCD_AB89,
