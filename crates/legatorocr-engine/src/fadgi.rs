@@ -208,6 +208,9 @@ pub fn parse_measurements(list: &str) -> Result<Measurements> {
             .trim()
             .parse()
             .map_err(|_| anyhow::anyhow!("{part:?}: the value is not a number"))?;
+        if !v.is_finite() {
+            bail!("{part:?}: the value must be a finite number (not nan, inf or out of range)");
+        }
         let slot = match k.trim() {
             "ppi" => &mut m.ppi,
             "dpi" => bail!(
@@ -482,5 +485,21 @@ mod tests {
             .notes
             .iter()
             .any(|n| n.contains("'>'")));
+    }
+
+    #[test]
+    fn non_finite_values_are_input_errors() {
+        for bad in [
+            "ppi=nan",
+            "ppi=NaN",
+            "ppi=inf",
+            "ppi=-inf",
+            "ppi=1e400",
+            "uniformity=infinity",
+        ] {
+            let e = parse_measurements(bad).unwrap_err().to_string();
+            assert!(e.contains("finite"), "{bad}: {e}");
+        }
+        assert_eq!(parse_measurements("ppi=400").unwrap().ppi, Some(400.0));
     }
 }
