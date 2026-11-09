@@ -66,3 +66,6 @@ Fiecare punct: spec, ce lipsește, ce s-a făcut în cod până la răspuns.
 6. Nivelul B-T: un atribut de ștampilă pe semnătură este recunoscut după OID-ul lui; la B-LTA se cere o ștampilă de document care acoperă depozitul, depozitul fiind după semnătură.
 7. **Constatare:** semnătorul existent (`openssl cms -sign -cades`, `--sign-pdf`) produce un atribut CMS de timp de semnare, pe care spec-ul îl interzice; `--pades-level` îl semnalează ca eroare (verificat pe OpenSSL 3.0.13). Nu s-a modificat semnătorul (în afara specului); decizia: titularul.
 8. Valoarea V și celelalte verificări „ar trebui" ale ștampilei sunt avertismente, nu erori, conform spec-ului. Regula DocMDP nu e verificată.
+
+## 10 pdfua1-autoverificare
+Ne-implementat. Spec-ul declară textul și pașii de test ale celor 136 de condiții [necunoscut] (protocolul oficial necitit, doar rezumate secundare), iar INDEX.md zice să nu fie trimis la implementare înainte ca omul să obțină documentul oficial. Doar câteva condiții sunt numite cu identificator în testele de acceptanță (07-001/002, 13-004), dar fără sensul exact al pașilor de test; implementarea ar cere ghicit. Necesar de la titular: textul punctelor de control 02, 06, 07, 10, 13, 31 din documentul oficial Matterhorn 1.1.
