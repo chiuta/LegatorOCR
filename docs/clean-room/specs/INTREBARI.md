@@ -49,3 +49,10 @@ Fiecare punct: spec, ce lipsește, ce s-a făcut în cod până la răspuns.
 4. Cheile TXT invalide (goale sau cu caractere neimprimabile) sunt omise; „ghilimele" în valori nu sunt tratate.
 5. Duplicatele pe interfețe: instanța e comparată după nume fără diferență de majuscule ASCII, adresele unite (regula pe interfețe: [necunoscut]).
 6. Compatibilitatea cu modul offline/sigilat: decizia omului ([necunoscut]); modulul nu face rețea.
+
+## 08 fadgi-niveluri
+1. Rândurile OECF și eroare de balans de alb („+9 ≤ 8" etc.): sensul notației [necunoscut]; **nu sunt evaluate** (raportate „not evaluated"). Paranteza de la zgomot: [necunoscut]; zgomotul se evaluează doar cu prima limită din fiecare pereche, strict „<" (decizia din testul 6).
+2. Regula de nivel global: [necunoscut]; nu se calculează. Se listează doar rândurile limitative (cele cu cel mai mic număr de stele dintre cele evaluate).
+3. 300 ppi se raportează 3 stele (cel mai înalt nivel care îl satisface; valoarea e aceeași pentru 2 și 3). „±N" la scara de reproducere tratat ca limită inclusivă.
+4. „Jumătate din frecvența de eșantionare" = 0,5 cicluri/pixel (deducție); cu `--measure-edge`, MTF50 % = mtf50/0,5×100 și SFR la 0,5 citit prin interpolare din curbă. Eficiența de eșantionare MTF10 nu se calculează din margine (definiția nu e în spec): se dă manual.
+5. Ediția 2023/2024 nu a fost citită; alte categorii de materiale nu sunt suportate (refuz).

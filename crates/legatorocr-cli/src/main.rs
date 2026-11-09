@@ -45,7 +45,7 @@ enum Fmt {
 #[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "install_modules", "scan_escl", "watch", "verify_bag", "verify_epub", "verify_ocfl", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "pdfa_check", "decode_worker", "fuse_frames", "verify_document", "integrity_hints", "mcp", "measure_edge", "backup_from", "efactura", "merkle_root", "merkle_verify", "merkle_verify_consistency", "verify_sums", "extract_project", "search_preset", "search_help"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "install_modules", "scan_escl", "watch", "verify_bag", "verify_epub", "verify_ocfl", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "pdfa_check", "decode_worker", "fuse_frames", "verify_document", "integrity_hints", "mcp", "measure_edge", "fadgi_levels", "backup_from", "efactura", "merkle_root", "merkle_verify", "merkle_verify_consistency", "verify_sums", "extract_project", "search_preset", "search_help"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -950,6 +950,15 @@ struct Cli {
     /// Use --edge-roi to select the edge; --dpi converts to line pairs per mm.
     #[arg(long, value_name = "IMAGE")]
     measure_edge: Option<PathBuf>,
+
+    /// Place measurements in the star levels (1 to 4) of one FADGI table (2016 edition, unbound
+    /// documents, general collections) and list the limiting rows. LIST is name=value pairs:
+    /// ppi, uniformity (%), deltae, efficiency (%), sfr-half, mtf50-pct, scale-error (%),
+    /// sharpening, noise. With --measure-edge the resolution (from --dpi), MTF50 as a percentage
+    /// of half the sampling frequency and the SFR at half the sampling frequency are taken from
+    /// the edge; values in LIST win. Measures nothing else; no overall level is given.
+    #[arg(long, value_name = "LIST", num_args = 0..=1, default_missing_value = "")]
+    fadgi_levels: Option<String>,
 
     /// Box around the edge for --measure-edge: x,y,width,height in pixels (default: whole image).
     #[arg(long, value_name = "X,Y,W,H")]
@@ -2602,6 +2611,12 @@ fn real_main() -> Result<()> {
         legatorocr_engine::mcp::serve(&exe, std::io::stdin().lock(), std::io::stdout().lock())?;
         return Ok(());
     }
+    if let (Some(list), None) = (&cli.fadgi_levels, &cli.measure_edge) {
+        let m = legatorocr_engine::fadgi::parse_measurements(list)?;
+        let r = legatorocr_engine::fadgi::classify(legatorocr_engine::fadgi::CATEGORY, &m)?;
+        print!("{}", legatorocr_engine::fadgi::render(&r));
+        return Ok(());
+    }
     if let Some(f) = &cli.measure_edge {
         let img = image::open(f)
             .with_context(|| format!("reading {}", f.display()))?
@@ -2628,6 +2643,40 @@ fn real_main() -> Result<()> {
         println!("MTF10 {:.3} cycles/pixel", r.mtf10);
         if let Some(d) = cli.dpi {
             println!("MTF50 {:.1} lp/mm at {d} dpi", r.mtf50 * d as f64 / 25.4);
+        }
+        if let Some(list) = &cli.fadgi_levels {
+            // half the sampling frequency is 0.5 cycles per pixel
+            let at_half = r
+                .curve
+                .windows(2)
+                .find(|w| w[0].0 <= 0.5 && w[1].0 >= 0.5)
+                .map(|w| {
+                    let t = (0.5 - w[0].0) / (w[1].0 - w[0].0).max(1e-12);
+                    w[0].1 + t * (w[1].1 - w[0].1)
+                });
+            let mut m = legatorocr_engine::fadgi::Measurements {
+                ppi: cli.dpi.map(f64::from),
+                mtf50_pct_of_half_sampling: Some(r.mtf50 / 0.5 * 100.0),
+                sfr_at_half_sampling: at_half,
+                ..Default::default()
+            };
+            let given = legatorocr_engine::fadgi::parse_measurements(list)?;
+            macro_rules! over {
+                ($($f:ident),*) => { $(if given.$f.is_some() { m.$f = given.$f; })* };
+            }
+            over!(
+                ppi,
+                uniformity_pct,
+                delta_e_mean,
+                sampling_efficiency_pct,
+                sfr_at_half_sampling,
+                mtf50_pct_of_half_sampling,
+                scale_error_pct,
+                sharpening_max_mtf,
+                noise_levels
+            );
+            let rep = legatorocr_engine::fadgi::classify(legatorocr_engine::fadgi::CATEGORY, &m)?;
+            print!("{}", legatorocr_engine::fadgi::render(&rep));
         }
         return Ok(());
     }

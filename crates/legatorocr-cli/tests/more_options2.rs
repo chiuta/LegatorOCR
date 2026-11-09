@@ -402,3 +402,19 @@ fn verify_epub_flags_a_missing_container_and_reads_a_plain_book() {
     assert!(text(&bad).contains("ZIP"), "{}", text(&bad));
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn fadgi_levels_places_values_in_stars_and_refuses_dpi() {
+    let d = tmp("fadgi");
+    let o = run(&d, &["--fadgi-levels", "ppi=400,deltae=6,uniformity=2"]);
+    assert!(o.status.success(), "{}", text(&o));
+    let t = text(&o);
+    assert!(
+        t.contains("resolution (ppi)") && t.contains("4 star(s)"),
+        "{t}"
+    );
+    assert!(t.contains("limiting: colour accuracy"), "{t}");
+    assert!(t.contains("not measured"), "{t}");
+    assert!(!run(&d, &["--fadgi-levels", "dpi=300"]).status.success());
+    let _ = std::fs::remove_dir_all(&d);
+}

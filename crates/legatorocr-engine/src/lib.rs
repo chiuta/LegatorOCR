@@ -63,6 +63,7 @@ pub mod textrules;
 pub fn set_accurate(on: bool) {
     legatorocr_nocr::set_accurate(on);
 }
+pub mod fadgi;
 pub mod figures;
 pub mod package;
 pub mod pagelang;
