@@ -864,6 +864,13 @@ struct Cli {
     #[arg(long, value_name = "FILE", requires = "sign_p12")]
     sign_pdf: Option<PathBuf>,
 
+    /// With --sign-pdf: make the signature follow the PAdES baseline rules, i.e. without the CMS
+    /// signing-time attribute that `openssl cms` always adds (the time stays in /M). Signed
+    /// attributes: content type, message digest, signing certificate v2 (SHA-256). RSA and EC keys
+    /// only. `--pades-level` then shows no signing-time error. Without it --sign-pdf is unchanged.
+    #[arg(long, requires = "sign_pdf")]
+    sign_pades: bool,
+
     /// PKCS#12 (.p12/.pfx) file for --sign-pdf.
     #[arg(long, value_name = "P12")]
     sign_p12: Option<PathBuf>,
@@ -2580,6 +2587,7 @@ fn real_main() -> Result<()> {
                 })
                 .transpose()?
                 .as_ref(),
+            cli.sign_pades,
         )?;
         println!("wrote {}", out.display());
         return Ok(());

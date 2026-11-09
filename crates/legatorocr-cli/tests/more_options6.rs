@@ -124,3 +124,97 @@ fn lt_refusal_then_lt_and_level_report() {
     // the plain signature: the signer's own `-cades` output is reported as it is
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// `--sign-pdf --sign-pades`: the signature has no signing-time attribute (the default one does),
+/// `--pades-level` reports no such error for it, and the signature still verifies. RSA and EC.
+#[test]
+fn sign_pades_has_no_signing_time_error() {
+    let d = tmp("pades");
+    if !ossl(&d, &["version"]) {
+        eprintln!("skipped: openssl is not installed");
+        return;
+    }
+    let ok = |args: &[&str]| assert!(ossl(&d, args), "openssl {args:?} failed");
+    ok(&[
+        "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "k.pem", "-out", "c.pem",
+        "-subj", "/CN=T", "-days", "3",
+    ]);
+    ok(&[
+        "pkcs12", "-export", "-inkey", "k.pem", "-in", "c.pem", "-out", "rsa.p12", "-passout",
+        "pass:pw",
+    ]);
+    ok(&[
+        "req",
+        "-x509",
+        "-newkey",
+        "ec",
+        "-pkeyopt",
+        "ec_paramgen_curve:P-256",
+        "-nodes",
+        "-keyout",
+        "ek.pem",
+        "-out",
+        "ec.pem",
+        "-subj",
+        "/CN=E",
+        "-days",
+        "3",
+    ]);
+    ok(&[
+        "pkcs12", "-export", "-inkey", "ek.pem", "-in", "ec.pem", "-out", "ec.p12", "-passout",
+        "pass:pw",
+    ]);
+    let made = run(
+        &d,
+        &[
+            "a.png", "--dpi", "300", "--format", "none", "--pdf", "h.pdf",
+        ],
+    );
+    assert!(made.status.success(), "{}", text(&made));
+    // default signer: unchanged, still carries the signing-time attribute
+    let s = run(
+        &d,
+        &[
+            "--sign-pdf",
+            "h.pdf",
+            "--sign-p12",
+            "rsa.p12",
+            "--sign-pass-env",
+            "LGR_TEST_PW",
+            "--pdf",
+            "plain.pdf",
+        ],
+    );
+    assert!(s.status.success(), "{}", text(&s));
+    let lv = run(&d, &["--pades-level", "plain.pdf"]);
+    assert!(text(&lv).contains("signing-time"), "{}", text(&lv));
+    for (p12, cert, out) in [
+        ("rsa.p12", "c.pem", "pr.pdf"),
+        ("ec.p12", "ec.pem", "pe.pdf"),
+    ] {
+        let s = run(
+            &d,
+            &[
+                "--sign-pdf",
+                "h.pdf",
+                "--sign-p12",
+                p12,
+                "--sign-pass-env",
+                "LGR_TEST_PW",
+                "--sign-pades",
+                "--pdf",
+                out,
+            ],
+        );
+        assert!(s.status.success(), "{}", text(&s));
+        let lv = run(&d, &["--pades-level", out]);
+        let t = text(&lv);
+        assert!(t.contains("level B-B"), "{t}");
+        assert!(!t.contains("signing-time"), "{t}");
+        assert!(!t.contains("ERROR"), "{t}");
+        let v = run(&d, &["--verify-pdf-signatures", out, "--sign-ca", cert]);
+        assert!(v.status.success(), "{}", text(&v));
+        let _ = cert;
+    }
+    let _ = std::fs::remove_dir_all(&d);
+}
