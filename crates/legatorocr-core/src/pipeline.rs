@@ -178,6 +178,9 @@ pub struct Settings {
     /// [`perspective::keystone`](crate::perspective::keystone)). Hand-drawn zones are dropped when
     /// it applies (guide lines follow), as with `perspective`.
     pub sheet_keystone: [f32; 2],
+    /// Keystone correction of each page after the cut (same meaning as `sheet_keystone`), for pages
+    /// of a spread that bend differently. Zones drawn on the page are dropped when it applies.
+    pub page_keystone: [f32; 2],
     /// Complete settings for one half of a cut sheet (`[0]` left page, `[1]` right page), used
     /// instead of the sheet's own for everything done to the page after the cut: clean-up, content
     /// box, output mode. Built by the caller from the general settings plus the page's own values
@@ -253,6 +256,7 @@ impl Default for Settings {
             sheet_split_frac: None,
             sheet_split_angle_deg: 0.0,
             sheet_keystone: [0.0; 2],
+            page_keystone: [0.0; 2],
             part_settings: [None, None],
             dropout: Dropout::Off,
             despeckle_strength: 1.0,
@@ -604,6 +608,108 @@ fn level_turn(rgb: &RgbImage, dpi: u32) -> Option<f32> {
     let deg = deskew::detect_skew(&a.ink, 20.0)?.to_degrees();
     let deg = (deg * 10.0).round() / 10.0;
     (deg.abs() >= 0.1).then_some(deg)
+}
+
+/// A guess at the keystone correction (`[vertical, horizontal]` percent, as `page_keystone` takes
+/// it) for every page the sheet yields after the cut, for an "auto trapezoid" button. The
+/// horizontal value comes from how the text lines tilt in the upper and in the lower part of the
+/// page (they fan out when one side of the page is nearer the camera); the vertical one from how
+/// the width of the text differs between those parts, so it is only offered when the difference
+/// is clear. Each entry is the page's index in the cut (`None` when not cut) and the guess
+/// (`[0, 0]` when the page needs none or has too little text to judge).
+pub fn detect_page_keystone(src: &DynamicImage, s: &Settings) -> Vec<(Option<u8>, [f32; 2])> {
+    let mut s = s.sanitized();
+    s.page_keystone = [0.0; 2];
+    s.part_settings = [None, None];
+    let src = &*erase_on_sheet(src, &s);
+    split_sheet(src, &s)
+        .into_iter()
+        .map(|(img, idx, _, _)| (idx, page_keystone_of(&img, s.dpi)))
+        .collect()
+}
+
+fn page_keystone_of(img: &RgbImage, dpi: u32) -> [f32; 2] {
+    let a = analyse(&transform::gray_of(img), dpi);
+    let ink = &a.ink;
+    if ink.w < 40 || ink.h < 60 {
+        return [0.0; 2];
+    }
+    // the upper and the lower part of the page, leaving the margins and the edges out
+    let band = |from: f32, to: f32| -> BitImage {
+        let (y0, y1) = ((ink.h as f32 * from) as u32, (ink.h as f32 * to) as u32);
+        let mut b = BitImage::new(ink.w, y1 - y0);
+        for y in y0..y1 {
+            for x in 0..ink.w {
+                if ink.get(x, y) {
+                    b.set(x, y - y0, true);
+                }
+            }
+        }
+        b
+    };
+    let (top, bottom) = (band(0.12, 0.40), band(0.60, 0.88));
+    // horizontal: lines tilt by +-c/W at 1/6 and 5/6 of the height when the left edge is c shorter
+    // at each end; deskew's answer is the clockwise turn that levels them
+    let h = match (
+        deskew::line_angle(&top, 8.0),
+        deskew::line_angle(&bottom, 8.0),
+    ) {
+        (Some(at), Some(ab)) => {
+            let c = 0.75 * ink.w as f32 * (at - ab);
+            200.0 * c / ink.h as f32
+        }
+        _ => 0.0,
+    };
+    // vertical: width of the ink in each band (without the 3 % stragglers at either end)
+    let extent = |b: &BitImage| -> Option<f32> {
+        let mut cols = vec![0u32; b.w as usize];
+        for y in 0..b.h {
+            for x in 0..b.w {
+                if b.get(x, y) {
+                    cols[x as usize] += 1;
+                }
+            }
+        }
+        let total: u32 = cols.iter().sum();
+        if total < 200 {
+            return None;
+        }
+        let (mut acc, mut lo, mut hi) = (0u32, 0usize, cols.len() - 1);
+        for (x, n) in cols.iter().enumerate() {
+            acc += n;
+            if acc * 100 >= total * 3 {
+                lo = x;
+                break;
+            }
+        }
+        acc = 0;
+        for (x, n) in cols.iter().enumerate().rev() {
+            acc += n;
+            if acc * 100 >= total * 3 {
+                hi = x;
+                break;
+            }
+        }
+        Some((hi.saturating_sub(lo)) as f32)
+    };
+    let v = match (extent(&top), extent(&bottom)) {
+        (Some(wt), Some(wb)) if wt.min(wb) > 0.5 * ink.w as f32 => {
+            let v = 200.0 * (wb - wt) / ink.w as f32;
+            if v.abs() >= 1.5 {
+                v.clamp(-10.0, 10.0)
+            } else {
+                0.0
+            }
+        }
+        _ => 0.0,
+    };
+    let round = |x: f32| (x.clamp(-15.0, 15.0) * 10.0).round() / 10.0;
+    let (v, h) = (round(v), round(h));
+    // below half a percent a correction does more harm (resampling) than good
+    [
+        if v.abs() >= 0.5 { v } else { 0.0 },
+        if h.abs() >= 0.5 { h } else { 0.0 },
+    ]
 }
 
 /// Where a point of an `w` x `h` image lands after [`transform::rotate_cw`] by `rad` (same
@@ -1049,6 +1155,16 @@ fn prepare(
     mut pictures: Vec<[f32; 5]>,
     mut guides: Guides,
 ) -> Prepared {
+    // --- keystone of this page (before anything else looks at it) ------------
+    if s.page_keystone.iter().any(|k| k.abs() >= 0.05) {
+        if let Some(flat) = crate::stage("page/keystone", || {
+            crate::perspective::keystone(&img, s.page_keystone[0], s.page_keystone[1], &mut guides)
+        }) {
+            img = flat;
+            // zones drawn on the page no longer lie where they were drawn
+            pictures.clear();
+        }
+    }
     // --- clean-up: fixes that make every later stage's job easier ----------
     if s.auto_invert {
         crate::stage("clean-up/invert-check", || {
@@ -2367,6 +2483,58 @@ mod tests {
         assert_eq!(sizes(&s), vec![1200, 1200]);
     }
 
+    /// A page of text bars (1200 x 1600 px, read at 150 dpi) bent by the opposite of a keystone
+    /// correction, as a page photographed at an angle would be.
+    fn bent_page(v: f32, h: f32) -> image::DynamicImage {
+        let mut g = image::RgbImage::from_pixel(1200, 1600, image::Rgb([255, 255, 255]));
+        for y in (150..1450).step_by(40) {
+            // words of 55 px with 12 px gaps (an unbroken bar would count as a ruled line)
+            for x in 150..1050 {
+                if (x - 150) % 67 < 55 {
+                    for dy in 0..12 {
+                        g.put_pixel(x, y + dy, image::Rgb([0, 0, 0]));
+                    }
+                }
+            }
+        }
+        let bent = crate::perspective::keystone(&g, -v, -h, &mut []).unwrap_or(g);
+        image::DynamicImage::ImageRgb8(bent)
+    }
+
+    fn guess(img: &image::DynamicImage) -> [f32; 2] {
+        let s = Settings {
+            dpi: 150,
+            split: SplitMode::Off,
+            auto_orient: false,
+            ..Settings::default()
+        };
+        detect_page_keystone(img, &s)[0].1
+    }
+
+    #[test]
+    fn auto_keystone_finds_the_bend_and_correcting_it_leaves_less() {
+        for (v, h) in [(0.0, 8.0), (0.0, -8.0), (8.0, 0.0), (-8.0, 0.0)] {
+            let img = bent_page(v, h);
+            let k = guess(&img);
+            // the estimate has the sign of the correction that straightens the page
+            assert!(
+                (v == 0.0 || k[0] * v > 0.0) && (h == 0.0 || k[1] * h > 0.0),
+                "bent by {v},{h}: guessed {k:?}"
+            );
+            // and applying it leaves less to correct than before
+            let fixed = crate::perspective::keystone(&img.to_rgb8(), k[0], k[1], &mut [])
+                .map(image::DynamicImage::ImageRgb8)
+                .unwrap_or(img.clone());
+            let after = guess(&fixed);
+            assert!(
+                after[0].abs() + after[1].abs() < k[0].abs() + k[1].abs(),
+                "bent by {v},{h}: guessed {k:?}, still {after:?}"
+            );
+        }
+        // a straight page gets nothing
+        assert_eq!(guess(&bent_page(0.0, 0.0)), [0.0, 0.0]);
+    }
+
     #[test]
     fn a_slanted_cut_line_gives_each_page_its_side_of_the_line() {
         // 400 x 200 white sheet, cut at x = 200 leaning 10 degrees clockwise: at the top the
@@ -3033,6 +3201,7 @@ mod tests {
                     rnd(40) as f32 - 20.0,
                     if rnd(6) == 0 { f32::NAN } else { 0.0 },
                 ],
+                page_keystone: [rnd(30) as f32 - 15.0, 0.0],
                 part_settings: [None, None],
                 sheet_picture_zones: if rnd(3) == 0 {
                     vec![[

@@ -425,6 +425,7 @@ impl UiSettings {
             sheet_split_frac: adj.split_frac,
             sheet_split_angle_deg: adj.cut_angle_deg,
             sheet_keystone: adj.keystone,
+            page_keystone: [0.0; 2],
             part_settings: [None, None],
             align: self.align,
             threshold: self.threshold,
@@ -760,6 +761,7 @@ mod portable_tests {
 /// Keys of the pipeline settings a single page may have of its own (output and clean-up of the
 /// page, and its content box); the geometry of the sheet and the layout of the document stay global.
 pub const PAGE_KEYS: &[&str] = &[
+    "page_keystone",
     "content_adjust",
     "mode",
     "threshold",

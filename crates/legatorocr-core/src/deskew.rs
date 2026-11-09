@@ -48,6 +48,18 @@ pub fn detect_skew(ink: &BitImage, max_deg: f32) -> Option<f32> {
     Some(ang)
 }
 
+/// Direction of the text lines alone (radians, the turn that levels them), without the
+/// cross-check against the vertical structure: a band of a bent page is not a rigid
+/// rotation, so only the lines may speak.
+pub(crate) fn line_angle(ink: &BitImage, max_deg: f32) -> Option<f32> {
+    let cleaned = crate::orient::without_long_runs(ink, 150);
+    let (ang, prom, share) = profile_skew(&cleaned, max_deg)?;
+    if share < MIN_INK_SHARE || prom < MIN_PROMINENCE {
+        return None;
+    }
+    Some(ang)
+}
+
 /// Fewer inked pixels than this share of the page: too little to judge the skew.
 const MIN_INK_SHARE: f64 = 0.008;
 /// Below this peak prominence there is no trustworthy text orientation (typical text pages

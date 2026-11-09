@@ -3140,6 +3140,7 @@ fn real_main() -> Result<()> {
         } else {
             anyhow::bail!("--keystone-v and --keystone-h need percentages between -30 and 30")
         },
+        page_keystone: [0.0; 2],
         part_settings: [None, None],
         sheet_dewarp_guides: Vec::new(),
         sheet_picture_zones: Vec::new(),

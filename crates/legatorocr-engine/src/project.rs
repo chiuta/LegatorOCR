@@ -296,6 +296,10 @@ pub fn settings_to_pairs(s: &Settings) -> Vec<(&'static str, String)> {
             "keystone",
             format!("{},{}", s.sheet_keystone[0], s.sheet_keystone[1]),
         ),
+        (
+            "page_keystone",
+            format!("{},{}", s.page_keystone[0], s.page_keystone[1]),
+        ),
         ("dropout", s.dropout.name().into()),
         ("despeckle_strength", s.despeckle_strength.to_string()),
         ("show_through", s.show_through.to_string()),
@@ -398,6 +402,17 @@ pub fn apply_pair(s: &mut Settings, k: &str, v: &str) -> Result<bool> {
                 return Err(bad());
             }
             s.sheet_keystone = k;
+        }
+        "page_keystone" => {
+            let (a, b) = v.split_once(',').ok_or_else(bad)?;
+            let k = [
+                a.trim().parse::<f32>().map_err(|_| bad())?,
+                b.trim().parse::<f32>().map_err(|_| bad())?,
+            ];
+            if k.iter().any(|x| !x.is_finite() || x.abs() > 30.0) {
+                return Err(bad());
+            }
+            s.page_keystone = k;
         }
         "cut_angle" => {
             let d: f32 = if v.is_empty() {

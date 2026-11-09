@@ -29,8 +29,8 @@ pub use binarize::Threshold;
 pub use bitimage::BitImage;
 pub use cleanup::Dropout;
 pub use pipeline::{
-    detect_sheet_turn, measure_page, process_page, HAlign, OutputMode, Page, PageImage, Settings,
-    SplitMode, VAlign,
+    detect_page_keystone, detect_sheet_turn, measure_page, process_page, HAlign, OutputMode, Page,
+    PageImage, Settings, SplitMode, VAlign,
 };
 pub use text::Word;
 

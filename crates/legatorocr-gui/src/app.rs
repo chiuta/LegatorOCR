@@ -187,6 +187,9 @@ struct Shot {
     saved: Arc<AtomicBool>,
 }
 
+/// Per page of a split sheet: its index and the keystone (vertical, horizontal) found for it.
+type PageKeystones = Vec<(Option<u8>, [f32; 2])>;
+
 pub struct App {
     tick: u64,
     lang: Lang,
@@ -245,6 +248,7 @@ pub struct App {
     grid_made: Option<std::time::Instant>,
     /// A running search for the sheet's fine-turn angle (sheet id, result), started by the Auto button.
     turn_probe: Option<(u64, mpsc::Receiver<Option<f32>>)>,
+    key_probe: Option<(u64, mpsc::Receiver<PageKeystones>)>,
     /// The same for every sheet (Auto for all): (sheets done, sheets found, total, results).
     turn_batch: Option<TurnBatch>,
     guide_path: Vec<egui::Pos2>,
@@ -334,6 +338,7 @@ impl App {
             grid_rows: 5,
             grid_made: None,
             turn_probe: None,
+            key_probe: None,
             turn_batch: None,
             guide_path: Vec::new(),
             guide_live: None,
@@ -3015,6 +3020,7 @@ impl App {
         );
         let (mut clear_zones, mut undo_zone, mut redo_zone) = (false, false, false);
         let mut auto_turn = false;
+        let mut auto_key = false;
         let mut auto_turn_all = false;
         let adj_before = ZoneSnap::of(&self.sheets[i].adj);
         ui.horizontal_wrapped(|ui| {
@@ -3079,6 +3085,16 @@ impl App {
                     )
                     .on_hover_text(tr("adj.keystone_hint"))
                     .changed();
+            }
+            if ui
+                .add_enabled(
+                    self.key_probe.is_none(),
+                    egui::Button::new(tr("adj.keystone_auto")),
+                )
+                .on_hover_text(tr("adj.keystone_auto_hint"))
+                .clicked()
+            {
+                auto_key = true;
             }
             // lean of the cut line (only meaningful with the cut-line tool and a line drawn)
             if self.draw_zones && self.draw_extra == 2 {
@@ -3229,6 +3245,52 @@ impl App {
         });
         if adj_changed {
             self.sheets[i].adj_gen += 1;
+        }
+        if auto_key && self.key_probe.is_none() {
+            let (path, id) = (self.sheets[i].path.clone(), self.sheets[i].id);
+            let st = self.s.to_core(&self.sheets[i].adj);
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let found = legatorocr_engine::load_image(&path)
+                    .map(|img| legatorocr_core::detect_page_keystone(&img, &st))
+                    .unwrap_or_default();
+                let _ = tx.send(found);
+            });
+            self.key_probe = Some((id, rx));
+        }
+        if let Some((id, rx)) = &self.key_probe {
+            let id = *id;
+            match rx.try_recv() {
+                Ok(found) => {
+                    self.key_probe = None;
+                    if let Some(k) = self.sheets.iter().position(|s| s.id == id) {
+                        let mut n = 0;
+                        for (part, v) in &found {
+                            let slot = part.unwrap_or(0).min(1) as usize;
+                            legatorocr_engine::project::set_page_pair(
+                                &mut self.sheets[k].adj.page_pairs[slot],
+                                "page_keystone",
+                                format!("{},{}", v[0], v[1]),
+                            );
+                            if v.iter().any(|x| x.abs() >= 0.5) {
+                                n += 1;
+                            }
+                        }
+                        self.sheets[k].adj_gen += 1;
+                        if n > 0 {
+                            let msg = tr("adj.keystone_auto_found").replace("{}", &n.to_string());
+                            self.say(msg, false);
+                        } else {
+                            self.say(tr("adj.keystone_auto_none").to_string(), true);
+                        }
+                    }
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ui.ctx()
+                        .request_repaint_after(std::time::Duration::from_millis(100));
+                }
+                Err(mpsc::TryRecvError::Disconnected) => self.key_probe = None,
+            }
         }
         if auto_turn && self.turn_probe.is_none() {
             // look for the angle in the background: a large scan takes a moment to open
