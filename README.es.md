@@ -6,7 +6,7 @@ Versión: 0.2.0-pre.38 · Última actualización: 2026-11-08
 
 Sitio de presentación: <https://legatorocr.chiuta.ro> (código fuente en `docs/`).
 
-Posprocesador clean-room en Rust para libros escaneados:
+Posprocesador independiente en Rust para libros escaneados:
 **dividir → enderezar → recortar → márgenes → limpiar / binarizar → PDF con capa de texto OCR buscable.**
 El mismo *flujo de trabajo* que las herramientas clásicas de ajuste de escaneos, con código independiente. Interfaz gráfica
 (Windows, macOS, Linux) y línea de comandos.
@@ -262,7 +262,9 @@ flujo de trabajo), la exportación editable a Word (para lo que se usa ABBYY Fin
 flujo de trabajo publicado y sus recomendaciones de herramientas. Solo se tomaron las *ideas de flujo de trabajo*; no se consultó ningún código de ABBYY, Agent Ransack, DocFetcher
 ni PDF24.
 
-## Declaración clean-room
+## Declaración de procedencia
+
+LegatorOCR es una **implementación independiente**, no un proyecto clean-room documentado: no se aplicó un procedimiento con equipos separados y el historial del repositorio no lo acredita. Véase `docs/clean-room/PROVENANCE.md`. El modelo OCR incorporado (`multi.lnm`) se entrenó en parte con escaneos de una revista y de un manual de 1960 cuyos derechos no están documentados; compruébelo antes de redistribuir el modelo con fines comerciales.
 
 Los algoritmos se escribieron a partir del conocimiento general de procesamiento de imágenes (Sauvola, perfiles de proyección,
 componentes conexos) y del flujo de trabajo descrito públicamente. Para `COMPARISON.md` solo se leyeron las

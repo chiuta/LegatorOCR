@@ -6,7 +6,7 @@ Versione: 0.2.0-pre.38 · Ultimo aggiornamento: 2026-11-08
 
 Sito di presentazione: <https://legatorocr.chiuta.ro> (sorgenti in `docs/`).
 
-Post-processore clean-room in Rust per libri scansionati:
+Post-processore indipendente in Rust per libri scansionati:
 **divisione → raddrizzamento → ritaglio → margini → pulizia / binarizzazione → PDF con livello di testo OCR ricercabile.**
 Stesso *flusso di lavoro* degli strumenti classici di rifinitura delle scansioni, codice indipendente. Interfaccia grafica
 (Windows, macOS, Linux) e riga di comando.
@@ -262,7 +262,9 @@ flusso di lavoro), l'esportazione Word modificabile (ciò per cui si usa ABBYY F
 flusso di lavoro pubblicato e le sue raccomandazioni sugli strumenti. Sono state riprese solo le *idee di flusso di lavoro*; non è stato consultato alcun codice di ABBYY, Agent Ransack, DocFetcher
 o PDF24.
 
-## Dichiarazione clean-room
+## Dichiarazione di provenienza
+
+LegatorOCR è un'**implementazione indipendente**, non un progetto clean-room documentato: non è stata applicata una procedura con team separati e la cronologia del repository non ne attesta alcuna. Vedi `docs/clean-room/PROVENANCE.md`. Il modello OCR incorporato (`multi.lnm`) è stato addestrato in parte su scansioni di una rivista e di un manuale del 1960 di cui i diritti non sono documentati; verificalo prima di redistribuire il modello a fini commerciali.
 
 Gli algoritmi sono stati scritti a partire dalla conoscenza generale dell'elaborazione di immagini (Sauvola, profili di proiezione,
 componenti connesse) e dal flusso di lavoro descritto pubblicamente. Per `COMPARISON.md` sono stati letti solo gli elenchi pubblici
