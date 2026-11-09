@@ -45,10 +45,47 @@ pub struct SheetAdj {
     pub work_mm: Option<[f32; 4]>,
     /// Cut line of a two-page sheet as a fraction (0-1) of the loaded width.
     pub split_frac: Option<f32>,
+    /// Lean of the cut line in degrees clockwise from vertical, at most ±20 (`cut-angle = 3`).
+    pub cut_angle_deg: f32,
+    /// Keystone correction `[vertical, horizontal]` in percent, at most ±30 (`keystone = 4, -2`).
+    pub keystone: [f32; 2],
     /// Turned by hand: no automatic orientation for this sheet (`orient-locked = 1`).
     pub orient_locked: bool,
     /// Fine turn of the sheet before the cut, degrees clockwise (`turn = -1.5`).
     pub turn_deg: f32,
+    /// Settings of one page only, as `(key, value)` pairs in the vocabulary of
+    /// [`settings_to_pairs`]: `[0]` is the left page of a cut sheet (or the only page of a sheet
+    /// that is not cut), `[1]` the right page. Written as `page1.mode = gray`, `page2.content_adjust
+    /// = 0,1,0,0`. They change only what the page gets after the cut (clean-up, content box,
+    /// output); the cut itself and the sheet-wide steps keep the sheet's settings.
+    pub page_pairs: [Vec<(String, String)>; 2],
+}
+
+/// Settings with the pages' own settings added (see `SheetAdj::page_pairs`): every page that has
+/// pairs gets a copy of `base` with them applied. Pairs that do not parse are ignored.
+pub fn with_page_pairs(mut base: Settings, pairs: &[Vec<(String, String)>; 2]) -> Settings {
+    base.part_settings = [None, None];
+    let mut parts: [Option<Box<Settings>>; 2] = [None, None];
+    for (i, list) in pairs.iter().enumerate() {
+        if list.is_empty() {
+            continue;
+        }
+        let mut p = base.clone();
+        for (k, v) in list {
+            let _ = apply_pair(&mut p, k, v);
+        }
+        parts[i] = Some(Box::new(p));
+    }
+    base.part_settings = parts;
+    base
+}
+
+/// Set one page's own value for a setting (replacing an earlier one for the same key).
+pub fn set_page_pair(list: &mut Vec<(String, String)>, key: &str, value: String) {
+    match list.iter_mut().find(|(k, _)| k == key) {
+        Some(e) => e.1 = value,
+        None => list.push((key.to_string(), value)),
+    }
 }
 
 impl SheetAdj {
@@ -77,7 +114,16 @@ impl SheetAdj {
         s.sheet_turn_deg += self.turn_deg;
         s.sheet_work_mm = self.work_mm.or(s.sheet_work_mm);
         s.sheet_split_frac = self.split_frac.or(s.sheet_split_frac);
-        s
+        // the sheet's own lean replaces a global `--cut-angle` only when it has one
+        if self.cut_angle_deg != 0.0 {
+            s.sheet_split_angle_deg = self.cut_angle_deg;
+        }
+        // added to a global `--keystone-v/-h`, like the turns
+        s.sheet_keystone = [
+            s.sheet_keystone[0] + self.keystone[0],
+            s.sheet_keystone[1] + self.keystone[1],
+        ];
+        with_page_pairs(s, &self.page_pairs)
     }
 }
 
@@ -245,6 +291,15 @@ pub fn settings_to_pairs(s: &Settings) -> Vec<(&'static str, String)> {
             "cut_at",
             s.sheet_split_frac.map_or(String::new(), |f| f.to_string()),
         ),
+        ("cut_angle", s.sheet_split_angle_deg.to_string()),
+        (
+            "keystone",
+            format!("{},{}", s.sheet_keystone[0], s.sheet_keystone[1]),
+        ),
+        (
+            "page_keystone",
+            format!("{},{}", s.page_keystone[0], s.page_keystone[1]),
+        ),
         ("dropout", s.dropout.name().into()),
         ("despeckle_strength", s.despeckle_strength.to_string()),
         ("show_through", s.show_through.to_string()),
@@ -336,6 +391,39 @@ pub fn apply_pair(s: &mut Settings, k: &str, v: &str) -> Result<bool> {
                     _ => return Err(bad()),
                 }
             }
+        }
+        "keystone" => {
+            let (a, b) = v.split_once(',').ok_or_else(bad)?;
+            let k = [
+                a.trim().parse::<f32>().map_err(|_| bad())?,
+                b.trim().parse::<f32>().map_err(|_| bad())?,
+            ];
+            if k.iter().any(|x| !x.is_finite() || x.abs() > 30.0) {
+                return Err(bad());
+            }
+            s.sheet_keystone = k;
+        }
+        "page_keystone" => {
+            let (a, b) = v.split_once(',').ok_or_else(bad)?;
+            let k = [
+                a.trim().parse::<f32>().map_err(|_| bad())?,
+                b.trim().parse::<f32>().map_err(|_| bad())?,
+            ];
+            if k.iter().any(|x| !x.is_finite() || x.abs() > 30.0) {
+                return Err(bad());
+            }
+            s.page_keystone = k;
+        }
+        "cut_angle" => {
+            let d: f32 = if v.is_empty() {
+                0.0
+            } else {
+                v.parse().map_err(|_| bad())?
+            };
+            if !d.is_finite() || d.abs() > 20.0 {
+                return Err(bad());
+            }
+            s.sheet_split_angle_deg = d;
         }
         "cut_at" => {
             s.sheet_split_frac = if v.is_empty() {
@@ -476,6 +564,20 @@ impl Project {
             if let Some(f) = a.split_frac {
                 out.push_str(&format!("split-at = {f}\n"));
             }
+            if a.cut_angle_deg != 0.0 {
+                out.push_str(&format!("cut-angle = {}\n", a.cut_angle_deg));
+            }
+            if a.keystone != [0.0, 0.0] {
+                out.push_str(&format!(
+                    "keystone = {}, {}\n",
+                    a.keystone[0], a.keystone[1]
+                ));
+            }
+            for (i, list) in a.page_pairs.iter().enumerate() {
+                for (k, v) in list {
+                    out.push_str(&format!("page{}.{k} = {v}\n", i + 1));
+                }
+            }
         }
         out
     }
@@ -508,6 +610,21 @@ impl Project {
                 return Err(at(anyhow::anyhow!("expected 'key = value', got '{line}'")));
             };
             let (k, v) = (k.trim(), v.trim());
+            if let (Some((_, adj)), Some(rest)) = (
+                cur.as_mut(),
+                k.strip_prefix("page1.")
+                    .map(|r| (0usize, r))
+                    .or_else(|| k.strip_prefix("page2.").map(|r| (1usize, r))),
+            ) {
+                let (slot, key) = rest;
+                let mut probe = Settings::default();
+                match apply_pair(&mut probe, key, v) {
+                    Ok(true) => set_page_pair(&mut adj.page_pairs[slot], key, v.to_string()),
+                    Ok(false) => return Err(at(anyhow::anyhow!("unknown page setting '{key}'"))),
+                    Err(e) => return Err(at(e)),
+                }
+                continue;
+            }
             match cur.as_mut() {
                 Some((path, adj)) => match k {
                     "path" => {
@@ -572,6 +689,33 @@ impl Project {
                             .filter(|d: &f32| d.is_finite() && d.abs() <= 45.0)
                             .ok_or_else(|| {
                                 at(anyhow::anyhow!("invalid turn '{v}' (degrees, at most 45)"))
+                            })?
+                    }
+                    "keystone" => {
+                        let bad = || {
+                            at(anyhow::anyhow!(
+                                "invalid keystone '{v}' (two percentages, at most 30)"
+                            ))
+                        };
+                        let (a, b) = v.split_once(',').ok_or_else(bad)?;
+                        let k = [
+                            a.trim().parse::<f32>().map_err(|_| bad())?,
+                            b.trim().parse::<f32>().map_err(|_| bad())?,
+                        ];
+                        if k.iter().any(|x| !x.is_finite() || x.abs() > 30.0) {
+                            return Err(bad());
+                        }
+                        adj.keystone = k;
+                    }
+                    "cut-angle" => {
+                        adj.cut_angle_deg = v
+                            .parse()
+                            .ok()
+                            .filter(|d: &f32| d.is_finite() && d.abs() <= 20.0)
+                            .ok_or_else(|| {
+                                at(anyhow::anyhow!(
+                                    "invalid cut-angle '{v}' (degrees, at most 20)"
+                                ))
                             })?
                     }
                     "split-at" => {
@@ -761,6 +905,15 @@ mod tests {
                 erase_mm: vec![[10.0, 20.5, 30.0, 40.0], [0.0, 0.0, 5.0, 5.0]],
                 work_mm: Some([5.0, 6.0, 100.0, 120.5]),
                 split_frac: Some(0.4375),
+                cut_angle_deg: 4.5,
+                keystone: [3.5, -2.0],
+                page_pairs: [
+                    vec![("mode".into(), "gray".into())],
+                    vec![
+                        ("content_adjust".into(), "0,1.5,0,-2".into()),
+                        ("despeckle".into(), "false".into()),
+                    ],
+                ],
                 orient_locked: true,
                 turn_deg: -2.5,
                 picture_mm: vec![[50.0, 60.0, 70.5, 80.0]],

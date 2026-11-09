@@ -176,6 +176,19 @@ pub fn correct_tracking(img: &RgbImage, follow: &mut [Vec<(f32, f32)>]) -> Optio
         return None;
     }
     let (ow, oh) = (ow as u32, oh as u32);
+    warp_quad(img, q, ow, oh, follow)
+}
+
+/// Warp the quadrilateral `q` (corners in the order top-left, top-right, bottom-right,
+/// bottom-left, in pixels of `img`) to a rectangle of `ow` x `oh` px, and move the polylines in
+/// `follow` to where the same spots land. `None` for a degenerate quadrilateral.
+pub fn warp_quad(
+    img: &RgbImage,
+    q: [Pt; 4],
+    ow: u32,
+    oh: u32,
+    follow: &mut [Vec<(f32, f32)>],
+) -> Option<RgbImage> {
     // unit square → quad (projective mapping, closed form)
     let [(x0, y0), (x1, y1), (x2, y2), (x3, y3)] = q;
     let (dx1, dx2, dx3) = (x1 - x2, x3 - x2, x0 - x1 + x2 - x3);
@@ -253,6 +266,31 @@ pub fn correct_tracking(img: &RgbImage, follow: &mut [Vec<(f32, f32)>]) -> Optio
         });
     let _ = Rgb([0u8; 3]);
     Some(out)
+}
+
+/// Manual keystone correction of a photographed sheet. `v` and `h` are percentages (at most ±30):
+/// with a positive `v` the top edge of the picture is narrower than the bottom one by that share
+/// of the width (a page photographed from below, tilting back) and is stretched out, a negative `v`
+/// does the same to the bottom edge; with a positive `h` the left edge is shorter than the right
+/// one by that share of the height, a negative `h` shortens the right edge. The picture keeps its size. `None` when both are about zero or the corners would collapse.
+pub fn keystone(
+    img: &RgbImage,
+    v: f32,
+    h: f32,
+    follow: &mut [Vec<(f32, f32)>],
+) -> Option<RgbImage> {
+    let (v, h) = (v.clamp(-30.0, 30.0), h.clamp(-30.0, 30.0));
+    if !v.is_finite() || !h.is_finite() || (v.abs() < 0.05 && h.abs() < 0.05) {
+        return None;
+    }
+    let (w, ht) = img.dimensions();
+    let (wf, hf) = (w as f32, ht as f32);
+    // how far each edge is pulled in at its two ends
+    let dx = v / 100.0 * wf / 2.0;
+    let dy = h / 100.0 * hf / 2.0;
+    let (a, b, c, d) = (dx.max(0.0), (-dx).max(0.0), dy.max(0.0), (-dy).max(0.0));
+    let q = [(a, c), (wf - a, d), (wf - b, hf - d), (b, hf - c)];
+    warp_quad(img, q, w, ht, follow)
 }
 
 #[cfg(test)]
@@ -379,5 +417,30 @@ mod tests {
         let dark = RgbImage::from_pixel(600, 800, Rgb([20, 20, 20]));
         assert!(correct(&dark).is_none());
         assert!(correct(&RgbImage::new(10, 10)).is_none());
+    }
+
+    #[test]
+    fn keystone_stretches_the_narrow_edge_and_keeps_the_size() {
+        // a trapezoid drawn on a 200 x 200 picture: the top edge spans x 20..180, the bottom edge
+        // the whole width; a positive v of 20 % (dx = 20) should make both edges full width
+        let mut img = RgbImage::from_pixel(200, 200, Rgb([255, 255, 255]));
+        for y in 0..200u32 {
+            let inset = (20.0 * (1.0 - y as f32 / 199.0)) as u32;
+            for x in inset..200 - inset {
+                img.put_pixel(x, y, Rgb([0, 0, 0]));
+            }
+        }
+        let out = keystone(&img, 20.0, 0.0, &mut []).expect("warped");
+        assert_eq!(out.dimensions(), (200, 200));
+        // top row and bottom row are now both black across (almost) the whole width
+        let dark = |y: u32| (0..200).filter(|&x| out.get_pixel(x, y)[0] < 128).count();
+        assert!(
+            dark(2) >= 190 && dark(197) >= 190,
+            "{} {}",
+            dark(2),
+            dark(197)
+        );
+        // no correction asked: nothing happens
+        assert!(keystone(&img, 0.0, 0.0, &mut []).is_none());
     }
 }

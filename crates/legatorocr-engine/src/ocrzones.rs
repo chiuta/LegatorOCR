@@ -1,5 +1,8 @@
 //! OCR zones: `--ocr-zone X,Y,W,H[=LANG]` and `--ocr-ignore X,Y,W,H`.
 //!
+//! A zone may end in `#table`: it is read as one uniform block (Tesseract mode 6), which keeps
+//! the rows of a table together instead of splitting them into columns of text.
+//!
 //! Rectangles are in millimetres on the processed page, origin top-left (like `--picture-zone`).
 //! With zones, only the zones are recognised, one after the other in the order given (so that is
 //! the reading order), each with its own language when `=LANG` is added. With only
@@ -23,6 +26,8 @@ pub struct Rect {
 pub struct Zone {
     pub rect: Rect,
     pub lang: Option<String>,
+    /// Read as one uniform block, row by row (a table).
+    pub table: bool,
 }
 
 type Config = (Vec<Zone>, Vec<Rect>);
@@ -48,6 +53,10 @@ pub fn parse_rect(s: &str) -> Result<Rect> {
 }
 
 pub fn parse_zone(s: &str) -> Result<Zone> {
+    let (s, table) = match s.trim().strip_suffix("#table") {
+        Some(t) => (t.trim_end(), true),
+        None => (s.trim(), false),
+    };
     let (r, lang) = match s.split_once('=') {
         Some((r, l)) => (r, Some(l.trim())),
         None => (s, None),
@@ -65,6 +74,7 @@ pub fn parse_zone(s: &str) -> Result<Zone> {
     Ok(Zone {
         rect: parse_rect(r)?,
         lang,
+        table,
     })
 }
 
@@ -126,6 +136,9 @@ pub fn recognize(
             let mut opt = o.clone();
             if let Some(l) = &z.lang {
                 opt.lang = l.clone();
+            }
+            if z.table {
+                opt.psm = 6;
             }
             for mut wd in inner(&crop(page, x, y, w, h), dpi, &opt)? {
                 wd.x += x;
@@ -191,6 +204,24 @@ mod tests {
         assert_eq!(z.lang.as_deref(), Some("ron+eng"));
         assert!(parse_zone("5,5,50,50=not a lang!").is_err());
         assert_eq!(parse_zone("5,5,50,50").unwrap().lang, None);
+        let t = parse_zone("5,5,50,50=ron#table").unwrap();
+        assert!(t.table && t.lang.as_deref() == Some("ron"));
+        assert!(parse_zone("5,5,50,50 #table").unwrap().table);
+        assert!(!parse_zone("5,5,50,50").unwrap().table);
+    }
+
+    #[test]
+    fn a_table_zone_is_read_as_one_uniform_block() {
+        let _g = LOCK.lock().unwrap();
+        set(vec![parse_zone("0,0,100,100#table").unwrap()], vec![]);
+        let psm = std::cell::Cell::new(0);
+        let inner = |_: &PageImage, _d: u32, o: &OcrOptions| {
+            psm.set(o.psm);
+            Ok(vec![])
+        };
+        recognize(&page(), 25, &OcrOptions::default(), &inner).unwrap();
+        set(vec![], vec![]);
+        assert_eq!(psm.get(), 6);
     }
 
     #[test]

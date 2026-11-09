@@ -30,6 +30,8 @@ pub struct PageInfo {
     /// Content box on the page (x, y, w, h in full-resolution pixels) and the page's dpi.
     pub content_box: Option<[u32; 4]>,
     pub dpi: u32,
+    /// Which half of a cut sheet this is (`Some(0)` left, `Some(1)` right); `None` when not cut.
+    pub split_index: Option<u8>,
 }
 
 pub struct Preview {
@@ -88,6 +90,7 @@ pub fn render(req: &PreviewRequest) -> Result<Preview, String> {
                 skew_deg: p.skew_deg,
                 blank: p.blank,
                 content_box: p.content_box,
+                split_index: p.split_index,
                 dpi: p.dpi,
             };
             (to_thumb(&page_rgba(&p.image), PREVIEW_MAX), info)

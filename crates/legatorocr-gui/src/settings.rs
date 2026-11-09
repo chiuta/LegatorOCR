@@ -35,10 +35,28 @@ impl From<SplitMode> for SplitChoice {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PageSizeChoice {
     Free,
-    A4,
-    A5,
-    Letter,
+    /// An index into `legatorocr_core::PAPER_SIZES` (A2..A6, B3..B6, Letter, Legal, Tabloid).
+    Paper(u8),
     Custom,
+}
+
+impl PageSizeChoice {
+    /// The named size with this name, e.g. `PageSizeChoice::named("A4")`.
+    #[cfg(test)]
+    pub fn named(name: &str) -> PageSizeChoice {
+        legatorocr_core::PAPER_SIZES
+            .iter()
+            .position(|(n, _, _)| *n == name)
+            .map_or(PageSizeChoice::Free, |i| PageSizeChoice::Paper(i as u8))
+    }
+
+    /// Every choice in the order the list shows them.
+    pub fn all() -> Vec<PageSizeChoice> {
+        let mut v = vec![PageSizeChoice::Free];
+        v.extend((0..legatorocr_core::PAPER_SIZES.len()).map(|i| PageSizeChoice::Paper(i as u8)));
+        v.push(PageSizeChoice::Custom);
+        v
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -248,11 +266,75 @@ pub struct SheetAdjust {
     pub work_mm: Option<[f32; 4]>,
     /// Cut line of a two-page sheet, as a fraction (0-1) of the original's width.
     pub split_frac: Option<f32>,
+    /// Lean of the cut line, degrees clockwise from vertical (±20).
+    pub cut_angle_deg: f32,
+    /// Keystone correction `[vertical, horizontal]` in percent (±30).
+    pub keystone: [f32; 2],
+    /// Settings of one page only (see `legatorocr_engine::project::SheetAdj::page_pairs`).
+    pub page_pairs: [Vec<(String, String)>; 2],
     /// The sheet was turned by hand: no automatic orientation on top (until Reset).
     pub orient_locked: bool,
     /// Fine turn of the original before it is cut in two (degrees, clockwise positive, ±20 on the
     /// slider): levels a spread scanned crooked so the gutter is vertical.
     pub sheet_turn_deg: f32,
+}
+
+/// Reduces a freehand guide line (points as fractions of the scan) to a few nodes that follow the
+/// curve: the path is first smoothed with a small moving average (so hand tremor does not make
+/// nodes), then simplified with the Ramer-Douglas-Peucker rule. The tolerance grows until at most
+/// `max_nodes` remain. The two ends are always kept.
+pub fn simplify_guide(points: &[(f32, f32)], max_nodes: usize) -> Vec<(f32, f32)> {
+    let n = points.len();
+    if n <= 2 {
+        return points.to_vec();
+    }
+    let max_nodes = max_nodes.max(2);
+    // moving average over 5 points, ends fixed
+    let smooth: Vec<(f32, f32)> = (0..n)
+        .map(|i| {
+            if i == 0 || i == n - 1 {
+                return points[i];
+            }
+            let r = 2.min(i).min(n - 1 - i);
+            let (mut sx, mut sy) = (0.0, 0.0);
+            for p in &points[i - r..=i + r] {
+                sx += p.0;
+                sy += p.1;
+            }
+            let k = (2 * r + 1) as f32;
+            (sx / k, sy / k)
+        })
+        .collect();
+    let mut tol = 0.0015f32;
+    loop {
+        let mut keep = vec![false; n];
+        keep[0] = true;
+        keep[n - 1] = true;
+        let mut stack = vec![(0usize, n - 1)];
+        while let Some((a, b)) = stack.pop() {
+            let (ax, ay) = smooth[a];
+            let (bx, by) = smooth[b];
+            let (dx, dy) = (bx - ax, by - ay);
+            let len = (dx * dx + dy * dy).sqrt().max(1e-6);
+            let mut far = (0.0f32, a);
+            for (i, p) in smooth.iter().enumerate().take(b).skip(a + 1) {
+                let d = ((p.0 - ax) * dy - (p.1 - ay) * dx).abs() / len;
+                if d > far.0 {
+                    far = (d, i);
+                }
+            }
+            if far.0 > tol {
+                keep[far.1] = true;
+                stack.push((a, far.1));
+                stack.push((far.1, b));
+            }
+        }
+        let out: Vec<(f32, f32)> = (0..n).filter(|&i| keep[i]).map(|i| smooth[i]).collect();
+        if out.len() <= max_nodes || tol > 0.5 {
+            return out;
+        }
+        tol *= 1.5;
+    }
 }
 
 /// A regular grid of dewarp guide lines over the page: `rows` lines of `cols` points each, as
@@ -302,14 +384,19 @@ impl UiSettings {
     pub fn page_size_mm(&self) -> Option<(f32, f32)> {
         match self.page_size {
             PageSizeChoice::Free => None,
-            PageSizeChoice::A4 => Some((210.0, 297.0)),
-            PageSizeChoice::A5 => Some((148.0, 210.0)),
-            PageSizeChoice::Letter => Some((215.9, 279.4)),
+            PageSizeChoice::Paper(i) => legatorocr_core::PAPER_SIZES
+                .get(i as usize)
+                .map(|&(_, w, h)| (w, h)),
             PageSizeChoice::Custom => Some((self.custom_w.max(10.0), self.custom_h.max(10.0))),
         }
     }
 
     pub fn to_core(&self, adj: &SheetAdjust) -> Settings {
+        legatorocr_engine::project::with_page_pairs(self.to_core_plain(adj), &adj.page_pairs)
+    }
+
+    /// The settings of the sheet itself, without the pages' own settings.
+    pub fn to_core_plain(&self, adj: &SheetAdjust) -> Settings {
         Settings {
             dpi: self.dpi.max(36),
             rotate_quarters: adj.rotate_quarters % 4,
@@ -336,6 +423,10 @@ impl UiSettings {
             auto_sheet_turn: false,
             sheet_work_mm: adj.work_mm,
             sheet_split_frac: adj.split_frac,
+            sheet_split_angle_deg: adj.cut_angle_deg,
+            sheet_keystone: adj.keystone,
+            page_keystone: [0.0; 2],
+            part_settings: [None, None],
             align: self.align,
             threshold: self.threshold,
             normalize_bg: self.normalize_bg,
@@ -421,13 +512,11 @@ impl UiSettings {
         self.page_size = match c.page_size_mm {
             None => PageSizeChoice::Free,
             Some((w, h)) => {
-                let is = |a: f32, b: f32| (w - a).abs() < 0.2 && (h - b).abs() < 0.2;
-                if is(210.0, 297.0) {
-                    PageSizeChoice::A4
-                } else if is(148.0, 210.0) {
-                    PageSizeChoice::A5
-                } else if is(215.9, 279.4) {
-                    PageSizeChoice::Letter
+                let known = legatorocr_core::PAPER_SIZES
+                    .iter()
+                    .position(|&(_, a, b)| (w - a).abs() < 0.2 && (h - b).abs() < 0.2);
+                if let Some(i) = known {
+                    PageSizeChoice::Paper(i as u8)
                 } else {
                     self.custom_w = w;
                     self.custom_h = h;
@@ -669,6 +758,79 @@ mod portable_tests {
     }
 }
 
+/// Keys of the pipeline settings a single page may have of its own (output and clean-up of the
+/// page, and its content box); the geometry of the sheet and the layout of the document stay global.
+pub const PAGE_KEYS: &[&str] = &[
+    "page_keystone",
+    "content_adjust",
+    "mode",
+    "threshold",
+    "sensitivity",
+    "despeckle",
+    "despeckle_strength",
+    "normalize",
+    "picture_sensitivity",
+    "hybrid_dpi",
+    "auto_invert",
+    "auto_levels",
+    "sharpen",
+    "fold_shadow",
+    "remove_bg",
+    "denoise",
+    "deblur",
+    "punch_holes",
+    "fingers",
+    "remove_lines",
+    "auto_pictures",
+    "dropout",
+    "show_through",
+    "descreen",
+    "trim_background",
+    "smooth_glyphs",
+];
+
+impl UiSettings {
+    /// These settings as one page of `adj` sees them: the general ones with the page's own on top.
+    pub fn for_page(&self, adj: &SheetAdjust, slot: usize) -> UiSettings {
+        let mut c = self.to_core_plain(adj);
+        for (k, v) in &adj.page_pairs[slot.min(1)] {
+            let _ = legatorocr_engine::project::apply_pair(&mut c, k, v);
+        }
+        let mut out = self.clone();
+        out.apply_project(&Project {
+            settings: c,
+            extra: Vec::new(),
+            sheets: Vec::new(),
+        });
+        out
+    }
+
+    /// Record in `adj` what `edited` changed compared with `before` (both as one page sees them)
+    /// as that page's own settings. Returns whether anything changed.
+    pub fn store_page_changes(
+        before: &UiSettings,
+        edited: &UiSettings,
+        adj: &mut SheetAdjust,
+        slot: usize,
+    ) -> bool {
+        let none = SheetAdjust::default();
+        let a = legatorocr_engine::project::settings_to_pairs(&before.to_core_plain(&none));
+        let b = legatorocr_engine::project::settings_to_pairs(&edited.to_core_plain(&none));
+        let mut changed = false;
+        for ((k, va), (_, vb)) in a.iter().zip(b.iter()) {
+            if va != vb && PAGE_KEYS.contains(k) {
+                legatorocr_engine::project::set_page_pair(
+                    &mut adj.page_pairs[slot.min(1)],
+                    k,
+                    vb.clone(),
+                );
+                changed = true;
+            }
+        }
+        changed
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -902,7 +1064,7 @@ mod tests {
     fn page_sizes_and_modes() {
         let mut s = UiSettings::default();
         assert_eq!(s.page_size_mm(), None);
-        s.page_size = PageSizeChoice::A5;
+        s.page_size = PageSizeChoice::named("A5");
         assert_eq!(s.page_size_mm(), Some((148.0, 210.0)));
         s.page_size = PageSizeChoice::Custom;
         s.custom_w = 3.0; // clamped to a sane minimum
@@ -939,5 +1101,70 @@ mod tests {
         assert_eq!(s.ocr_options().lang, "ron+eng");
         s.ocr_langs.clear();
         assert_eq!(s.lang_string(), "eng");
+    }
+
+    #[test]
+    fn simplified_guide_keeps_ends_and_few_nodes() {
+        // a gentle arc drawn with 400 points
+        let pts: Vec<(f32, f32)> = (0..400)
+            .map(|i| {
+                let x = i as f32 / 399.0;
+                (x, 0.5 + 0.05 * (x * std::f32::consts::PI).sin())
+            })
+            .collect();
+        let g = simplify_guide(&pts, 12);
+        assert!(g.len() <= 12 && g.len() >= 3, "{}", g.len());
+        assert_eq!(g[0], pts[0]);
+        assert_eq!(*g.last().unwrap(), pts[399]);
+        // the simplified line stays near the drawn one
+        for p in &pts {
+            let near = g.windows(2).any(|w| {
+                let (a, b) = (w[0], w[1]);
+                p.0 >= a.0 - 1e-4 && p.0 <= b.0 + 1e-4 && {
+                    let t = if b.0 > a.0 {
+                        (p.0 - a.0) / (b.0 - a.0)
+                    } else {
+                        0.0
+                    };
+                    (a.1 + t * (b.1 - a.1) - p.1).abs() < 0.01
+                }
+            });
+            assert!(near);
+        }
+        // a straight line needs only its two ends
+        let line: Vec<(f32, f32)> = (0..100).map(|i| (i as f32 / 99.0, 0.3)).collect();
+        assert_eq!(simplify_guide(&line, 12).len(), 2);
+    }
+
+    #[test]
+    fn a_page_keeps_its_own_output_settings() {
+        let general = UiSettings::default();
+        let mut adj = SheetAdjust::default();
+        // the left page is made grey, the general settings stay as they were
+        let mut edited = general.for_page(&adj, 0);
+        edited.mode = ModeChoice::Gray;
+        edited.despeckle = !general.despeckle;
+        assert!(UiSettings::store_page_changes(
+            &general, &edited, &mut adj, 0
+        ));
+        assert!(adj.page_pairs[1].is_empty());
+        assert_eq!(general.for_page(&adj, 0).mode, ModeChoice::Gray);
+        assert_ne!(general.for_page(&adj, 1).mode, ModeChoice::Gray);
+        let core = general.to_core(&adj);
+        assert_eq!(
+            core.part_settings[0].as_ref().map(|p| p.mode),
+            Some(legatorocr_core::OutputMode::Gray)
+        );
+        assert!(core.part_settings[1].is_none());
+        // what the sheet as a whole is set to is unchanged
+        assert_eq!(core.mode, general.to_core(&SheetAdjust::default()).mode);
+        // an edit that changes nothing stores nothing
+        let same = general.for_page(&adj, 1);
+        assert!(!UiSettings::store_page_changes(
+            &general.for_page(&adj, 1),
+            &same,
+            &mut adj,
+            1
+        ));
     }
 }

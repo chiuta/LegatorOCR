@@ -168,6 +168,25 @@ pub struct Settings {
     /// of that line as the turn carries it, and is vertical on the turned sheet. Used when splitting is on, at any rotation (on a sheet turned by
     /// 90 or 270 degrees the two pages lie one above the other).
     pub sheet_split_frac: Option<f32>,
+    /// Lean of the manual cut line, degrees clockwise from vertical (at most ±20): the line passes
+    /// through the middle of the sheet's height at the position given by `sheet_split_frac`, and
+    /// each page keeps its side of the slanted line (the other side is painted with the paper
+    /// colour). Only used together with a manual cut position.
+    pub sheet_split_angle_deg: f32,
+    /// Manual keystone (trapezoid) correction of the sheet as `[vertical, horizontal]` percentages
+    /// (at most ±30), applied after the fine turn and before the cut (see
+    /// [`perspective::keystone`](crate::perspective::keystone)). Hand-drawn zones are dropped when
+    /// it applies (guide lines follow), as with `perspective`.
+    pub sheet_keystone: [f32; 2],
+    /// Keystone correction of each page after the cut (same meaning as `sheet_keystone`), for pages
+    /// of a spread that bend differently. Zones drawn on the page are dropped when it applies.
+    pub page_keystone: [f32; 2],
+    /// Complete settings for one half of a cut sheet (`[0]` left page, `[1]` right page), used
+    /// instead of the sheet's own for everything done to the page after the cut: clean-up, content
+    /// box, output mode. Built by the caller from the general settings plus the page's own values
+    /// (the cut itself and anything before it follow the sheet's settings). Not used for sheets
+    /// that are not cut.
+    pub part_settings: [Option<Box<Settings>>; 2],
     /// Drop one printed colour (form rules, stamps).
     pub dropout: Dropout,
     /// Despeckle strength 0.25–4 (1 = default speck size).
@@ -235,6 +254,10 @@ impl Default for Settings {
             sheet_turn_deg: 0.0,
             auto_sheet_turn: false,
             sheet_split_frac: None,
+            sheet_split_angle_deg: 0.0,
+            sheet_keystone: [0.0; 2],
+            page_keystone: [0.0; 2],
+            part_settings: [None, None],
             dropout: Dropout::Off,
             despeckle_strength: 1.0,
             show_through: false,
@@ -386,6 +409,14 @@ impl Settings {
             }
         };
         let mut s = self.clone();
+        // a page's own settings are checked like the sheet's, and carry no pages of their own
+        s.part_settings = std::array::from_fn(|i| {
+            self.part_settings[i].as_ref().map(|p| {
+                let mut p = p.sanitized();
+                p.part_settings = [None, None];
+                Box::new(p)
+            })
+        });
         s.dpi = s.dpi.clamp(36, 2400);
         s.rotate_quarters %= 4;
         s.smooth_glyphs = s.smooth_glyphs.min(3);
@@ -400,6 +431,18 @@ impl Settings {
         }
         s.sheet_turn_deg = if s.sheet_turn_deg.is_finite() {
             s.sheet_turn_deg.clamp(-45.0, 45.0)
+        } else {
+            0.0
+        };
+        s.sheet_keystone = s.sheet_keystone.map(|k| {
+            if k.is_finite() {
+                k.clamp(-30.0, 30.0)
+            } else {
+                0.0
+            }
+        });
+        s.sheet_split_angle_deg = if s.sheet_split_angle_deg.is_finite() {
+            s.sheet_split_angle_deg.clamp(-20.0, 20.0)
         } else {
             0.0
         };
@@ -567,6 +610,115 @@ fn level_turn(rgb: &RgbImage, dpi: u32) -> Option<f32> {
     (deg.abs() >= 0.1).then_some(deg)
 }
 
+/// A guess at the keystone correction (`[vertical, horizontal]` percent, as `page_keystone` takes
+/// it) for every page the sheet yields after the cut, for an "auto trapezoid" button. The
+/// horizontal value comes from how the text lines tilt in the upper and in the lower part of the
+/// page (they fan out when one side of the page is nearer the camera); the vertical one from how
+/// the width of the text differs between those parts, so it is only offered when the difference
+/// is clear. Each entry is the page's index in the cut (`None` when not cut) and the guess
+/// (`[0, 0]` when the page needs none or has too little text to judge).
+pub fn detect_page_keystone(src: &DynamicImage, s: &Settings) -> Vec<(Option<u8>, [f32; 2])> {
+    let mut s = s.sanitized();
+    s.page_keystone = [0.0; 2];
+    s.part_settings = [None, None];
+    let src = &*erase_on_sheet(src, &s);
+    split_sheet(src, &s)
+        .into_iter()
+        .map(|(img, idx, _, _)| (idx, page_keystone_of(&img, s.dpi)))
+        .collect()
+}
+
+fn page_keystone_of(img: &RgbImage, dpi: u32) -> [f32; 2] {
+    let a = analyse(&transform::gray_of(img), dpi);
+    let ink = &a.ink;
+    if ink.w < 40 || ink.h < 60 {
+        return [0.0; 2];
+    }
+    // the upper and the lower part of the page, leaving the margins and the edges out
+    let band = |from: f32, to: f32| -> BitImage {
+        let (y0, y1) = ((ink.h as f32 * from) as u32, (ink.h as f32 * to) as u32);
+        let mut b = BitImage::new(ink.w, y1 - y0);
+        for y in y0..y1 {
+            for x in 0..ink.w {
+                if ink.get(x, y) {
+                    b.set(x, y - y0, true);
+                }
+            }
+        }
+        b
+    };
+    let (top, bottom) = (band(0.12, 0.40), band(0.60, 0.88));
+    // horizontal: lines tilt by +-c/W at 1/6 and 5/6 of the height when the left edge is c shorter
+    // at each end; deskew's answer is the clockwise turn that levels them
+    let h = match (
+        deskew::line_angle(&top, 8.0),
+        deskew::line_angle(&bottom, 8.0),
+    ) {
+        (Some(at), Some(ab)) => {
+            let c = 0.75 * ink.w as f32 * (at - ab);
+            200.0 * c / ink.h as f32
+        }
+        _ => 0.0,
+    };
+    // vertical: where the text block starts and ends in each band. Real text is ragged (short
+    // lines, headings, pictures), so the margins are read from the lines themselves: the left
+    // margin is the 20th percentile of the line starts, the right one the 80th of the line ends.
+    // A keystone moves the two margins in opposite directions (the block narrows); a shift or a
+    // turn moves both the same way, and a ragged block moves them at random: only a clear,
+    // mirrored drift of both is believed.
+    let edges = |b: &BitImage| -> Option<(f32, f32)> {
+        let b = crate::orient::without_long_runs(b, 150);
+        let (mut lefts, mut rights) = (Vec::new(), Vec::new());
+        for y in 0..b.h {
+            let (mut first, mut last, mut n) = (None, 0u32, 0u32);
+            for x in 0..b.w {
+                if b.get(x, y) {
+                    first.get_or_insert(x);
+                    last = x;
+                    n += 1;
+                }
+            }
+            if let (Some(f), true) = (first, n >= 8) {
+                lefts.push(f as f32);
+                rights.push(last as f32);
+            }
+        }
+        if lefts.len() < 40 {
+            return None;
+        }
+        let pick = |v: &mut Vec<f32>, q: f32| {
+            v.sort_by(|a, b| a.total_cmp(b));
+            v[((v.len() - 1) as f32 * q) as usize]
+        };
+        Some((pick(&mut lefts, 0.2), pick(&mut rights, 0.8)))
+    };
+    let v = match (edges(&top), edges(&bottom)) {
+        (Some((lt, rt)), Some((lb, rb))) => {
+            let (dl, dr) = (lb - lt, rb - rt);
+            let narrow = dr - dl; // the block is this much narrower (<0) or wider at the bottom
+            let w = ink.w as f32;
+            let mirrored = (dl + dr).abs() <= 0.5 * narrow.abs();
+            let both = dl.abs() >= 0.004 * w && dr.abs() >= 0.004 * w;
+            let v = 200.0 * narrow / w;
+            // a drift beyond 6 % is no keystone of a photographed page: it is a picture, a table
+            // or a heading skewing the margins, so it is not believed either
+            if mirrored && both && (1.5..=6.0).contains(&v.abs()) {
+                v
+            } else {
+                0.0
+            }
+        }
+        _ => 0.0,
+    };
+    let round = |x: f32| (x.clamp(-15.0, 15.0) * 10.0).round() / 10.0;
+    let (v, h) = (round(v), round(h));
+    // below half a percent a correction does more harm (resampling) than good
+    [
+        if v.abs() >= 0.5 { v } else { 0.0 },
+        if h.abs() >= 0.5 { h } else { 0.0 },
+    ]
+}
+
 /// Where a point of an `w` x `h` image lands after [`transform::rotate_cw`] by `rad` (same
 /// centre mapping as the resampling there, on the enlarged canvas).
 fn turn_point(p: (f32, f32), w: u32, h: u32, rad: f32) -> (f32, f32) {
@@ -669,6 +821,16 @@ fn split_sheet_left_first(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
             }
         }
     }
+    if s.sheet_keystone.iter().any(|k| k.abs() >= 0.05) {
+        let mut moved: Guides = guides.clone();
+        if let Some(flat) = crate::stage("sheet/keystone", || {
+            crate::perspective::keystone(&rgb, s.sheet_keystone[0], s.sheet_keystone[1], &mut moved)
+        }) {
+            rgb = flat;
+            zones.clear();
+            guides = moved;
+        }
+    }
     if s.perspective {
         // guide points are carried through the projective warp; zones are not followed
         let mut moved: Guides = guides.clone();
@@ -741,6 +903,8 @@ fn split_sheet_left_first(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
     }
 
     let mut cut_at = None;
+    // tangent of the lean of a manual cut line (None: straight cut)
+    let mut slant: Option<f32> = None;
     if s.split != SplitMode::Off {
         // a line the user dragged on the original wins over the automatic cut (also on sheets turned by a quarter: the cut is then horizontal)
         let manual = s
@@ -769,8 +933,61 @@ fn split_sheet_left_first(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
             }
         };
         cut_at = cut.filter(|&x| x > 0 && x < rgb.width());
+        if manual.is_some() && s.sheet_split_angle_deg.abs() >= 0.05 {
+            slant = Some(s.sheet_split_angle_deg.to_radians().tan());
+        }
     }
     match cut_at {
+        Some(x) if slant.is_some() => {
+            let t = slant.unwrap_or(0.0);
+            let (w, h) = (rgb.width(), rgb.height());
+            let fill = transform::estimate_background(&rgb);
+            // x of the cut line at row y: leans clockwise, so the top is further right for a
+            // positive angle
+            let line = |y: f32| x as f32 + (h as f32 / 2.0 - y) * t;
+            let reach = (h as f32 / 2.0 * t.abs()).ceil() as u32;
+            let x_hi = (x + reach).min(w);
+            let x_lo = x.saturating_sub(reach);
+            let mut l = imageops::crop_imm(&rgb, 0, 0, x_hi, h).to_image();
+            for (px, py, p) in l.enumerate_pixels_mut() {
+                if px as f32 + 0.5 > line(py as f32 + 0.5) {
+                    *p = fill;
+                }
+            }
+            let mut r = imageops::crop_imm(&rgb, x_lo, 0, w - x_lo, h).to_image();
+            for (px, py, p) in r.enumerate_pixels_mut() {
+                if ((px + x_lo) as f32 + 0.5) < line(py as f32 + 0.5) {
+                    *p = fill;
+                }
+            }
+            let clip = |z: &[f32; 5], x0: f32, x1: f32| {
+                let (a, b) = (z[0].max(x0), (z[0] + z[2]).min(x1));
+                (b > a).then_some([a - x0, z[1], b - a, z[3], z[4]])
+            };
+            let lz = zones
+                .iter()
+                .filter_map(|z| clip(z, 0.0, x_hi as f32))
+                .collect();
+            let rz = zones
+                .iter()
+                .filter_map(|z| clip(z, x_lo as f32, w as f32))
+                .collect();
+            // a guide point belongs to the page on whose side of the slanted line it lies
+            let part = |left: bool| -> Guides {
+                let x0 = if left { 0.0 } else { x_lo as f32 };
+                guides
+                    .iter()
+                    .map(|g| {
+                        g.iter()
+                            .filter(|p| (p.0 < line(p.1)) == left)
+                            .map(|p| (p.0 - x0, p.1))
+                            .collect::<Vec<_>>()
+                    })
+                    .filter(|g| g.len() >= 2)
+                    .collect()
+            };
+            vec![(l, Some(0), lz, part(true)), (r, Some(1), rz, part(false))]
+        }
         Some(x) => {
             let l = imageops::crop_imm(&rgb, 0, 0, x, rgb.height()).to_image();
             let r = imageops::crop_imm(&rgb, x, 0, rgb.width() - x, rgb.height()).to_image();
@@ -871,7 +1088,20 @@ fn smoothed(src: &DynamicImage, s: &Settings) -> Option<(DynamicImage, Settings)
     let mut s2 = s.clone();
     s2.dpi *= k;
     s2.smooth_glyphs = 0;
+    for p in s2.part_settings.iter_mut().flatten() {
+        p.dpi *= k;
+        p.smooth_glyphs = 0;
+    }
     Some((big, s2))
+}
+
+/// The settings that apply to one half of a cut sheet: its own when it has them, else the sheet's.
+fn for_part(s: &Settings, idx: Option<u8>) -> &Settings {
+    // a sheet that is not cut has one page: it takes the settings of the first
+    s.part_settings
+        .get(idx.unwrap_or(0) as usize)
+        .and_then(|p| p.as_deref())
+        .unwrap_or(s)
 }
 
 pub fn process_page(src: &DynamicImage, s: &Settings) -> Vec<Page> {
@@ -882,7 +1112,10 @@ pub fn process_page(src: &DynamicImage, s: &Settings) -> Vec<Page> {
     let src = &*erase_on_sheet(src, s);
     split_sheet(src, s)
         .into_iter()
-        .map(|(img, idx, zones, guides)| render(prepare(img, s, zones, guides), idx, s))
+        .map(|(img, idx, zones, guides)| {
+            let sp = for_part(s, idx);
+            render(prepare(img, sp, zones, guides), idx, sp)
+        })
         .collect()
 }
 
@@ -897,7 +1130,8 @@ pub fn measure_page(src: &DynamicImage, s: &Settings) -> Vec<Option<(f32, f32)>>
     let src = &*erase_on_sheet(src, s);
     split_sheet(src, s)
         .into_iter()
-        .map(|(img, _, zones, guides)| {
+        .map(|(img, idx, zones, guides)| {
+            let s = for_part(s, idx);
             let p = prepare(img, s, zones, guides);
             p.content.map(|r| {
                 let [ml, mt, mr, mb] = s.margins_mm;
@@ -928,6 +1162,16 @@ fn prepare(
     mut pictures: Vec<[f32; 5]>,
     mut guides: Guides,
 ) -> Prepared {
+    // --- keystone of this page (before anything else looks at it) ------------
+    if s.page_keystone.iter().any(|k| k.abs() >= 0.05) {
+        if let Some(flat) = crate::stage("page/keystone", || {
+            crate::perspective::keystone(&img, s.page_keystone[0], s.page_keystone[1], &mut guides)
+        }) {
+            img = flat;
+            // zones drawn on the page no longer lie where they were drawn
+            pictures.clear();
+        }
+    }
     // --- clean-up: fixes that make every later stage's job easier ----------
     if s.auto_invert {
         crate::stage("clean-up/invert-check", || {
@@ -2246,6 +2490,100 @@ mod tests {
         assert_eq!(sizes(&s), vec![1200, 1200]);
     }
 
+    /// A page of text bars (1200 x 1600 px, read at 150 dpi) bent by the opposite of a keystone
+    /// correction, as a page photographed at an angle would be.
+    fn bent_page(v: f32, h: f32) -> image::DynamicImage {
+        let mut g = image::RgbImage::from_pixel(1200, 1600, image::Rgb([255, 255, 255]));
+        for y in (150..1450).step_by(40) {
+            // words of 55 px with 12 px gaps (an unbroken bar would count as a ruled line)
+            for x in 150..1050 {
+                if (x - 150) % 67 < 55 {
+                    for dy in 0..12 {
+                        g.put_pixel(x, y + dy, image::Rgb([0, 0, 0]));
+                    }
+                }
+            }
+        }
+        let bent = crate::perspective::keystone(&g, -v, -h, &mut []).unwrap_or(g);
+        image::DynamicImage::ImageRgb8(bent)
+    }
+
+    fn guess(img: &image::DynamicImage) -> [f32; 2] {
+        let s = Settings {
+            dpi: 150,
+            split: SplitMode::Off,
+            auto_orient: false,
+            ..Settings::default()
+        };
+        detect_page_keystone(img, &s)[0].1
+    }
+
+    #[test]
+    fn auto_keystone_finds_the_bend_and_correcting_it_leaves_less() {
+        for (v, h) in [(0.0, 8.0), (0.0, -8.0), (4.0, 0.0), (-4.0, 0.0)] {
+            let img = bent_page(v, h);
+            let k = guess(&img);
+            // the estimate has the sign of the correction that straightens the page
+            assert!(
+                (v == 0.0 || k[0] * v > 0.0) && (h == 0.0 || k[1] * h > 0.0),
+                "bent by {v},{h}: guessed {k:?}"
+            );
+            // and applying it leaves less to correct than before
+            let fixed = crate::perspective::keystone(&img.to_rgb8(), k[0], k[1], &mut [])
+                .map(image::DynamicImage::ImageRgb8)
+                .unwrap_or(img.clone());
+            let after = guess(&fixed);
+            assert!(
+                after[0].abs() + after[1].abs() < k[0].abs() + k[1].abs(),
+                "bent by {v},{h}: guessed {k:?}, still {after:?}"
+            );
+        }
+        // a straight page gets nothing
+        assert_eq!(guess(&bent_page(0.0, 0.0)), [0.0, 0.0]);
+    }
+
+    #[test]
+    fn a_slanted_cut_line_gives_each_page_its_side_of_the_line() {
+        // 400 x 200 white sheet, cut at x = 200 leaning 10 degrees clockwise: at the top the
+        // line lies right of 200 (about 216), at the bottom left of it (about 183)
+        let mut img = image::RgbImage::from_pixel(400, 200, image::Rgb([255, 255, 255]));
+        for y in (0..10).chain(190..200) {
+            for x in 205..215 {
+                img.put_pixel(x, y, image::Rgb([0, 0, 0]));
+            }
+        }
+        let src = image::DynamicImage::ImageRgb8(img);
+        let s = Settings {
+            dpi: 300,
+            deskew: false,
+            auto_orient: false,
+            split: SplitMode::Middle,
+            sheet_split_frac: Some(0.5),
+            sheet_split_angle_deg: 10.0,
+            ..Settings::default()
+        };
+        let parts = split_sheet(&src, &s);
+        assert_eq!(parts.len(), 2);
+        let (l, r) = (&parts[0].0, &parts[1].0);
+        let reach = (100.0 * 10f32.to_radians().tan()).ceil() as u32;
+        assert_eq!(l.width(), 200 + reach);
+        assert_eq!(r.width(), 200 + reach);
+        let x_lo = 200 - reach;
+        // the block at the top is left of the line: the left page keeps it, the right page not
+        assert_eq!(l.get_pixel(210, 5)[0], 0);
+        assert_eq!(r.get_pixel(210 - x_lo, 5)[0], 255);
+        // the block at the bottom is right of the line: the other way round
+        assert_eq!(l.get_pixel(210, 195)[0], 255);
+        assert_eq!(r.get_pixel(210 - x_lo, 195)[0], 0);
+        // no lean: the ordinary straight cut
+        let straight = Settings {
+            sheet_split_angle_deg: 0.0,
+            ..s
+        };
+        let parts = split_sheet(&src, &straight);
+        assert_eq!(parts[0].0.width(), 200);
+    }
+
     #[test]
     fn a_dragged_cut_line_also_works_on_a_sheet_turned_by_a_quarter() {
         // the same 25 % cut on a sheet turned by 90 or 270 degrees: the pages lie one above the
@@ -2860,6 +3198,18 @@ mod tests {
                 } else {
                     None
                 },
+                // includes values outside ±20 and a nan, which the settings check must absorb
+                sheet_split_angle_deg: match rnd(5) {
+                    0 => rnd(60) as f32 - 30.0,
+                    1 => f32::NAN,
+                    _ => 0.0,
+                },
+                sheet_keystone: [
+                    rnd(40) as f32 - 20.0,
+                    if rnd(6) == 0 { f32::NAN } else { 0.0 },
+                ],
+                page_keystone: [rnd(30) as f32 - 15.0, 0.0],
+                part_settings: [None, None],
                 sheet_picture_zones: if rnd(3) == 0 {
                     vec![[
                         rnd(300) as f32 - 50.0,

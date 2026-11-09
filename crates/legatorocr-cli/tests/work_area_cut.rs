@@ -104,3 +104,53 @@ fn work_area_blanks_the_stray_block_and_cut_at_moves_the_cut() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn slanted_cut_keystone_and_paper_names_work_from_the_command_line() {
+    let dir = std::env::temp_dir().join(format!("lgr_slant_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    sheet(&dir);
+    // a cut at the middle leaning 8 degrees: each page grows by the lean over half the height
+    let out = run(
+        &dir,
+        &[
+            "--split",
+            "middle",
+            "--cut-at",
+            "0.5",
+            "--cut-angle",
+            "8",
+            "--page-size",
+            "b5",
+            "-o",
+            "slant",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // B5 at 300 dpi: 176 x 250 mm = 2079 x 2953 px
+    let l = image::open(dir.join("slant/s_L.png")).unwrap();
+    assert_eq!((l.width(), l.height()), (2079, 2953));
+    // values outside the range are refused with a message that names the option
+    let out = run(&dir, &["--cut-angle", "45", "-o", "bad"]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cut-angle"));
+    let out = run(&dir, &["--keystone-v", "99", "-o", "bad"]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("keystone"));
+    // a keystone correction runs end to end
+    let out = run(
+        &dir,
+        &["--keystone-v", "6", "--keystone-h", "-4", "-o", "key"],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
