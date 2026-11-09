@@ -22,7 +22,7 @@ pub struct Entry {
     pub name: String,
     method: usize,
     csize: usize,
-    usize_: usize,
+    pub usize_: usize,
     local: usize,
     crc: u32,
     flags: usize,

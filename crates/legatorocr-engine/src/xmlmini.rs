@@ -77,10 +77,18 @@ impl std::fmt::Display for XmlError {
     }
 }
 
+/// Deepest element nesting accepted (the tree walkers recurse once per level).
+pub const MAX_DEPTH: usize = 256;
+/// Most bytes all internal entity references of one document may expand to.
+pub const MAX_ENTITY_EXPANSION: usize = 1 << 20;
+
 struct P<'a> {
     s: &'a str,
     i: usize,
     entities: BTreeMap<String, String>,
+    /// Bytes produced so far by internal entity references.
+    expanded: usize,
+    depth: usize,
     doc: Doc,
 }
 
@@ -136,7 +144,7 @@ impl<'a> P<'a> {
         }
     }
 
-    fn decode(&self, raw: &str, in_attr: bool) -> Result<String, XmlError> {
+    fn decode(&mut self, raw: &str, in_attr: bool) -> Result<String, XmlError> {
         let mut out = String::new();
         let mut rest = raw;
         while let Some(k) = rest.find('&') {
@@ -163,7 +171,7 @@ impl<'a> P<'a> {
                         _ => return err(self, "a character reference is not a legal character"),
                     }
                 }
-                _ => match self.entities.get(ent) {
+                _ => match self.entities.get(ent).cloned() {
                     Some(v) => {
                         if v.contains('&') {
                             return err(self, "an entity inside an entity is not expanded");
@@ -171,7 +179,14 @@ impl<'a> P<'a> {
                         if v.contains('<') && in_attr {
                             return err(self, "< in an attribute value");
                         }
-                        out.push_str(v);
+                        self.expanded = self.expanded.saturating_add(v.len());
+                        if self.expanded > MAX_ENTITY_EXPANSION {
+                            return err(
+                                self,
+                                "entity references expand to more than 1 MiB in total",
+                            );
+                        }
+                        out.push_str(&v);
                     }
                     None => return err(self, &format!("entity &{ent}; is not declared")),
                 },
@@ -261,6 +276,19 @@ impl<'a> P<'a> {
 
     fn element(&mut self, scopes: &mut Vec<BTreeMap<String, String>>) -> Result<Node, XmlError> {
         // at '<'
+        if self.depth >= MAX_DEPTH {
+            return err(self, "elements are nested more than 256 levels deep");
+        }
+        self.depth += 1;
+        let r = self.element_inner(scopes);
+        self.depth -= 1;
+        r
+    }
+
+    fn element_inner(
+        &mut self,
+        scopes: &mut Vec<BTreeMap<String, String>>,
+    ) -> Result<Node, XmlError> {
         self.i += 1;
         let qname = self.name()?.to_string();
         let mut attrs: Vec<(String, String)> = Vec::new();
@@ -411,6 +439,8 @@ pub fn parse(s: &str) -> Result<Doc, XmlError> {
         s,
         i: 0,
         entities: BTreeMap::new(),
+        expanded: 0,
+        depth: 0,
         doc: Doc::default(),
     };
     p.xml_decl()?;

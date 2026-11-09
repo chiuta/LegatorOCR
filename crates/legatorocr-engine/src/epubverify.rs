@@ -6,7 +6,13 @@
 
 use crate::xmlmini::{self, Doc, Node};
 use crate::zipmini;
-use std::collections::{BTreeMap, BTreeSet};
+use std::cell::{Cell, RefCell};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::rc::Rc;
+
+/// Most bytes of members the checker inflates and parses for one EPUB, counting every use of
+/// a member (a hostile manifest can list one small, highly compressed member many times).
+const MAX_INFLATED_TOTAL: u64 = 128 << 20;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
@@ -265,8 +271,43 @@ pub fn check(data: &[u8]) -> Report {
     };
     let members: BTreeMap<&str, &zipmini::Entry> =
         list.iter().map(|e| (e.name.as_str(), e)).collect();
-    let read =
-        |name: &str| -> Option<Vec<u8>> { members.get(name).and_then(|e| zipmini::read(data, e)) };
+    // Each member is inflated at most once; every use of a cached member still counts
+    // against the total budget.
+    let cache: RefCell<HashMap<String, Option<Rc<Vec<u8>>>>> = RefCell::new(HashMap::new());
+    let used = Cell::new(0u64);
+    let over_budget = Cell::new(false);
+    let fetch = |name: &str, count_hit: bool| -> Option<Rc<Vec<u8>>> {
+        let e = members.get(name)?;
+        let hit = cache.borrow().get(name).cloned();
+        let got = match hit {
+            Some(g) => {
+                if count_hit {
+                    if let Some(b) = &g {
+                        used.set(used.get().saturating_add(b.len() as u64));
+                    }
+                }
+                g
+            }
+            None => {
+                if used.get().saturating_add(e.usize_ as u64) > MAX_INFLATED_TOTAL {
+                    over_budget.set(true);
+                    return None;
+                }
+                let g = zipmini::read(data, e).map(Rc::new);
+                if let Some(b) = &g {
+                    used.set(used.get().saturating_add(b.len() as u64));
+                }
+                cache.borrow_mut().insert(name.to_string(), g.clone());
+                g
+            }
+        };
+        if used.get() > MAX_INFLATED_TOTAL {
+            over_budget.set(true);
+            return None;
+        }
+        got
+    };
+    let read = |name: &str| fetch(name, true);
 
     if !members.contains_key("mimetype") {
         cx.err(
@@ -441,7 +482,13 @@ pub fn check(data: &[u8]) -> Report {
             continue;
         }
         let path = resolve(&opf_dir, &percent_decode(h));
-        match read(&path) {
+        let got = if is_xml_type(mt) {
+            read(&path)
+        } else {
+            fetch(&path, false)
+        };
+        match got {
+            None if over_budget.get() => {}
             None => cx.err(
                 &opf_path,
                 format!("manifest item {path:?} is a member of the container (EPUB 3.3, 3.6)"),
@@ -617,6 +664,12 @@ pub fn check(data: &[u8]) -> Report {
                 }
             }
         }
+    }
+    if over_budget.get() {
+        cx.err(
+            "archive",
+            "the members to be checked inflate to more than 128 MiB in total; the check was cut short",
+        );
     }
     Report {
         findings: cx.findings,
@@ -964,5 +1017,64 @@ mod tests {
         assert_eq!(e.len(), 1, "{:?}", r.findings);
         assert!(e[0].contains("accessibilityHazard"));
         assert_eq!(r.conformance, Conformance::NotDeclared);
+    }
+
+    #[test]
+    fn deeply_nested_navigation_is_an_error_not_a_stack_overflow() {
+        let mut b = Book::good();
+        b.nav_pl = "<div>".repeat(200_000);
+        let r = check(&b.bytes());
+        assert!(
+            msgs(&r, Level::Error)
+                .iter()
+                .any(|m| m.contains("nested more than 256")),
+            "{:?}",
+            r.findings
+        );
+    }
+
+    #[test]
+    fn entity_expansion_is_bounded_in_total() {
+        let mut b = Book::good();
+        let value = "A".repeat(600 << 10);
+        b.content = format!(
+            "<!DOCTYPE html [<!ENTITY e \"{value}\">]>{}",
+            CONTENT.replace("__MARK__", &"<p>&e;</p>".repeat(50_000))
+        );
+        let r = check(&b.bytes());
+        assert!(
+            msgs(&r, Level::Error)
+                .iter()
+                .any(|m| m.contains("expand to more than 1 MiB")),
+            "{:?}",
+            r.findings
+        );
+        // a single reference stays fine
+        let mut ok = Book::good();
+        ok.content = b.content.replace(&"<p>&e;</p>".repeat(50_000), "<p>&e;</p>");
+        let r = check(&ok.bytes());
+        assert!(msgs(&r, Level::Error).is_empty(), "{:?}", r.findings);
+    }
+
+    #[test]
+    fn one_big_member_listed_many_times_is_cut_short() {
+        let mut b = Book::good();
+        b.extra_members
+            .push(("OEBPS/big.xhtml".into(), vec![0u8; 48 << 20]));
+        for k in 0..40 {
+            b.manifest_extra.push_str(&format!(
+                "<item id=\"b{k}\" href=\"big.xhtml\" media-type=\"application/xhtml+xml\"/>"
+            ));
+        }
+        let t = std::time::Instant::now();
+        let r = check(&b.bytes());
+        assert!(
+            msgs(&r, Level::Error)
+                .iter()
+                .any(|m| m.contains("more than 128 MiB in total")),
+            "{:?}",
+            r.findings
+        );
+        assert!(t.elapsed().as_secs() < 60);
     }
 }
