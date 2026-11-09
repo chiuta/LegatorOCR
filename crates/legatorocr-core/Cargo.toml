@@ -1,6 +1,6 @@
 [package]
 name = "legatorocr-core"
-description = "LegatorOCR core: clean-room scanned-page post-processing pipeline (orientation, page split, deskew, content selection, margins, binarization)"
+description = "LegatorOCR core: scanned-page post-processing pipeline (orientation, page split, deskew, content selection, margins, binarization)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

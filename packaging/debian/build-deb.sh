@@ -21,7 +21,7 @@ Depends: libc6, libgcc-s1
 Recommends: tesseract-ocr
 Homepage: https://github.com/chiuta/LegatorOCR
 Description: scan post-processing, PDF export and OCR
- Clean-room command-line tool: deskew, page split, content selection,
+ Command-line tool: deskew, page split, content selection,
  binarisation, PDF export and OCR.
 C
 dpkg-deb --root-owner-group --build "$R" "$OUT/legatorocr_${V}_$(dpkg --print-architecture).deb"

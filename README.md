@@ -6,7 +6,7 @@ Version: 0.2.0-pre.38 · Last updated: 2026-11-08
 
 Presentation site: <https://legatorocr.chiuta.ro> (source in `docs/`).
 
-Clean-room Rust post-processor for scanned books:
+Independently implemented Rust post-processor for scanned books:
 **split → deskew → crop → margins → clean / binarize → PDF with a searchable OCR text layer.**
 Same *workflow* as classic scan-tailoring tools, independent code. Graphical interface
 (Windows, macOS, Linux) and command line.
@@ -267,13 +267,17 @@ workflow), the editable Word export (what ABBYY FineReader is used for) and the 
 published workflow and tool recommendations. Only the *workflow ideas* were taken; no code of ABBYY, Agent Ransack, DocFetcher
 or PDF24 was consulted.
 
-## Clean-room statement
+## Provenance statement
+
+LegatorOCR is an independent implementation, not a documented clean-room one: no two-team procedure was applied and the repository history is not a record of one. See `docs/clean-room/PROVENANCE.md`.
 
 Algorithms were written from general image-processing knowledge (Sauvola, projection profiles,
 connected components) and the publicly described workflow. For `COMPARISON.md` only public
-feature lists and release notes of other tools were read; no source code of any existing
-scan-processing tool was consulted or copied. Before commercial release, do your own due
+feature lists and release notes of other tools were read; the development sessions reviewed show no use of source code of any existing
+scan-processing tool, and none was copied. Before commercial release, do your own due
 diligence, including a trademark search for the name.
+
+The built-in OCR model (`multi.lnm`) was trained in part on scans of a magazine and a 1960 manual whose rights are not documented; see `docs/clean-room/PROVENANCE.md` before redistributing the model commercially.
 
 MIT licensed. Dependencies and embedded fonts: see `THIRD_PARTY_LICENSES.md`. The built-in OCR engine ships word lists
 derived from the *wordfreq* data (**CC BY-SA 4.0**, attribution in `crates/legatorocr-nocr/lexicons/README.md` and in the release

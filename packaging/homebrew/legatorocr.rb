@@ -2,7 +2,7 @@
 # replace the sha256 when the tag is published. `:recommended` is allowed in a tap but not in
 # Homebrew/homebrew-core; core also calls a bare `--version` test weak (Formula Cookbook, read 2026-11-04).
 class Legatorocr < Formula
-  desc "Clean-room scan post-processing, PDF export and OCR"
+  desc "Scan post-processing, PDF export and OCR"
   homepage "https://github.com/chiuta/LegatorOCR"
   url "https://github.com/chiuta/LegatorOCR/archive/refs/tags/v0.2.0.tar.gz"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"

@@ -15,7 +15,7 @@ PackageLocale: en-US
 Publisher: Alexandru-Ionuț Chiuță
 PackageName: LegatorOCR
 License: MIT
-ShortDescription: Clean-room scan post-processing, PDF export and OCR
+ShortDescription: Scan post-processing, PDF export and OCR
 Installers:
   - Architecture: x64
     InstallerType: zip

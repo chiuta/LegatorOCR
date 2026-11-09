@@ -6,7 +6,7 @@ Version: 0.2.0-pre.38 · Letzte Aktualisierung: 2026-11-08
 
 Präsentationsseite: <https://legatorocr.chiuta.ro> (Quellcode in `docs/`).
 
-Clean-Room-Nachbearbeitung in Rust für gescannte Bücher:
+Unabhängig implementierte Nachbearbeitung in Rust für gescannte Bücher:
 **teilen → Schräglage korrigieren → zuschneiden → Ränder → bereinigen / binarisieren → PDF mit durchsuchbarer OCR-Textebene.**
 Derselbe *Arbeitsablauf* wie bei klassischen Scan-Tailoring-Werkzeugen, aber unabhängiger Code. Grafische Oberfläche
 (Windows, macOS, Linux) und Kommandozeile.
@@ -259,7 +259,9 @@ Arbeitsablauf erfüllen), der bearbeitbare Word-Export (wofür ABBYY FineReader 
 veröffentlichten Arbeitsablauf und seinen Werkzeugempfehlungen. Übernommen wurden nur die *Ideen zum Arbeitsablauf*; es wurde kein Code von ABBYY, Agent Ransack, DocFetcher
 oder PDF24 konsultiert.
 
-## Clean-Room-Erklärung
+## Herkunftserklärung
+
+LegatorOCR ist eine **unabhängige Implementierung**, kein dokumentiertes Clean-Room-Projekt: Es wurde kein Verfahren mit getrennten Teams angewandt, und der Verlauf des Repositorys belegt keines. Siehe `docs/clean-room/PROVENANCE.md`. Das eingebaute OCR-Modell (`multi.lnm`) wurde teilweise mit Scans einer Zeitschrift und eines Handbuchs von 1960 trainiert, deren Rechte nicht dokumentiert sind; prüfen Sie dies vor einer kommerziellen Weitergabe des Modells.
 
 Die Algorithmen wurden aus allgemeinem Wissen der Bildverarbeitung (Sauvola, Projektionsprofile,
 zusammenhängende Komponenten) und dem öffentlich beschriebenen Arbeitsablauf geschrieben. Für `COMPARISON.md` wurden nur öffentliche

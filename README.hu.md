@@ -6,7 +6,7 @@ Verzió: 0.2.0-pre.38 · Utolsó frissítés: 2026-11-08
 
 Bemutatóoldal: <https://legatorocr.chiuta.ro> (a forrás a `docs/` mappában van).
 
-Clean-room (tiszta szobás) Rust utófeldolgozó beszkennelt könyvekhez:
+Független Rust utófeldolgozó beszkennelt könyvekhez:
 **szétválasztás → ferdeség-korrekció → vágás → margók → tisztítás / binarizálás → PDF kereshető OCR-szövegréteggel.**
 Ugyanaz a *munkafolyamat*, mint a klasszikus szkennelés-utómunkáló eszközöké, de független kóddal. Grafikus felület
 (Windows, macOS, Linux) és parancssor.
@@ -259,7 +259,9 @@ munkafolyamatában), a szerkeszthető Word-export (amire az ABBYY FineReadert ha
 közzétett munkafolyamatát és eszközajánlásait követi. Csak a *munkafolyamat-ötleteket* vettük át; az ABBYY, az Agent Ransack, a DocFetcher
 vagy a PDF24 kódját nem tanulmányoztuk.
 
-## Clean-room nyilatkozat
+## Származási nyilatkozat
+
+A LegatorOCR **független megvalósítás**, nem dokumentált clean-room projekt: nem alkalmaztak külön csapatos eljárást, és a tároló története sem igazol ilyet. Lásd: `docs/clean-room/PROVENANCE.md`. A beépített OCR-modellt (`multi.lnm`) részben egy folyóirat és egy 1960-as kézikönyv szkennelt lapjain tanították, amelyek jogai nem dokumentáltak; a modell kereskedelmi terjesztése előtt ellenőrizze ezt.
 
 Az algoritmusok általános képfeldolgozási ismeretekből (Sauvola, vetületi profilok,
 összefüggő komponensek) és a nyilvánosan leírt munkafolyamatból íródtak. A `COMPARISON.md`-hez csak más eszközök nyilvános
