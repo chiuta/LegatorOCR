@@ -41,3 +41,11 @@ Fiecare punct: spec, ce lipsește, ce s-a făcut în cod până la răspuns.
 3. Validarea față de schema TEI nu s-a făcut; testele verifică bună-formare, unicitatea identificatorilor și rezolvarea legăturilor.
 4. Imaginea legată este pagina prelucrată (după îndreptare/decupare), scrisă ca PNG de program în DIR; nu originalul. Atribute de dimensiune pe `graphic` nu s-au scris (nu sunt în spec).
 5. Zone doar pentru paragrafe, titluri și tabele; figuri nu există în modelul de blocuri, deci nu au zone. Rectangle-ul unui bloc este încadrarea cuvintelor lui (reuniunea liniilor).
+
+## 07 dnssd-descoperire
+1. Transportul (mDNS, RFC 6762) nu a fost citit: nicio interogare nu se trimite; nu există opțiune CLI și nu s-a legat de `--scan-escl`. Tipul de serviciu al scannerelor și cheile TXT: necunoscute. Implementat doar modulul logic `dnssd` (nume, TXT, SRV/PTR/adrese -> listă), cu teste; **parțial**.
+2. Normalizarea NFC a numelui de instanță: nu se aplică (ar cere tabele Unicode); doar lungime (63 de octeți) și caractere de control.
+3. SRV cu port 0: spec-ul zice și „port 0, pondere 0, prioritate 0 = substituent", și testul 6 „port 0 → nu se afișează"; codul ascunde orice port 0. Alegerea între SRV-uri: prioritate minimă, apoi pondere maximă (deterministă, nu aleatoare cum cere ponderarea clasică).
+4. Cheile TXT invalide (goale sau cu caractere neimprimabile) sunt omise; „ghilimele" în valori nu sunt tratate.
+5. Duplicatele pe interfețe: instanța e comparată după nume fără diferență de majuscule ASCII, adresele unite (regula pe interfețe: [necunoscut]).
+6. Compatibilitatea cu modul offline/sigilat: decizia omului ([necunoscut]); modulul nu face rețea.

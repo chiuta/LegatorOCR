@@ -25,6 +25,7 @@ pub mod checksums;
 pub mod classify;
 pub mod corrections;
 pub mod djvu;
+pub mod dnssd;
 pub mod doctor;
 pub mod docx;
 pub mod doubtful;
