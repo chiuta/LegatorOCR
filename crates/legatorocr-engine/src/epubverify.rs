@@ -1051,7 +1051,9 @@ mod tests {
         );
         // a single reference stays fine
         let mut ok = Book::good();
-        ok.content = b.content.replace(&"<p>&e;</p>".repeat(50_000), "<p>&e;</p>");
+        ok.content = b
+            .content
+            .replace(&"<p>&e;</p>".repeat(50_000), "<p>&e;</p>");
         let r = check(&ok.bytes());
         assert!(msgs(&r, Level::Error).is_empty(), "{:?}", r.findings);
     }
