@@ -116,6 +116,7 @@ pub fn sign_pdf(
     reason: Option<&str>,
     tsa_url: Option<&str>,
     visible: Option<&Visible>,
+    pades: bool,
 ) -> Result<()> {
     let data = std::fs::read(input).with_context(|| format!("reading {}", input.display()))?;
     if openssl_program().is_none() {
@@ -177,28 +178,40 @@ pub fn sign_pdf(
     let content = tmp.0.join("content.bin");
     std::fs::write(&content, prepared.signed_data())?;
     let der = tmp.0.join("sig.der");
-    let mut cmd = openssl();
-    cmd.args([
-        "cms", "-sign", "-binary", "-md", "sha256", "-cades", "-outform", "DER", "-in",
-    ])
-    .arg(&content)
-    .arg("-signer")
-    .arg(&pem)
-    .arg("-inkey")
-    .arg(&pem);
-    if has_chain {
-        cmd.arg("-certfile").arg(&chain);
-    }
-    let st = cmd
-        .arg("-out")
-        .arg(&der)
-        .output()
-        .context("cannot run openssl")?;
-    if !st.status.success() {
-        bail!(
-            "openssl cms -sign failed: {}",
-            String::from_utf8_lossy(&st.stderr).trim()
-        );
+    if pades {
+        // PAdES baseline: no signing-time attribute, which `openssl cms` always adds; the CMS
+        // structure is written here and openssl only makes the raw signature
+        let cms = pades_cms(
+            &tmp.0,
+            &pem,
+            has_chain.then_some(chain.as_path()),
+            &prepared.signed_data(),
+        )?;
+        std::fs::write(&der, cms)?;
+    } else {
+        let mut cmd = openssl();
+        cmd.args([
+            "cms", "-sign", "-binary", "-md", "sha256", "-cades", "-outform", "DER", "-in",
+        ])
+        .arg(&content)
+        .arg("-signer")
+        .arg(&pem)
+        .arg("-inkey")
+        .arg(&pem);
+        if has_chain {
+            cmd.arg("-certfile").arg(&chain);
+        }
+        let st = cmd
+            .arg("-out")
+            .arg(&der)
+            .output()
+            .context("cannot run openssl")?;
+        if !st.status.success() {
+            bail!(
+                "openssl cms -sign failed: {}",
+                String::from_utf8_lossy(&st.stderr).trim()
+            );
+        }
     }
     let mut cms = std::fs::read(&der)?;
     if let Some(url) = tsa_url {
@@ -212,6 +225,207 @@ pub fn sign_pdf(
     let signed = prepared.embed(&cms).map_err(|e| anyhow::anyhow!("{e}"))?;
     std::fs::write(output, signed)?;
     Ok(())
+}
+
+// ---- PAdES baseline signature without the signing-time attribute ----
+
+const OID_SIGNED_DATA: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x02];
+const OID_DATA: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x01];
+const OID_SHA256: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01];
+const OID_CONTENT_TYPE: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09, 0x03];
+const OID_MESSAGE_DIGEST: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09, 0x04];
+const OID_SIGNING_CERT_V2: &[u8] = &[
+    0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09, 0x10, 0x02, 0x2F,
+];
+const OID_RSA_ENC: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01];
+const OID_SHA256_RSA: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B];
+const OID_EC_PUBKEY: &[u8] = &[0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01];
+const OID_ECDSA_SHA256: &[u8] = &[0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x02];
+
+fn alg_id(oid: &[u8], null_params: bool) -> Vec<u8> {
+    let mut b = der_tlv(0x06, oid);
+    if null_params {
+        b.extend([0x05, 0x00]);
+    }
+    der_tlv(0x30, &b)
+}
+
+fn pem_blocks_der(pem: &str) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut cur: Option<String> = None;
+    for l in pem.lines() {
+        let l = l.trim();
+        if l == "-----BEGIN CERTIFICATE-----" {
+            cur = Some(String::new());
+        } else if l == "-----END CERTIFICATE-----" {
+            if let Some(b) = cur.take() {
+                if let Some(d) = b64_decode(&b) {
+                    out.push(d);
+                }
+            }
+        } else if let Some(b) = cur.as_mut() {
+            b.push_str(l);
+        }
+    }
+    out
+}
+
+fn b64_decode(s: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let (mut acc, mut bits) = (0u32, 0u32);
+    for c in s.bytes() {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' => break,
+            _ => return None,
+        };
+        acc = (acc << 6) | v as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    Some(out)
+}
+
+/// What the CMS needs from the signer's certificate: issuer Name, serial INTEGER (both whole
+/// DER elements) and whether the key is RSA or EC.
+struct CertParts {
+    issuer: Vec<u8>,
+    serial: Vec<u8>,
+    ec: bool,
+}
+
+fn cert_parts(cert: &[u8]) -> Option<CertParts> {
+    let c = children(body_of(cert)?)?; // tbs, sigalg, sig
+    let tbs = children(body_of(&c.first()?.1)?)?;
+    let mut i = 0;
+    if tbs.first()?.0 == 0xA0 {
+        i = 1; // explicit version
+    }
+    let serial = tbs.get(i)?.1.clone();
+    let issuer = tbs.get(i + 2)?.1.clone();
+    let spki = children(body_of(&tbs.get(i + 5)?.1)?)?;
+    let alg = children(body_of(&spki.first()?.1)?)?;
+    let oid = body_of(&alg.first()?.1)?;
+    let ec = if oid == OID_EC_PUBKEY {
+        true
+    } else if oid == OID_RSA_ENC {
+        false
+    } else {
+        return None;
+    };
+    Some(CertParts { issuer, serial, ec })
+}
+
+/// Build the DER CMS of a PAdES baseline signature over `content`: signed attributes are the
+/// content type, the message digest and the signing certificate (version 2, SHA-256); no
+/// signing-time attribute. The signature over the attributes is made by `openssl dgst -sign`.
+fn pades_cms(dir: &Path, pem: &Path, chain: Option<&Path>, content: &[u8]) -> Result<Vec<u8>> {
+    let cert_der_path = dir.join("signer.der");
+    let st = openssl()
+        .args(["x509", "-outform", "DER", "-in"])
+        .arg(pem)
+        .arg("-out")
+        .arg(&cert_der_path)
+        .output()
+        .context("cannot run openssl")?;
+    if !st.status.success() {
+        bail!(
+            "openssl could not read the signer certificate: {}",
+            String::from_utf8_lossy(&st.stderr).trim()
+        );
+    }
+    let cert = std::fs::read(&cert_der_path)?;
+    let parts = cert_parts(&cert).context(
+        "the signer certificate has a key type this option does not handle (RSA or EC only)",
+    )?;
+    // signed attributes
+    let attr = |oid: &[u8], value: Vec<u8>| {
+        der_tlv(0x30, &[der_tlv(0x06, oid), der_tlv(0x31, &value)].concat())
+    };
+    let digest = legatorocr_pdf::crypt::sha256(content);
+    let cert_hash = legatorocr_pdf::crypt::sha256(&cert);
+    let issuer_serial = der_tlv(
+        0x30,
+        &[
+            der_tlv(0x30, &der_tlv(0xA4, &parts.issuer)),
+            parts.serial.clone(),
+        ]
+        .concat(),
+    );
+    let ess = der_tlv(0x30, &[der_tlv(0x04, &cert_hash), issuer_serial].concat());
+    let signing_cert = der_tlv(0x30, &der_tlv(0x30, &ess));
+    let mut attrs = vec![
+        attr(OID_CONTENT_TYPE, der_tlv(0x06, OID_DATA)),
+        attr(OID_MESSAGE_DIGEST, der_tlv(0x04, &digest)),
+        attr(OID_SIGNING_CERT_V2, signing_cert),
+    ];
+    attrs.sort(); // DER SET OF: ordered by encoding
+    let attrs_body = attrs.concat();
+    let to_sign = der_tlv(0x31, &attrs_body);
+    let tbs_path = dir.join("attrs.der");
+    std::fs::write(&tbs_path, &to_sign)?;
+    let sig_path = dir.join("attrs.sig");
+    let st = openssl()
+        .args(["dgst", "-sha256", "-sign"])
+        .arg(pem)
+        .arg("-out")
+        .arg(&sig_path)
+        .arg(&tbs_path)
+        .output()
+        .context("cannot run openssl")?;
+    if !st.status.success() {
+        bail!(
+            "openssl dgst -sign failed: {}",
+            String::from_utf8_lossy(&st.stderr).trim()
+        );
+    }
+    let sig = std::fs::read(&sig_path)?;
+    let sig_alg = if parts.ec {
+        alg_id(OID_ECDSA_SHA256, false)
+    } else {
+        alg_id(OID_SHA256_RSA, true)
+    };
+    let signer_info = der_tlv(
+        0x30,
+        &[
+            vec![0x02, 0x01, 0x01],
+            der_tlv(0x30, &[parts.issuer.clone(), parts.serial.clone()].concat()),
+            alg_id(OID_SHA256, true),
+            der_tlv(0xA0, &attrs_body),
+            sig_alg,
+            der_tlv(0x04, &sig),
+        ]
+        .concat(),
+    );
+    let mut certs = cert.clone();
+    if let Some(c) = chain {
+        for x in pem_blocks_der(&std::fs::read_to_string(c).unwrap_or_default()) {
+            certs.extend(x);
+        }
+    }
+    let signed_data = der_tlv(
+        0x30,
+        &[
+            vec![0x02, 0x01, 0x01],
+            der_tlv(0x31, &alg_id(OID_SHA256, true)),
+            der_tlv(0x30, &der_tlv(0x06, OID_DATA)),
+            der_tlv(0xA0, &certs),
+            der_tlv(0x31, &signer_info),
+        ]
+        .concat(),
+    );
+    Ok(der_tlv(
+        0x30,
+        &[der_tlv(0x06, OID_SIGNED_DATA), der_tlv(0xA0, &signed_data)].concat(),
+    ))
 }
 
 // ---- minimal DER helpers for PAdES-B-T ----
@@ -540,6 +754,7 @@ mod tests {
             Some("Approved"),
             None,
             None,
+            false,
         )
         .unwrap();
         let r = verify_pdf(&d.join("out.pdf"), Some(&d.join("c.pem")), None).unwrap();
@@ -562,7 +777,8 @@ mod tests {
             None,
             None,
             None,
-            None
+            None,
+            false
         )
         .is_err());
     }
