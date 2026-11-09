@@ -39,20 +39,24 @@ impl Dec {
     }
 
     fn lift(self, s: u32) -> i128 {
-        self.m * 10i128.pow(s - self.s)
+        let f = 10i128.checked_pow(s - self.s).unwrap_or_else(overflowed);
+        self.m.checked_mul(f).unwrap_or_else(overflowed)
     }
 
     pub fn plus(self, o: Dec) -> Dec {
         let s = self.s.max(o.s);
         Dec {
-            m: self.lift(s) + o.lift(s),
+            m: self
+                .lift(s)
+                .checked_add(o.lift(s))
+                .unwrap_or_else(overflowed),
             s,
         }
     }
 
     pub fn negated(self) -> Dec {
         Dec {
-            m: -self.m,
+            m: self.m.checked_neg().unwrap_or_else(overflowed),
             s: self.s,
         }
     }
@@ -72,7 +76,7 @@ impl Dec {
 
     fn abs_le(self, limit: Dec) -> bool {
         let s = self.s.max(limit.s);
-        self.lift(s).abs() <= limit.lift(s)
+        self.lift(s).saturating_abs() <= limit.lift(s)
     }
 
     /// Number of decimals the value really needs (trailing zeros do not count).
@@ -88,7 +92,7 @@ impl Dec {
     /// `self * rate / 100`, exact.
     pub fn percent(self, rate: Dec) -> Dec {
         Dec {
-            m: self.m * rate.m,
+            m: self.m.checked_mul(rate.m).unwrap_or_else(overflowed),
             s: self.s + rate.s + 2,
         }
     }
@@ -100,8 +104,8 @@ impl std::fmt::Display for Dec {
         let want = self.decimals().max(2);
         let v = self.lift(want.max(self.s));
         let s = want.max(self.s);
-        let (sign, a) = (if v < 0 { "-" } else { "" }, v.abs());
-        let p = 10i128.pow(s);
+        let (sign, a) = (if v < 0 { "-" } else { "" }, v.unsigned_abs());
+        let p = 10u128.pow(s.min(38));
         write!(f, "{sign}{}.{:0w$}", a / p, a % p, w = s as usize)
     }
 }
@@ -290,8 +294,33 @@ fn present(o: &Option<String>) -> bool {
     o.as_deref().is_some_and(|v| !v.trim().is_empty())
 }
 
+thread_local! {
+    static OVERFLOW: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Called when an amount computation does not fit; the result is marked, not trusted.
+fn overflowed() -> i128 {
+    OVERFLOW.with(|o| o.set(true));
+    0
+}
+
 /// Apply every rule this program knows to `s`; each violated rule is reported on its own.
+/// Amounts so large that a sum or product does not fit in 38 digits are one `NUMBER` violation.
 pub fn check(s: &Semantic) -> Vec<Violation> {
+    OVERFLOW.with(|o| o.set(false));
+    let v = check_rules(s);
+    if OVERFLOW.with(|o| o.replace(false)) {
+        return vec![Violation {
+            rule: "NUMBER".into(),
+            fields: Vec::new(),
+            found: "amounts whose sums or products exceed 38 digits".into(),
+            expected: "amounts that can be added and multiplied exactly".into(),
+        }];
+    }
+    v
+}
+
+fn check_rules(s: &Semantic) -> Vec<Violation> {
     let mut c = Ctx { s, out: Vec::new() };
     for (rule, bt) in [
         ("BR-01", "BT-24"),
@@ -870,5 +899,27 @@ mod tests {
             "",
         );
         assert!(rules(&from_ubl(&no_lines).unwrap()).contains(&"BR-16".to_string()));
+    }
+
+    #[test]
+    fn huge_amounts_are_a_number_violation_not_an_overflow_panic() {
+        let mut s = good();
+        let base = s.lines[0].clone();
+        s.lines.clear();
+        for _ in 0..2500 {
+            s.lines.push(SemLine {
+                net_amount: Some("999999999999999999".into()),
+                ..base.clone()
+            });
+        }
+        s.lines.push(SemLine {
+            net_amount: Some("0.12345678901234567".into()),
+            ..base
+        });
+        let v = check(&s);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert_eq!(v[0].rule, "NUMBER");
+        // the flag does not leak into the next check
+        assert!(check(&good()).is_empty());
     }
 }

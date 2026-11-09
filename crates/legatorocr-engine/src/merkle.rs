@@ -42,7 +42,7 @@ fn node(l: &[u8], r: &[u8]) -> Hash {
 fn split(n: usize) -> usize {
     // largest power of two strictly below n (n >= 2)
     let mut k = 1;
-    while k * 2 < n {
+    while k < n - k {
         k *= 2;
     }
     k
@@ -533,5 +533,14 @@ mod tests {
             check_consistency_hex(2, 3, &hex(&root(&lo)), &hex(&root(&ln)), &hexp),
             Ok(())
         );
+    }
+
+    #[test]
+    fn split_does_not_overflow_for_huge_sizes() {
+        assert_eq!(split(usize::MAX), 1usize << (usize::BITS - 1));
+        assert_eq!(split(2), 1);
+        assert_eq!(split(3), 2);
+        assert_eq!(split(8), 4);
+        assert_eq!(split(9), 8);
     }
 }

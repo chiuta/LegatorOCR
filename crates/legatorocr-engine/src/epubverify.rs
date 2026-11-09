@@ -235,12 +235,13 @@ fn resolve(base_dir: &str, href: &str) -> String {
 
 fn percent_decode(s: &str) -> String {
     let b = s.as_bytes();
+    let hex = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
     let mut out = Vec::new();
     let mut i = 0;
     while i < b.len() {
         if b[i] == b'%' && i + 2 < b.len() {
-            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                out.push(v);
+            if let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2])) {
+                out.push(h * 16 + l);
                 i += 3;
                 continue;
             }
@@ -1078,5 +1079,19 @@ mod tests {
             r.findings
         );
         assert!(t.elapsed().as_secs() < 60);
+    }
+
+    #[test]
+    fn percent_decoding_never_panics_and_decodes_hex_pairs() {
+        assert_eq!(percent_decode("c1.xhtml%aé"), "c1.xhtml%aé");
+        assert_eq!(percent_decode("a%41"), "aA");
+        assert_eq!(percent_decode("%4"), "%4");
+        assert_eq!(percent_decode("%"), "%");
+        assert_eq!(percent_decode("%e9%"), "\u{fffd}%");
+        assert_eq!(percent_decode("a%20b"), "a b");
+        let mut b = Book::good();
+        b.manifest_extra =
+            "<item id=\"x\" href=\"c1.xhtml%aé\" media-type=\"application/xhtml+xml\"/>".into();
+        let _ = check(&b.bytes());
     }
 }

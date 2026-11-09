@@ -250,25 +250,27 @@ impl<'a> P<'a> {
             self.doc.external_subset = true;
         }
         if let (Some(a), Some(b)) = (decl.find('['), decl.rfind(']')) {
-            let mut sub = &decl[a + 1..b];
-            while let Some(k) = sub.find("<!ENTITY") {
-                let after = &sub[k + 8..];
-                let e = after.find('>').unwrap_or(after.len());
-                let d = after[..e].trim();
-                let parameter = d.starts_with('%');
-                let d = d.trim_start_matches('%').trim_start();
-                let name_end = d.find(char::is_whitespace).unwrap_or(d.len());
-                let (name, val) = (&d[..name_end], d[name_end..].trim());
-                if val.starts_with("SYSTEM") || val.starts_with("PUBLIC") {
-                    self.doc.external_entities = true;
-                } else if !parameter && (val.starts_with('"') || val.starts_with('\'')) {
-                    let q = &val[..1];
-                    if let Some(close) = val[1..].find(q) {
-                        self.entities
-                            .insert(name.to_string(), val[1..1 + close].to_string());
+            if a < b {
+                let mut sub = &decl[a + 1..b];
+                while let Some(k) = sub.find("<!ENTITY") {
+                    let after = &sub[k + 8..];
+                    let e = after.find('>').unwrap_or(after.len());
+                    let d = after[..e].trim();
+                    let parameter = d.starts_with('%');
+                    let d = d.trim_start_matches('%').trim_start();
+                    let name_end = d.find(char::is_whitespace).unwrap_or(d.len());
+                    let (name, val) = (&d[..name_end], d[name_end..].trim());
+                    if val.starts_with("SYSTEM") || val.starts_with("PUBLIC") {
+                        self.doc.external_entities = true;
+                    } else if !parameter && (val.starts_with('"') || val.starts_with('\'')) {
+                        let q = &val[..1];
+                        if let Some(close) = val[1..].find(q) {
+                            self.entities
+                                .insert(name.to_string(), val[1..1 + close].to_string());
+                        }
                     }
+                    sub = &after[e.min(after.len())..];
                 }
-                sub = &after[e.min(after.len())..];
             }
         }
         Ok(())
@@ -480,6 +482,17 @@ pub fn parse(s: &str) -> Result<Doc, XmlError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn doctype_with_a_bracket_before_the_subset_is_not_a_panic() {
+        for d in [
+            "<!DOCTYPE a ][ ><a/>",
+            "<!DOCTYPE a ]><a/>",
+            "<!DOCTYPE a [ ><a/>",
+        ] {
+            let _ = parse(d);
+        }
+    }
+
     use super::*;
 
     #[test]
