@@ -379,8 +379,28 @@ fn parse_manifest(dir: &Path, name: &str, alg: &str, bytes: &[u8], c: &mut Colle
             );
             continue;
         }
+        // Versions before the RFC 8493 escaping wrote a `%` in a file name as it is. The strict
+        // reading comes first; when it finds no file but the text taken literally does, the
+        // literal reading is used, with a warning (it fails strict checking).
+        let literal_ok = unsafe_reason(rest).is_none() && dir.join(rest).exists();
         let mut path = match decode_path(rest) {
+            Ok(p) if literal_ok && rest != p && !dir.join(&p).exists() => {
+                c.warn(
+                    Category::Compat,
+                    name,
+                    format!("{rest}: '%' not escaped as %25 (older writer); fails strict checking"),
+                );
+                rest.to_string()
+            }
             Ok(p) => p,
+            Err(_) if literal_ok => {
+                c.warn(
+                    Category::Compat,
+                    name,
+                    format!("{rest}: '%' not escaped as %25 (older writer); fails strict checking"),
+                );
+                rest.to_string()
+            }
             Err(e) => {
                 c.err(Category::Malformed, name, format!("{rest}: {e}"));
                 continue;
@@ -1008,6 +1028,28 @@ mod tests {
         let h = crate::checksums::sha256_hex(b"x");
         fs::write(bag.join("manifest-sha256.txt"), format!("{h}  data/%41\n")).unwrap();
         assert!(cats(&validate(&bag).unwrap()).contains(&Category::Malformed));
+        // bags written before the escaping (main): a lone '%' or a literal "%25" in the name
+        // is read as written, with a warning, and the bag stays valid
+        for name in ["100%.txt", "a%25b.txt", "x%41.txt"] {
+            let root = scratch("pct-old");
+            let bag = hand_bag(&root, &[(name, b"x")]);
+            let h = crate::checksums::sha256_hex(b"x");
+            fs::write(
+                bag.join("manifest-sha256.txt"),
+                format!("{h}  data/{name}\n"),
+            )
+            .unwrap();
+            let r = validate(&bag).unwrap();
+            assert!(r.valid, "{name}: {:?}", r.findings);
+            assert!(
+                r.findings
+                    .iter()
+                    .any(|f| f.severity == Severity::Warning && f.category == Category::Compat),
+                "{name}: {:?}",
+                r.findings
+            );
+            let _ = fs::remove_dir_all(&root);
+        }
         assert_eq!(decode_path("a%0Ab%0dc%25").unwrap(), "a\nb\rc%");
         let _ = fs::remove_dir_all(&root);
     }
