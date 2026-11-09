@@ -30,6 +30,7 @@ pub mod docx;
 pub mod doubtful;
 pub mod efactura;
 pub mod embedproject;
+pub mod en16931;
 pub mod epub;
 pub mod eval;
 pub mod explain;

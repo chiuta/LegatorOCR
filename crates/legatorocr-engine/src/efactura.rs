@@ -90,6 +90,11 @@ fn elements(xml: &str) -> Vec<(String, String)> {
     out
 }
 
+/// `(path, text)` for every element with text, as used by the invoice reader.
+pub fn flatten(xml: &str) -> Vec<(String, String)> {
+    elements(xml)
+}
+
 fn unescape(s: &str) -> String {
     s.replace("&lt;", "<")
         .replace("&gt;", ">")

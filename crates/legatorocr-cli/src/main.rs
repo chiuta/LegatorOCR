@@ -616,6 +616,13 @@ struct Cli {
     #[arg(long, value_name = "FILE")]
     efactura: Option<PathBuf>,
 
+    /// With --efactura: also apply the EN 16931 business rules (calculation BR-CO-*, decimals
+    /// BR-DEC, mandatory fields BR-*) to the fields this program can read, and list each
+    /// violated rule with the fields, the value found and the value expected; exit 1 if any.
+    /// Not a full Schematron validation: code lists and national rules are not checked.
+    #[arg(long, requires = "efactura")]
+    efactura_rules: bool,
+
     /// Black-and-white pages (needs --ocr, --mode bw/mixed/hybrid): read each page with the chosen
     /// threshold and with a global Otsu threshold, keep the one Tesseract is more sure of. About
     /// twice the clean-up and OCR time for pages under 93 % mean confidence.
@@ -2599,7 +2606,19 @@ fn real_main() -> Result<()> {
         let inv = legatorocr_engine::efactura::parse(&xml)?;
         let problems = legatorocr_engine::efactura::check(&inv);
         print!("{}", legatorocr_engine::efactura::render(&inv, &problems));
-        if !problems.is_empty() {
+        let mut broken = !problems.is_empty();
+        if cli.efactura_rules {
+            let violations =
+                legatorocr_engine::en16931::check(&legatorocr_engine::en16931::from_ubl(&xml)?);
+            for v in &violations {
+                println!("RULE {v}");
+            }
+            if violations.is_empty() {
+                println!("rules: no violation among the rules this program checks");
+            }
+            broken |= !violations.is_empty();
+        }
+        if broken {
             std::process::exit(1);
         }
         return Ok(());

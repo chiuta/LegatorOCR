@@ -266,6 +266,20 @@ fn efactura_accepts_a_consistent_invoice_and_flags_a_wrong_total() {
     assert!(text(&ok).contains("FCT 0042"), "{}", text(&ok));
     let bad = run(&d, &["--efactura", "bad.xml"]);
     assert!(!bad.status.success(), "{}", text(&bad));
+    let rules_ok = run(&d, &["--efactura", "ok.xml", "--efactura-rules"]);
+    assert!(rules_ok.status.success(), "{}", text(&rules_ok));
+    assert!(
+        text(&rules_ok).contains("no violation"),
+        "{}",
+        text(&rules_ok)
+    );
+    let rules_bad = run(&d, &["--efactura", "bad.xml", "--efactura-rules"]);
+    assert!(!rules_bad.status.success());
+    assert!(
+        text(&rules_bad).contains("RULE BR-CO-15"),
+        "{}",
+        text(&rules_bad)
+    );
     let _ = std::fs::remove_dir_all(&d);
 }
 
