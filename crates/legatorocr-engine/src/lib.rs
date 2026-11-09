@@ -66,6 +66,7 @@ pub fn set_accurate(on: bool) {
 pub mod fadgi;
 pub mod figures;
 pub mod package;
+pub mod pades;
 pub mod pagelang;
 pub mod pagenum;
 pub mod passages;

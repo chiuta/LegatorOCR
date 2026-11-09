@@ -228,7 +228,7 @@ fn der_len(n: usize) -> Vec<u8> {
     }
 }
 
-fn der_tlv(tag: u8, body: &[u8]) -> Vec<u8> {
+pub(crate) fn der_tlv(tag: u8, body: &[u8]) -> Vec<u8> {
     let mut v = vec![tag];
     v.extend(der_len(body.len()));
     v.extend_from_slice(body);
@@ -236,7 +236,7 @@ fn der_tlv(tag: u8, body: &[u8]) -> Vec<u8> {
 }
 
 /// Split the body of a constructed element into its (tag, whole element) children.
-fn children(body: &[u8]) -> Option<Vec<(u8, Vec<u8>)>> {
+pub(crate) fn children(body: &[u8]) -> Option<Vec<(u8, Vec<u8>)>> {
     let mut out = Vec::new();
     let mut rest = body;
     while !rest.is_empty() {
@@ -249,13 +249,13 @@ fn children(body: &[u8]) -> Option<Vec<(u8, Vec<u8>)>> {
     Some(out)
 }
 
-fn body_of(el: &[u8]) -> Option<&[u8]> {
+pub(crate) fn body_of(el: &[u8]) -> Option<&[u8]> {
     crate::tsa::read(el).map(|(_, b, _)| b)
 }
 
 /// The path ContentInfo -> [0] -> SignedData -> signerInfos SET -> first SignerInfo, as the
 /// children of the SignerInfo, plus the rebuilt-parent chain needed to put it back.
-fn signer_info_children(cms: &[u8]) -> Option<Vec<(u8, Vec<u8>)>> {
+pub(crate) fn signer_info_children(cms: &[u8]) -> Option<Vec<(u8, Vec<u8>)>> {
     let ci = children(body_of(cms)?)?; // oid, [0]
     let sd = children(body_of(&ci.get(1)?.1)?)?; // SignedData
     let sd_items = children(body_of(&sd.first()?.1)?)?;
@@ -404,6 +404,11 @@ pub fn verify_pdf(file: &Path, ca: Option<&Path>, tsa_ca: Option<&Path>) -> Resu
             let signed = s
                 .signed_data(&data)
                 .ok_or("the byte range does not fit the file")?;
+            if s.sub_filter == "ETSI.RFC3161" {
+                // a document time stamp is a time-stamp token, not a CMS signature over the data:
+                // only the imprint can be compared here
+                return crate::pades::check_imprint(&s.contents, &signed);
+            }
             // DER length tells where the CMS structure ends; the rest is zero padding
             let der = der_trim(&s.contents).ok_or("the signature value is not DER")?;
             let c = tmp.0.join(format!("c{i}.bin"));
@@ -449,7 +454,7 @@ pub fn verify_pdf(file: &Path, ca: Option<&Path>, tsa_ca: Option<&Path>) -> Resu
 }
 
 /// Cut a BER/DER element to its declared length (drops padding after it).
-fn der_trim(d: &[u8]) -> Option<&[u8]> {
+pub(crate) fn der_trim(d: &[u8]) -> Option<&[u8]> {
     if d.len() < 2 || d[0] != 0x30 {
         return None;
     }

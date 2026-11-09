@@ -56,3 +56,13 @@ Fiecare punct: spec, ce lipsește, ce s-a făcut în cod până la răspuns.
 3. 300 ppi se raportează 3 stele (cel mai înalt nivel care îl satisface; valoarea e aceeași pentru 2 și 3). „±N" la scara de reproducere tratat ca limită inclusivă.
 4. „Jumătate din frecvența de eșantionare" = 0,5 cicluri/pixel (deducție); cu `--measure-edge`, MTF50 % = mtf50/0,5×100 și SFR la 0,5 citit prin interpolare din curbă. Eficiența de eșantionare MTF10 nu se calculează din margine (definiția nu e în spec): se dă manual.
 5. Ediția 2023/2024 nu a fost citită; alte categorii de materiale nu sunt suportate (refuz).
+
+## 09 pades-lt-lta
+1. Obținerea valorilor de revocare (OCSP, CRL) și validarea lanțului/revocării: [necunoscut] (RFC 5280 / RFC 6960 necitite). Nimic nu se preia din rețea; valorile se dau de utilizator (`--dss-cert/--dss-ocsp/--dss-crl`) și sunt doar verificate să fie un singur element DER. Nivelul „B-LT" raportat înseamnă „depozitul conține certificate și cel puțin o valoare de revocare", nu „validat". Verificarea ca depozitul să acopere *fiecare* semnătură (certificatele fiecărui semnatar) nu se face.
+2. Mărimea spațiului rezervat: nu e dată de spec; rămâne cea existentă (20000 octeți) și un token care nu încape face operația să eșueze înainte de scriere. Nu s-a verificat că 20000 ajunge pentru token-uri reale ale autorităților publice.
+3. Dicționarul VRI nu se scrie (spec: opțional, „nu ar trebui folosit"); depozitul existent se păstrează, inclusiv un VRI deja prezent. Fișierele cu flux de referințe încrucișate (xref stream) sunt refuzate de `--pades-lt`/`--pades-lta` (semnarea le rescrie clasic, aceste operații nu).
+4. Reînnoirea ștampilei (reguli): [necunoscut]. `--pades-lta` doar adaugă o ștampilă nouă peste un depozit existent; adăugarea materialului nou pentru ștampila anterioară e responsabilitatea utilizatorului (`--pades-lt` apoi `--pades-lta`).
+5. Imprint: se compară doar rezumat SHA-256; alte algoritmi sunt raportați ca „necomparat". Semnătura token-ului ștampilei nu e verificată de `--pades-level`.
+6. Nivelul B-T: un atribut de ștampilă pe semnătură este recunoscut după OID-ul lui; la B-LTA se cere o ștampilă de document care acoperă depozitul, depozitul fiind după semnătură.
+7. **Constatare:** semnătorul existent (`openssl cms -sign -cades`, `--sign-pdf`) produce un atribut CMS de timp de semnare, pe care spec-ul îl interzice; `--pades-level` îl semnalează ca eroare (verificat pe OpenSSL 3.0.13). Nu s-a modificat semnătorul (în afara specului); decizia: titularul.
+8. Valoarea V și celelalte verificări „ar trebui" ale ștampilei sunt avertismente, nu erori, conform spec-ului. Regula DocMDP nu e verificată.

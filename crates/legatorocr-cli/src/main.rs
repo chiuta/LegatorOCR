@@ -45,7 +45,7 @@ enum Fmt {
 #[command(name = "legatorocr", version, about)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
-    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "install_modules", "scan_escl", "watch", "verify_bag", "verify_epub", "verify_ocfl", "timestamp", "timestamp_verify", "sign_pdf", "verify_pdf_signatures", "pdfa_check", "decode_worker", "fuse_frames", "verify_document", "integrity_hints", "mcp", "measure_edge", "fadgi_levels", "backup_from", "efactura", "merkle_root", "merkle_verify", "merkle_verify_consistency", "verify_sums", "extract_project", "search_preset", "search_help"])]
+    #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "install_modules", "scan_escl", "watch", "verify_bag", "verify_epub", "verify_ocfl", "timestamp", "timestamp_verify", "sign_pdf", "pades_lt", "pades_lta", "pades_level", "verify_pdf_signatures", "pdfa_check", "decode_worker", "fuse_frames", "verify_document", "integrity_hints", "mcp", "measure_edge", "fadgi_levels", "backup_from", "efactura", "merkle_root", "merkle_verify", "merkle_verify_consistency", "verify_sums", "extract_project", "search_preset", "search_help"])]
     inputs: Vec<PathBuf>,
 
     /// Load settings and page list (with per-page adjustments) from a `.lgr` project
@@ -918,6 +918,37 @@ struct Cli {
     /// The authority sees only the hash of the signature.
     #[arg(long, requires = "tsa_url")]
     sign_timestamp: bool,
+
+    /// Add validation material to the signed PDF FILE as an incremental update (PAdES-B-LT):
+    /// the certificates (--dss-cert) and revocation values (--dss-ocsp / --dss-crl) go into the
+    /// document security store. Output: --pdf, else FILE with `.lt.pdf`. Refused without at least
+    /// one certificate and one OCSP response or CRL; the values are not fetched, nor checked.
+    #[arg(long, value_name = "FILE")]
+    pades_lt: Option<PathBuf>,
+
+    /// DER certificate to put in the store (--pades-lt); repeat for the chain.
+    #[arg(long, value_name = "FILE", requires = "pades_lt")]
+    dss_cert: Vec<PathBuf>,
+
+    /// DER OCSP response to put in the store (--pades-lt); repeat as needed.
+    #[arg(long, value_name = "FILE", requires = "pades_lt")]
+    dss_ocsp: Vec<PathBuf>,
+
+    /// DER CRL to put in the store (--pades-lt); repeat as needed.
+    #[arg(long, value_name = "FILE", requires = "pades_lt")]
+    dss_crl: Vec<PathBuf>,
+
+    /// Add a document time stamp from --tsa-url (PAdES-B-LTA) over FILE, which must already hold
+    /// a validation store (--pades-lt). Output: --pdf, else FILE with `.lta.pdf`. Call it again
+    /// later to renew.
+    #[arg(long, value_name = "FILE", requires = "tsa_url")]
+    pades_lta: Option<PathBuf>,
+
+    /// Report the PAdES level (B-B, B-T, B-LT, B-LTA) of each signature in FILE and what breaks
+    /// the baseline rules (signing-time attribute, MD5, /Cert entry, bad document time stamps).
+    /// Chain and revocation values are not validated. Exit 1 on any error.
+    #[arg(long, value_name = "FILE")]
+    pades_level: Option<PathBuf>,
 
     /// Check every signature in FILE (data matches the signature; with --sign-ca also the
     /// certificate chain). Exit 1 when one fails or the file has no signature.
@@ -2478,6 +2509,51 @@ fn real_main() -> Result<()> {
             r.shifts.iter().flatten().count(),
             r.shifts.len()
         );
+        return Ok(());
+    }
+    if let Some(f) = &cli.pades_level {
+        let data = std::fs::read(f)?;
+        let lv = legatorocr_engine::pades::analyse(&data)?;
+        print!("{}", legatorocr_engine::pades::render(&lv));
+        let bad = lv.is_empty()
+            || lv.iter().any(|l| {
+                l.findings
+                    .iter()
+                    .any(|x| x.severity == legatorocr_engine::pades::Severity::Error)
+            });
+        std::process::exit(if bad { 1 } else { 0 });
+    }
+    if let Some(f) = &cli.pades_lt {
+        let rd = |v: &[PathBuf]| -> Result<Vec<Vec<u8>>> {
+            v.iter()
+                .map(|p| Ok(std::fs::read(p).with_context(|| format!("reading {}", p.display()))?))
+                .collect()
+        };
+        let out = match &cli.pdf {
+            Some(n) => n.clone(),
+            None => f.with_extension("lt.pdf"),
+        };
+        let r = legatorocr_engine::pades::extend_lt(
+            &std::fs::read(f)?,
+            &rd(&cli.dss_cert)?,
+            &rd(&cli.dss_ocsp)?,
+            &rd(&cli.dss_crl)?,
+        )?;
+        std::fs::write(&out, r)?;
+        println!("{}: validation store added", out.display());
+        return Ok(());
+    }
+    if let Some(f) = &cli.pades_lta {
+        let url = cli.tsa_url.clone().unwrap_or_default();
+        let out = match &cli.pdf {
+            Some(n) => n.clone(),
+            None => f.with_extension("lta.pdf"),
+        };
+        let r = legatorocr_engine::pades::add_document_timestamp(&std::fs::read(f)?, &|d| {
+            Ok(legatorocr_engine::tsa::request(&url, d)?.0)
+        })?;
+        std::fs::write(&out, r)?;
+        println!("{}: document time stamp added", out.display());
         return Ok(());
     }
     if let Some(f) = &cli.sign_pdf {
