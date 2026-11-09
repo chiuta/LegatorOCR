@@ -769,6 +769,12 @@ struct Cli {
     #[arg(long)]
     mrz: bool,
 
+    /// With --mrz: do not turn letters that look like digits (O for 0, I for 1, S for 5, B for 8,
+    /// Z for 2) into digits, or the reverse in letter fields; they are only reported as warnings.
+    /// Without this option every repair is applied and listed.
+    #[arg(long, requires = "mrz")]
+    mrz_no_repair: bool,
+
     /// Decode every input in a separate worker process with a memory limit, a CPU-time limit
     /// (Unix) and a timeout, so a hostile or corrupt file can crash only the worker, not the
     /// run. Process isolation, not a security sandbox (no seccomp or namespaces).
@@ -4214,7 +4220,7 @@ fn real_main() -> Result<()> {
         match res.text.as_deref() {
             None => eprintln!("--mrz: no OCR text was produced"),
             Some(t) => {
-                let found = legatorocr_engine::mrz::find(t);
+                let found = legatorocr_engine::mrz::find_with(t, !cli.mrz_no_repair);
                 if found.is_empty() {
                     println!("mrz: none found");
                 }
@@ -4224,6 +4230,18 @@ fn real_main() -> Result<()> {
                         m.format, m.doc_type, m.country, m.surname, m.number, m.nationality, m.birth, m.sex, m.expiry,
                         if m.failed.is_empty() { "all check digits agree".to_string() } else { format!("CHECK FAILED: {}", m.failed.join(", ")) }
                     );
+                    for r in &m.repairs {
+                        println!("mrz {}: repaired {r}", m.format);
+                    }
+                    for w in &m.warnings {
+                        println!("mrz {}: warning {w}", m.format);
+                    }
+                    if m.name_truncated {
+                        println!(
+                            "mrz {}: the name field ends in a letter: the name was cut to fit",
+                            m.format
+                        );
+                    }
                 }
             }
         }

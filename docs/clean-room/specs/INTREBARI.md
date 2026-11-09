@@ -11,3 +11,10 @@ Fiecare punct: spec, ce lipsește, ce s-a făcut în cod până la răspuns.
 ## 02 merkle-dovezi
 1. Prefixele de frunză/nod (0x00 / 0x01) erau [necunoscut] în spec; au fost confirmate din textul public RFC 9162, 2.1.1 (citit la implementare) și coincid cu implementarea existentă.
 2. Codificarea frunzei rămâne cea existentă (nume + hash de fișier), fixată de proiect; spec-ul o lasă utilizatorului. Ordinea de inserare este opțională (`--merkle-keep-order`), deoarece comportamentul existent sortează după nume și rădăcinile deja publicate nu trebuie schimbate.
+
+## 03 mrz-icao9303
+1. Transliterarea literelor non-A-Z (Partea 3, sec. 6) și lista codurilor de stat: [necunoscut]; `encode_name` refuză astfel de caractere, codurile de stat nu se validează.
+2. Secolul pentru AA: [necunoscut]; nu se deduce, datele rămân AALLZZ.
+3. TD2 (2×36): spec-ul zice că programul îl ignoră; codul existent îl citea deja, a rămas neschimbat ca funcționalitate (fără reguli noi), nespecificat.
+4. Metoda de scurtare a numelui rămâne la discreția statului; politica aleasă (primarul tăiat, secundarul tăiat la locul rămas) este a implementării. Dacă tăierea cade pe `<`, ultima poziție poate rămâne `<` (nesemnalat ca trunchiat).
+5. Reparația: tabelul existent (O Q D→0, I L→1, Z→2, S→5, B→8) este mai larg decât cele cinci confuzii din spec (O, I, S, B, Z); neschimbat pentru a nu regresa comportamentul livrat.

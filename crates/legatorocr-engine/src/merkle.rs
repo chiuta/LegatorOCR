@@ -173,7 +173,7 @@ fn rebuild(
     old_root: &[u8],
     proof: &mut &[Hash],
 ) -> std::result::Result<(Hash, Hash), ProofError> {
-    let mut take = |proof: &mut &[Hash]| -> std::result::Result<Hash, ProofError> {
+    let take = |proof: &mut &[Hash]| -> std::result::Result<Hash, ProofError> {
         let (last, rest) = proof.split_last().ok_or(ProofError::TooShort)?;
         *proof = rest;
         Ok(last.clone())
