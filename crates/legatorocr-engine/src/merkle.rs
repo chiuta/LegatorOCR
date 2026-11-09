@@ -477,7 +477,7 @@ mod tests {
             Err(ProofError::BadInput(_))
         ));
         assert!(matches!(
-            verify_consistency(0, 5, &r, &r, &[r.clone()]),
+            verify_consistency(0, 5, &r, &r, std::slice::from_ref(&r)),
             Err(ProofError::BadInput(_))
         ));
         // an element of the wrong length is refused

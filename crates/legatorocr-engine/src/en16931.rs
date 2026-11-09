@@ -42,7 +42,7 @@ impl Dec {
         self.m * 10i128.pow(s - self.s)
     }
 
-    pub fn add(self, o: Dec) -> Dec {
+    pub fn plus(self, o: Dec) -> Dec {
         let s = self.s.max(o.s);
         Dec {
             m: self.lift(s) + o.lift(s),
@@ -50,15 +50,15 @@ impl Dec {
         }
     }
 
-    pub fn neg(self) -> Dec {
+    pub fn negated(self) -> Dec {
         Dec {
             m: -self.m,
             s: self.s,
         }
     }
 
-    pub fn sub(self, o: Dec) -> Dec {
-        self.add(o.neg())
+    pub fn minus(self, o: Dec) -> Dec {
+        self.plus(o.negated())
     }
 
     pub fn zero() -> Dec {
@@ -345,7 +345,7 @@ pub fn check(s: &Semantic) -> Vec<Violation> {
             for l in &s.lines {
                 if let Some(a) = l.net_amount.as_deref().filter(|x| !x.trim().is_empty()) {
                     match c.dec(a, "BT-131") {
-                        Some(d) => sum = sum.add(d),
+                        Some(d) => sum = sum.plus(d),
                         None => ok = false,
                     }
                 }
@@ -370,7 +370,7 @@ pub fn check(s: &Semantic) -> Vec<Violation> {
             let mut sum = Dec::zero();
             for a in list {
                 if let Some(x) = a.amount.as_deref().and_then(Dec::parse) {
-                    sum = sum.add(x);
+                    sum = sum.plus(x);
                 }
             }
             c.equal(rule, &[bt, key], t, sum);
@@ -380,8 +380,8 @@ pub fn check(s: &Semantic) -> Vec<Violation> {
     if let (Some(n), Some(l)) = (net, line_total) {
         if c.read("BT-107") && c.read("BT-108") {
             let expected = l
-                .sub(allow_total.unwrap_or(Dec::zero()))
-                .add(charge_total.unwrap_or(Dec::zero()));
+                .minus(allow_total.unwrap_or(Dec::zero()))
+                .plus(charge_total.unwrap_or(Dec::zero()));
             c.equal(
                 "BR-CO-13",
                 &["BT-109", "BT-106", "BT-107", "BT-108"],
@@ -396,7 +396,7 @@ pub fn check(s: &Semantic) -> Vec<Violation> {
             let mut sum = Dec::zero();
             for v in &s.vat {
                 if let Some(x) = v.amount.as_deref().and_then(Dec::parse) {
-                    sum = sum.add(x);
+                    sum = sum.plus(x);
                 }
             }
             c.equal("BR-CO-14", &["BT-110", "BT-117"], t, sum);
@@ -404,14 +404,14 @@ pub fn check(s: &Semantic) -> Vec<Violation> {
     }
     // BR-CO-15: gross = net + VAT, when VAT is given
     if let (Some(g), Some(n), Some(v)) = (gross, net, vat_total) {
-        c.equal("BR-CO-15", &["BT-112", "BT-109", "BT-110"], g, n.add(v));
+        c.equal("BR-CO-15", &["BT-112", "BT-109", "BT-110"], g, n.plus(v));
     }
     // BR-CO-16: payable = gross - paid + rounding
     if let (Some(p), Some(g)) = (payable, gross) {
         if c.read("BT-113") && c.read("BT-114") {
             let expected = g
-                .sub(prepaid.unwrap_or(Dec::zero()))
-                .add(rounding.unwrap_or(Dec::zero()));
+                .minus(prepaid.unwrap_or(Dec::zero()))
+                .plus(rounding.unwrap_or(Dec::zero()));
             c.equal(
                 "BR-CO-16",
                 &["BT-115", "BT-112", "BT-113", "BT-114"],
@@ -436,12 +436,12 @@ pub fn check(s: &Semantic) -> Vec<Violation> {
                 continue;
             };
             let exact = b.percent(r);
-            if !a.sub(exact).abs_le(Dec { m: 5, s: 3 }) {
+            if !a.minus(exact).abs_le(Dec { m: 5, s: 3 }) {
                 c.bad(
                     "BR-CO-17",
                     &["BT-117", "BT-116", "BT-119"],
                     a.to_string(),
-                    format!("{} (exact {exact})", Dec { m: 0, s: 0 }.add(round2(exact))),
+                    format!("{} (exact {exact})", Dec { m: 0, s: 0 }.plus(round2(exact))),
                 );
             }
         }
@@ -702,7 +702,7 @@ mod tests {
     fn decimals_are_exact() {
         let a = Dec::parse("0.1").unwrap();
         let b = Dec::parse("0.2").unwrap();
-        assert!(a.add(b).eq_value(Dec::parse("0.30").unwrap()));
+        assert!(a.plus(b).eq_value(Dec::parse("0.30").unwrap()));
         assert_eq!(Dec::parse("12.345").unwrap().decimals(), 3);
         assert_eq!(Dec::parse("12.340").unwrap().decimals(), 2);
         assert_eq!(Dec::parse("-5").unwrap().to_string(), "-5.00");
@@ -763,7 +763,7 @@ mod tests {
                 amount: Some(amt.into()),
             };
             t.fields.insert("BT-110", amt.into());
-            let sum = Dec::parse("100.00").unwrap().add(Dec::parse(amt).unwrap());
+            let sum = Dec::parse("100.00").unwrap().plus(Dec::parse(amt).unwrap());
             t.fields.insert("BT-112", sum.to_string());
             t.fields.insert("BT-115", sum.to_string());
             assert!(rules(&t).is_empty(), "{amt}: {:?}", check(&t));

@@ -2541,7 +2541,7 @@ fn real_main() -> Result<()> {
     if let Some(f) = &cli.pades_lt {
         let rd = |v: &[PathBuf]| -> Result<Vec<Vec<u8>>> {
             v.iter()
-                .map(|p| Ok(std::fs::read(p).with_context(|| format!("reading {}", p.display()))?))
+                .map(|p| std::fs::read(p).with_context(|| format!("reading {}", p.display())))
                 .collect()
         };
         let out = match &cli.pdf {

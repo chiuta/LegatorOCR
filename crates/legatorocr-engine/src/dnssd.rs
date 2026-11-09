@@ -270,7 +270,7 @@ mod tests {
         ] {
             assert!(!valid_service_type(bad), "{bad}");
         }
-        assert!(valid_service_type("_123456789012345a._tcp") == false);
+        assert!(!valid_service_type("_123456789012345a._tcp"));
         assert!(valid_service_type("_12345678901234a._tcp"));
     }
 

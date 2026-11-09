@@ -369,7 +369,7 @@ fn pades_cms(dir: &Path, pem: &Path, chain: Option<&Path>, content: &[u8]) -> Re
     );
     let ess = der_tlv(0x30, &[der_tlv(0x04, &cert_hash), issuer_serial].concat());
     let signing_cert = der_tlv(0x30, &der_tlv(0x30, &ess));
-    let mut attrs = vec![
+    let mut attrs = [
         attr(OID_CONTENT_TYPE, der_tlv(0x06, OID_DATA)),
         attr(OID_MESSAGE_DIGEST, der_tlv(0x04, &digest)),
         attr(OID_SIGNING_CERT_V2, signing_cert),
