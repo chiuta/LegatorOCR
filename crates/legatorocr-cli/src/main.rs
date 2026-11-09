@@ -1209,7 +1209,7 @@ struct Cli {
     #[arg(long, default_value_t = 5.0)]
     margin: f32,
 
-    /// Fixed page size: a4, a5, letter, or WxH in mm (e.g. 148x210).
+    /// Fixed page size: a2-a6, b3-b6, letter, legal, tabloid, or WxH in mm (e.g. 148x210).
     #[arg(long)]
     page_size: Option<String>,
 
@@ -1284,6 +1284,36 @@ struct Cli {
     /// middle (needs splitting on; not used for sheets turned a quarter).
     #[arg(long, value_name = "FRACTION")]
     cut_at: Option<f32>,
+
+    /// With --cut-at: lean the cut line by this many degrees clockwise from vertical (-20 to 20);
+    /// each page keeps its side of the slanted line.
+    #[arg(
+        long,
+        value_name = "DEGREES",
+        default_value_t = 0.0,
+        allow_negative_numbers = true
+    )]
+    cut_angle: f32,
+
+    /// Keystone (trapezoid) correction of every sheet, vertical: percent of the width (-30 to 30);
+    /// positive stretches a top edge that is narrower than the bottom one.
+    #[arg(
+        long,
+        value_name = "PERCENT",
+        default_value_t = 0.0,
+        allow_negative_numbers = true
+    )]
+    keystone_v: f32,
+
+    /// Keystone correction, horizontal: percent of the height (-30 to 30); positive stretches a
+    /// left edge that is shorter than the right one.
+    #[arg(
+        long,
+        value_name = "PERCENT",
+        default_value_t = 0.0,
+        allow_negative_numbers = true
+    )]
+    keystone_h: f32,
 
     /// Photographs from a phone have no usable resolution: assume each shot is framed on a page
     /// of this size (`A4`, `A5`, `B5`, `Letter`, … or `WIDTHxHEIGHT` in mm) and derive the dpi
@@ -1644,20 +1674,17 @@ fn output_clobbers_input(
 }
 
 fn parse_page_size(s: &str) -> Result<(f32, f32)> {
-    Ok(match s.to_ascii_lowercase().as_str() {
-        "a4" => (210.0, 297.0),
-        "a5" => (148.0, 210.0),
-        "letter" => (215.9, 279.4),
-        other => {
-            let (w, h) = other
-                .split_once('x')
-                .context("page size must be a4|a5|letter|WxH")?;
-            let (w, h): (f32, f32) = (w.parse()?, h.parse()?);
-            in_range("page-size width", w, 10.0, 2000.0)?;
-            in_range("page-size height", h, 10.0, 2000.0)?;
-            (w, h)
-        }
-    })
+    if let Some(size) = legatorocr_core::paper_size_mm(s) {
+        return Ok(size);
+    }
+    let lower = s.to_ascii_lowercase();
+    let (w, h) = lower
+        .split_once('x')
+        .context("page size must be a name (a2..a6, b3..b6, letter, legal, tabloid) or WxH")?;
+    let (w, h): (f32, f32) = (w.parse()?, h.parse()?);
+    in_range("page-size width", w, 10.0, 2000.0)?;
+    in_range("page-size height", h, 10.0, 2000.0)?;
+    Ok((w, h))
 }
 
 fn main() -> Result<()> {
@@ -3100,6 +3127,20 @@ fn real_main() -> Result<()> {
             Some(f) if f.is_finite() && f > 0.0 && f < 1.0 => Some(f),
             Some(_) => anyhow::bail!("--cut-at needs a fraction between 0 and 1, e.g. 0.45"),
         },
+        sheet_split_angle_deg: if cli.cut_angle.is_finite() && cli.cut_angle.abs() <= 20.0 {
+            cli.cut_angle
+        } else {
+            anyhow::bail!("--cut-angle needs degrees between -20 and 20")
+        },
+        sheet_keystone: if [cli.keystone_v, cli.keystone_h]
+            .iter()
+            .all(|k| k.is_finite() && k.abs() <= 30.0)
+        {
+            [cli.keystone_v, cli.keystone_h]
+        } else {
+            anyhow::bail!("--keystone-v and --keystone-h need percentages between -30 and 30")
+        },
+        part_settings: [None, None],
         sheet_dewarp_guides: Vec::new(),
         sheet_picture_zones: Vec::new(),
         sheet_no_picture_zones: Vec::new(),

@@ -23,9 +23,9 @@ fn split_name(lang: Lang, c: SplitChoice) -> &'static str {
 fn size_name(lang: Lang, c: PageSizeChoice) -> &'static str {
     match c {
         PageSizeChoice::Free => t(lang, "size.free"),
-        PageSizeChoice::A4 => "A4",
-        PageSizeChoice::A5 => "A5",
-        PageSizeChoice::Letter => "Letter",
+        PageSizeChoice::Paper(i) => legatorocr_core::PAPER_SIZES
+            .get(i as usize)
+            .map_or("?", |&(n, _, _)| n),
         PageSizeChoice::Custom => t(lang, "size.custom"),
     }
 }
@@ -91,6 +91,7 @@ struct PageTex {
     blank: bool,
     content_box: Option<[u32; 4]>,
     dpi: u32,
+    split_index: Option<u8>,
 }
 
 /// Why a processed sheet deserves a look (None = nothing suspicious). A heuristic on the preview
@@ -193,6 +194,9 @@ pub struct App {
     /// Password for encrypted PDFs; kept for this session only, never written to the settings.
     pdf_password: String,
     settings_gen: u32,
+    /// Which page the Output and Clean-up sections edit: `None` = all pages, `Some(0)` / `Some(1)` =
+    /// the left (or only) / right page of the selected sheet only.
+    page_scope: Option<u8>,
     sheets: Vec<Sheet>,
     selected: Option<usize>,
     /// The selection was moved with the keyboard: scroll the list so the row is visible.
@@ -256,6 +260,9 @@ pub struct App {
     edit_box: bool,
     /// Edge being dragged: (0 left, 1 top, 2 right, 3 bottom, screen position at the start).
     box_drag: Option<(usize, egui::Pos2)>,
+    /// OCR pencil: 0 off, 1 draws OCR zones (green), 2 draws areas the OCR ignores (red).
+    ocr_tool: u8,
+    ocr_drag: Option<egui::Pos2>,
     zone_drag: Option<egui::Pos2>,
     /// A corner of an existing erase/picture zone being dragged: (is picture zone, index, corner).
     zone_resize: Option<(u8, usize, u8)>,
@@ -272,12 +279,13 @@ pub struct App {
     saved_lang: Lang,
 }
 
-/// One page cell of the preview: texture, caption, is-processed, content box + dpi + size.
+/// One page cell of the preview: texture, caption, is-processed, content box + dpi + size + which
+/// half of a cut sheet the page is.
 type Cell<'a> = (
     &'a TextureHandle,
     String,
     bool,
-    Option<([u32; 4], u32, (u32, u32))>,
+    Option<([u32; 4], u32, (u32, u32), Option<u8>)>,
 );
 
 impl App {
@@ -289,6 +297,7 @@ impl App {
             s: UiSettings::default(),
             pdf_password: String::new(),
             settings_gen: 1,
+            page_scope: None,
             sheets: Vec::new(),
             selected: None,
             scroll_to_selected: false,
@@ -333,6 +342,8 @@ impl App {
             draw_extra: 0,
             edit_box: false,
             box_drag: None,
+            ocr_tool: 0,
+            ocr_drag: None,
             zone_drag: None,
             zone_resize: None,
             auto_export: std::env::var_os("LEGATOROCR_GUI_AUTOEXPORT_PDF")
@@ -436,6 +447,9 @@ impl App {
                         turn_deg: a.sheet_turn_deg,
                         work_mm: a.work_mm,
                         split_frac: a.split_frac,
+                        cut_angle_deg: a.cut_angle_deg,
+                        keystone: a.keystone,
+                        page_pairs: a.page_pairs.clone(),
                         ..Default::default()
                     },
                 )
@@ -561,6 +575,9 @@ impl App {
                         sheet_turn_deg: a.turn_deg,
                         work_mm: a.work_mm,
                         split_frac: a.split_frac,
+                        cut_angle_deg: a.cut_angle_deg,
+                        keystone: a.keystone,
+                        page_pairs: a.page_pairs.clone(),
                     };
                 }
                 self.settings_gen += 1;
@@ -729,6 +746,7 @@ impl App {
                             blank: info.blank,
                             content_box: info.content_box,
                             dpi: info.dpi,
+                            split_index: info.split_index,
                         })
                         .collect();
                     sheet.ready = Some(Ready {
@@ -2022,7 +2040,8 @@ impl App {
         }
     }
 
-    /// The slider view: the original left of the divider, the processed first page right of it.
+    /// The slider view: the original left of the divider, the processed pages of the sheet (both,
+    /// when the sheet is cut in two) right of it.
     fn slider_view(ui: &mut egui::Ui, ready: &Ready, frac: &mut f32, before: &str, after: &str) {
         let avail = ui.available_size();
         let (rect, resp) = ui.allocate_exact_size(
@@ -2044,10 +2063,25 @@ impl App {
         let left = egui::Rect::from_min_max(rect.min, egui::pos2(x, rect.max.y));
         ui.painter_at(left)
             .image(ready.original.id(), fit(ow, oh), uv, Color32::WHITE);
-        if let Some(p) = ready.pages.first() {
+        if !ready.pages.is_empty() {
+            // every processed page of the sheet side by side (a cut sheet gives two), as the
+            // original's two pages lie side by side; the whole row is fitted to the frame
+            let total_w: f32 = ready.pages.iter().map(|p| p.w as f32).sum();
+            let max_h = ready.pages.iter().map(|p| p.h as f32).fold(1.0, f32::max);
+            let row = fit(total_w.max(1.0), max_h);
+            let k = row.width() / total_w.max(1.0);
             let right = egui::Rect::from_min_max(egui::pos2(x, rect.min.y), rect.max);
-            ui.painter_at(right)
-                .image(p.tex.id(), fit(p.w as f32, p.h as f32), uv, Color32::WHITE);
+            let painter = ui.painter_at(right);
+            let mut x0 = row.min.x;
+            for p in &ready.pages {
+                let (w, h) = (p.w as f32 * k, p.h as f32 * k);
+                let r = egui::Rect::from_min_size(
+                    egui::pos2(x0, row.center().y - h / 2.0),
+                    Vec2::new(w, h),
+                );
+                painter.image(p.tex.id(), r, uv, Color32::WHITE);
+                x0 += w;
+            }
         }
         let pt = ui.painter_at(rect);
         pt.line_segment(
@@ -2273,13 +2307,7 @@ impl App {
                             egui::ComboBox::from_id_salt("psize")
                                 .selected_text(size_name(lang, self.s.page_size))
                                 .show_ui(ui, |ui| {
-                                    for c in [
-                                        PageSizeChoice::Free,
-                                        PageSizeChoice::A4,
-                                        PageSizeChoice::A5,
-                                        PageSizeChoice::Letter,
-                                        PageSizeChoice::Custom,
-                                    ] {
+                                    for c in PageSizeChoice::all() {
                                         ch |= ui
                                             .selectable_value(
                                                 &mut self.s.page_size,
@@ -2360,6 +2388,44 @@ impl App {
                             });
                         }
                     });
+                // which page the next two sections edit (the general settings, or one page's own)
+                let sel_sheet = self.selected.filter(|&k| k < self.sheets.len());
+                let two_pages = sel_sheet
+                    .and_then(|k| self.sheets[k].ready.as_ref())
+                    .is_some_and(|r| r.pages.len() > 1);
+                if sel_sheet.is_none() || (!two_pages && self.page_scope == Some(1)) {
+                    self.page_scope = None;
+                }
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(tr("scope.label"));
+                    ui.selectable_value(&mut self.page_scope, None, tr("scope.all"));
+                    if sel_sheet.is_some() {
+                        let first = if two_pages {
+                            "scope.left"
+                        } else {
+                            "scope.single"
+                        };
+                        ui.selectable_value(&mut self.page_scope, Some(0), tr(first));
+                        if two_pages {
+                            ui.selectable_value(&mut self.page_scope, Some(1), tr("scope.right"));
+                        }
+                    }
+                });
+                if let (Some(slot), Some(k)) = (self.page_scope, sel_sheet) {
+                    ui.label(RichText::new(tr("scope.note")).small().weak());
+                    if !self.sheets[k].adj.page_pairs[slot as usize].is_empty()
+                        && ui.button(tr("scope.clear")).clicked()
+                    {
+                        self.sheets[k].adj.page_pairs[slot as usize].clear();
+                        self.sheets[k].adj_gen += 1;
+                    }
+                }
+                let scope_state = self.page_scope.zip(sel_sheet).map(|(slot, k)| {
+                    let backup = self.s.clone();
+                    let eff = self.s.for_page(&self.sheets[k].adj, slot as usize);
+                    self.s = eff.clone();
+                    (backup, eff, k, slot, ch)
+                });
                 egui::CollapsingHeader::new(tr("set.output"))
                     .default_open(true)
                     .show(ui, |ui| {
@@ -2556,6 +2622,19 @@ impl App {
                             });
                         }
                     });
+                if let Some((backup, eff, k, slot, ch_before)) = scope_state {
+                    // what was edited in the two sections belongs to the page, not to everyone
+                    let edited = std::mem::replace(&mut self.s, backup);
+                    if UiSettings::store_page_changes(
+                        &eff,
+                        &edited,
+                        &mut self.sheets[k].adj,
+                        slot as usize,
+                    ) {
+                        self.sheets[k].adj_gen += 1;
+                    }
+                    ch = ch_before;
+                }
                 egui::CollapsingHeader::new(tr("set.pdf"))
                     .default_open(true)
                     .show(ui, |ui| {
@@ -2841,6 +2920,16 @@ impl App {
                 .on_hover_text(tr("zones.hint"));
             ui.checkbox(&mut self.edit_box, tr("box.edit"))
                 .on_hover_text(tr("box.hint"));
+            for (v, k) in [(1u8, "ocr.tool_zone"), (2u8, "ocr.tool_ignore")] {
+                if ui
+                    .selectable_label(self.ocr_tool == v, tr(k))
+                    .on_hover_text(tr("ocr.tool_hint"))
+                    .clicked()
+                {
+                    self.ocr_tool = if self.ocr_tool == v { 0 } else { v };
+                    self.ocr_drag = None;
+                }
+            }
             if self.draw_zones {
                 let plain = !self.draw_guide && !self.draw_pictures && !self.draw_nopic;
                 if ui
@@ -2978,6 +3067,31 @@ impl App {
                 .clicked()
             {
                 auto_turn = true;
+            }
+            // trapezoid correction of a sheet photographed at an angle
+            for (idx, key) in [(0usize, "adj.keystone_v"), (1, "adj.keystone_h")] {
+                ui.label(tr(key)).on_hover_text(tr("adj.keystone_hint"));
+                adj_changed |= ui
+                    .add(
+                        egui::Slider::new(&mut adj.keystone[idx], -30.0..=30.0)
+                            .suffix("%")
+                            .fixed_decimals(1),
+                    )
+                    .on_hover_text(tr("adj.keystone_hint"))
+                    .changed();
+            }
+            // lean of the cut line (only meaningful with the cut-line tool and a line drawn)
+            if self.draw_zones && self.draw_extra == 2 {
+                ui.label(tr("adj.cut_angle"))
+                    .on_hover_text(tr("adj.cut_angle_hint"));
+                adj_changed |= ui
+                    .add(
+                        egui::Slider::new(&mut adj.cut_angle_deg, -20.0..=20.0)
+                            .suffix("°")
+                            .fixed_decimals(1),
+                    )
+                    .on_hover_text(tr("adj.cut_angle_hint"))
+                    .changed();
             }
             if ui
                 .add_enabled(
@@ -3354,7 +3468,7 @@ impl App {
                         blank
                     ),
                     false,
-                    p.content_box.map(|b| (b, p.dpi, (p.w, p.h))),
+                    p.content_box.map(|b| (b, p.dpi, (p.w, p.h), p.split_index)),
                 ));
             }
         }
@@ -3376,6 +3490,7 @@ impl App {
         let draw_cut = self.draw_extra == 2;
         let work_now: Option<[f32; 4]> = sheet.adj.work_mm;
         let cut_now: Option<f32> = sheet.adj.split_frac;
+        let cut_tan: f32 = sheet.adj.cut_angle_deg.to_radians().tan();
         let turn_now: f32 = sheet.adj.sheet_turn_deg;
         let mut new_work: Option<Option<[f32; 4]>> = None;
         let mut new_cut: Option<Option<f32>> = None;
@@ -3387,8 +3502,33 @@ impl App {
         let mut node_move: Option<(usize, usize, (f32, f32))> = None;
         let mut node_remove: Option<(usize, usize)> = None;
         let mut node_insert: Option<(usize, usize, (f32, f32))> = None;
-        let edit_box = self.edit_box;
-        let mut box_delta: Option<(usize, f32)> = None;
+        let edit_box = self.edit_box && self.ocr_tool == 0;
+        let ocr_tool = self.ocr_tool;
+        let odrag = &mut self.ocr_drag;
+        let mut new_ocr: Option<(u8, [f32; 4])> = None;
+        // (zone, is-ignore, index) rectangles in mm to show on the processed pages
+        let ocr_rects: Vec<([f32; 4], bool)> = {
+            let split = |t: &str| -> Vec<String> {
+                t.split(';')
+                    .map(|x| x.trim().to_string())
+                    .filter(|x| !x.is_empty())
+                    .collect()
+            };
+            let mut v = Vec::new();
+            for z in split(&self.s.ocr_zones) {
+                if let Ok(z) = legatorocr_engine::ocrzones::parse_zone(&z) {
+                    v.push(([z.rect.x, z.rect.y, z.rect.w, z.rect.h], false));
+                }
+            }
+            for z in split(&self.s.ocr_ignore) {
+                if let Ok(r) = legatorocr_engine::ocrzones::parse_rect(&z) {
+                    v.push(([r.x, r.y, r.w, r.h], true));
+                }
+            }
+            v
+        };
+        let mut remove_ocr: Option<usize> = None;
+        let mut box_delta: Option<(usize, f32, Option<u8>)> = None;
         let bdrag = &mut self.box_drag;
         let mut new_zone: Option<[f32; 4]> = None;
         let mut remove_zone: Option<(u8, usize)> = None;
@@ -3409,7 +3549,7 @@ impl App {
                         if *is_orig && draw_zones {
                             img = img.sense(egui::Sense::click_and_drag());
                         }
-                        if !*is_orig && edit_box && boxinfo.is_some() {
+                        if !*is_orig && (edit_box || ocr_tool != 0) && boxinfo.is_some() {
                             img = img.sense(egui::Sense::click_and_drag());
                         }
                         let resp = ui.add(img);
@@ -3544,8 +3684,13 @@ impl App {
                             // cut line of a two-page sheet
                             if let Some(f) = cut_now {
                                 let x = rect.min.x + f * rect.width();
-                                painter.line_segment(
-                                    [egui::pos2(x, rect.min.y), egui::pos2(x, rect.max.y)],
+                                // leans clockwise: the top end lies right of the middle
+                                let half = rect.height() / 2.0 * cut_tan;
+                                painter.with_clip_rect(rect).line_segment(
+                                    [
+                                        egui::pos2(x + half, rect.min.y),
+                                        egui::pos2(x - half, rect.max.y),
+                                    ],
                                     egui::Stroke::new(2.0, Color32::from_rgb(255, 140, 0)),
                                 );
                             }
@@ -3613,10 +3758,11 @@ impl App {
                                             .clamp(0.02, 0.98);
                                         if resp.dragged() {
                                             let x = rect.min.x + f * rect.width();
-                                            painter.line_segment(
+                                            let half = rect.height() / 2.0 * cut_tan;
+                                            painter.with_clip_rect(rect).line_segment(
                                                 [
-                                                    egui::pos2(x, rect.min.y),
-                                                    egui::pos2(x, rect.max.y),
+                                                    egui::pos2(x + half, rect.min.y),
+                                                    egui::pos2(x - half, rect.max.y),
                                                 ],
                                                 egui::Stroke::new(
                                                     2.0,
@@ -3794,15 +3940,14 @@ impl App {
                                     ));
                                 }
                                 if glive.is_none() && resp.drag_stopped() {
-                                    // thin the path to at most 24 points, fractions of the image
+                                    // keep the few nodes that follow the curve (smoothed, then
+                                    // simplified), as fractions of the image
                                     let n = gpath.len();
                                     if n >= 2
                                         && (gpath[0].x - gpath[n - 1].x).abs() >= 0.3 * rect.width()
                                     {
-                                        let step = n.div_ceil(24).max(1);
-                                        let mut v: Vec<(f32, f32)> = gpath
+                                        let raw: Vec<(f32, f32)> = gpath
                                             .iter()
-                                            .step_by(step)
                                             .map(|p| {
                                                 (
                                                     (p.x - rect.min.x) / rect.width().max(1.0),
@@ -3810,11 +3955,7 @@ impl App {
                                                 )
                                             })
                                             .collect();
-                                        let l = gpath[n - 1];
-                                        v.push((
-                                            (l.x - rect.min.x) / rect.width().max(1.0),
-                                            (l.y - rect.min.y) / rect.height().max(1.0),
-                                        ));
+                                        let v = crate::settings::simplify_guide(&raw, 10);
                                         new_guide = Some(v);
                                     }
                                     gpath.clear();
@@ -3951,7 +4092,7 @@ impl App {
                                 }
                             }
                         }
-                        if let (false, true, Some((b, dpi, (pw, ph)))) =
+                        if let (false, true, Some((b, dpi, (pw, ph), page_part))) =
                             (*is_orig, edit_box, boxinfo)
                         {
                             // content box of this page: green frame, edges draggable
@@ -4041,12 +4182,98 @@ impl App {
                                         _ => (now.y - start.y) / ky,
                                     } * mm_per_px;
                                     if grow.abs() > 0.05 {
-                                        box_delta = Some((e, grow));
+                                        box_delta = Some((e, grow, *page_part));
                                     }
                                     *bdrag = None;
                                 }
                             } else if resp.drag_stopped() {
                                 *bdrag = None;
+                            }
+                        }
+                        if let (false, Some((_, dpi, (pw, ph), _))) = (*is_orig, boxinfo) {
+                            // OCR zones (green) and ignored areas (red) of the output page, in mm
+                            let rect = resp.rect;
+                            let (kx, ky) = (
+                                rect.width() / (*pw).max(1) as f32,
+                                rect.height() / (*ph).max(1) as f32,
+                            );
+                            let px_per_mm = (*dpi).max(1) as f32 / 25.4;
+                            let to_scr = |x: f32, y: f32| {
+                                egui::pos2(
+                                    rect.min.x + x * px_per_mm * kx,
+                                    rect.min.y + y * px_per_mm * ky,
+                                )
+                            };
+                            let painter = ui.painter_at(rect);
+                            for (n, (r, ignore)) in ocr_rects.iter().enumerate() {
+                                let (fill, line) = if *ignore {
+                                    (
+                                        Color32::from_rgba_unmultiplied(230, 50, 80, 50),
+                                        Color32::from_rgb(230, 50, 80),
+                                    )
+                                } else {
+                                    (
+                                        Color32::from_rgba_unmultiplied(40, 190, 90, 45),
+                                        Color32::from_rgb(40, 170, 80),
+                                    )
+                                };
+                                let rr = egui::Rect::from_two_pos(
+                                    to_scr(r[0], r[1]),
+                                    to_scr(r[0] + r[2], r[1] + r[3]),
+                                );
+                                painter.rect_filled(rr, 0.0, fill);
+                                painter.rect_stroke(
+                                    rr,
+                                    0.0,
+                                    egui::Stroke::new(1.5, line),
+                                    egui::StrokeKind::Inside,
+                                );
+                                if ocr_tool != 0 && resp.secondary_clicked() {
+                                    if let Some(p) = resp.interact_pointer_pos() {
+                                        if rr.contains(p) {
+                                            remove_ocr = Some(n);
+                                        }
+                                    }
+                                }
+                            }
+                            if ocr_tool != 0 {
+                                if resp.drag_started() {
+                                    *odrag = ui
+                                        .input(|i| i.pointer.press_origin())
+                                        .or_else(|| resp.interact_pointer_pos());
+                                }
+                                if !ui.input(|i| i.pointer.any_down()) && !resp.drag_stopped() {
+                                    *odrag = None;
+                                }
+                                if let (Some(a), Some(b)) =
+                                    (*odrag, ui.input(|i| i.pointer.latest_pos()))
+                                {
+                                    let r = egui::Rect::from_two_pos(a, b).intersect(rect);
+                                    let col = if ocr_tool == 2 {
+                                        Color32::from_rgb(230, 50, 80)
+                                    } else {
+                                        Color32::from_rgb(40, 170, 80)
+                                    };
+                                    painter.rect_stroke(
+                                        r,
+                                        0.0,
+                                        egui::Stroke::new(2.0, col),
+                                        egui::StrokeKind::Inside,
+                                    );
+                                    if resp.drag_stopped() {
+                                        let mm = |p: egui::Pos2| {
+                                            (
+                                                (p.x - rect.min.x) / kx / px_per_mm,
+                                                (p.y - rect.min.y) / ky / px_per_mm,
+                                            )
+                                        };
+                                        let ((x0, y0), (x1, y1)) = (mm(r.min), mm(r.max));
+                                        if x1 - x0 >= 3.0 && y1 - y0 >= 3.0 {
+                                            new_ocr = Some((ocr_tool, [x0, y0, x1 - x0, y1 - y0]));
+                                        }
+                                        *odrag = None;
+                                    }
+                                }
                             }
                         }
                         ui.label(RichText::new(caption).small());
@@ -4061,10 +4288,70 @@ impl App {
                 .auto_shrink([false, false])
                 .show(ui, draw);
         }
-        if let Some((e, mm)) = box_delta {
+        if let Some((kind, r)) = new_ocr {
+            let item = format!("{:.1},{:.1},{:.1},{:.1}", r[0], r[1], r[2], r[3]);
+            let field = if kind == 2 {
+                &mut self.s.ocr_ignore
+            } else {
+                &mut self.s.ocr_zones
+            };
+            if !field.trim().is_empty() {
+                field.push_str("; ");
+            }
+            field.push_str(&item);
+            self.config_dirty = true;
+        }
+        if let Some(n) = remove_ocr {
+            // the n-th rectangle shown: zones first, then ignored areas
+            let split = |t: &str| -> Vec<String> {
+                t.split(';')
+                    .map(|x| x.trim().to_string())
+                    .filter(|x| !x.is_empty())
+                    .collect()
+            };
+            let mut zones = split(&self.s.ocr_zones);
+            let mut ign = split(&self.s.ocr_ignore);
+            if n < zones.len() {
+                zones.remove(n);
+            } else if n - zones.len() < ign.len() {
+                ign.remove(n - zones.len());
+            }
+            self.s.ocr_zones = zones.join("; ");
+            self.s.ocr_ignore = ign.join("; ");
+            self.config_dirty = true;
+        }
+        if let Some((e, mm, part)) = box_delta {
             let before = ZoneSnap::of(&self.sheets[i].adj);
-            let a = &mut self.sheets[i].adj.content_adjust_mm[e];
-            *a = (*a + mm).clamp(-100.0, 100.0);
+            let two_pages = self.sheets[i]
+                .ready
+                .as_ref()
+                .is_some_and(|r| r.pages.len() > 1);
+            match part.filter(|_| two_pages) {
+                // a cut sheet: the box of the page that was dragged changes, not the other page's
+                Some(slot) => {
+                    let adj = &mut self.sheets[i].adj;
+                    let list = &mut adj.page_pairs[(slot as usize).min(1)];
+                    let mut cur = list
+                        .iter()
+                        .find(|(k, _)| k == "content_adjust")
+                        .and_then(|(_, v)| {
+                            let p: Vec<f32> =
+                                v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                            <[f32; 4]>::try_from(p).ok()
+                        })
+                        .unwrap_or(adj.content_adjust_mm);
+                    cur[e] = (cur[e] + mm).clamp(-100.0, 100.0);
+                    legatorocr_engine::project::set_page_pair(
+                        &mut adj.page_pairs[(slot as usize).min(1)],
+                        "content_adjust",
+                        format!("{},{},{},{}", cur[0], cur[1], cur[2], cur[3]),
+                    );
+                }
+                None => {
+                    let a = &mut self.sheets[i].adj.content_adjust_mm[e];
+                    *a = (*a + mm).clamp(-100.0, 100.0);
+                }
+            }
             self.sheets[i].zone_undo.push(before);
             self.sheets[i].zone_redo.clear();
             self.sheets[i].last_edit = None;
@@ -4163,6 +4450,9 @@ impl App {
             let before = ZoneSnap::of(&self.sheets[i].adj);
             let adj = &mut self.sheets[i].adj;
             adj.split_frac = c;
+            if c.is_none() {
+                adj.cut_angle_deg = 0.0;
+            }
             // a cut line does nothing while splitting is off: turn it on for this sheet
             if c.is_some() && matches!(adj.split, Some(SplitChoice::Off)) {
                 adj.split = Some(SplitChoice::Middle);
