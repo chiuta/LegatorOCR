@@ -413,7 +413,9 @@ pub fn parse_bytes(b: &[u8]) -> Result<Doc, XmlError> {
     let text = if b.starts_with(&[0xff, 0xfe]) || b.starts_with(&[0xfe, 0xff]) {
         let le = b[0] == 0xff;
         let units: Vec<u16> = b[2..]
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| {
                 if le {
                     u16::from_le_bytes([c[0], c[1]])
