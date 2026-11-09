@@ -516,8 +516,10 @@ struct Cli {
     #[arg(long, value_name = "DIR")]
     verify_ocfl: Option<PathBuf>,
 
-    /// Check a BagIt bag (such as one made by --bagit): every file against its manifest, the
-    /// tag files, and files the manifest does not list; exit 1 on any problem; then exit.
+    /// Check a BagIt 1.0 bag (RFC 8493), such as one made by --bagit: declaration, manifests and
+    /// tag manifests, unsafe paths, files not listed, Payload-Oxum, every checksum (SHA-256,
+    /// SHA-512, SHA-1, MD5). Prints each finding with its category and "complete / valid";
+    /// exit 1 unless the bag is valid; then exit.
     #[arg(long, value_name = "DIR")]
     verify_bag: Option<PathBuf>,
 
@@ -2544,15 +2546,33 @@ fn real_main() -> Result<()> {
         return Ok(());
     }
     if let Some(bag) = &cli.verify_bag {
-        let problems = legatorocr_engine::bagit::verify(bag)?;
-        if problems.is_empty() {
+        let report = legatorocr_engine::bagit::validate(bag)?;
+        for f in &report.findings {
+            let kind = match f.severity {
+                legatorocr_engine::bagit::Severity::Error => "problem",
+                legatorocr_engine::bagit::Severity::Warning => "warning",
+            };
+            println!(
+                "{}: {kind} [{}] {}: {}",
+                bag.display(),
+                f.category.label(),
+                f.path,
+                f.message
+            );
+        }
+        if report.valid && report.findings.is_empty() {
             println!("{}: bag is intact", bag.display());
-            return Ok(());
         }
-        for p in &problems {
-            println!("{}: {p}", bag.display());
+        println!(
+            "{}: complete: {}, valid: {}",
+            bag.display(),
+            if report.complete { "yes" } else { "no" },
+            if report.valid { "yes" } else { "no" }
+        );
+        if !report.valid {
+            std::process::exit(1);
         }
-        std::process::exit(1);
+        return Ok(());
     }
     if let Some(list) = &cli.install_modules {
         return install_modules(
