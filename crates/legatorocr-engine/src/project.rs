@@ -438,6 +438,18 @@ pub fn apply_pair(s: &mut Settings, k: &str, v: &str) -> Result<bool> {
                 s.page_ocr_ignore = v.trim().to_string();
             }
         }
+        "page_skew" => {
+            // the manual tilt of one page: "auto" lets the program measure it, otherwise degrees
+            s.manual_skew_deg = if v.eq_ignore_ascii_case("auto") {
+                None
+            } else {
+                let d: f32 = v.parse().map_err(|_| bad())?;
+                if !d.is_finite() || d.abs() > 45.0 {
+                    return Err(bad());
+                }
+                Some(d)
+            };
+        }
         "page_keystone" => {
             let (a, b) = v.split_once(',').ok_or_else(bad)?;
             let k = [
@@ -998,6 +1010,39 @@ mod tests {
         assert!(Project::parse(&bad, None).is_err());
     }
 
+    /// A real project text with one sheet, plus one extra line under that sheet.
+    fn sheet_text(key: &str, value: &str) -> String {
+        let mut p = Project::default();
+        p.sheets
+            .push((PathBuf::from("/scans/a.png"), SheetAdj::default()));
+        let mut text = p.to_text(None);
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(&format!("{key} = {value}\n"));
+        text
+    }
+
+    #[test]
+    fn a_page_tilt_is_read_per_page_and_junk_is_refused() {
+        let mut s = Settings::default();
+        assert!(apply_pair(&mut s, "page_skew", "-2.5").is_ok());
+        assert_eq!(s.manual_skew_deg, Some(-2.5));
+        assert!(apply_pair(&mut s, "page_skew", "auto").is_ok());
+        assert_eq!(s.manual_skew_deg, None);
+        for bad in ["nan", "inf", "46", "-90", "x", ""] {
+            assert!(apply_pair(&mut s, "page_skew", bad).is_err(), "{bad}");
+        }
+        let text = sheet_text("page2.page_skew", "1.5");
+        let p = Project::parse(&text, None).unwrap();
+        assert_eq!(
+            p.sheets[0].1.page_pairs[1][0],
+            ("page_skew".into(), "1.5".into())
+        );
+        assert!(p.sheets[0].1.page_pairs[0].is_empty());
+        assert!(Project::parse(&sheet_text("page1.page_skew", "99"), None).is_err());
+    }
+
     #[test]
     fn hostile_ocr_regions_of_a_page_are_refused_not_stored() {
         for bad in [
@@ -1009,7 +1054,7 @@ mod tests {
             "1,2,3,4;;;x",
             "1,2,3,4=\n[sheet]",
         ] {
-            let text = format!("[sheet]\npath = /a.png\npage1.page_ocr_zones = {bad}\n");
+            let text = sheet_text("page1.page_ocr_zones", bad);
             let r = Project::parse(&text, None);
             if let Ok(p) = r {
                 // anything accepted must hold only regions that parse
@@ -1029,7 +1074,7 @@ mod tests {
             }
         }
         let long = vec!["1,2,3,4"; 2000].join(";");
-        let text = format!("[sheet]\npath = /a.png\npage1.page_ocr_zones = {long}\n");
+        let text = sheet_text("page1.page_ocr_zones", &long);
         assert!(Project::parse(&text, None).is_err());
     }
 

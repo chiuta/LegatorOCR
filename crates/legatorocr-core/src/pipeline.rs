@@ -2849,6 +2849,40 @@ mod tests {
     }
 
     #[test]
+    fn a_manual_tilt_set_for_one_page_leaves_the_other_page_alone() {
+        // two text pages side by side on one sheet; only the right page gets a manual tilt
+        let g = text_page(3000, 2000, 250, 1250);
+        let g2 = text_page(3000, 2000, 250, 1250);
+        let mut both = GrayImage::from_pixel(3000, 2000, Luma([235]));
+        for y in 0..2000 {
+            for x in 0..1500 {
+                both.put_pixel(x, y, *g.get_pixel(x, y));
+                both.put_pixel(1500 + x, y, *g2.get_pixel(x, y));
+            }
+        }
+        let src = image::DynamicImage::ImageRgb8(to_rgb(&both));
+        let base = Settings {
+            split: SplitMode::Middle,
+            deskew: false,
+            ..Default::default()
+        };
+        let mut own = base.clone();
+        own.manual_skew_deg = Some(3.0);
+        let with = Settings {
+            part_settings: [None, Some(Box::new(own))],
+            ..base.clone()
+        };
+        let pages = process_page(&src, &with);
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].skew_deg, 0.0);
+        assert!(
+            (pages[1].skew_deg - 3.0).abs() < 1e-3,
+            "{}",
+            pages[1].skew_deg
+        );
+    }
+
+    #[test]
     fn end_to_end_page_geometry() {
         let g = text_page(1500, 2000, 250, 1250);
         let rot = transform::rotate_cw(&to_rgb(&g), 2.0f32.to_radians(), Rgb([235; 3]));
