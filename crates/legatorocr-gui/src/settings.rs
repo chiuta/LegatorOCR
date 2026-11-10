@@ -791,6 +791,11 @@ pub const PAGE_KEYS: &[&str] = &[
     "descreen",
     "trim_background",
     "smooth_glyphs",
+    "dewarp",
+    "dewarp_margin",
+    "dewarp_guides",
+    "perspective",
+    "erase",
 ];
 
 impl UiSettings {
@@ -1222,5 +1227,27 @@ mod tests {
             &mut adj,
             1
         ));
+    }
+
+    #[test]
+    fn straightening_and_perspective_can_be_set_for_one_page() {
+        // these boxes sit under "Settings for: this page" and must not be dropped silently
+        let general = UiSettings::default();
+        let mut adj = SheetAdjust::default();
+        let mut edited = general.for_page(&adj, 1);
+        edited.dewarp = !general.dewarp;
+        edited.dewarp_margin = !general.dewarp_margin;
+        assert!(UiSettings::store_page_changes(
+            &general, &edited, &mut adj, 1
+        ));
+        let back = general.for_page(&adj, 1);
+        assert_eq!(back.dewarp, !general.dewarp);
+        assert_eq!(back.dewarp_margin, !general.dewarp_margin);
+        assert_eq!(general.for_page(&adj, 0).dewarp, general.dewarp);
+        let core = general.to_core(&adj);
+        assert_eq!(
+            core.part_settings[1].as_ref().map(|p| p.dewarp),
+            Some(!general.dewarp)
+        );
     }
 }

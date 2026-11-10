@@ -148,6 +148,28 @@ fn px_box(r: &Rect, dpi: u32, w: u32, h: u32) -> Option<(u32, u32, u32, u32)> {
     (x1 > x0 + 4 && y1 > y0 + 4).then_some((x0, y0, x1 - x0, y1 - y0))
 }
 
+/// Paint the given page rectangles (x, y, w, h in page pixels) with paper colour in `img`, which
+/// is the part of the page starting at `(ox, oy)`.
+fn blank(img: &mut PageImage, ox: u32, oy: u32, rects: &[(u32, u32, u32, u32)]) {
+    let (iw, ih) = (img.width(), img.height());
+    for &(x, y, w, h) in rects {
+        // the rectangle in the coordinates of `img`, clipped to it
+        let x0 = x.saturating_sub(ox).min(iw);
+        let y0 = y.saturating_sub(oy).min(ih);
+        let x1 = (x + w).saturating_sub(ox).min(iw);
+        let y1 = (y + h).saturating_sub(oy).min(ih);
+        for yy in y0..y1 {
+            for xx in x0..x1 {
+                match img {
+                    PageImage::Rgb(i) => i.put_pixel(xx, yy, image::Rgb([255, 255, 255])),
+                    PageImage::Gray(i) => i.put_pixel(xx, yy, image::Luma([255])),
+                    PageImage::Bw(b) => b.set(xx, yy, false),
+                }
+            }
+        }
+    }
+}
+
 fn crop(page: &PageImage, x: u32, y: u32, w: u32, h: u32) -> PageImage {
     match page {
         PageImage::Rgb(i) => PageImage::Rgb(image::imageops::crop_imm(i, x, y, w, h).to_image()),
@@ -172,13 +194,32 @@ pub fn recognize(
     };
     let (pw, ph) = (page.width(), page.height());
     let mut words: Vec<Word> = Vec::new();
+    let boxes: Vec<_> = ignores
+        .iter()
+        .filter_map(|r| px_box(r, dpi, pw, ph))
+        .collect();
     if zones.is_empty() {
-        words = inner(page, dpi, o)?;
+        if boxes.is_empty() {
+            words = inner(page, dpi, o)?;
+        } else {
+            // what is ignored is painted out first, so it cannot disturb the reading of the rest
+            let mut copy = crop(page, 0, 0, pw, ph);
+            blank(&mut copy, 0, 0, &boxes);
+            words = inner(&copy, dpi, o)?;
+        }
     } else {
+        // the areas already read by earlier zones
+        let mut done: Vec<(u32, u32, u32, u32)> = Vec::new();
         for (zi, z) in zones.iter().enumerate() {
             let Some((x, y, w, h)) = px_box(&z.rect, dpi, pw, ph) else {
                 continue;
             };
+            // ignored areas and the parts of earlier zones inside this zone are painted out: they
+            // may overlap it, and must neither disturb the reading nor be read twice
+            let mut piece = crop(page, x, y, w, h);
+            let covered: Vec<_> = boxes.iter().chain(done.iter()).copied().collect();
+            blank(&mut piece, x, y, &covered);
+            done.push((x, y, w, h));
             let mut opt = o.clone();
             if let Some(l) = &z.lang {
                 opt.lang = l.clone();
@@ -186,7 +227,7 @@ pub fn recognize(
             if z.table {
                 opt.psm = 6;
             }
-            for mut wd in inner(&crop(page, x, y, w, h), dpi, &opt)? {
+            for mut wd in inner(&piece, dpi, &opt)? {
                 wd.x += x;
                 wd.y += y;
                 // lines of different zones must never merge
@@ -195,10 +236,6 @@ pub fn recognize(
             }
         }
     }
-    let boxes: Vec<_> = ignores
-        .iter()
-        .filter_map(|r| px_box(r, dpi, pw, ph))
-        .collect();
     words.retain(|w| {
         let (cx, cy) = (w.x + w.w / 2, w.y + w.h / 2);
         !boxes
@@ -381,5 +418,58 @@ mod tests {
         assert_eq!((c.w, c.h), (30, 30));
         assert!(c.get(10, 10) && !c.get(0, 0));
         assert!(px_box(&parse_rect("0,0,2,2").unwrap(), 25, 600, 800).is_none());
+    }
+
+    #[test]
+    fn overlapping_zones_and_ignored_areas_are_painted_out_before_reading() {
+        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // a page with a dark square; the reader reports how much ink each piece holds
+        let mut g = image::GrayImage::from_pixel(600, 800, image::Luma([255]));
+        for y in 100..200 {
+            for x in 100..200 {
+                g.put_pixel(x, y, image::Luma([0]));
+            }
+        }
+        let page = PageImage::Gray(g);
+        fn ink(p: &PageImage, _d: u32, _o: &OcrOptions) -> Result<Vec<Word>, OcrError> {
+            let PageImage::Gray(g) = p else {
+                return Ok(vec![]);
+            };
+            let n = g.pixels().filter(|p| p.0[0] < 128).count() as u32;
+            Ok(vec![Word {
+                text: n.to_string(),
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+                conf: 90.0,
+                line: 1,
+            }])
+        }
+        let dpi = 254; // 10 px per mm
+                       // the second zone lies on the first: the shared part is read once
+        set(
+            vec![
+                parse_zone("5,5,20,20").unwrap(),
+                parse_zone("10,10,20,20").unwrap(),
+            ],
+            vec![],
+        );
+        let w = recognize(&page, dpi, &OcrOptions::default(), &ink).unwrap();
+        let n: Vec<u32> = w.iter().map(|w| w.text.parse().unwrap()).collect();
+        // zone 1 (50..250) holds the whole square (100x100 = 10000), zone 2 only what zone 1 did not
+        assert_eq!(n, vec![10000, 0]);
+        // an ignored area is painted out of the zone, whatever the zone is
+        set(
+            vec![parse_zone("5,5,20,20").unwrap()],
+            vec![parse_rect("10,10,5,5").unwrap()],
+        );
+        let w = recognize(&page, dpi, &OcrOptions::default(), &ink).unwrap();
+        assert_eq!(w[0].text.parse::<u32>().unwrap(), 10000 - 50 * 50);
+        // only ignored areas: the whole page is read with them painted out
+        set(vec![], vec![parse_rect("10,10,5,5").unwrap()]);
+        let w = recognize(&page, dpi, &OcrOptions::default(), &ink).unwrap();
+        assert_eq!(w[0].text.parse::<u32>().unwrap(), 10000 - 50 * 50);
+        set(vec![], vec![]);
     }
 }

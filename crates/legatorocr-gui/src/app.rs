@@ -90,6 +90,8 @@ struct PageTex {
     skew_deg: f32,
     blank: bool,
     content_box: Option<[u32; 4]>,
+    /// The block of text found from the picture (see `worker::text_block`).
+    text_box: Option<[u32; 4]>,
     dpi: u32,
     split_index: Option<u8>,
 }
@@ -233,6 +235,8 @@ pub struct App {
     pv_rx: mpsc::Receiver<PreviewResult>,
     view: View,
     fit: bool,
+    /// Zoomed preview (fit off): the mouse drags the picture instead of drawing.
+    hand: bool,
     zoom: f32,
     job: Option<Job>,
     status: Option<(String, bool)>,
@@ -337,6 +341,7 @@ impl App {
             pv_rx,
             view: View::Both,
             fit: true,
+            hand: false,
             zoom: 1.0,
             job: None,
             status: None,
@@ -781,6 +786,7 @@ impl App {
                             skew_deg: info.skew_deg,
                             blank: info.blank,
                             content_box: info.content_box,
+                            text_box: info.text_box,
                             dpi: info.dpi,
                             split_index: info.split_index,
                         })
@@ -1318,6 +1324,25 @@ impl App {
                     }
                 }
                 ui.separator();
+                // text size, also here so it can be reached whatever the window shows
+                let cur = self.ui_zoom.unwrap_or(1.0);
+                ui.label(format!("{}: {:.0}%", self.tr("zoom.text"), cur * 100.0));
+                ui.horizontal(|ui| {
+                    if ui.button("A-").on_hover_text(self.tr("zoom.out")).clicked() {
+                        self.set_ui_zoom(cur - 0.1);
+                    }
+                    if ui.button("A+").on_hover_text(self.tr("zoom.in")).clicked() {
+                        self.set_ui_zoom(cur + 0.1);
+                    }
+                    if ui
+                        .button("Auto")
+                        .on_hover_text(self.tr("zoom.auto"))
+                        .clicked()
+                    {
+                        self.set_ui_zoom(0.0);
+                    }
+                });
+                ui.separator();
                 if ui.button(self.tr("menu.about")).clicked() {
                     self.show_about = true;
                     ui.close();
@@ -1828,10 +1853,14 @@ impl App {
             });
         });
         if let Some(z) = zoom_to {
-            // 0 = measure the screen again
-            self.ui_zoom = (z > 0.0).then(|| ((z.clamp(0.5, 3.0)) * 20.0).round() / 20.0);
-            self.config_dirty = true;
+            self.set_ui_zoom(z);
         }
+    }
+
+    /// Set the interface zoom; 0 measures the window again.
+    fn set_ui_zoom(&mut self, z: f32) {
+        self.ui_zoom = (z > 0.0).then(|| ((z.clamp(0.5, 3.0)) * 20.0).round() / 20.0);
+        self.config_dirty = true;
     }
 
     fn status_text(&mut self, ui: &mut egui::Ui) {
@@ -2987,7 +3016,8 @@ impl App {
                 r.pages
                     .iter()
                     .filter_map(|p| {
-                        let b = p.content_box?;
+                        // the text itself, not the page: fall back to the content box
+                        let b = p.text_box.or(p.content_box)?;
                         let k = 25.4 / p.dpi.max(1) as f32;
                         Some((
                             (p.split_index.unwrap_or(0) as usize).min(1),
@@ -3191,6 +3221,10 @@ impl App {
             // the zoom slider only means something when "fit" is off; shown greyed it looked like a stuck control
             if !self.fit {
                 ui.add(egui::Slider::new(&mut self.zoom, 0.2..=4.0).suffix("×"));
+                // the hand: drag the zoomed picture to the place to work on (Space or the middle
+                // button does the same without switching tools)
+                ui.toggle_value(&mut self.hand, tr("view.hand"))
+                    .on_hover_text(tr("view.hand_hint"));
             }
         });
         // --- per-sheet adjustments
@@ -3764,7 +3798,9 @@ impl App {
         let cell_w = (avail.x / n - ui.spacing().item_spacing.x).max(50.0);
         let cell_h = (avail.y - 24.0).max(50.0);
         let (fit, zoom) = (self.fit, self.zoom);
-        let draw_zones = self.draw_zones;
+        // zoomed in, with the hand: the mouse moves the picture, nothing is drawn or edited
+        let hand = !self.fit && (self.hand || ui.input(|i| i.key_down(egui::Key::Space)));
+        let draw_zones = self.draw_zones && !hand;
         let osz = ready.original_size;
         let mm_per_px = 25.4 / self.s.dpi.max(36) as f32;
         let zones: Vec<[f32; 4]> = sheet.adj.erase_mm.clone();
@@ -3789,10 +3825,10 @@ impl App {
         let mut node_move: Option<(usize, usize, (f32, f32))> = None;
         let mut node_remove: Option<(usize, usize)> = None;
         let mut node_insert: Option<(usize, usize, (f32, f32))> = None;
-        let edit_box = self.edit_box;
+        let edit_box = self.edit_box && !hand;
         let scope_now = self.page_scope;
         let mut picked_page: Option<u8> = None;
-        let ocr_tool = self.ocr_tool;
+        let ocr_tool = if hand { 0 } else { self.ocr_tool };
         let odrag = &mut self.ocr_drag;
         let mut new_ocr: Option<(u8, [f32; 4], usize)> = None;
         // (zone, is-ignore, index) rectangles in mm to show on the processed pages
@@ -4653,7 +4689,27 @@ impl App {
         } else {
             egui::ScrollArea::both()
                 .auto_shrink([false, false])
-                .show(ui, draw);
+                .show(ui, |ui| {
+                    let area = ui.clip_rect();
+                    let (grab, delta, over) = ui.input(|i| {
+                        (
+                            (hand && i.pointer.primary_down()) || i.pointer.middle_down(),
+                            i.pointer.delta(),
+                            i.pointer.hover_pos().is_some_and(|p| area.contains(p)),
+                        )
+                    });
+                    if over && (hand || grab) {
+                        ui.ctx().set_cursor_icon(if grab {
+                            egui::CursorIcon::Grabbing
+                        } else {
+                            egui::CursorIcon::Grab
+                        });
+                    }
+                    if over && grab && delta != egui::Vec2::ZERO {
+                        ui.scroll_with_delta(delta);
+                    }
+                    draw(ui)
+                });
         }
         if let Some(p) = picked_page {
             self.page_scope = Some(p);
@@ -4970,12 +5026,7 @@ impl eframe::App for App {
             .default_size(310.0)
             .min_size(250.0)
             .show(ui, |ui| self.settings_panel(ui));
-        if self.view != View::Original
-            && self
-                .selected
-                .and_then(|i| self.sheets.get(i))
-                .is_some_and(|s| s.ready.is_some())
-        {
+        if self.selected.is_some_and(|i| i < self.sheets.len()) {
             egui::Panel::bottom("pagetools").show(ui, |ui| self.page_tools(ui));
         }
         egui::CentralPanel::default().show(ui, |ui| self.preview(ui));
