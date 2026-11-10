@@ -834,6 +834,58 @@ impl UiSettings {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn hostile_guide_lines_never_hang_panic_or_lose_their_ends() {
+        let nan = f32::NAN;
+        let cases: Vec<Vec<(f32, f32)>> = vec![
+            vec![],
+            vec![(0.5, 0.5)],
+            vec![(0.0, 0.0), (1.0, 1.0)],
+            vec![(nan, nan); 50],
+            vec![
+                (0.1, 0.1),
+                (nan, 0.5),
+                (0.9, 0.9),
+                (f32::INFINITY, 0.2),
+                (0.3, f32::NEG_INFINITY),
+            ],
+            vec![(0.5, 0.5); 5000], // a click that never moved
+            vec![(f32::MAX, f32::MIN); 100],
+            (0..100_000)
+                .map(|i| (i as f32 / 1e5, ((i * 7919) % 1000) as f32 / 1000.0))
+                .collect(), // violent zigzag
+            (0..100_000).map(|i| (i as f32 / 1e5, 0.5)).collect(), // a perfect straight line
+            (0..2000)
+                .map(|i| ((i as f32).sin(), (i as f32).cos() * 1e6))
+                .collect(), // far outside the scan
+        ];
+        for (c, pts) in cases.iter().enumerate() {
+            for max in [0usize, 1, 2, 3, 10, 1000] {
+                let t = std::time::Instant::now();
+                let out = simplify_guide(pts, max);
+                assert!(t.elapsed().as_secs() < 5, "case {c} max {max}: too slow");
+                assert!(out.len() <= pts.len(), "case {c}: grew");
+                if pts.len() >= 2 {
+                    assert!(out.len() >= 2, "case {c} max {max}: lost an end");
+                    let same = |a: (f32, f32), b: (f32, f32)| {
+                        (a.0 == b.0 || a.0.is_nan()) && (a.1 == b.1 || a.1.is_nan())
+                    };
+                    assert!(
+                        same(out[0], pts[0]) && same(*out.last().unwrap(), *pts.last().unwrap()),
+                        "case {c} max {max}: ends moved"
+                    );
+                }
+            }
+        }
+        // the everyday case: a gentle curve drawn with 400 samples gives few nodes, in order
+        let curve: Vec<(f32, f32)> = (0..400)
+            .map(|i| (i as f32 / 399.0, 0.5 + 0.1 * (i as f32 / 60.0).sin()))
+            .collect();
+        let out = simplify_guide(&curve, 10);
+        assert!((2..=10).contains(&out.len()), "{}", out.len());
+        assert!(out.windows(2).all(|w| w[0].0 <= w[1].0));
+    }
+
+    #[test]
     fn the_grid_has_the_asked_size_and_the_default_is_unchanged() {
         let g = grid_guides(7, 5);
         assert_eq!((g.len(), g[0].len()), (5, 7));

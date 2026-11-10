@@ -1682,7 +1682,12 @@ fn parse_page_size(s: &str) -> Result<(f32, f32)> {
     let (w, h) = lower
         .split_once('x')
         .context("page size must be a name (a2..a6, b3..b6, letter, legal, tabloid) or WxH")?;
-    let (w, h): (f32, f32) = (w.parse()?, h.parse()?);
+    let num = |t: &str| -> Result<f32> {
+        t.trim().parse().map_err(|_| {
+            anyhow::anyhow!("--page-size {s:?}: {t:?} is not a number (WxH in mm, or a paper name)")
+        })
+    };
+    let (w, h) = (num(w)?, num(h)?);
     in_range("page-size width", w, 10.0, 2000.0)?;
     in_range("page-size height", h, 10.0, 2000.0)?;
     Ok((w, h))

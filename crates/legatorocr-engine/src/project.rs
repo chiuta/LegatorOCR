@@ -214,6 +214,10 @@ fn b(v: &str) -> Option<bool> {
     }
 }
 
+/// Keys that act on the whole sheet (how it is turned, cut and sampled): a page of a cut sheet
+/// cannot have its own, so `pageN.KEY` refuses them instead of silently ignoring them.
+pub const SHEET_ONLY_KEYS: &[&str] = &["split", "auto_orient", "cut_angle", "keystone", "dpi"];
+
 /// Settings as `(key, value)` pairs.
 pub fn settings_to_pairs(s: &Settings) -> Vec<(&'static str, String)> {
     let [a, b, c, d] = s.margins_mm;
@@ -617,6 +621,11 @@ impl Project {
                     .or_else(|| k.strip_prefix("page2.").map(|r| (1usize, r))),
             ) {
                 let (slot, key) = rest;
+                if SHEET_ONLY_KEYS.contains(&key) {
+                    return Err(at(anyhow::anyhow!(
+                        "'{key}' belongs to the whole sheet, not to one page"
+                    )));
+                }
                 let mut probe = Settings::default();
                 match apply_pair(&mut probe, key, v) {
                     Ok(true) => set_page_pair(&mut adj.page_pairs[slot], key, v.to_string()),

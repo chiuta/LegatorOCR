@@ -53,9 +53,10 @@ pub fn parse_rect(s: &str) -> Result<Rect> {
 }
 
 pub fn parse_zone(s: &str) -> Result<Zone> {
-    let (s, table) = match s.trim().strip_suffix("#table") {
-        Some(t) => (t.trim_end(), true),
-        None => (s.trim(), false),
+    let s = s.trim();
+    let (s, table) = match s.len().checked_sub(6).and_then(|i| s.get(i..)) {
+        Some(tail) if tail.eq_ignore_ascii_case("#table") => (s[..s.len() - 6].trim_end(), true),
+        _ => (s, false),
     };
     let (r, lang) = match s.split_once('=') {
         Some((r, l)) => (r, Some(l.trim())),
@@ -207,6 +208,8 @@ mod tests {
         let t = parse_zone("5,5,50,50=ron#table").unwrap();
         assert!(t.table && t.lang.as_deref() == Some("ron"));
         assert!(parse_zone("5,5,50,50 #table").unwrap().table);
+        assert!(parse_zone("5,5,50,50#TaBlE").unwrap().table);
+        assert!(parse_zone("ß#tabl").is_err() && parse_zone("é").is_err()); // multi-byte tails
         assert!(!parse_zone("5,5,50,50").unwrap().table);
     }
 
