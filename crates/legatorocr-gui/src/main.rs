@@ -18,6 +18,7 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_title("LegatorOCR")
             .with_inner_size([1360.0, 860.0])
+            .with_maximized(true)
             .with_min_inner_size([980.0, 600.0]),
         ..Default::default()
     };
