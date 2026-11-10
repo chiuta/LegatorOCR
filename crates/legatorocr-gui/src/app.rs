@@ -3720,7 +3720,10 @@ impl App {
                         if let (false, Some((_, _, _, Some(part)))) = (*is_orig, boxinfo) {
                             // a click selects this page: the settings, the keystone, the box and
                             // the pencils then work on it alone
-                            if resp.clicked() && !edit_box && ocr_tool == 0 {
+                            // the page under the mouse is the one the settings and tools work on
+                            if (resp.clicked() || ui.rect_contains_pointer(resp.rect))
+                                && odrag.is_none()
+                            {
                                 picked_page = Some(*part);
                             }
                             if scope_now == Some(*part) {
@@ -4439,12 +4442,18 @@ impl App {
                                         .input(|i| i.pointer.press_origin())
                                         .or_else(|| resp.interact_pointer_pos());
                                 }
-                                if !ui.input(|i| i.pointer.any_down()) && !resp.drag_stopped() {
+                                // a drag belongs to the page it started on: another page's cell,
+                                // drawn earlier in the same frame, must not end it
+                                if !ui.input(|i| i.pointer.any_down())
+                                    && !resp.drag_stopped()
+                                    && odrag.is_none_or(|a| rect.contains(a))
+                                {
                                     *odrag = None;
                                 }
-                                if let (Some(a), Some(b)) =
-                                    (*odrag, ui.input(|i| i.pointer.latest_pos()))
-                                {
+                                if let (Some(a), Some(b)) = (
+                                    (*odrag).filter(|a| rect.contains(*a)),
+                                    ui.input(|i| i.pointer.latest_pos()),
+                                ) {
                                     let r = egui::Rect::from_two_pos(a, b).intersect(rect);
                                     let col = if ocr_tool == 3 {
                                         Color32::from_rgb(110, 60, 190)
