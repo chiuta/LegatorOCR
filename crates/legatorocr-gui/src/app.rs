@@ -235,6 +235,8 @@ pub struct App {
     pv_rx: mpsc::Receiver<PreviewResult>,
     view: View,
     fit: bool,
+    /// Zoomed preview (fit off): the mouse drags the picture instead of drawing.
+    hand: bool,
     zoom: f32,
     job: Option<Job>,
     status: Option<(String, bool)>,
@@ -339,6 +341,7 @@ impl App {
             pv_rx,
             view: View::Both,
             fit: true,
+            hand: false,
             zoom: 1.0,
             job: None,
             status: None,
@@ -3218,6 +3221,10 @@ impl App {
             // the zoom slider only means something when "fit" is off; shown greyed it looked like a stuck control
             if !self.fit {
                 ui.add(egui::Slider::new(&mut self.zoom, 0.2..=4.0).suffix("×"));
+                // the hand: drag the zoomed picture to the place to work on (Space or the middle
+                // button does the same without switching tools)
+                ui.toggle_value(&mut self.hand, tr("view.hand"))
+                    .on_hover_text(tr("view.hand_hint"));
             }
         });
         // --- per-sheet adjustments
@@ -3791,7 +3798,9 @@ impl App {
         let cell_w = (avail.x / n - ui.spacing().item_spacing.x).max(50.0);
         let cell_h = (avail.y - 24.0).max(50.0);
         let (fit, zoom) = (self.fit, self.zoom);
-        let draw_zones = self.draw_zones;
+        // zoomed in, with the hand: the mouse moves the picture, nothing is drawn or edited
+        let hand = !self.fit && (self.hand || ui.input(|i| i.key_down(egui::Key::Space)));
+        let draw_zones = self.draw_zones && !hand;
         let osz = ready.original_size;
         let mm_per_px = 25.4 / self.s.dpi.max(36) as f32;
         let zones: Vec<[f32; 4]> = sheet.adj.erase_mm.clone();
@@ -3816,10 +3825,10 @@ impl App {
         let mut node_move: Option<(usize, usize, (f32, f32))> = None;
         let mut node_remove: Option<(usize, usize)> = None;
         let mut node_insert: Option<(usize, usize, (f32, f32))> = None;
-        let edit_box = self.edit_box;
+        let edit_box = self.edit_box && !hand;
         let scope_now = self.page_scope;
         let mut picked_page: Option<u8> = None;
-        let ocr_tool = self.ocr_tool;
+        let ocr_tool = if hand { 0 } else { self.ocr_tool };
         let odrag = &mut self.ocr_drag;
         let mut new_ocr: Option<(u8, [f32; 4], usize)> = None;
         // (zone, is-ignore, index) rectangles in mm to show on the processed pages
@@ -4680,7 +4689,27 @@ impl App {
         } else {
             egui::ScrollArea::both()
                 .auto_shrink([false, false])
-                .show(ui, draw);
+                .show(ui, |ui| {
+                    let area = ui.clip_rect();
+                    let (grab, delta, over) = ui.input(|i| {
+                        (
+                            (hand && i.pointer.primary_down()) || i.pointer.middle_down(),
+                            i.pointer.delta(),
+                            i.pointer.hover_pos().is_some_and(|p| area.contains(p)),
+                        )
+                    });
+                    if over && (hand || grab) {
+                        ui.ctx().set_cursor_icon(if grab {
+                            egui::CursorIcon::Grabbing
+                        } else {
+                            egui::CursorIcon::Grab
+                        });
+                    }
+                    if over && grab && delta != egui::Vec2::ZERO {
+                        ui.scroll_with_delta(delta);
+                    }
+                    draw(ui)
+                });
         }
         if let Some(p) = picked_page {
             self.page_scope = Some(p);
