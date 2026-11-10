@@ -3251,6 +3251,16 @@ impl App {
             .is_some_and(|r| r.pages.len() > 1)
             .then_some(self.page_scope)
             .flatten();
+        // the tilt measured on the selected page, for its manual tilt box
+        let det_page: f32 = key_page
+            .and_then(|slot| {
+                self.sheets[i]
+                    .ready
+                    .as_ref()
+                    .and_then(|r| r.pages.iter().find(|p| p.split_index == Some(slot)))
+                    .map(|p| p.skew_deg)
+            })
+            .unwrap_or(0.0);
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(tr("adj.title")).strong());
             let adj = &mut self.sheets[i].adj;
@@ -3429,32 +3439,91 @@ impl App {
                     }
                 });
             ui.separator();
-            let mut manual = adj.skew_deg.is_some();
-            if ui.checkbox(&mut manual, tr("adj.skew_manual")).changed() {
-                adj.skew_deg = manual.then_some((detected * 100.0).round() / 100.0);
-                adj_changed = true;
-            }
-            if let Some(v) = adj.skew_deg.as_mut() {
-                // The slider is for fine work (±10°); a larger value (left by a 45° step) must not be
-                // clamped back every frame, so the slider only clamps what the user edits, and a
-                // number box takes any angle up to ±45°.
-                adj_changed |= ui
-                    .add(
-                        egui::Slider::new(v, -10.0..=10.0)
-                            .clamping(egui::SliderClamping::Edits)
-                            .suffix("°")
-                            .fixed_decimals(2),
-                    )
-                    .changed();
-                adj_changed |= ui
-                    .add(
-                        egui::DragValue::new(v)
-                            .range(-45.0..=45.0)
-                            .speed(0.1)
-                            .suffix("°")
-                            .fixed_decimals(2),
-                    )
-                    .changed();
+            if let Some(slot) = key_page {
+                // a cut sheet with a page selected: the tilt is that page's own
+                let slot = slot as usize;
+                let key = "page_skew";
+                let cur: Option<f32> = adj.page_pairs[slot]
+                    .iter()
+                    .find(|(k, _)| k == key)
+                    .and_then(|(_, v)| v.parse::<f32>().ok());
+                let mut manual = cur.is_some();
+                let page = tr(if slot == 0 {
+                    "scope.left"
+                } else {
+                    "scope.right"
+                });
+                if ui
+                    .checkbox(&mut manual, format!("{} ({page})", tr("adj.skew_manual")))
+                    .changed()
+                {
+                    if manual {
+                        legatorocr_engine::project::set_page_pair(
+                            &mut adj.page_pairs[slot],
+                            key,
+                            format!("{:.2}", (det_page * 100.0).round() / 100.0),
+                        );
+                    } else {
+                        // back to what the sheet says
+                        adj.page_pairs[slot].retain(|(k, _)| k != key);
+                    }
+                    adj_changed = true;
+                }
+                if let Some(mut v) = cur {
+                    let mut moved = ui
+                        .add(
+                            egui::Slider::new(&mut v, -10.0..=10.0)
+                                .clamping(egui::SliderClamping::Edits)
+                                .suffix("°")
+                                .fixed_decimals(2),
+                        )
+                        .changed();
+                    moved |= ui
+                        .add(
+                            egui::DragValue::new(&mut v)
+                                .range(-45.0..=45.0)
+                                .speed(0.1)
+                                .suffix("°")
+                                .fixed_decimals(2),
+                        )
+                        .changed();
+                    if moved && v.is_finite() {
+                        legatorocr_engine::project::set_page_pair(
+                            &mut adj.page_pairs[slot],
+                            key,
+                            format!("{v:.2}"),
+                        );
+                        adj_changed = true;
+                    }
+                }
+            } else {
+                let mut manual = adj.skew_deg.is_some();
+                if ui.checkbox(&mut manual, tr("adj.skew_manual")).changed() {
+                    adj.skew_deg = manual.then_some((detected * 100.0).round() / 100.0);
+                    adj_changed = true;
+                }
+                if let Some(v) = adj.skew_deg.as_mut() {
+                    // The slider is for fine work (±10°); a larger value (left by a 45° step) must not be
+                    // clamped back every frame, so the slider only clamps what the user edits, and a
+                    // number box takes any angle up to ±45°.
+                    adj_changed |= ui
+                        .add(
+                            egui::Slider::new(v, -10.0..=10.0)
+                                .clamping(egui::SliderClamping::Edits)
+                                .suffix("°")
+                                .fixed_decimals(2),
+                        )
+                        .changed();
+                    adj_changed |= ui
+                        .add(
+                            egui::DragValue::new(v)
+                                .range(-45.0..=45.0)
+                                .speed(0.1)
+                                .suffix("°")
+                                .fixed_decimals(2),
+                        )
+                        .changed();
+                }
             }
             if ui.button(tr("zones.clear")).clicked()
                 && !(adj.erase_mm.is_empty()

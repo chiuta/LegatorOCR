@@ -87,6 +87,7 @@
 <li><b>Settings per page.</b> "Settings for: All pages / This page only", above Output and Clean-up, applies the output mode, threshold, despeckle and the other clean-up settings to a single page of a cut sheet; the green content box changes only the page it is dragged on. In a project: <code>page1.KEY = VALUE</code> / <code>page2.KEY = VALUE</code> under [sheet]. A click on a processed page selects it (blue frame): the output mode (gray, black-and-white, mixed), clean-up, keystone, the green box and the OCR pencils then work on that page alone. OCR zones you draw stay with that page (<code>page1.page_ocr_zones</code>, <code>page_ocr_ignore</code>).</li>
 </ul>
 <p>The bar below the preview holds the content box, the OCR pencils and <b>Auto OCR pencil</b> (separately for the left and the right page): it puts the OCR zone on the content of that page.</p>
+<p>The manual tilt works on the selected page (left or right) of a cut sheet: each page can have its own angle (<code>page1.page_skew</code>, <code>page2.page_skew</code>).</p>
 <p>Page sizes now include A2–A6, B3–B6, Letter, Legal and Tabloid (<code>--page-size</code> takes the same names). OCR pencils on processed pages: green (OCR zone), red (ignored area), violet (table, read as one block row by row; <code>--ocr-zone X,Y,W,H#table</code>).</p>
 <h3 id="setările-din-dreapta">The settings on the right</h3>
 <p>They are grouped into sections: Input, Geometry, Output, Cleaning, PDF, OCR, plus the profiles. Section 6 explains what each one does.</p>

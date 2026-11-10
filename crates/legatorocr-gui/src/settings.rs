@@ -764,6 +764,7 @@ mod portable_tests {
 /// page, and its content box); the geometry of the sheet and the layout of the document stay global.
 pub const PAGE_KEYS: &[&str] = &[
     "page_keystone",
+    "page_skew",
     "page_ocr_zones",
     "page_ocr_ignore",
     "content_adjust",
