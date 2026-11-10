@@ -2,7 +2,7 @@
 
 [English](README.md) · [Română](README.ro.md) · [Français](README.fr.md) · [Italiano](README.it.md) · [Español](README.es.md) · [Português](README.pt.md) · **Deutsch** · [Magyar](README.hu.md)
 
-Version: 0.2.0-pre.45 · Letzte Aktualisierung: 2026-11-10
+Version: 0.2.0-pre.46 · Letzte Aktualisierung: 2026-11-10
 
 Präsentationsseite: <https://legatorocr.chiuta.ro> (Quellcode in `docs/`).
 
