@@ -1318,6 +1318,25 @@ impl App {
                     }
                 }
                 ui.separator();
+                // text size, also here so it can be reached whatever the window shows
+                let cur = self.ui_zoom.unwrap_or(1.0);
+                ui.label(format!("{}: {:.0}%", self.tr("zoom.text"), cur * 100.0));
+                ui.horizontal(|ui| {
+                    if ui.button("A-").on_hover_text(self.tr("zoom.out")).clicked() {
+                        self.set_ui_zoom(cur - 0.1);
+                    }
+                    if ui.button("A+").on_hover_text(self.tr("zoom.in")).clicked() {
+                        self.set_ui_zoom(cur + 0.1);
+                    }
+                    if ui
+                        .button("Auto")
+                        .on_hover_text(self.tr("zoom.auto"))
+                        .clicked()
+                    {
+                        self.set_ui_zoom(0.0);
+                    }
+                });
+                ui.separator();
                 if ui.button(self.tr("menu.about")).clicked() {
                     self.show_about = true;
                     ui.close();
@@ -1828,10 +1847,14 @@ impl App {
             });
         });
         if let Some(z) = zoom_to {
-            // 0 = measure the screen again
-            self.ui_zoom = (z > 0.0).then(|| ((z.clamp(0.5, 3.0)) * 20.0).round() / 20.0);
-            self.config_dirty = true;
+            self.set_ui_zoom(z);
         }
+    }
+
+    /// Set the interface zoom; 0 measures the window again.
+    fn set_ui_zoom(&mut self, z: f32) {
+        self.ui_zoom = (z > 0.0).then(|| ((z.clamp(0.5, 3.0)) * 20.0).round() / 20.0);
+        self.config_dirty = true;
     }
 
     fn status_text(&mut self, ui: &mut egui::Ui) {
@@ -4970,12 +4993,7 @@ impl eframe::App for App {
             .default_size(310.0)
             .min_size(250.0)
             .show(ui, |ui| self.settings_panel(ui));
-        if self.view != View::Original
-            && self
-                .selected
-                .and_then(|i| self.sheets.get(i))
-                .is_some_and(|s| s.ready.is_some())
-        {
+        if self.selected.is_some_and(|i| i < self.sheets.len()) {
             egui::Panel::bottom("pagetools").show(ui, |ui| self.page_tools(ui));
         }
         egui::CentralPanel::default().show(ui, |ui| self.preview(ui));
