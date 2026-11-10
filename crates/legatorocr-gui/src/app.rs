@@ -2888,6 +2888,105 @@ impl App {
         }
     }
 
+    /// Bottom bar of the preview: the content box, the OCR pencils and the automatic pencil, which
+    /// puts the OCR zone on the content of one page (left or right), never on all of them.
+    fn page_tools(&mut self, ui: &mut egui::Ui) {
+        let lang = self.lang;
+        let tr = |k: &'static str| t(lang, k);
+        let Some(i) = self.selected.filter(|&i| i < self.sheets.len()) else {
+            return;
+        };
+        // per page: (slot, content box in mm)
+        let pages: Vec<(usize, [f32; 4])> = self.sheets[i]
+            .ready
+            .as_ref()
+            .map(|r| {
+                r.pages
+                    .iter()
+                    .filter_map(|p| {
+                        let b = p.content_box?;
+                        let k = 25.4 / p.dpi.max(1) as f32;
+                        Some((
+                            (p.split_index.unwrap_or(0) as usize).min(1),
+                            [
+                                b[0] as f32 * k,
+                                b[1] as f32 * k,
+                                b[2] as f32 * k,
+                                b[3] as f32 * k,
+                            ],
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let two = pages.len() > 1;
+        let mut auto: Option<(usize, [f32; 4])> = None;
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .checkbox(&mut self.edit_box, tr("box.edit"))
+                .on_hover_text(tr("box.hint"))
+                .changed()
+                && self.edit_box
+            {
+                // the box and the pencils both use the drag on the page: one at a time
+                self.ocr_tool = 0;
+                self.ocr_drag = None;
+            }
+            for (v, k) in [
+                (1u8, "ocr.tool_zone"),
+                (2u8, "ocr.tool_ignore"),
+                (3u8, "ocr.tool_table"),
+            ] {
+                if ui
+                    .selectable_label(self.ocr_tool == v, tr(k))
+                    .on_hover_text(tr("ocr.tool_hint"))
+                    .clicked()
+                {
+                    self.ocr_tool = if self.ocr_tool == v { 0 } else { v };
+                    self.ocr_drag = None;
+                    if self.ocr_tool != 0 {
+                        self.edit_box = false;
+                    }
+                }
+            }
+            for (slot, b) in &pages {
+                let label = if two {
+                    format!(
+                        "{} — {}",
+                        tr("ocr.auto"),
+                        tr(if *slot == 0 {
+                            "ocr.auto_left"
+                        } else {
+                            "ocr.auto_right"
+                        })
+                    )
+                } else {
+                    tr("ocr.auto").to_string()
+                };
+                if ui
+                    .button(label)
+                    .on_hover_text(tr("ocr.auto_hint"))
+                    .clicked()
+                {
+                    auto = Some((*slot, *b));
+                }
+            }
+        });
+        if let Some((slot, b)) = auto {
+            let a = &mut self.sheets[i].adj;
+            let before = ZoneSnap::of(a);
+            legatorocr_engine::project::set_page_pair(
+                &mut a.page_pairs[slot],
+                "page_ocr_zones",
+                format!("{:.1},{:.1},{:.1},{:.1}", b[0], b[1], b[2], b[3]),
+            );
+            self.sheets[i].zone_undo.push(before);
+            self.sheets[i].zone_redo.clear();
+            self.sheets[i].adj_gen += 1;
+            self.page_scope = two.then_some(slot as u8);
+        }
+    }
+
     fn preview(&mut self, ui: &mut egui::Ui) {
         let lang = self.lang;
         let tr = |k: &'static str| t(lang, k);
@@ -2940,33 +3039,6 @@ impl App {
             ui.separator();
             ui.checkbox(&mut self.draw_zones, tr("zones.draw"))
                 .on_hover_text(tr("zones.hint"));
-            if ui
-                .checkbox(&mut self.edit_box, tr("box.edit"))
-                .on_hover_text(tr("box.hint"))
-                .changed()
-                && self.edit_box
-            {
-                // the box and the pencils both use the drag on the page: one at a time
-                self.ocr_tool = 0;
-                self.ocr_drag = None;
-            }
-            for (v, k) in [
-                (1u8, "ocr.tool_zone"),
-                (2u8, "ocr.tool_ignore"),
-                (3u8, "ocr.tool_table"),
-            ] {
-                if ui
-                    .selectable_label(self.ocr_tool == v, tr(k))
-                    .on_hover_text(tr("ocr.tool_hint"))
-                    .clicked()
-                {
-                    self.ocr_tool = if self.ocr_tool == v { 0 } else { v };
-                    self.ocr_drag = None;
-                    if self.ocr_tool != 0 {
-                        self.edit_box = false;
-                    }
-                }
-            }
             if self.draw_zones {
                 let plain = !self.draw_guide && !self.draw_pictures && !self.draw_nopic;
                 if ui
@@ -4811,6 +4883,14 @@ impl eframe::App for App {
             .default_size(310.0)
             .min_size(250.0)
             .show(ui, |ui| self.settings_panel(ui));
+        if self.view != View::Original
+            && self
+                .selected
+                .and_then(|i| self.sheets.get(i))
+                .is_some_and(|s| s.ready.is_some())
+        {
+            egui::Panel::bottom("pagetools").show(ui, |ui| self.page_tools(ui));
+        }
         egui::CentralPanel::default().show(ui, |ui| self.preview(ui));
         self.request_preview(&ctx);
         if self.lang != self.saved_lang {
