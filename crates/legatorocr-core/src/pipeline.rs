@@ -2681,6 +2681,49 @@ mod tests {
     }
 
     #[test]
+    fn mouse_drawn_picture_zones_work_with_a_page_of_its_own_mixed_mode() {
+        let g = text_page(2400, 900, 100, 2300);
+        let mut rgb = to_rgb(&g);
+        for y in 600..800 {
+            for x in 1700..2000 {
+                rgb.put_pixel(x, y, Rgb([200, 40, 40]));
+            }
+        }
+        let src = image::DynamicImage::ImageRgb8(rgb);
+        let mm = |px: f32| px / 300.0 * 25.4;
+        // the sheet is black and white; only the right page is Mixed, as chosen under
+        // "Settings for: right page only"; the zone was drawn on the original
+        let mut base = Settings {
+            mode: OutputMode::BlackWhite,
+            dpi: 300,
+            deskew: false,
+            split: SplitMode::Middle,
+            sheet_picture_zones: vec![[mm(1690.0), mm(590.0), mm(320.0), mm(220.0)]],
+            ..Settings::default()
+        };
+        let mut right = base.clone();
+        right.mode = OutputMode::Mixed;
+        base.part_settings = [None, Some(Box::new(right))];
+        let pages = process_page(&src, &base);
+        assert_eq!(pages.len(), 2);
+        assert!(red_share(&pages[0]).is_none());
+        assert!(
+            red_share(&pages[1]).unwrap_or(0.0) > 0.5,
+            "the picture zone must keep the picture in colour on the Mixed page"
+        );
+        // a "no picture" zone over it takes the picture away again (it is then black and white)
+        let mut veto = base.clone();
+        veto.sheet_no_picture_zones = vec![[mm(1690.0), mm(590.0), mm(320.0), mm(220.0)]];
+        veto.sheet_picture_zones = vec![];
+        let mut right = veto.clone();
+        right.part_settings = [None, None];
+        right.mode = OutputMode::Mixed;
+        veto.part_settings = [None, Some(Box::new(right))];
+        let pages = process_page(&src, &veto);
+        assert!(red_share(&pages[1]).is_none_or(|v| v < 0.2));
+    }
+
+    #[test]
     fn content_box_is_reported_on_the_output_page_and_follows_the_nudge() {
         let g = text_page(1200, 900, 100, 1100);
         let src = image::DynamicImage::ImageRgb8(to_rgb(&g));
