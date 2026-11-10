@@ -222,7 +222,7 @@ pub const SHEET_ONLY_KEYS: &[&str] = &["split", "auto_orient", "cut_angle", "key
 pub fn settings_to_pairs(s: &Settings) -> Vec<(&'static str, String)> {
     let [a, b, c, d] = s.margins_mm;
     let [e, f, g, h] = s.content_adjust_mm;
-    vec![
+    let mut pairs = vec![
         ("dpi", s.dpi.to_string()),
         ("auto_orient", s.auto_orient.to_string()),
         ("split", split_name(s.split).into()),
@@ -310,7 +310,17 @@ pub fn settings_to_pairs(s: &Settings) -> Vec<(&'static str, String)> {
         ("descreen", s.descreen.to_string()),
         ("perspective", s.perspective.to_string()),
         ("trim_background", s.trim_background.to_string()),
-    ]
+    ];
+    // the OCR regions of one page: written only when the page has some
+    for (key, val) in [
+        ("page_ocr_zones", &s.page_ocr_zones),
+        ("page_ocr_ignore", &s.page_ocr_ignore),
+    ] {
+        if !val.trim().is_empty() {
+            pairs.push((key, val.clone()));
+        }
+    }
+    pairs
 }
 
 /// Apply one setting. `Ok(false)` = not a pipeline setting (caller may keep it as extra).
@@ -406,6 +416,27 @@ pub fn apply_pair(s: &mut Settings, k: &str, v: &str) -> Result<bool> {
                 return Err(bad());
             }
             s.sheet_keystone = k;
+        }
+        "page_ocr_zones" | "page_ocr_ignore" => {
+            let zones = k == "page_ocr_zones";
+            if v.len() > 4000 {
+                return Err(bad());
+            }
+            for item in v.split(';').map(str::trim).filter(|t| !t.is_empty()) {
+                let ok = if zones {
+                    crate::ocrzones::parse_zone(item).is_ok()
+                } else {
+                    crate::ocrzones::parse_rect(item).is_ok()
+                };
+                if !ok {
+                    return Err(bad());
+                }
+            }
+            if zones {
+                s.page_ocr_zones = v.trim().to_string();
+            } else {
+                s.page_ocr_ignore = v.trim().to_string();
+            }
         }
         "page_keystone" => {
             let (a, b) = v.split_once(',').ok_or_else(bad)?;
@@ -944,6 +975,62 @@ mod tests {
         assert!(q.settings.dewarp);
         assert_eq!(q.settings.margins_mm, [1.0, 2.0, 3.0, 4.5]);
         assert_eq!(q.get("pdf_quality"), Some("70"));
+    }
+
+    #[test]
+    fn ocr_regions_of_one_page_survive_save_and_load_and_junk_is_refused() {
+        let mut p = Project::default();
+        let mut adj = SheetAdj::default();
+        adj.page_pairs[1] = vec![
+            (
+                "page_ocr_zones".into(),
+                "10,20,30,40; 5,5,50,50#table".into(),
+            ),
+            ("page_ocr_ignore".into(), "0,0,20,20".into()),
+        ];
+        p.sheets.push((PathBuf::from("/scans/a.png"), adj));
+        let text = p.to_text(None);
+        assert!(text.contains("page2.page_ocr_zones"));
+        assert!(!text.contains("page1.page_ocr"));
+        let q = Project::parse(&text, None).unwrap();
+        assert_eq!(q.sheets, p.sheets);
+        let bad = text.replace("10,20,30,40", "10,20,thirty,40");
+        assert!(Project::parse(&bad, None).is_err());
+    }
+
+    #[test]
+    fn hostile_ocr_regions_of_a_page_are_refused_not_stored() {
+        for bad in [
+            "nan,0,10,10",
+            "0,0,inf,10",
+            "-5,0,10,10",
+            "0,0,0,0",
+            "1,2,3",
+            "1,2,3,4;;;x",
+            "1,2,3,4=\n[sheet]",
+        ] {
+            let text = format!("[sheet]\npath = /a.png\npage1.page_ocr_zones = {bad}\n");
+            let r = Project::parse(&text, None);
+            if let Ok(p) = r {
+                // anything accepted must hold only regions that parse
+                for (_, a) in &p.sheets {
+                    for (k, v) in a.page_pairs.iter().flatten() {
+                        if k == "page_ocr_zones" {
+                            assert!(
+                                v.split(';')
+                                    .map(str::trim)
+                                    .filter(|x| !x.is_empty())
+                                    .all(|z| crate::ocrzones::parse_zone(z).is_ok()),
+                                "{bad}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        let long = vec!["1,2,3,4"; 2000].join(";");
+        let text = format!("[sheet]\npath = /a.png\npage1.page_ocr_zones = {long}\n");
+        assert!(Project::parse(&text, None).is_err());
     }
 
     #[test]

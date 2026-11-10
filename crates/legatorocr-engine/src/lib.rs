@@ -862,6 +862,12 @@ pub fn run_export(
                         continue;
                     }
                     on_page(base + i, &pg);
+                    // the OCR regions drawn on this page alone (not on the other half of the sheet)
+                    let _page_regions = settings
+                        .part_settings
+                        .get(pg.split_index.unwrap_or(0) as usize)
+                        .and_then(|p| p.as_deref())
+                        .and_then(|p| ocrzones::for_page(&p.page_ocr_zones, &p.page_ocr_ignore));
                     let words = match ocr_opts {
                         Some(o) => {
                             if cancel.load(Ordering::Relaxed) {

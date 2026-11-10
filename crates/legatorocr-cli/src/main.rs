@@ -3148,6 +3148,8 @@ fn real_main() -> Result<()> {
         },
         page_keystone: [0.0; 2],
         part_settings: [None, None],
+        page_ocr_zones: String::new(),
+        page_ocr_ignore: String::new(),
         sheet_dewarp_guides: Vec::new(),
         sheet_picture_zones: Vec::new(),
         sheet_no_picture_zones: Vec::new(),
