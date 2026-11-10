@@ -427,6 +427,8 @@ impl UiSettings {
             sheet_keystone: adj.keystone,
             page_keystone: [0.0; 2],
             part_settings: [None, None],
+            page_ocr_zones: String::new(),
+            page_ocr_ignore: String::new(),
             align: self.align,
             threshold: self.threshold,
             normalize_bg: self.normalize_bg,
@@ -762,6 +764,8 @@ mod portable_tests {
 /// page, and its content box); the geometry of the sheet and the layout of the document stay global.
 pub const PAGE_KEYS: &[&str] = &[
     "page_keystone",
+    "page_ocr_zones",
+    "page_ocr_ignore",
     "content_adjust",
     "mode",
     "threshold",

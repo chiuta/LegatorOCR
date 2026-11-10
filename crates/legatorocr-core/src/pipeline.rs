@@ -181,6 +181,11 @@ pub struct Settings {
     /// Keystone correction of each page after the cut (same meaning as `sheet_keystone`), for pages
     /// of a spread that bend differently. Zones drawn on the page are dropped when it applies.
     pub page_keystone: [f32; 2],
+    /// OCR zones and ignored areas of this page only (`X,Y,W,H[=LANG][#table]` / `X,Y,W,H`,
+    /// separated by `;`, millimetres on the processed page). Only the OCR step of the engine reads
+    /// them, from the settings of the page (`part_settings`); the pipeline itself ignores them.
+    pub page_ocr_zones: String,
+    pub page_ocr_ignore: String,
     /// Complete settings for one half of a cut sheet (`[0]` left page, `[1]` right page), used
     /// instead of the sheet's own for everything done to the page after the cut: clean-up, content
     /// box, output mode. Built by the caller from the general settings plus the page's own values
@@ -258,6 +263,8 @@ impl Default for Settings {
             sheet_keystone: [0.0; 2],
             page_keystone: [0.0; 2],
             part_settings: [None, None],
+            page_ocr_zones: String::new(),
+            page_ocr_ignore: String::new(),
             dropout: Dropout::Off,
             despeckle_strength: 1.0,
             show_through: false,
@@ -3210,6 +3217,8 @@ mod tests {
                 ],
                 page_keystone: [rnd(30) as f32 - 15.0, 0.0],
                 part_settings: [None, None],
+                page_ocr_zones: String::new(),
+                page_ocr_ignore: String::new(),
                 sheet_picture_zones: if rnd(3) == 0 {
                     vec![[
                         rnd(300) as f32 - 50.0,

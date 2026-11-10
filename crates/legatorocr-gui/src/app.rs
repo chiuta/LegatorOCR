@@ -190,6 +190,23 @@ struct Shot {
 /// Per page of a split sheet: its index and the keystone (vertical, horizontal) found for it.
 type PageKeystones = Vec<(Option<u8>, [f32; 2])>;
 
+/// Where a drawn OCR rectangle is kept: with the general settings, or with one page of the sheet.
+#[derive(Clone, Copy)]
+enum OcrSrc {
+    General(usize),
+    Page(usize, usize),
+}
+
+/// The page's own keystone (vertical, horizontal) among its `(key, value)` pairs.
+fn page_keystone_of(pairs: &[(String, String)]) -> [f32; 2] {
+    pairs
+        .iter()
+        .find(|(k, _)| k == "page_keystone")
+        .and_then(|(_, v)| v.split_once(','))
+        .and_then(|(a, b)| Some([a.trim().parse().ok()?, b.trim().parse().ok()?]))
+        .unwrap_or([0.0; 2])
+}
+
 pub struct App {
     tick: u64,
     lang: Lang,
@@ -2923,8 +2940,16 @@ impl App {
             ui.separator();
             ui.checkbox(&mut self.draw_zones, tr("zones.draw"))
                 .on_hover_text(tr("zones.hint"));
-            ui.checkbox(&mut self.edit_box, tr("box.edit"))
-                .on_hover_text(tr("box.hint"));
+            if ui
+                .checkbox(&mut self.edit_box, tr("box.edit"))
+                .on_hover_text(tr("box.hint"))
+                .changed()
+                && self.edit_box
+            {
+                // the box and the pencils both use the drag on the page: one at a time
+                self.ocr_tool = 0;
+                self.ocr_drag = None;
+            }
             for (v, k) in [
                 (1u8, "ocr.tool_zone"),
                 (2u8, "ocr.tool_ignore"),
@@ -2937,6 +2962,9 @@ impl App {
                 {
                     self.ocr_tool = if self.ocr_tool == v { 0 } else { v };
                     self.ocr_drag = None;
+                    if self.ocr_tool != 0 {
+                        self.edit_box = false;
+                    }
                 }
             }
             if self.draw_zones {
@@ -3027,6 +3055,13 @@ impl App {
         let mut auto_key = false;
         let mut auto_turn_all = false;
         let adj_before = ZoneSnap::of(&self.sheets[i].adj);
+        // a cut sheet with one of its pages selected: the keystone sliders are that page's own
+        let key_page: Option<u8> = self.sheets[i]
+            .ready
+            .as_ref()
+            .is_some_and(|r| r.pages.len() > 1)
+            .then_some(self.page_scope)
+            .flatten();
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(tr("adj.title")).strong());
             let adj = &mut self.sheets[i].adj;
@@ -3079,16 +3114,47 @@ impl App {
                 auto_turn = true;
             }
             // trapezoid correction of a sheet photographed at an angle
-            for (idx, key) in [(0usize, "adj.keystone_v"), (1, "adj.keystone_h")] {
-                ui.label(tr(key)).on_hover_text(tr("adj.keystone_hint"));
-                adj_changed |= ui
-                    .add(
-                        egui::Slider::new(&mut adj.keystone[idx], -30.0..=30.0)
-                            .suffix("%")
-                            .fixed_decimals(1),
-                    )
-                    .on_hover_text(tr("adj.keystone_hint"))
-                    .changed();
+            if let Some(slot) = key_page {
+                // the page selected in the preview (left or right), not the whole photo
+                let page = tr(if slot == 0 {
+                    "scope.left"
+                } else {
+                    "scope.right"
+                });
+                let mut k = page_keystone_of(&adj.page_pairs[slot as usize]);
+                let mut moved = false;
+                for (idx, key) in [(0usize, "adj.keystone_v"), (1, "adj.keystone_h")] {
+                    ui.label(format!("{} ({page})", tr(key)))
+                        .on_hover_text(tr("adj.keystone_hint"));
+                    moved |= ui
+                        .add(
+                            egui::Slider::new(&mut k[idx], -30.0..=30.0)
+                                .suffix("%")
+                                .fixed_decimals(1),
+                        )
+                        .on_hover_text(tr("adj.keystone_hint"))
+                        .changed();
+                }
+                if moved {
+                    legatorocr_engine::project::set_page_pair(
+                        &mut adj.page_pairs[slot as usize],
+                        "page_keystone",
+                        format!("{},{}", k[0], k[1]),
+                    );
+                    adj_changed = true;
+                }
+            } else {
+                for (idx, key) in [(0usize, "adj.keystone_v"), (1, "adj.keystone_h")] {
+                    ui.label(tr(key)).on_hover_text(tr("adj.keystone_hint"));
+                    adj_changed |= ui
+                        .add(
+                            egui::Slider::new(&mut adj.keystone[idx], -30.0..=30.0)
+                                .suffix("%")
+                                .fixed_decimals(1),
+                        )
+                        .on_hover_text(tr("adj.keystone_hint"))
+                        .changed();
+                }
             }
             if ui
                 .add_enabled(
@@ -3568,10 +3634,12 @@ impl App {
         let mut node_move: Option<(usize, usize, (f32, f32))> = None;
         let mut node_remove: Option<(usize, usize)> = None;
         let mut node_insert: Option<(usize, usize, (f32, f32))> = None;
-        let edit_box = self.edit_box && self.ocr_tool == 0;
+        let edit_box = self.edit_box;
+        let scope_now = self.page_scope;
+        let mut picked_page: Option<u8> = None;
         let ocr_tool = self.ocr_tool;
         let odrag = &mut self.ocr_drag;
-        let mut new_ocr: Option<(u8, [f32; 4])> = None;
+        let mut new_ocr: Option<(u8, [f32; 4], usize)> = None;
         // (zone, is-ignore, index) rectangles in mm to show on the processed pages
         let ocr_rects: Vec<([f32; 4], u8)> = {
             let split = |t: &str| -> Vec<String> {
@@ -3596,7 +3664,32 @@ impl App {
             }
             v
         };
-        let mut remove_ocr: Option<usize> = None;
+        // the regions drawn on one page alone (zones first, then ignored areas), per page slot
+        let own_rects: [Vec<([f32; 4], u8)>; 2] = std::array::from_fn(|slot| {
+            let get = |key: &str| {
+                sheet.adj.page_pairs[slot]
+                    .iter()
+                    .find(|(k, _)| k == key)
+                    .map(|(_, v)| v.clone())
+                    .unwrap_or_default()
+            };
+            let mut v = Vec::new();
+            for z in get("page_ocr_zones").split(';').map(str::trim) {
+                if let Ok(z) = legatorocr_engine::ocrzones::parse_zone(z) {
+                    v.push((
+                        [z.rect.x, z.rect.y, z.rect.w, z.rect.h],
+                        u8::from(z.table) * 2,
+                    ));
+                }
+            }
+            for z in get("page_ocr_ignore").split(';').map(str::trim) {
+                if let Ok(r) = legatorocr_engine::ocrzones::parse_rect(z) {
+                    v.push(([r.x, r.y, r.w, r.h], 1));
+                }
+            }
+            v
+        });
+        let mut remove_ocr: Option<OcrSrc> = None;
         let mut box_delta: Option<(usize, f32, Option<u8>)> = None;
         let bdrag = &mut self.box_drag;
         let mut new_zone: Option<[f32; 4]> = None;
@@ -3620,8 +3713,25 @@ impl App {
                         }
                         if !*is_orig && (edit_box || ocr_tool != 0) && boxinfo.is_some() {
                             img = img.sense(egui::Sense::click_and_drag());
+                        } else if !*is_orig && boxinfo.is_some_and(|b| b.3.is_some()) {
+                            img = img.sense(egui::Sense::click());
                         }
                         let resp = ui.add(img);
+                        if let (false, Some((_, _, _, Some(part)))) = (*is_orig, boxinfo) {
+                            // a click selects this page: the settings, the keystone, the box and
+                            // the pencils then work on it alone
+                            if resp.clicked() && !edit_box && ocr_tool == 0 {
+                                picked_page = Some(*part);
+                            }
+                            if scope_now == Some(*part) {
+                                ui.painter().rect_stroke(
+                                    resp.rect.shrink(1.0),
+                                    0.0,
+                                    egui::Stroke::new(2.0, egui::Color32::from_rgb(40, 140, 255)),
+                                    egui::StrokeKind::Inside,
+                                );
+                            }
+                        }
                         if *is_orig {
                             let rect = resp.rect;
                             // image px -> screen and back
@@ -4259,8 +4369,21 @@ impl App {
                                 *bdrag = None;
                             }
                         }
-                        if let (false, Some((_, dpi, (pw, ph), _))) = (*is_orig, boxinfo) {
+                        if let (false, Some((_, dpi, (pw, ph), page_part))) = (*is_orig, boxinfo) {
                             // OCR zones (green) and ignored areas (red) of the output page, in mm
+                            let slot = (page_part.unwrap_or(0) as usize).min(1);
+                            let own = &own_rects[slot];
+                            let own_zones = own.iter().any(|(_, k)| *k != 1);
+                            // the page's own zones replace the general ones; ignored areas add up
+                            let mut shown: Vec<([f32; 4], u8, OcrSrc)> = Vec::new();
+                            for (n, (r, k)) in ocr_rects.iter().enumerate() {
+                                if *k == 1 || !own_zones {
+                                    shown.push((*r, *k, OcrSrc::General(n)));
+                                }
+                            }
+                            for (n, (r, k)) in own.iter().enumerate() {
+                                shown.push((*r, *k, OcrSrc::Page(slot, n)));
+                            }
                             let rect = resp.rect;
                             let (kx, ky) = (
                                 rect.width() / (*pw).max(1) as f32,
@@ -4274,7 +4397,7 @@ impl App {
                                 )
                             };
                             let painter = ui.painter_at(rect);
-                            for (n, (r, kind)) in ocr_rects.iter().enumerate() {
+                            for (r, kind, src) in shown.iter() {
                                 let (fill, line) = if *kind == 2 {
                                     (
                                         Color32::from_rgba_unmultiplied(120, 70, 200, 50),
@@ -4305,7 +4428,7 @@ impl App {
                                 if ocr_tool != 0 && resp.secondary_clicked() {
                                     if let Some(p) = resp.interact_pointer_pos() {
                                         if rr.contains(p) {
-                                            remove_ocr = Some(n);
+                                            remove_ocr = Some(*src);
                                         }
                                     }
                                 }
@@ -4345,7 +4468,8 @@ impl App {
                                         };
                                         let ((x0, y0), (x1, y1)) = (mm(r.min), mm(r.max));
                                         if x1 - x0 >= 3.0 && y1 - y0 >= 3.0 {
-                                            new_ocr = Some((ocr_tool, [x0, y0, x1 - x0, y1 - y0]));
+                                            new_ocr =
+                                                Some((ocr_tool, [x0, y0, x1 - x0, y1 - y0], slot));
                                         }
                                         *odrag = None;
                                     }
@@ -4364,7 +4488,11 @@ impl App {
                 .auto_shrink([false, false])
                 .show(ui, draw);
         }
-        if let Some((kind, r)) = new_ocr {
+        if let Some(p) = picked_page {
+            self.page_scope = Some(p);
+        }
+        if let Some((kind, r, slot)) = new_ocr {
+            // drawn on one page: it belongs to that page alone, not to every page of the job
             let item = format!(
                 "{:.1},{:.1},{:.1},{:.1}{}",
                 r[0],
@@ -4373,35 +4501,78 @@ impl App {
                 r[3],
                 if kind == 3 { "#table" } else { "" }
             );
-            let field = if kind == 2 {
-                &mut self.s.ocr_ignore
+            let key = if kind == 2 {
+                "page_ocr_ignore"
             } else {
-                &mut self.s.ocr_zones
+                "page_ocr_zones"
             };
-            if !field.trim().is_empty() {
-                field.push_str("; ");
+            let a = &mut self.sheets[i].adj;
+            let before = ZoneSnap::of(a);
+            let mut cur = a.page_pairs[slot]
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default();
+            if cur.len() < 1500 {
+                if !cur.trim().is_empty() {
+                    cur.push_str("; ");
+                }
+                cur.push_str(&item);
+                legatorocr_engine::project::set_page_pair(&mut a.page_pairs[slot], key, cur);
+                self.sheets[i].zone_undo.push(before);
+                self.sheets[i].zone_redo.clear();
+                self.sheets[i].adj_gen += 1;
             }
-            field.push_str(&item);
-            self.config_dirty = true;
         }
-        if let Some(n) = remove_ocr {
-            // the n-th rectangle shown: zones first, then ignored areas
+        if let Some(src) = remove_ocr {
             let split = |t: &str| -> Vec<String> {
                 t.split(';')
                     .map(|x| x.trim().to_string())
                     .filter(|x| !x.is_empty())
                     .collect()
             };
-            let mut zones = split(&self.s.ocr_zones);
-            let mut ign = split(&self.s.ocr_ignore);
-            if n < zones.len() {
-                zones.remove(n);
-            } else if n - zones.len() < ign.len() {
-                ign.remove(n - zones.len());
+            match src {
+                OcrSrc::General(n) => {
+                    // the n-th general rectangle: zones first, then ignored areas
+                    let mut zones = split(&self.s.ocr_zones);
+                    let mut ign = split(&self.s.ocr_ignore);
+                    if n < zones.len() {
+                        zones.remove(n);
+                    } else if n - zones.len() < ign.len() {
+                        ign.remove(n - zones.len());
+                    }
+                    self.s.ocr_zones = zones.join("; ");
+                    self.s.ocr_ignore = ign.join("; ");
+                    self.config_dirty = true;
+                }
+                OcrSrc::Page(slot, n) => {
+                    let a = &mut self.sheets[i].adj;
+                    let before = ZoneSnap::of(a);
+                    let get = |a: &SheetAdjust, key: &str| {
+                        a.page_pairs[slot]
+                            .iter()
+                            .find(|(k, _)| k == key)
+                            .map(|(_, v)| split(v))
+                            .unwrap_or_default()
+                    };
+                    let mut zones = get(a, "page_ocr_zones");
+                    let mut ign = get(a, "page_ocr_ignore");
+                    if n < zones.len() {
+                        zones.remove(n);
+                    } else if n - zones.len() < ign.len() {
+                        ign.remove(n - zones.len());
+                    }
+                    for (key, list) in [("page_ocr_zones", zones), ("page_ocr_ignore", ign)] {
+                        a.page_pairs[slot].retain(|(k, _)| k != key);
+                        if !list.is_empty() {
+                            a.page_pairs[slot].push((key.to_string(), list.join("; ")));
+                        }
+                    }
+                    self.sheets[i].zone_undo.push(before);
+                    self.sheets[i].zone_redo.clear();
+                    self.sheets[i].adj_gen += 1;
+                }
             }
-            self.s.ocr_zones = zones.join("; ");
-            self.s.ocr_ignore = ign.join("; ");
-            self.config_dirty = true;
         }
         if let Some((e, mm, part)) = box_delta {
             let before = ZoneSnap::of(&self.sheets[i].adj);

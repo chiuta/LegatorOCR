@@ -35,6 +35,48 @@ type Config = (Vec<Zone>, Vec<Rect>);
 pub type Inner<'a> = &'a dyn Fn(&PageImage, u32, &OcrOptions) -> Result<Vec<Word>, OcrError>;
 static CFG: Mutex<Option<Config>> = Mutex::new(None);
 
+thread_local! {
+    /// The regions of the page this thread is reading now (see [`for_page`]).
+    static PAGE: std::cell::RefCell<Option<Config>> = const { std::cell::RefCell::new(None) };
+}
+
+/// While alive, the OCR on this thread reads under the regions of one page: its own zones replace
+/// the general ones when it has any, its ignored areas come on top of the general ones.
+pub struct PageGuard(Option<Config>);
+
+impl Drop for PageGuard {
+    fn drop(&mut self) {
+        PAGE.with(|c| *c.borrow_mut() = self.0.take());
+    }
+}
+
+/// `zones` / `ignores` are `;`-separated lists as in [`parse_zone`] / [`parse_rect`]; entries that
+/// do not parse are skipped. `None` when the page has no regions of its own.
+pub fn for_page(zones: &str, ignores: &str) -> Option<PageGuard> {
+    let split = |t: &str| -> Vec<String> {
+        t.split(';')
+            .map(|x| x.trim().to_string())
+            .filter(|x| !x.is_empty())
+            .collect()
+    };
+    let own_z: Vec<Zone> = split(zones)
+        .iter()
+        .filter_map(|z| parse_zone(z).ok())
+        .collect();
+    let own_i: Vec<Rect> = split(ignores)
+        .iter()
+        .filter_map(|z| parse_rect(z).ok())
+        .collect();
+    if own_z.is_empty() && own_i.is_empty() {
+        return None;
+    }
+    let (gz, gi) = CFG.lock().ok().and_then(|c| c.clone()).unwrap_or_default();
+    let zones = if own_z.is_empty() { gz } else { own_z };
+    let ignores = [gi, own_i].concat();
+    let prev = PAGE.with(|c| c.borrow_mut().replace((zones, ignores)));
+    Some(PageGuard(prev))
+}
+
 pub fn parse_rect(s: &str) -> Result<Rect> {
     let v: Vec<f32> = s
         .split(',')
@@ -86,6 +128,9 @@ pub fn set(zones: Vec<Zone>, ignores: Vec<Rect>) {
 }
 
 fn config() -> Option<Config> {
+    if let Some(p) = PAGE.with(|c| c.borrow().clone()) {
+        return Some(p);
+    }
     CFG.lock().ok().and_then(|c| c.clone())
 }
 
@@ -211,6 +256,56 @@ mod tests {
         assert!(parse_zone("5,5,50,50#TaBlE").unwrap().table);
         assert!(parse_zone("ß#tabl").is_err() && parse_zone("é").is_err()); // multi-byte tails
         assert!(!parse_zone("5,5,50,50").unwrap().table);
+    }
+
+    #[test]
+    fn a_page_reads_under_its_own_regions_and_only_while_the_guard_lives() {
+        let _g = LOCK.lock().unwrap();
+        set(
+            vec![parse_zone("0,0,100,100").unwrap()],
+            vec![parse_rect("0,0,5,5").unwrap()],
+        );
+        let general = config().unwrap();
+        {
+            let _p = for_page(
+                "10,10,20,20=ron#table; junk ;30,30,10,10",
+                "50,50,5,5; nope",
+            )
+            .unwrap();
+            let (z, i) = config().unwrap();
+            assert_eq!(z.len(), 2, "own zones replace the general ones");
+            assert!(z[0].table && z[0].lang.as_deref() == Some("ron"));
+            assert_eq!(
+                i.len(),
+                2,
+                "own ignored areas come on top of the general ones"
+            );
+            // another thread keeps reading under the general regions
+            let other = std::thread::spawn(config).join().unwrap().unwrap();
+            assert_eq!(other, general);
+        }
+        assert_eq!(
+            config().unwrap(),
+            general,
+            "the guard gives the general regions back"
+        );
+        // only ignored areas: the general zones stay
+        {
+            let _p = for_page("", "50,50,5,5").unwrap();
+            let (z, i) = config().unwrap();
+            assert_eq!((z.len(), i.len()), (1, 2));
+        }
+        // nothing usable of its own: no guard at all
+        assert!(for_page("", "").is_none() && for_page(" ; junk", "x").is_none());
+        // guards nest and unwind in order
+        let a = for_page("1,1,10,10", "").unwrap();
+        let b = for_page("2,2,10,10", "").unwrap();
+        assert_eq!(config().unwrap().0[0].rect.x, 2.0);
+        drop(b);
+        assert_eq!(config().unwrap().0[0].rect.x, 1.0);
+        drop(a);
+        assert_eq!(config().unwrap(), general);
+        set(vec![], vec![]);
     }
 
     #[test]
