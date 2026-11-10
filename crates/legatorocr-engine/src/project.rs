@@ -999,6 +999,41 @@ mod tests {
     }
 
     #[test]
+    fn hostile_ocr_regions_of_a_page_are_refused_not_stored() {
+        for bad in [
+            "nan,0,10,10",
+            "0,0,inf,10",
+            "-5,0,10,10",
+            "0,0,0,0",
+            "1,2,3",
+            "1,2,3,4;;;x",
+            "1,2,3,4=\n[sheet]",
+        ] {
+            let text = format!("[sheet]\npath = /a.png\npage1.page_ocr_zones = {bad}\n");
+            let r = Project::parse(&text, None);
+            if let Ok(p) = r {
+                // anything accepted must hold only regions that parse
+                for (_, a) in &p.sheets {
+                    for (k, v) in a.page_pairs.iter().flatten() {
+                        if k == "page_ocr_zones" {
+                            assert!(
+                                v.split(';')
+                                    .map(str::trim)
+                                    .filter(|x| !x.is_empty())
+                                    .all(|z| crate::ocrzones::parse_zone(z).is_ok()),
+                                "{bad}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        let long = vec!["1,2,3,4"; 2000].join(";");
+        let text = format!("[sheet]\npath = /a.png\npage1.page_ocr_zones = {long}\n");
+        assert!(Project::parse(&text, None).is_err());
+    }
+
+    #[test]
     fn global_work_area_and_cut_line_survive_save_and_load() {
         let mut p = Project::default();
         p.settings.sheet_work_mm = Some([5.0, 6.0, 80.5, 60.0]);
