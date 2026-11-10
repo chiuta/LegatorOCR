@@ -90,6 +90,8 @@ struct PageTex {
     skew_deg: f32,
     blank: bool,
     content_box: Option<[u32; 4]>,
+    /// The block of text found from the picture (see `worker::text_block`).
+    text_box: Option<[u32; 4]>,
     dpi: u32,
     split_index: Option<u8>,
 }
@@ -781,6 +783,7 @@ impl App {
                             skew_deg: info.skew_deg,
                             blank: info.blank,
                             content_box: info.content_box,
+                            text_box: info.text_box,
                             dpi: info.dpi,
                             split_index: info.split_index,
                         })
@@ -3010,7 +3013,8 @@ impl App {
                 r.pages
                     .iter()
                     .filter_map(|p| {
-                        let b = p.content_box?;
+                        // the text itself, not the page: fall back to the content box
+                        let b = p.text_box.or(p.content_box)?;
                         let k = 25.4 / p.dpi.max(1) as f32;
                         Some((
                             (p.split_index.unwrap_or(0) as usize).min(1),
