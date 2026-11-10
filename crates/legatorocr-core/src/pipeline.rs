@@ -1171,12 +1171,37 @@ fn prepare(
 ) -> Prepared {
     // --- keystone of this page (before anything else looks at it) ------------
     if s.page_keystone.iter().any(|k| k.abs() >= 0.05) {
+        // the guide lines and the corners of the hand-marked zones are carried along with the
+        // picture, so they stay where they were drawn
+        let n = guides.len();
+        let mut follow: Vec<Vec<(f32, f32)>> = guides.clone();
+        for z in &pictures {
+            let (x, y, w, h) = (z[0], z[1], z[2], z[3]);
+            follow.push(vec![(x, y), (x + w, y), (x + w, y + h), (x, y + h)]);
+        }
         if let Some(flat) = crate::stage("page/keystone", || {
-            crate::perspective::keystone(&img, s.page_keystone[0], s.page_keystone[1], &mut guides)
+            crate::perspective::keystone(&img, s.page_keystone[0], s.page_keystone[1], &mut follow)
         }) {
             img = flat;
-            // zones drawn on the page no longer lie where they were drawn
-            pictures.clear();
+            guides = follow[..n].to_vec();
+            for (z, c) in pictures.iter_mut().zip(&follow[n..]) {
+                let xs = c.iter().map(|p| p.0);
+                let ys = c.iter().map(|p| p.1);
+                let (x0, x1) = (
+                    xs.clone().fold(f32::MAX, f32::min),
+                    xs.fold(f32::MIN, f32::max),
+                );
+                let (y0, y1) = (
+                    ys.clone().fold(f32::MAX, f32::min),
+                    ys.fold(f32::MIN, f32::max),
+                );
+                if x0.is_finite() && x1.is_finite() && y0.is_finite() && y1.is_finite() {
+                    *z = [x0, y0, x1 - x0, y1 - y0, z[4]];
+                } else {
+                    z[2] = 0.0;
+                    z[3] = 0.0;
+                }
+            }
         }
     }
     // --- clean-up: fixes that make every later stage's job easier ----------
@@ -2678,6 +2703,37 @@ mod tests {
         assert_eq!(pages.len(), 2);
         assert!(red_share(&pages[0]).is_none(), "left page has no picture");
         assert!(red_share(&pages[1]).unwrap_or(0.0) > 0.5);
+    }
+
+    #[test]
+    fn mouse_drawn_picture_zones_survive_a_keystone_of_their_page() {
+        let g = text_page(2400, 900, 100, 2300);
+        let mut rgb = to_rgb(&g);
+        for y in 600..800 {
+            for x in 1700..2000 {
+                rgb.put_pixel(x, y, Rgb([200, 40, 40]));
+            }
+        }
+        let src = image::DynamicImage::ImageRgb8(rgb);
+        let mm = |px: f32| px / 300.0 * 25.4;
+        let mut base = Settings {
+            mode: OutputMode::BlackWhite,
+            dpi: 300,
+            deskew: false,
+            split: SplitMode::Middle,
+            sheet_picture_zones: vec![[mm(1690.0), mm(590.0), mm(320.0), mm(220.0)]],
+            ..Settings::default()
+        };
+        let mut right = base.clone();
+        right.mode = OutputMode::Mixed;
+        right.page_keystone = [1.5, 0.5];
+        base.part_settings = [None, Some(Box::new(right))];
+        let pages = process_page(&src, &base);
+        assert_eq!(pages.len(), 2);
+        assert!(
+            red_share(&pages[1]).unwrap_or(0.0) > 0.4,
+            "a keystone on the page must not drop the picture zone"
+        );
     }
 
     #[test]
