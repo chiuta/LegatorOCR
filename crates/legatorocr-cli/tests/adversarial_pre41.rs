@@ -42,6 +42,11 @@ fn run(dir: &std::path::Path, extra: &[&str]) -> Output {
         .unwrap()
 }
 
+/// The OCR cases need the real engine: without it the program stops earlier, with its own message.
+fn have_tesseract() -> bool {
+    Command::new("tesseract").arg("--version").output().is_ok()
+}
+
 fn err_text(o: &Output) -> String {
     String::from_utf8_lossy(&o.stderr).to_string()
 }
@@ -79,7 +84,11 @@ fn hostile_values_end_in_clear_errors() {
         (&["--ocr", "--ocr-zone", "1,2,3#table"], "ocr-zone"),
         (&["--ocr", "--ocr-ignore", "1,2,3,4#table"], "ocr-ignore"),
     ];
+    let tess = have_tesseract();
     for (args, word) in cases {
+        if args.contains(&"--ocr") && !tess {
+            continue; // the zone syntax itself is covered by the unit tests of the engine
+        }
         let o = run(d.path(), args);
         let e = err_text(&o);
         assert_eq!(
@@ -128,6 +137,9 @@ fn good_values_at_the_edges_work() {
             "0,0,5,5",
         ],
     ] {
+        if args.contains(&"--ocr") && !have_tesseract() {
+            continue;
+        }
         let o = run(d.path(), &args);
         assert!(o.status.success(), "{args:?}: {}", err_text(&o));
     }
