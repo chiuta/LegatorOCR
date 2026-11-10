@@ -174,9 +174,9 @@ pub fn text_block(t: &Thumb) -> Option<[u32; 4]> {
             })
             .collect();
         let dt = integral(&|i| dense[i]);
-        for i in 0..w * h {
+        for (i, d) in drop.iter_mut().enumerate() {
             if boxsum(&dt, i % w, i / w, 8) > 0 {
-                drop[i] = true;
+                *d = true;
             }
         }
     }
@@ -345,7 +345,7 @@ mod text_block_tests {
 
     /// Lines of text between (x0,y0) and (x1,y1): 4 px of ink, 6 px of space, in words.
     fn text(x: usize, y: usize, x0: usize, y0: usize, x1: usize, y1: usize) -> bool {
-        x >= x0 && x < x1 && y >= y0 && y < y1 && (y - y0) % 10 < 4 && (x / 7) % 5 != 0
+        x >= x0 && x < x1 && y >= y0 && y < y1 && (y - y0) % 10 < 4 && !(x / 7).is_multiple_of(5)
     }
 
     #[test]
