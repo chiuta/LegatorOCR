@@ -63,7 +63,7 @@ canvas{width:100%;height:auto;border:1px solid var(--line);border-radius:8px;bac
 .tabs button[aria-selected=true]{color:var(--ink);border-color:var(--acc)}
 table{border-collapse:collapse;width:100%;font-size:15px}td,th{border-bottom:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
 th{color:var(--mute);font-weight:600}.ok{color:var(--acc)}.no{color:var(--bad)}.part{color:var(--acc2)}
-.tablewrap{overflow:auto}
+.tablewrap{overflow:auto;max-height:75vh}.tablewrap th{position:sticky;top:0;z-index:2;background:var(--panel)}
 ul.lim li{margin:6px 0}
 footer{border-top:1px solid var(--line);padding:28px 16px;text-align:center;color:var(--mute);font-size:14px}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}

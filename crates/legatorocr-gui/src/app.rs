@@ -279,6 +279,11 @@ pub struct App {
     draw_extra: u8,
     /// Processed pages show the content box with draggable edges.
     edit_box: bool,
+    /// Interface zoom (1.0 = normal), changed from the bottom bar; `None` until the first frame
+    /// has measured the screen and chosen one.
+    ui_zoom: Option<f32>,
+    /// The zoom factor this program last set; a different one means Ctrl +/− changed it.
+    zoom_applied: f32,
     /// Edge being dragged: (0 left, 1 top, 2 right, 3 bottom, screen position at the start).
     box_drag: Option<(usize, egui::Pos2)>,
     /// OCR pencil: 0 off, 1 draws OCR zones (green), 2 draws areas the OCR ignores (red).
@@ -363,6 +368,8 @@ impl App {
             draw_nopic: false,
             draw_extra: 0,
             edit_box: false,
+            ui_zoom: None,
+            zoom_applied: 0.0,
             box_drag: None,
             ocr_tool: 0,
             ocr_drag: None,
@@ -432,6 +439,10 @@ impl App {
             if let Some(l) = p.get("lang").and_then(Lang::from_code) {
                 self.lang = l;
             }
+            self.ui_zoom = p
+                .get("ui_zoom")
+                .and_then(|v| v.parse::<f32>().ok())
+                .filter(|z| z.is_finite() && (0.5..=3.0).contains(z));
         }
     }
 
@@ -441,6 +452,9 @@ impl App {
         };
         let mut p = self.s.to_project(Vec::new());
         p.extra.push(("lang".into(), self.lang.code().into()));
+        if let Some(z) = self.ui_zoom {
+            p.extra.push(("ui_zoom".into(), format!("{z:.2}")));
+        }
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
@@ -1751,7 +1765,76 @@ impl App {
         }
     }
 
+    /// Interface zoom: chosen once from the screen size on the first start (so the text is large
+    /// and fills the screen), then kept; the bottom bar changes it.
+    fn apply_ui_zoom(&mut self, ctx: &egui::Context) {
+        let now = ctx.zoom_factor();
+        if self.zoom_applied > 0.0 && (now - self.zoom_applied).abs() > 0.001 {
+            // the keyboard shortcut (Ctrl +/−) moved it: keep that choice
+            self.ui_zoom = Some(now.clamp(0.5, 3.0));
+            self.zoom_applied = now;
+            self.config_dirty = true;
+            return;
+        }
+        let z = match self.ui_zoom {
+            Some(z) => z,
+            None => {
+                // wait for the window to reach its size (maximised on start), then fit the
+                // interface to it: the window is ~1360x860 points at zoom 1
+                if ctx.input(|i| i.time) < 0.8 {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(200));
+                    return;
+                }
+                let z = ctx.input(|i| i.viewport().inner_rect).map_or(1.0, |r| {
+                    let (w, h) = (r.width() * now, r.height() * now);
+                    (w / 1360.0).min(h / 860.0)
+                });
+                let z = if z.is_finite() { z } else { 1.0 };
+                let z = ((z.clamp(1.0, 2.0)) * 20.0).round() / 20.0;
+                self.ui_zoom = Some(z);
+                self.config_dirty = true;
+                z
+            }
+        };
+        if (now - z).abs() > 0.001 {
+            ctx.set_zoom_factor(z);
+        }
+        self.zoom_applied = z;
+    }
+
     fn status_bar(&mut self, ui: &mut egui::Ui) {
+        let mut zoom_to: Option<f32> = None;
+        let cur = self.ui_zoom.unwrap_or(1.0);
+        ui.horizontal(|ui| {
+            // zoom of the whole interface, on the right of the bar
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("A+").on_hover_text(self.tr("zoom.in")).clicked() {
+                    zoom_to = Some(cur + 0.1);
+                }
+                ui.label(format!("{:.0}%", cur * 100.0));
+                if ui.button("A-").on_hover_text(self.tr("zoom.out")).clicked() {
+                    zoom_to = Some(cur - 0.1);
+                }
+                if ui
+                    .button("Auto")
+                    .on_hover_text(self.tr("zoom.auto"))
+                    .clicked()
+                {
+                    zoom_to = Some(0.0);
+                }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    self.status_text(ui);
+                });
+            });
+        });
+        if let Some(z) = zoom_to {
+            // 0 = measure the screen again
+            self.ui_zoom = (z > 0.0).then(|| ((z.clamp(0.5, 3.0)) * 20.0).round() / 20.0);
+            self.config_dirty = true;
+        }
+    }
+
+    fn status_text(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             if let Some(job) = &self.job {
                 let d = job.done.load(Ordering::Relaxed);
@@ -3793,7 +3876,10 @@ impl App {
                             // a click selects this page: the settings, the keystone, the box and
                             // the pencils then work on it alone
                             // the page under the mouse is the one the settings and tools work on
-                            if (resp.clicked() || ui.rect_contains_pointer(resp.rect))
+                            if (resp.clicked()
+                                || ui
+                                    .input(|i| i.pointer.hover_pos())
+                                    .is_some_and(|p| resp.rect.contains(p)))
                                 && odrag.is_none()
                             {
                                 picked_page = Some(*part);
@@ -4873,6 +4959,7 @@ impl eframe::App for App {
         self.pump(&ctx);
         self.palette(&ctx);
         self.page_keys(&ctx);
+        self.apply_ui_zoom(&ctx);
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
         egui::Panel::left("pages")
