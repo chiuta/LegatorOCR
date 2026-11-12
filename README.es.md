@@ -4,6 +4,8 @@
 
 Versión: 0.2.0-pre.47 · Última actualización: 2026-11-11
 
+Tutoriales en vídeo de Alexandru Dumbravă (ASFAN): [estudio de caso detallado, 54 min](https://drive.proton.me/urls/TY10AYCB1G#lis9oybHW8I7) · [tutorial en vídeo 2](https://drive.proton.me/urls/VRZCCZSMTW#dxmgAsJqIMtL) (Proton Drive).
+
 Sitio de presentación: <https://legatorocr.chiuta.ro> (código fuente en `docs/`).
 
 Posprocesador independiente en Rust para libros escaneados:
