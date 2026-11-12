@@ -134,7 +134,7 @@ fn hostile_settings(r: &mut Rng) -> Settings {
     s.deskew = r.below(2) == 0;
     s.auto_orient = r.below(2) == 0;
     // per-page overrides, nested on purpose, with their own hostile values
-    for slot in 0..2 {
+    for slot in s.part_settings.iter_mut().take(2) {
         if r.below(2) == 0 {
             let mut p = Settings::default();
             p.page_keystone = [r.pick(NASTY), r.pick(NASTY)];
@@ -146,7 +146,7 @@ fn hostile_settings(r: &mut Rng) -> Settings {
                 inner.page_keystone = [r.pick(NASTY), r.pick(NASTY)];
                 p.part_settings = [Some(Box::new(inner.clone())), Some(Box::new(inner))];
             }
-            s.part_settings[slot] = Some(Box::new(p));
+            *slot = Some(Box::new(p));
         }
     }
     s
