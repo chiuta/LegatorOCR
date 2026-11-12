@@ -4,6 +4,8 @@
 
 Verzió: 0.2.0-pre.47 · Utolsó frissítés: 2026-11-11
 
+Videóoktatóanyagok Alexandru Dumbravă (ASFAN) tollából: [részletes esettanulmány, 54 perc](https://drive.proton.me/urls/TY10AYCB1G#lis9oybHW8I7) · [videóoktatóanyag 2](https://drive.proton.me/urls/VRZCCZSMTW#dxmgAsJqIMtL) (Proton Drive).
+
 Bemutatóoldal: <https://legatorocr.chiuta.ro> (a forrás a `docs/` mappában van).
 
 Független Rust utófeldolgozó beszkennelt könyvekhez:
