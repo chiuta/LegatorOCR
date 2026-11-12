@@ -2,7 +2,7 @@
 
 [English](README.md) · [Română](README.ro.md) · [Français](README.fr.md) · **Italiano** · [Español](README.es.md) · [Português](README.pt.md) · [Deutsch](README.de.md) · [Magyar](README.hu.md)
 
-Versione: 0.2.0-pre.49 · Ultimo aggiornamento: 2026-11-12
+Versione: 0.2.0-pre.50 · Ultimo aggiornamento: 2026-11-12
 
 Video tutorial di Alexandru Dumbravă (ASFAN): [caso di studio dettagliato, 54 min](https://drive.proton.me/urls/TY10AYCB1G#lis9oybHW8I7) · [video tutorial 2](https://drive.proton.me/urls/VRZCCZSMTW#dxmgAsJqIMtL) (Proton Drive).
 
@@ -159,6 +159,7 @@ Una compilazione **senza il modello di riconoscimento incorporato** (per esempio
 | e-Factura | `--efactura FILE` legge una fattura rumena e-Factura (UBL XML o lo ZIP dell'ANAF) e stampa i campi chiave; verifica che gli importi quadrino e che le cifre di controllo del CUI siano valide. Non convalida rispetto allo schematron ufficiale né verifica le firme |
 | Backup | `--backup-from DIR --backup-to D1 --backup-to D2 [--backup-read-only]`: copia una cartella in ciascuna destinazione, rilegge ogni copia e confronta lo SHA-256, scrive `SHA256SUMS.txt`; verifica solo i byte, che le copie siano su supporti diversi o fuori sede spetta a voi organizzarlo |
 | Esportazione di passaggi | `--passages-jsonl FILE` (richiede `--ocr`; opzionali `--passages-title TEXT`, `--page-labels`, `--clean-text`): un oggetto JSON per paragrafo, per strumenti di ricerca ancorati alle citazioni; schema in "Esportazione di passaggi" più sotto, verificato da `scripts/check-passages.py`. L'importazione in un particolare strumento non è verificata |
+| Immagini di articoli | `--article-query TEXT --article-crops DIR` (richiede `--ocr`): un PNG per ogni articolo di giornale o rivista che contiene il testo (es. `Voyager`), ritagliato dalla pagina elaborata, dal titolo fino al titolo o spazio successivo; un articolo che continua in un'altra colonna o pagina viene tagliato alla colonna |
 | TEI | `--tei FILE` (richiede `--ocr`): XML TEI P5 con un'interruzione di pagina per ogni pagina scansionata, paragrafi, tabelle e colonne; solo struttura di pagina |
 | Busta FFF | `--fff-out FILE.fff.json` (richiede `--ocr`; opzionali `--fff-title`, `--author`, `--fff-year`): il testo riconosciuto per pagina e lo SHA-256 della scansione come busta di tipo `document/ocr`, primo passo della catena di fonti offline LegatorOCR -> TEZAUR (`tezaur ingest --fff-in`) -> VERIGA (`veriga --fff-in … --fff-out`) -> AcademiSearch (Library -> Receive). Formato: `docs/FFF-ENVELOPE.md` e `docs/FLUXURI.md` in github.com/chiuta/chiuta.github.io. Il titolo è il primo titolo del testo OCR salvo diversa indicazione; gli errori OCR viaggiano con il testo |
 | Nitidezza | `--measure-edge IMAGE [--edge-roi X,Y,W,H] [--dpi N]`: MTF50 / MTF10 da un bordo nero / bianco inclinato in una scansione o in un target di prova. Solo il bordo: nessun rilevamento del target, nessuna misura di colore o rumore, nessuna valutazione FADGI |

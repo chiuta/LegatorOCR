@@ -2,7 +2,7 @@
 
 [English](README.md) · [Română](README.ro.md) · **Français** · [Italiano](README.it.md) · [Español](README.es.md) · [Português](README.pt.md) · [Deutsch](README.de.md) · [Magyar](README.hu.md)
 
-Version : 0.2.0-pre.49 · Dernière mise à jour : 2026-11-12
+Version : 0.2.0-pre.50 · Dernière mise à jour : 2026-11-12
 
 Tutoriels vidéo d’Alexandru Dumbravă (ASFAN) : [étude de cas détaillée, 54 min](https://drive.proton.me/urls/TY10AYCB1G#lis9oybHW8I7) · [tutoriel vidéo 2](https://drive.proton.me/urls/VRZCCZSMTW#dxmgAsJqIMtL) (Proton Drive).
 
@@ -159,6 +159,7 @@ Une compilation **sans le modèle de reconnaissance intégré** (par exemple tan
 | e-Factura | `--efactura FILE` lit une facture roumaine e-Factura (XML UBL ou ZIP de l’ANAF) et affiche les champs clés ; il vérifie que les montants concordent et que les chiffres de contrôle du CUI sont valides. Il ne valide pas contre le schematron officiel et ne vérifie pas les signatures |
 | Sauvegarde | `--backup-from DIR --backup-to D1 --backup-to D2 [--backup-read-only]` : copie un dossier vers chaque destination, relit chaque copie et compare le SHA-256, écrit `SHA256SUMS.txt` ; il ne vérifie que les octets, le fait que les copies soient sur des supports différents ou hors site vous incombe |
 | Export de passages | `--passages-jsonl FILE` (nécessite `--ocr` ; `--passages-title TEXT`, `--page-labels`, `--clean-text` facultatifs) : un objet JSON par paragraphe, pour des outils de recherche fondés sur la citation ; schéma dans « Export de passages » ci-dessous, vérifié par `scripts/check-passages.py`. L’import dans un outil particulier n’est pas vérifié |
+| Images d'articles | `--article-query TEXT --article-crops DIR` (nécessite `--ocr`) : un PNG par article de journal ou de revue contenant le texte (p. ex. `Voyager`), découpé dans la page traitée, du titre jusqu'au titre ou à l'espace suivant ; un article qui continue dans une autre colonne ou page est coupé à la colonne |
 | TEI | `--tei FILE` (nécessite `--ocr`) : XML TEI P5 avec un saut de page par page numérisée, paragraphes, tableaux et colonnes ; structure de page seulement |
 | Enveloppe FFF | `--fff-out FILE.fff.json` (nécessite `--ocr` ; `--fff-title`, `--author`, `--fff-year` facultatifs) : le texte reconnu par page et le SHA-256 du scan sous forme d’enveloppe de type `document/ocr`, première étape de la chaîne de sources hors ligne LegatorOCR -> TEZAUR (`tezaur ingest --fff-in`) -> VERIGA (`veriga --fff-in … --fff-out`) -> AcademiSearch (Library -> Receive). Format : `docs/FFF-ENVELOPE.md` et `docs/FLUXURI.md` dans github.com/chiuta/chiuta.github.io. Le titre est le premier titre du texte OCR sauf s’il est donné ; les erreurs d’OCR voyagent avec le texte |
 | Netteté | `--measure-edge IMAGE [--edge-roi X,Y,W,H] [--dpi N]` : MTF50 / MTF10 à partir d’un bord oblique noir / blanc dans un scan ou une mire. Bord seulement : pas de détection de mire, ni de mesure de couleur ou de bruit, ni de classement FADGI |

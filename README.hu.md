@@ -2,7 +2,7 @@
 
 [English](README.md) · [Română](README.ro.md) · [Français](README.fr.md) · [Italiano](README.it.md) · [Español](README.es.md) · [Português](README.pt.md) · [Deutsch](README.de.md) · **Magyar**
 
-Verzió: 0.2.0-pre.49 · Utolsó frissítés: 2026-11-12
+Verzió: 0.2.0-pre.50 · Utolsó frissítés: 2026-11-12
 
 Videóoktatóanyagok Alexandru Dumbravă (ASFAN) tollából: [részletes esettanulmány, 54 perc](https://drive.proton.me/urls/TY10AYCB1G#lis9oybHW8I7) · [videóoktatóanyag 2](https://drive.proton.me/urls/VRZCCZSMTW#dxmgAsJqIMtL) (Proton Drive).
 
@@ -159,6 +159,7 @@ Az `--auto-rotate` / az OSD jelölőnégyzet ezen felül az `osd.traineddata` f�
 | e-Factura | az `--efactura FILE` beolvas egy román e-Factura számlát (UBL XML vagy az ANAF ZIP-je), és kiírja a kulcsmezőket; ellenőrzi, hogy az összegek összeadódnak-e és a CUI ellenőrző számjegyei érvényesek-e. Nem validál a hivatalos schematronnal szemben, és az aláírásokat sem ellenőrzi |
 | Mentés | `--backup-from DIR --backup-to D1 --backup-to D2 [--backup-read-only]`: egy mappát átmásol minden célhelyre, minden másolatot visszaolvas és SHA-256-ot hasonlít, `SHA256SUMS.txt`-t ír; csak a bájtokat ellenőrzi, hogy a másolatok különböző adathordozón vagy telephelyen kívül vannak-e, azt neked kell megszervezned |
 | Szakaszexport | `--passages-jsonl FILE` (`--ocr` kell hozzá; opcionális `--passages-title TEXT`, `--page-labels`, `--clean-text`): bekezdésenként egy JSON-objektum idézet-alapú kutatóeszközöknek; a séma lent, a „Szakaszexport" részben, a `scripts/check-passages.py` ellenőrzi. Az egyes eszközökbe való importálás nem ellenőrzött |
+| Cikkképek | `--article-query TEXT --article-crops DIR` (`--ocr` kell hozzá): egy PNG minden olyan újság- vagy folyóiratcikkről, amely tartalmazza a szöveget (pl. `Voyager`), a feldolgozott oldalból kivágva, a címtől a következő címig vagy résig; a másik hasábban vagy oldalon folytatódó cikket a hasábnál vágja el |
 | TEI | `--tei FILE` (`--ocr` kell hozzá): TEI P5 XML beszkennelt oldalanként egy oldaltöréssel, bekezdésekkel, táblázatokkal és oszlopokkal; csak az oldalszerkezet |
 | FFF-boríték | `--fff-out FILE.fff.json` (`--ocr` kell hozzá; opcionális `--fff-title`, `--author`, `--fff-year`): a felismert szöveg oldalanként és a szkennelés SHA-256-ja egy `document/ocr` típusú borítékként, a LegatorOCR -> TEZAUR (`tezaur ingest --fff-in`) -> VERIGA (`veriga --fff-in … --fff-out`) -> AcademiSearch (Library -> Receive) offline forráslánc első lépéseként. Formátum: `docs/FFF-ENVELOPE.md` és `docs/FLUXURI.md` a github.com/chiuta/chiuta.github.io-n. A cím az OCR-szöveg első címsora, hacsak meg nem adják; az OCR-hibák a szöveggel együtt utaznak |
 | Élesség | `--measure-edge IMAGE [--edge-roi X,Y,W,H] [--dpi N]`: MTF50 / MTF10 egy ferde fekete / fehér élből egy szkennelésben vagy tesztcélban. Csak él: nincs célérzékelés, szín- vagy zajmérés, FADGI-minősítés |

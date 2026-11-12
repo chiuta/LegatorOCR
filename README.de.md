@@ -2,7 +2,7 @@
 
 [English](README.md) · [Română](README.ro.md) · [Français](README.fr.md) · [Italiano](README.it.md) · [Español](README.es.md) · [Português](README.pt.md) · **Deutsch** · [Magyar](README.hu.md)
 
-Version: 0.2.0-pre.49 · Letzte Aktualisierung: 2026-11-12
+Version: 0.2.0-pre.50 · Letzte Aktualisierung: 2026-11-12
 
 Video-Tutorials von Alexandru Dumbravă (ASFAN): [ausführliche Fallstudie, 54 Min.](https://drive.proton.me/urls/TY10AYCB1G#lis9oybHW8I7) · [Video-Tutorial 2](https://drive.proton.me/urls/VRZCCZSMTW#dxmgAsJqIMtL) (Proton Drive).
 
@@ -157,6 +157,7 @@ Ein Build **ohne das einkompilierte Erkennungsmodell** (zum Beispiel solange des
 | e-Factura | `--efactura FILE` liest eine rumänische e-Factura-Rechnung (UBL-XML oder das ZIP der ANAF) und gibt die Schlüsselfelder aus; es prüft, ob die Beträge stimmig sind und die CUI-Prüfziffern gültig sind. Es validiert nicht gegen das offizielle Schematron und prüft keine Signaturen |
 | Backup | `--backup-from DIR --backup-to D1 --backup-to D2 [--backup-read-only]`: kopiert einen Ordner an jedes Ziel, liest jede Kopie zurück und vergleicht SHA-256, schreibt `SHA256SUMS.txt`; es prüft nur Bytes, ob die Kopien auf verschiedenen Medien oder außer Haus liegen, müssen Sie selbst sicherstellen |
 | Passagen-Export | `--passages-jsonl FILE` (benötigt `--ocr`; optional `--passages-title TEXT`, `--page-labels`, `--clean-text`): ein JSON-Objekt pro Absatz, für belegbasierte Recherchewerkzeuge; Schema unten unter „Passage export“, geprüft mit `scripts/check-passages.py`. Der Import in ein bestimmtes Werkzeug wird nicht geprüft |
+| Artikelbilder | `--article-query TEXT --article-crops DIR` (benötigt `--ocr`): ein PNG je Zeitungs- oder Zeitschriftenartikel, der den Text enthält (z. B. `Voyager`), aus der verarbeiteten Seite ausgeschnitten, von der Überschrift bis zur nächsten Überschrift oder Lücke; ein Artikel, der in einer anderen Spalte oder Seite weitergeht, wird an der Spalte abgeschnitten |
 | TEI | `--tei FILE` (benötigt `--ocr`): TEI-P5-XML mit einem Seitenumbruch pro gescannter Seite, Absätzen, Tabellen und Spalten; nur Seitenstruktur |
 | FFF-Umschlag | `--fff-out FILE.fff.json` (benötigt `--ocr`; optional `--fff-title`, `--author`, `--fff-year`): der erkannte Text pro Seite und das SHA-256 des Scans als Umschlag vom Typ `document/ocr`, der erste Schritt der Offline-Quellenkette LegatorOCR -> TEZAUR (`tezaur ingest --fff-in`) -> VERIGA (`veriga --fff-in … --fff-out`) -> AcademiSearch (Library -> Receive). Format: `docs/FFF-ENVELOPE.md` und `docs/FLUXURI.md` in github.com/chiuta/chiuta.github.io. Der Titel ist die erste Überschrift des OCR-Textes, sofern nicht angegeben; OCR-Fehler wandern mit dem Text mit |
 | Schärfe | `--measure-edge IMAGE [--edge-roi X,Y,W,H] [--dpi N]`: MTF50 / MTF10 aus einer schrägen Schwarzweiß-Kante in einem Scan oder Testtarget. Nur Kante: keine Targeterkennung, keine Farb- oder Rauschmessung, keine FADGI-Bewertung |

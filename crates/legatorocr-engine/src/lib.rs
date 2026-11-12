@@ -63,6 +63,7 @@ pub mod textrules;
 pub fn set_accurate(on: bool) {
     legatorocr_nocr::set_accurate(on);
 }
+pub mod articles;
 pub mod fadgi;
 pub mod figures;
 pub mod package;
@@ -1099,6 +1100,14 @@ pub fn run_export(
                         .or_else(|| ocr_opts.map(|o| o.lang.clone()))
                         .unwrap_or_default();
                     passages::record(base + i, &chunk[i].path, res.pages, &pg, &words, &lang);
+                }
+                if articles::enabled() {
+                    articles::record(
+                        &chunk[i].path,
+                        res.pages,
+                        &pg,
+                        &legatorocr_ocr::paragraph_boxes(&words),
+                    );
                 }
                 if pagenum::enabled() {
                     printed_nums.push(legatorocr_core::quality::detect_page_number(
