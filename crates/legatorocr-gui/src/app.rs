@@ -52,6 +52,7 @@ enum Cmd {
     ExportImages,
     Modules,
     Proof,
+    Find,
     FirstPage,
     LastPage,
     NextAttention,
@@ -73,6 +74,7 @@ const CMDS: &[(Cmd, &str)] = &[
     (Cmd::ExportImages, "menu.export_images"),
     (Cmd::Modules, "menu.modules"),
     (Cmd::Proof, "menu.proof"),
+    (Cmd::Find, "menu.find"),
     (Cmd::FirstPage, "cmd.first_page"),
     (Cmd::LastPage, "cmd.last_page"),
     (Cmd::NextAttention, "cmd.next_attention"),
@@ -254,6 +256,7 @@ pub struct App {
     show_about: bool,
     modules: ModulesWindow,
     proof: crate::proof::ProofWindow,
+    find: crate::find::FindWindow,
     /// The corrected text is loaded into the engine for the running export.
     apply_pending: bool,
     /// Pages written by the last finished export (to compare with the corrected text).
@@ -356,6 +359,7 @@ impl App {
             show_about: false,
             modules: ModulesWindow::default(),
             proof: crate::proof::ProofWindow::default(),
+            find: Default::default(),
             apply_pending: false,
             last_pages: 0,
             allopts: Default::default(),
@@ -629,6 +633,28 @@ impl App {
                 );
             }
             Err(e) => self.say(format!("{}: {e:#}", self.tr("status.error")), true),
+        }
+    }
+
+    /// Select the sheet of a search result: page `page` (1-based) of the file `source`. A file
+    /// that is not in the project yet is added first.
+    fn go_to_hit(&mut self, source: &str, page: Option<usize>) {
+        let src = PathBuf::from(source);
+        let find = |sheets: &[Sheet]| {
+            sheets.iter().position(|sh| {
+                let (b, f) = legatorocr_engine::files::split_frame(&sh.path);
+                // a one-page PDF has no `#1` in its sheet's name
+                b == src && f.map_or(page.unwrap_or(1) == 1, |n| Some(n as usize) == page)
+            })
+        };
+        let mut at = find(&self.sheets);
+        if at.is_none() && src.is_file() {
+            self.add_files(std::slice::from_ref(&src));
+            at = find(&self.sheets);
+        }
+        if let Some(i) = at {
+            self.selected = Some(i);
+            self.scroll_to_selected = true;
         }
     }
 
@@ -1294,6 +1320,13 @@ impl App {
                 }
                 if ui.button(self.tr("menu.proof")).clicked() {
                     self.proof.open();
+                    ui.close();
+                }
+                if ui
+                    .add(egui::Button::new(self.tr("menu.find")).shortcut_text("Ctrl+F"))
+                    .clicked()
+                {
+                    self.find.open();
                     ui.close();
                 }
                 ui.separator();
@@ -2082,6 +2115,7 @@ impl App {
             Cmd::ExportImages if idle => self.start_export(ctx, JobKind::Images),
             Cmd::Modules => self.modules.open(),
             Cmd::Proof => self.proof.open(),
+            Cmd::Find => self.find.open(),
             Cmd::FirstPage if !self.sheets.is_empty() => {
                 self.selected = Some(0);
                 self.scroll_to_selected = true;
@@ -2102,6 +2136,9 @@ impl App {
 
     /// Ctrl+K: type a few letters of a command and press Enter.
     fn palette(&mut self, ctx: &egui::Context) {
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F)) {
+            self.find.open();
+        }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::K)) {
             self.palette_open = !self.palette_open;
             self.palette_q.clear();
@@ -5119,6 +5156,20 @@ impl eframe::App for App {
         {
             let lang = self.lang;
             self.proof.ui(&ctx, &|k| t(lang, k));
+            let files: Vec<PathBuf> = {
+                let mut v: Vec<PathBuf> = Vec::new();
+                for sh in &self.sheets {
+                    let base = legatorocr_engine::files::split_frame(&sh.path).0;
+                    if !v.contains(&base) {
+                        v.push(base);
+                    }
+                }
+                v
+            };
+            self.find.ui(&ctx, &|k| t(lang, k), &|| files.clone());
+        }
+        if let Some(h) = self.find.goto.take() {
+            self.go_to_hit(&h.source, h.page);
         }
         if std::mem::take(&mut self.proof.apply_requested) {
             if !self.s.ocr {

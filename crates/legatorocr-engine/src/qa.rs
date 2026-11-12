@@ -54,7 +54,11 @@ pub fn record(index: usize, path: &Path, img: &image::DynamicImage) {
         hash: q::perceptual_hash(&g),
         thumb: q::thumbnail(&g),
         cut: q::edge_text_cut(&g),
-        dpi: q::effective_dpi(w, h, a4),
+        // the resolution the file declares (a scanned PDF, a JPEG header) wins over the guess that
+        // the page is A4: a newspaper sheet or a poster is not
+        dpi: crate::files::detect_dpi(path)
+            .map(|d| d as f32)
+            .unwrap_or_else(|| q::effective_dpi(w, h, a4)),
     };
     if let Ok(mut d) = DATA.lock() {
         d.insert(index, e);
