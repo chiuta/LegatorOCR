@@ -2,7 +2,7 @@
 
 [English](README.md) · **Română** · [Français](README.fr.md) · [Italiano](README.it.md) · [Español](README.es.md) · [Português](README.pt.md) · [Deutsch](README.de.md) · [Magyar](README.hu.md)
 
-Versiune: 0.2.0-pre.49 · Ultima actualizare: 2026-11-12
+Versiune: 0.2.0-pre.50 · Ultima actualizare: 2026-11-12
 
 Tutoriale video de Alexandru Dumbravă (ASFAN): [studiu de caz detaliat, 54 min](https://drive.proton.me/urls/TY10AYCB1G#lis9oybHW8I7) · [tutorial video 2](https://drive.proton.me/urls/VRZCCZSMTW#dxmgAsJqIMtL) (Proton Drive).
 
@@ -158,6 +158,7 @@ O compilare **fără modelul de recunoaștere inclus în program** (de exemplu c
 | e-Factura | `--efactura FILE` (cu `--efactura-rules`: aplică și regulile de afaceri EN 16931, listate după numărul regulii, cu valoarea găsită și cea așteptată, pentru câmpurile pe care programul le poate citi; nu este o validare Schematron completă) citește o factură românească e-Factura (UBL XML sau ZIP-ul ANAF) și afișează câmpurile cheie; verifică dacă sumele se adună și dacă cifrele de control ale CUI sunt valide. Nu validează față de schematronul oficial și nu verifică semnăturile |
 | Copie de rezervă | `--backup-from DIR --backup-to D1 --backup-to D2 [--backup-read-only]`: copiază un dosar în fiecare destinație, citește înapoi fiecare copie și compară SHA-256, scrie `SHA256SUMS.txt`; verifică doar octeții, iar dacă copiile se află pe medii diferite sau în afara sediului rămâne în grija dumneavoastră |
 | Export de pasaje | `--passages-jsonl FILE` (necesită `--ocr`; opționale `--passages-title TEXT`, `--page-labels`, `--clean-text`): un obiect JSON pe paragraf, pentru instrumente de cercetare ancorate în citări; schema în „Export de pasaje” mai jos, verificată de `scripts/check-passages.py`. Importul în vreun instrument anume nu este verificat |
+| Imagini de articole | `--article-query TEXT --article-crops DIR` (necesită `--ocr`): un PNG pentru fiecare articol de ziar sau revistă care conține textul (de ex. `Voyager`), decupat din pagina procesată, de la titlu până la următorul titlu sau spațiu; un articol care continuă în altă coloană sau pagină se taie la coloană |
 | TEI | `--tei FILE` (necesită `--ocr`): XML TEI P5 cu o întrerupere de pagină pentru fiecare pagină scanată, paragrafe, tabele și coloane; doar structura paginii; `--tei-facsimile DIR` scrie în plus imaginile paginilor prelucrate în DIR și adaugă un facsimil (o suprafață pe pagină, o zonă dreptunghiulară pe paragraf, titlu și tabel, în pixeli ai imaginii scrise) cu legături din text |
 | Plic FFF | `--fff-out FILE.fff.json` (necesită `--ocr`; opționale `--fff-title`, `--author`, `--fff-year`): textul recunoscut pe pagină și SHA-256 al scanării ca plic de tip `document/ocr`, primul pas al lanțului offline de surse LegatorOCR -> TEZAUR (`tezaur ingest --fff-in`) -> VERIGA (`veriga --fff-in … --fff-out`) -> AcademiSearch (Library -> Receive). Format: `docs/FFF-ENVELOPE.md` și `docs/FLUXURI.md` din github.com/chiuta/chiuta.github.io. Titlul este primul titlu al textului OCR dacă nu este dat; erorile OCR călătoresc odată cu textul |
 | Claritate | `--measure-edge IMAGE [--edge-roi X,Y,W,H] [--dpi N]`: MTF50 / MTF10 dintr-o muchie înclinată neagră / albă dintr-o scanare sau o țintă de test. Doar muchia: fără detecția țintei, fără măsurarea culorii sau a zgomotului, fără clasificare FADGI |

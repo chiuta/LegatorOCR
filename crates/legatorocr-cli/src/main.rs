@@ -199,6 +199,16 @@ struct Cli {
     /// of the page image, a stable passage id and a "cite" string. Needs --ocr. Schema in README.
     #[arg(long, value_name = "FILE")]
     passages_jsonl: Option<PathBuf>,
+    /// With --ocr and --article-crops: the text to look for (case and diacritics ignored, a word
+    /// broken with a hyphen at the end of a line is found), e.g. `Voyager`.
+    #[arg(long, value_name = "TEXT")]
+    article_query: Option<String>,
+    /// With --article-query: write into DIR one PNG per article that contains the text, cut from
+    /// the processed page (`<file>_p<page>_<n>.png`). The article is the column of the hit, from
+    /// its headline down to the next headline or gap; an article that goes on in another column or
+    /// page is cut there. Prints the files and the first words of each.
+    #[arg(long, value_name = "DIR")]
+    article_crops: Option<PathBuf>,
 
     /// Title used in the "cite" string of --passages-jsonl ("<title> p.<label>"); default: the
     /// source file name without extension.
@@ -3332,6 +3342,12 @@ fn real_main() -> Result<()> {
     {
         bail!("--txt, --hocr, --alto, --page-xml, --json, --docx, --tei, --passages-jsonl and --fff-out need --ocr");
     }
+    if cli.article_crops.is_some() != cli.article_query.is_some() {
+        bail!("--article-crops and --article-query go together");
+    }
+    if cli.article_crops.is_some() && !cli.ocr {
+        bail!("--article-crops needs --ocr");
+    }
     for p in cli
         .txt
         .iter()
@@ -3360,6 +3376,7 @@ fn real_main() -> Result<()> {
         && cli.epub.is_none()
         && cli.tei.is_none()
         && cli.passages_jsonl.is_none()
+        && cli.article_crops.is_none()
         && cli.report.is_none()
         && cli.multitiff.is_none()
         && !cli.report_outliers
@@ -3953,6 +3970,9 @@ fn real_main() -> Result<()> {
         legatorocr_engine::djvu::set_thumbnails(cli.djvu_thumbnails);
         legatorocr_engine::djvu::begin();
     }
+    if let (Some(dir), Some(q)) = (&cli.article_crops, &cli.article_query) {
+        legatorocr_engine::articles::begin(dir, q);
+    }
     if cli.passages_jsonl.is_some() {
         let ext_name = match cli.format {
             Fmt::None => "png",
@@ -4393,6 +4413,15 @@ fn real_main() -> Result<()> {
                 cli.verify_conf
             ),
         }
+    }
+    if cli.article_crops.is_some() {
+        let w = legatorocr_engine::articles::finish();
+        for (p, t) in &w {
+            let t: String = t.chars().take(60).collect();
+            eprintln!("article {} : {t}", p.display());
+        }
+        eprintln!("{} article image(s) written", w.len());
+        written.extend(w.into_iter().map(|(p, _)| p));
     }
     if let Some(p) = &cli.passages_jsonl {
         let ps = legatorocr_engine::passages::finish(cli.clean_text);

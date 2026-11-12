@@ -2,7 +2,7 @@
 
 **English** · [Română](README.ro.md) · [Français](README.fr.md) · [Italiano](README.it.md) · [Español](README.es.md) · [Português](README.pt.md) · [Deutsch](README.de.md) · [Magyar](README.hu.md)
 
-Version: 0.2.0-pre.49 · Last updated: 2026-11-12
+Version: 0.2.0-pre.50 · Last updated: 2026-11-12
 
 Video tutorials by Alexandru Dumbravă (ASFAN): [detailed case study, 54 min](https://drive.proton.me/urls/TY10AYCB1G#lis9oybHW8I7) · [video tutorial 2](https://drive.proton.me/urls/VRZCCZSMTW#dxmgAsJqIMtL) (Proton Drive).
 
@@ -163,6 +163,7 @@ A build **without the compiled-in recogniser model** (for example while its lice
 | e-Factura | `--efactura FILE` (with `--efactura-rules`: also the EN 16931 business rules, listed by rule number with the value found and expected, for the fields this program can read; not a full Schematron validation) reads a Romanian e-Factura invoice (UBL XML or ANAF's ZIP) and prints the key fields; it checks that the amounts add up and that CUI check digits are valid. It does not validate against the official schematron or check signatures |
 | Backup | `--backup-from DIR --backup-to D1 --backup-to D2 [--backup-read-only]`: copies a folder to each destination, reads every copy back and compares SHA-256, writes `SHA256SUMS.txt`; it checks bytes only, whether the copies are on different media or off site is yours to arrange |
 | Passage export | `--passages-jsonl FILE` (needs `--ocr`; optional `--passages-title TEXT`, `--page-labels`, `--clean-text`): one JSON object per paragraph, for citation-grounded research tools; schema in "Passage export" below, checked by `scripts/check-passages.py`. Import into any particular tool is not checked |
+| Article images | `--article-query TEXT --article-crops DIR` (needs `--ocr`): one PNG per newspaper or magazine article that contains the text (e.g. `Voyager`), cut from the processed page, from its headline to the next headline or gap; an article that continues in another column or page is cut at the column |
 | TEI | `--tei FILE` (needs `--ocr`): TEI P5 XML with a page break per scanned page, paragraphs, tables and columns; page structure only; `--tei-facsimile DIR` also writes the processed page images into DIR and adds a facsimile (one surface per page, one rectangular zone per paragraph, heading and table, in pixels of the written image) with links from the text |
 | FFF envelope | `--fff-out FILE.fff.json` (needs `--ocr`; optional `--fff-title`, `--author`, `--fff-year`): the recognised text per page and the SHA-256 of the scan as an envelope of type `document/ocr`, the first step of the offline source chain LegatorOCR -> TEZAUR (`tezaur ingest --fff-in`) -> VERIGA (`veriga --fff-in … --fff-out`) -> AcademiSearch (Library -> Receive). Format: `docs/FFF-ENVELOPE.md` and `docs/FLUXURI.md` in github.com/chiuta/chiuta.github.io. The title is the first heading of the OCR text unless given; OCR errors travel with the text |
 | Sharpness | `--measure-edge IMAGE [--edge-roi X,Y,W,H] [--dpi N]`: MTF50 / MTF10 from a slanted black / white edge in a scan or test target. Edge only: no target detection, colour or noise measurement, no FADGI rating |
