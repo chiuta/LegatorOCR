@@ -2,7 +2,9 @@
 
 use image::{imageops, DynamicImage, RgbaImage};
 use legatorocr_core::{process_page, PageImage, Settings};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 
 /// Longest edge of a preview texture (keeps GPU upload and memory small).
 pub const PREVIEW_MAX: u32 = 1800;
@@ -231,9 +233,64 @@ pub fn text_block(t: &Thumb) -> Option<[u32; 4]> {
     ])
 }
 
+/// What identifies a decoded picture: the file (path, size, modification time) and the plugin
+/// that may rework it on loading.
+type DecodedKey = (PathBuf, u64, Option<SystemTime>, Option<PathBuf>);
+
+/// The last decoded pictures. Decoding a large scan (a JPEG 2000 / JBIG2 page of a newspaper is
+/// 30 million pixels) is most of the wait for a preview, and it does not depend on the settings:
+/// moving a slider or tick box used to decode the file again every time.
+static DECODED: Mutex<Vec<(DecodedKey, Arc<DynamicImage>)>> = Mutex::new(Vec::new());
+
+/// Pictures kept, and the most pixels all of them together may hold (about 330 MB as RGB).
+const DECODED_KEEP: usize = 3;
+const DECODED_MAX_PIXELS: u64 = 110_000_000;
+
+fn decoded_key(path: &Path) -> DecodedKey {
+    let base = legatorocr_engine::files::split_frame(path).0;
+    let meta = std::fs::metadata(&base).ok();
+    (
+        path.to_path_buf(),
+        meta.as_ref().map_or(0, |m| m.len()),
+        meta.and_then(|m| m.modified().ok()),
+        legatorocr_engine::plugin::current(),
+    )
+}
+
+/// [`legatorocr_engine::load_image`] with the last few results kept. A file that cannot be
+/// stat-ed (no modification time) is never kept, so a changed file is never shown stale.
+fn load_decoded(path: &Path) -> Result<Arc<DynamicImage>, String> {
+    let key = decoded_key(path);
+    let usable = key.2.is_some();
+    if usable {
+        let mut c = DECODED.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(i) = c.iter().position(|(k, _)| *k == key) {
+            let hit = c.remove(i); // most recently used goes last
+            let img = hit.1.clone();
+            c.push(hit);
+            return Ok(img);
+        }
+    }
+    let img =
+        legatorocr_engine::load_image(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let img = Arc::new(img);
+    let px = |i: &DynamicImage| i.width() as u64 * i.height() as u64;
+    if usable && px(&img) <= DECODED_MAX_PIXELS {
+        let mut c = DECODED.lock().unwrap_or_else(|e| e.into_inner());
+        c.retain(|(k, _)| k.0 != key.0);
+        c.push((key, img.clone()));
+        while c.len() > DECODED_KEEP
+            || c.iter().map(|(_, i)| px(i)).sum::<u64>() > DECODED_MAX_PIXELS
+        {
+            c.remove(0);
+        }
+    }
+    Ok(img)
+}
+
 pub fn render(req: &PreviewRequest) -> Result<Preview, String> {
-    let img = legatorocr_engine::load_image(&req.path)
-        .map_err(|e| format!("{}: {e}", req.path.display()))?;
+    let img = load_decoded(&req.path)?;
+    let img = (*img).clone();
     let original_size = (img.width(), img.height());
     let original = to_thumb(&img.to_rgba8(), PREVIEW_MAX);
     let (img, settings) = legatorocr_engine::orient_with_osd(img, &req.settings, req.osd.as_ref());
@@ -284,6 +341,28 @@ mod tests {
         let small = RgbaImage::new(100, 50);
         let t = to_thumb(&small, 1800);
         assert_eq!((t.w, t.h), (100, 50));
+    }
+
+    #[test]
+    fn a_decoded_picture_is_reused_until_the_file_changes() {
+        let dir = std::env::temp_dir().join(format!("lgr-gui-dec-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("d.png");
+        GrayImage::from_pixel(40, 30, Luma([200]))
+            .save(&path)
+            .unwrap();
+        let a = load_decoded(&path).unwrap();
+        let b = load_decoded(&path).unwrap();
+        assert!(Arc::ptr_eq(&a, &b), "the second load comes from the cache");
+        // a different file under the same name (other size) is decoded again
+        GrayImage::from_pixel(50, 30, Luma([100]))
+            .save(&path)
+            .unwrap();
+        let c = load_decoded(&path).unwrap();
+        assert_eq!((c.width(), c.height()), (50, 30));
+        assert!(!Arc::ptr_eq(&a, &c));
+        assert!(load_decoded(&dir.join("missing.png")).is_err());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

@@ -1594,6 +1594,22 @@ impl PdfDoc {
         Ok((imgs.swap_remove(0), layered))
     }
 
+    /// The widest image of the page in pixels, counting the explicit `/Mask` stencils of images.
+    fn sharpest_width(&self, page: &Dict) -> f64 {
+        let mut imgs = Vec::new();
+        if let Some(r) = page.get("Resources") {
+            self.images_in(r, 0, &mut imgs);
+        }
+        let mut best = 0.0f64;
+        for (d, _, _) in &imgs {
+            best = best.max(self.num_of(d, "Width").unwrap_or(0.0));
+            if let Some(Val::Stream(m, _, _)) = d.get("Mask").map(|v| self.resolve(v)) {
+                best = best.max(self.num_of(&m, "Width").unwrap_or(0.0));
+            }
+        }
+        best
+    }
+
     pub fn page_info(&self, index: usize) -> R<PageInfo> {
         budget_reset();
         let page = self
@@ -1623,8 +1639,11 @@ impl PdfDoc {
             .and_then(|u| self.resolve(u).num())
             .filter(|u| *u > 0.0)
             .unwrap_or(1.0);
+        // the sharpest layer sets the resolution of the page: in a scanned newspaper (MRC) the text
+        // sits in a 300 dpi stencil mask over colour layers of 75 to 150 dpi
+        let sharp = self.sharpest_width(page).max(w);
         let dpi = (mb.0 > 1.0)
-            .then(|| (w * 72.0 / (mb.0 * unit)).round())
+            .then(|| (sharp * 72.0 / (mb.0 * unit)).round())
             .filter(|d| (36.0..=2400.0).contains(d))
             .map(|d| d as u32);
         let rot = page
@@ -2032,6 +2051,12 @@ impl PdfDoc {
                 Some(Val::Bool(true))
             );
             let img = self.decode_image(&q.dict, q.s, q.e)?;
+            // an explicit /Mask (a stencil stream, the usual MRC foreground): the image is painted only
+            // where the mask lets it through; a bad mask is ignored (the image shows whole, as before)
+            let explicit = match q.dict.get("Mask").map(|v| self.resolve(v)) {
+                Some(Val::Stream(d, s, e)) => self.decode_image(&d, s, e).ok(),
+                _ => None,
+            };
             if !straight(&q.m) {
                 // rotated / skewed placement: inverse-map every canvas pixel of its bounding box
                 let m = q.m;
@@ -2127,6 +2152,13 @@ impl PdfDoc {
             // PDF images are stored top row first; a negative d flips them
             let img = if q.m[3] < 0.0 { img.flipv() } else { img };
             let img = if q.m[0] < 0.0 { img.fliph() } else { img };
+            // the mask, turned and sized like the image (it is usually sharper than the image)
+            let keep = explicit.map(|m| {
+                let m = if q.m[3] < 0.0 { m.flipv() } else { m };
+                let m = if q.m[0] < 0.0 { m.fliph() } else { m };
+                m.resize_exact(dw, dh, image::imageops::FilterType::Nearest)
+                    .to_luma8()
+            });
             let img = if img.width() == dw && img.height() == dh {
                 img
             } else {
@@ -2149,6 +2181,19 @@ impl PdfDoc {
                             let (cx, cy) = (dx + xx as i64, dy + yy as i64);
                             if cx >= 0 && cy >= 0 && cx < cw as i64 && cy < ch as i64 {
                                 canvas.put_pixel(cx as u32, cy as u32, image::Rgb(q.fill));
+                            }
+                        }
+                    }
+                }
+            } else if let Some(k) = keep {
+                // stencil sample 0 = paint, as for an ImageMask
+                let rgb = img.to_rgb8();
+                for yy in 0..dh {
+                    for xx in 0..dw {
+                        if k.get_pixel(xx, yy).0[0] < 128 {
+                            let (cx, cy) = (dx + xx as i64, dy + yy as i64);
+                            if cx >= 0 && cy >= 0 && cx < cw as i64 && cy < ch as i64 {
+                                canvas.put_pixel(cx as u32, cy as u32, *rgb.get_pixel(xx, yy));
                             }
                         }
                     }
@@ -3240,6 +3285,49 @@ mod tests {
         assert_eq!(img.get_pixel(140, 230).0, [0, 0, 255]); // picture patch
         let bgp = img.get_pixel(250, 350).0; // background layer
         assert!((bgp[0] as i32 - 240).abs() < 6 && (bgp[2] as i32 - 200).abs() < 6);
+    }
+
+    /// The usual scanned-newspaper layout (MRC): a background picture, then a colour image painted
+    /// through an explicit `/Mask` stencil stream (sample 0 = paint). The text lives in the mask;
+    /// a reader that ignores the mask paints the colour image over the whole page.
+    #[test]
+    fn an_image_with_an_explicit_mask_is_painted_only_where_the_mask_allows() {
+        let obj = |o: &mut Vec<u8>, n: u32, dict: &str, data: &[u8]| {
+            o.extend_from_slice(
+                format!("{n} 0 obj\n<< {dict} /Length {} >>\nstream\n", data.len()).as_bytes(),
+            );
+            o.extend_from_slice(data);
+            o.extend_from_slice(b"\nendstream\nendobj\n");
+        };
+        let mut o = b"%PDF-1.5\n".to_vec();
+        o.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+        o.extend_from_slice(b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /XObject << /Im0 4 0 R /Im1 5 0 R >> >> /Contents 7 0 R >>\nendobj\n");
+        // background: 4x4 light grey-yellow
+        let bg: Vec<u8> = (0..16).flat_map(|_| [240u8, 230, 200]).collect();
+        obj(&mut o, 4, "/Type /XObject /Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceRGB /BitsPerComponent 8", &bg);
+        // foreground colour: 2x2 dark red, with the stencil of object 6
+        let fg: Vec<u8> = (0..4).flat_map(|_| [200u8, 0, 0]).collect();
+        obj(&mut o, 5, "/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Mask 6 0 R", &fg);
+        // stencil 16x16: the left 8 columns are 0 (paint), the right 8 are 1 (masked out)
+        let mask: Vec<u8> = (0..16).flat_map(|_| [0x00u8, 0xFF]).collect();
+        obj(&mut o, 6, "/Type /XObject /Subtype /Image /Width 16 /Height 16 /ImageMask true /BitsPerComponent 1", &mask);
+        let c = "q 200 0 0 200 0 0 cm /Im0 Do Q q 200 0 0 200 0 0 cm /Im1 Do Q";
+        obj(&mut o, 7, "", c.as_bytes());
+        o.extend_from_slice(b"trailer\n<< /Root 1 0 R >>\n%%EOF\n");
+        let img = PdfDoc::open(o)
+            .unwrap()
+            .page_image(0)
+            .unwrap()
+            .image
+            .to_rgb8();
+        let (w, h) = img.dimensions();
+        let left = img.get_pixel(w / 4, h / 2).0;
+        let right = img.get_pixel(w * 3 / 4, h / 2).0;
+        assert_eq!(left, [200, 0, 0], "painted through the stencil");
+        assert!(
+            (right[0] as i32 - 240).abs() < 6 && (right[2] as i32 - 200).abs() < 6,
+            "masked out: the background shows, got {right:?}"
+        );
     }
 
     #[test]

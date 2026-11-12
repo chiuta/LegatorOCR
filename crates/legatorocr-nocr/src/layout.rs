@@ -519,6 +519,34 @@ fn looks_like_text_lines(g: &[(usize, usize)], len: usize, med: u32) -> bool {
     all >= 2 && ok * 10 >= all * 7
 }
 
+/// The deepest narrow dip of a column profile that is far below the typical column (under 35 % of
+/// the median, averaged over one letter height) and not at the very edge: the gutter of a block
+/// whose gutters are bridged by ink. `None` when there is no such dip.
+fn valley(cols: &[u32], med: u32) -> Option<usize> {
+    let n = cols.len();
+    let win = (med as usize).max(4);
+    if n < win * 12 {
+        return None;
+    }
+    let mut sorted = cols.to_vec();
+    sorted.sort_unstable();
+    let typical = sorted[n / 2] as u64;
+    if typical == 0 {
+        return None;
+    }
+    let mut pre = vec![0u64; n + 1];
+    for i in 0..n {
+        pre[i + 1] = pre[i] + cols[i] as u64;
+    }
+    let avg = |i: usize| (pre[i + win] - pre[i]) / win as u64;
+    let (lo, hi) = (win * 6, n.saturating_sub(win * 7));
+    (lo..hi)
+        .map(|i| (avg(i), i))
+        .filter(|&(a, _)| a * 100 < typical * 35)
+        .min()
+        .map(|(_, i)| i + win / 2)
+}
+
 fn widest(g: &[(usize, usize)]) -> Option<(usize, usize)> {
     g.iter()
         .copied()
@@ -888,14 +916,21 @@ fn cut(p: &Prof, r: Region, med: u32, depth: u32, out: &mut Vec<Line>) {
             (med / 2).max(4),
         )
     });
-    let vg = widest(&vgaps).filter(|&(s, l)| {
+    // the widest gap that qualifies (not simply the widest one: on a newspaper page the widest
+    // gap can lie in an outer fifth of the width, where a narrow gutter does not count, while
+    // the tight gutters between the middle columns would)
+    let qualifies = |&(s, l): &(usize, usize)| {
         let l32 = l as u32;
         l32 * 10 >= med * 18
             || (l32 * 10 >= med * 9
                 && h > med * 8
                 && s as u32 * 5 >= w
                 && (w - s as u32 - l32) * 5 >= w)
-    });
+    };
+    let vg = {
+        let ok: Vec<(usize, usize)> = vgaps.iter().copied().filter(qualifies).collect();
+        widest(&ok)
+    };
     let hg = widest(&hgaps);
     // a whitespace column running through several lines is a gutter: read it column by column
     // unless a blank row band is clearly bigger (a heading above two columns)
@@ -941,6 +976,18 @@ fn cut(p: &Prof, r: Region, med: u32, depth: u32, out: &mut Vec<Line>) {
         cut(p, (x0, y0, xs, y1), med, depth + 1, out);
         cut(p, (xs + vl as u32, y0, x1, y1), med, depth + 1, out);
         return;
+    }
+    // No blank row and no empty column, yet the block is tall: columns set so tight that a headline,
+    // the edge of a picture or specks of dust touch every gutter (a newspaper page). Cut at the
+    // deepest dip of the column profile; the halves are then cut again, and each column
+    // alone has its blank rows.
+    if hgaps.is_empty() && h > med * 8 {
+        if let Some(x) = valley(&cols, med) {
+            let xs = x0 + x as u32;
+            cut(p, (x0, y0, xs, y1), med, depth + 1, out);
+            cut(p, (xs, y0, x1, y1), med, depth + 1, out);
+            return;
+        }
     }
     // no whitespace at all: touching lines (heavy skew) or a picture
     if h <= med * 8 {
@@ -1440,6 +1487,76 @@ mod tests {
             out.iter().position(|l| l.y < 250),
             Some(0),
             "before the column"
+        );
+    }
+
+    /// A newspaper page: tight columns whose lines sit at different heights (no blank row runs
+    /// across), with specks of ink in every gutter (no empty column either). The page used to be
+    /// dropped as a picture and none of its text was read.
+    #[test]
+    fn tight_columns_bridged_by_specks_are_cut_at_their_gutters() {
+        let (w, h) = (1200u32, 1200u32);
+        let mut ink = BitImage::new(w, h);
+        let fill = |ink: &mut BitImage, x0: u32, y0: u32, x1: u32, y1: u32| {
+            for y in y0..y1.min(ink.h) {
+                for x in x0..x1.min(ink.w) {
+                    ink.set(x, y, true);
+                }
+            }
+        };
+        // 5 columns 200 px wide with gutters of 14 px; lines 18 px tall every 24 px, the phase
+        // of each column shifted so that no row stays blank across two neighbouring columns
+        for c in 0..5u32 {
+            let x0 = 40 + c * 214;
+            let phase = c * 8 % 24;
+            let mut y = 60 + phase;
+            while y + 18 < h - 40 {
+                fill(&mut ink, x0, y, x0 + 200, y + 18);
+                y += 24;
+            }
+            // a speck in the gutter on the right, every 8 rows
+            let mut y = 60;
+            while y < h - 40 {
+                fill(&mut ink, x0 + 203, y, x0 + 205, y + 1);
+                y += 8;
+            }
+        }
+        let lines = find_lines(&ink, 12);
+        // every column is read: lines start in all five column bands
+        for c in 0..5u32 {
+            let (lo, hi) = (40 + c * 214, 40 + c * 214 + 200);
+            let n = lines
+                .iter()
+                .filter(|l| l.x >= lo.saturating_sub(4) && l.x < hi)
+                .count();
+            assert!(n >= 20, "column {c} has {n} lines");
+        }
+        // and no line runs across a gutter
+        assert!(
+            lines.iter().all(|l| l.w <= 215),
+            "{:?}",
+            lines.iter().map(|l| l.w).max()
+        );
+    }
+
+    #[test]
+    fn valley_needs_a_deep_dip_and_a_wide_enough_block() {
+        let med = 12;
+        let mut cols = vec![400u32; 600];
+        assert_eq!(valley(&cols, med), None, "a flat profile has no valley");
+        for c in cols.iter_mut().skip(300).take(14) {
+            *c = 50;
+        }
+        let v = valley(&cols, med).expect("a dip to 12 % of the typical column");
+        assert!((300..314).contains(&v), "{v}");
+        let shallow: Vec<u32> = (0..600)
+            .map(|i| if (300..314).contains(&i) { 300 } else { 400 })
+            .collect();
+        assert_eq!(valley(&shallow, med), None, "a dip to 75 % is no gutter");
+        assert_eq!(
+            valley(&cols[..100], med),
+            None,
+            "too narrow to hold two columns"
         );
     }
 }
