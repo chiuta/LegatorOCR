@@ -4,6 +4,8 @@
 
 Versione: 0.2.0-pre.47 · Ultimo aggiornamento: 2026-11-11
 
+Video tutorial di Alexandru Dumbravă (ASFAN): [caso di studio dettagliato, 54 min](https://drive.proton.me/urls/TY10AYCB1G#lis9oybHW8I7) · [video tutorial 2](https://drive.proton.me/urls/VRZCCZSMTW#dxmgAsJqIMtL) (Proton Drive).
+
 Sito di presentazione: <https://legatorocr.chiuta.ro> (sorgenti in `docs/`).
 
 Post-processore indipendente in Rust per libri scansionati:

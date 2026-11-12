@@ -4,6 +4,8 @@
 
 Versiune: 0.2.0-pre.47 · Ultima actualizare: 2026-11-11
 
+Tutoriale video de Alexandru Dumbravă (ASFAN): [studiu de caz detaliat, 54 min](https://drive.proton.me/urls/TY10AYCB1G#lis9oybHW8I7) · [tutorial video 2](https://drive.proton.me/urls/VRZCCZSMTW#dxmgAsJqIMtL) (Proton Drive).
+
 Site de prezentare: <https://legatorocr.chiuta.ro> (sursa în `docs/`).
 
 Post-procesor Rust independent pentru cărți scanate:
