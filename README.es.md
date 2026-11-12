@@ -2,7 +2,7 @@
 
 [English](README.md) · [Română](README.ro.md) · [Français](README.fr.md) · [Italiano](README.it.md) · **Español** · [Português](README.pt.md) · [Deutsch](README.de.md) · [Magyar](README.hu.md)
 
-Versión: 0.2.0-pre.48 · Última actualización: 2026-11-12
+Versión: 0.2.0-pre.49 · Última actualización: 2026-11-12
 
 Tutoriales en vídeo de Alexandru Dumbravă (ASFAN): [estudio de caso detallado, 54 min](https://drive.proton.me/urls/TY10AYCB1G#lis9oybHW8I7) · [tutorial en vídeo 2](https://drive.proton.me/urls/VRZCCZSMTW#dxmgAsJqIMtL) (Proton Drive).
 
