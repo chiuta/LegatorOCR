@@ -20,6 +20,8 @@ struct Entry {
     thumb: Vec<u8>,
     cut: bool,
     dpi: f32,
+    /// The paper is clearly tinted (cream, yellow): red well above blue (15 or more).
+    tinted: bool,
 }
 
 static DATA: Mutex<BTreeMap<usize, Entry>> = Mutex::new(BTreeMap::new());
@@ -48,8 +50,21 @@ pub fn record(index: usize, path: &Path, img: &image::DynamicImage) {
     } else {
         (210.0, 297.0)
     };
+    // a colour photo of a page: its paper tone, from the bright majority of the picture
+    let tinted = if matches!(
+        img,
+        image::DynamicImage::ImageRgb8(_)
+            | image::DynamicImage::ImageRgba8(_)
+            | image::DynamicImage::ImageRgb16(_)
+    ) {
+        let p = legatorocr_core::transform::estimate_background(&img.to_rgb8()).0;
+        p[0] as i32 - p[2] as i32 >= 15 && p[1] >= 150
+    } else {
+        false
+    };
     let e = Entry {
         path: path.to_path_buf(),
+        tinted,
         sharp: q::sharpness(&g),
         hash: q::perceptual_hash(&g),
         thumb: q::thumbnail(&g),
@@ -120,6 +135,13 @@ pub fn report() -> Vec<String> {
             "{high} page(s) have over about 400 dpi if the page is A4: plain text gains nothing, files and processing time grow"
         ));
     }
+    let tinted = rows.iter().filter(|e| e.tinted).count();
+    if tinted > 0 {
+        out.push(format!(
+            "{tinted} page(s) have tinted paper (cream or yellow): colour output keeps it; \
+             --remove-background makes the paper white and evens the lighting out"
+        ));
+    }
     out
 }
 
@@ -171,6 +193,22 @@ mod tests {
         );
         // 300 px across 210 mm is about 36 dpi
         assert!(r.iter().any(|l| l.contains("under about 200 dpi")), "{r:?}");
+        // a cream page is reported, a neutral one is not
+        assert!(!r.iter().any(|l| l.contains("tinted paper")), "{r:?}");
+        record(
+            2,
+            Path::new("c.png"),
+            &DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+                300,
+                400,
+                image::Rgb([240, 226, 208]),
+            )),
+        );
+        let r = report();
+        assert!(
+            r.iter().any(|l| l.contains("1 page(s) have tinted paper")),
+            "{r:?}"
+        );
         enable(false);
         assert!(report().is_empty());
     }
