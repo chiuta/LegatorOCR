@@ -3342,6 +3342,13 @@ fn real_main() -> Result<()> {
     {
         bail!("--txt, --hocr, --alto, --page-xml, --json, --docx, --tei, --passages-jsonl and --fff-out need --ocr");
     }
+    if cli
+        .article_query
+        .as_deref()
+        .is_some_and(|q| q.trim().is_empty())
+    {
+        bail!("--article-query needs a text to look for");
+    }
     if cli.article_crops.is_some() != cli.article_query.is_some() {
         bail!("--article-crops and --article-query go together");
     }

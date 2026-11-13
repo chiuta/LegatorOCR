@@ -912,7 +912,7 @@ pub fn remove_fingers(img: &mut RgbImage, dpi: u32, paper: Rgb<u8>) -> usize {
             ((77.0..=127.0).contains(&cb)
                 && cr >= pcr + 9.0
                 && cr <= 180.0
-                && y >= 70.0
+                && y >= 40.0
                 && y <= 0.97 * py) as u8
         })
         .collect();
@@ -927,7 +927,12 @@ pub fn remove_fingers(img: &mut RgbImage, dpi: u32, paper: Rgb<u8>) -> usize {
     let mut hit = vec![false; comps.len() + 1];
     let mut n = 0;
     for (i, c) in comps.iter().enumerate() {
-        let touches = c.x0 == 0 || c.y0 == 0 || c.x1 as usize == w - 1 || c.y1 as usize == h - 1;
+        // within ~1.5 mm of the border: a dark vignette or a soft edge keeps the mask a pixel away
+        let tol = ((1.5 / 25.4 * sdpi).round() as usize).max(1);
+        let touches = (c.x0 as usize) < tol
+            || (c.y0 as usize) < tol
+            || c.x1 as usize + tol >= w
+            || c.y1 as usize + tol >= h;
         let len = ((c.x1 - c.x0 + 1) as f32).max((c.y1 - c.y0 + 1) as f32);
         // a hand is a small part of the picture; a "finger" the size of a quarter page is
         // warm shadow or a cover, and wiping it would take the page with it
@@ -939,6 +944,37 @@ pub fn remove_fingers(img: &mut RgbImage, dpi: u32, paper: Rgb<u8>) -> usize {
     }
     if n == 0 {
         return 0;
+    }
+    // The other fingers of the same hand: separated from the first by a crease or a shadow, so
+    // they do not reach the border themselves. A skin blob within 6 mm of a finger already
+    // found, of at least a quarter of the minimum area, goes with it.
+    {
+        let gap = (6.0 / 25.4 * sdpi).round() as i64;
+        let mut grew = true;
+        while grew {
+            grew = false;
+            for i in 0..comps.len() {
+                if hit[i + 1] {
+                    continue;
+                }
+                let c = &comps[i];
+                if (c.area as f32) < min_area / 4.0 || (c.area as usize) * 8 > w * h {
+                    continue;
+                }
+                let near = comps.iter().enumerate().any(|(j, o)| {
+                    hit[j + 1]
+                        && (c.x0 as i64) <= o.x1 as i64 + gap
+                        && (o.x0 as i64) <= c.x1 as i64 + gap
+                        && (c.y0 as i64) <= o.y1 as i64 + gap
+                        && (o.y0 as i64) <= c.y1 as i64 + gap
+                });
+                if near {
+                    hit[i + 1] = true;
+                    n += 1;
+                    grew = true;
+                }
+            }
+        }
     }
     // A finger holds no print. Between the first and last skin pixel of every row, a real
     // finger is solid skin; text lines in that span (dark pixels that are not skin) mean the
@@ -975,8 +1011,10 @@ pub fn remove_fingers(img: &mut RgbImage, dpi: u32, paper: Rgb<u8>) -> usize {
                         continue;
                     }
                     let q = (y * w + x) * 3;
-                    let lum = ycbcr([raw[q], raw[q + 1], raw[q + 2]]).0;
-                    if lum < 0.6 * py {
+                    let (lum, _, cr) = ycbcr([raw[q], raw[q + 1], raw[q + 2]]);
+                    // the dark creases and shadows between fingers are warm too; only
+                    // neutral dark pixels are print
+                    if lum < 0.6 * py && cr < pcr + 9.0 {
                         ink += 1;
                     }
                 }
@@ -990,10 +1028,11 @@ pub fn remove_fingers(img: &mut RgbImage, dpi: u32, paper: Rgb<u8>) -> usize {
             return 0;
         }
     }
-    // grow by one small pixel so the soft edge of the finger goes too
+    // grow by about 1 mm so the shadowed rim of the finger goes too
+    let rad = ((1.0 / 25.4 * sdpi).round() as i64).max(1);
     let grown = |sx: i64, sy: i64| -> bool {
-        for dy in -1..=1 {
-            for dx in -1..=1 {
+        for dy in -rad..=rad {
+            for dx in -rad..=rad {
                 let (x, y) = (sx + dx, sy + dy);
                 if x >= 0
                     && y >= 0
@@ -1507,6 +1546,45 @@ mod tests {
         let before = p.clone();
         trim_to_paper(&mut p, 300, paper);
         assert_eq!(p, before);
+    }
+
+    #[test]
+    fn the_other_fingers_of_the_hand_go_with_the_one_at_the_border() {
+        // thumb on the border, two more fingers below it, each one cut off from the border and
+        // from the others by a dark warm crease (a photographed hand: the Bruhn book, 2026)
+        let dpi = 150;
+        let paper = Rgb([235, 235, 230]);
+        let mut p = RgbImage::from_pixel(600, 800, paper);
+        let skin = Rgb([205, 150, 125]);
+        let crease = Rgb([70, 35, 28]);
+        for (y0, y1) in [(300, 400), (430, 520), (550, 640)] {
+            for y in y0..y1 {
+                for x in 0..140 {
+                    p.put_pixel(x, y, skin);
+                }
+            }
+        }
+        for y in 400..430 {
+            for x in 0..140 {
+                p.put_pixel(x, y, crease);
+            }
+        }
+        for y in 520..550 {
+            for x in 0..140 {
+                p.put_pixel(x, y, crease);
+            }
+        }
+        // the lower fingers do not reach the border: a dark rim in front of them
+        for y in 430..640 {
+            for x in 0..12 {
+                p.put_pixel(x, y, crease);
+            }
+        }
+        assert!(remove_fingers(&mut p, dpi, paper) >= 1);
+        for y in [350, 475, 595] {
+            let q = p.get_pixel(70, y).0;
+            assert!(q[0] > 225 && q[1] > 225, "finger left at y={y}: {q:?}");
+        }
     }
 
     #[test]

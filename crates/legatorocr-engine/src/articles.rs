@@ -191,7 +191,13 @@ pub fn record(source: &Path, page: usize, pg: &Page, paras: &[ParagraphBox]) {
             x1.saturating_sub(x0).max(1),
             y1.saturating_sub(y0).max(1),
         );
-        let path = st.dir.join(format!("{stem}_p{page}_{}.png", n + 1));
+        // two files of the same name in different folders must not overwrite each other's pictures
+        let mut path = st.dir.join(format!("{stem}_p{page}_{}.png", n + 1));
+        let mut again = 1;
+        while st.written.iter().any(|(w, _)| *w == path) {
+            again += 1;
+            path = st.dir.join(format!("{stem}_p{page}_{}_{again}.png", n + 1));
+        }
         if std::fs::create_dir_all(&st.dir).is_ok() && crop.save(&path).is_ok() {
             let first = paras
                 .iter()
