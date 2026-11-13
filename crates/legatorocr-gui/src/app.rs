@@ -308,6 +308,9 @@ pub struct App {
     config_dirty: bool,
     /// Name typed for "save as profile".
     profile_name: String,
+    /// The profile last applied or saved, with the settings it gave; the box shows its name while
+    /// the settings are still those, and "name *" once something was changed.
+    active_profile: Option<(String, String)>,
     /// Last language written to config (so a menu change marks it dirty once).
     saved_lang: Lang,
 }
@@ -389,6 +392,7 @@ impl App {
             adjust_test: std::env::var_os("LEGATOROCR_GUI_TEST_ADJUST").map(|_| false),
             config_dirty: false,
             profile_name: String::new(),
+            active_profile: None,
             saved_lang: Lang::En,
             shot: std::env::var_os("LEGATOROCR_GUI_SCREENSHOT").map(|p| Shot {
                 path: p.into(),
@@ -2360,12 +2364,20 @@ impl App {
         let mut to_save: Option<String> = None;
         ui.horizontal(|ui| {
             ui.label(tr("set.profile"));
+            let now = format!("{:?}", self.s.to_project(Vec::new()));
+            let shown = match &self.active_profile {
+                Some((n, snap)) if *snap == now => n.clone(),
+                Some((n, _)) => format!("{n} *"),
+                None => tr("set.profile_pick").to_string(),
+            };
+            let active = self.active_profile.as_ref().map(|(n, _)| n.clone());
             egui::ComboBox::from_id_salt("profile")
-                .selected_text(tr("set.profile_pick"))
+                .selected_text(shown)
                 .width(150.0)
                 .show_ui(ui, |ui| {
                     for (n, d) in legatorocr_engine::profiles::list() {
-                        if ui.selectable_label(false, &n).on_hover_text(d).clicked() {
+                        let is = active.as_deref() == Some(n.as_str());
+                        if ui.selectable_label(is, &n).on_hover_text(d).clicked() {
                             chosen = Some(n);
                         }
                     }
@@ -2394,6 +2406,8 @@ impl App {
                     self.s.apply_project(&p);
                     self.s.ocr = ocr;
                     ch = true;
+                    self.active_profile =
+                        Some((n.clone(), format!("{:?}", self.s.to_project(Vec::new()))));
                     self.say(format!("{}: {n}", self.tr("status.profile_applied")), false);
                 }
                 Err(e) => self.say(format!("{}: {e:#}", self.tr("status.error")), true),
@@ -2402,7 +2416,11 @@ impl App {
         if let Some(n) = to_save {
             let p = self.s.to_project(Vec::new());
             match legatorocr_engine::profiles::save_user(&n, &p) {
-                Ok(_) => self.say(format!("{}: {n}", self.tr("status.profile_saved")), false),
+                Ok(_) => {
+                    self.active_profile =
+                        Some((n.clone(), format!("{:?}", self.s.to_project(Vec::new()))));
+                    self.say(format!("{}: {n}", self.tr("status.profile_saved")), false)
+                }
                 Err(e) => self.say(format!("{}: {e:#}", self.tr("status.error")), true),
             }
         }
@@ -2660,6 +2678,10 @@ impl App {
                         if self.s.mode != ModeChoice::Bw {
                             ch |= ui
                                 .checkbox(&mut self.s.normalize_bg, tr("set.normalize"))
+                                .changed();
+                            ch |= ui
+                                .checkbox(&mut self.s.remove_bg, tr("set.remove_bg"))
+                                .on_hover_text(tr("set.remove_bg_tip"))
                                 .changed();
                         }
                         ch |= ui.checkbox(&mut self.s.dewarp, tr("set.dewarp")).changed();
