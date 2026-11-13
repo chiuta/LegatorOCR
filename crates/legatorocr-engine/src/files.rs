@@ -107,6 +107,18 @@ fn expand(p: &Path, out: &mut Vec<PathBuf>) {
     } else {
         1
     };
+    // A hostile header may claim a billion pages: a page or frame takes at least ~16 bytes in the
+    // file itself, and nobody has more than 200 000 of them in one file.
+    let cap = (std::fs::metadata(p).map_or(0, |m| m.len()) / 16).clamp(1, 200_000);
+    let n = if n as u64 > cap {
+        eprintln!(
+            "{}: the file claims {n} pages but is too small for that; using {cap}",
+            p.display()
+        );
+        cap as _
+    } else {
+        n
+    };
     if n > 1 {
         let name = p
             .file_name()

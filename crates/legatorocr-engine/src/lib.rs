@@ -671,6 +671,15 @@ pub fn load_image_direct(path: &Path) -> Result<DynamicImage> {
     limits.max_image_height = Some(60_000);
     reader.limits(limits);
     let mut dec = reader.into_decoder()?;
+    // `max_alloc` is only advisory for the buffer the picture itself needs (60 000 x 60 000 x 3 is
+    // 10.8 GB and would abort the process): refuse it here with a message instead.
+    if dec.total_bytes() > (3u64 << 30) {
+        let (w, h) = dec.dimensions();
+        bail!(
+            "the picture is too large to open: {w} x {h} pixels needs {} GB of memory (limit 3 GB)",
+            dec.total_bytes() >> 30
+        );
+    }
     let orientation = dec
         .orientation()
         .unwrap_or(image::metadata::Orientation::NoTransforms);
@@ -2127,6 +2136,49 @@ where
 #[cfg(test)]
 mod multitiff_tests {
     use super::*;
+
+    /// A PNG header that claims 60 000 x 60 000 pixels (10.8 GB) must be refused with a message,
+    /// not abort the process on the allocation.
+    #[test]
+    fn a_picture_claiming_ten_gigabytes_is_refused_not_allocated() {
+        fn chunk(t: &[u8], d: &[u8]) -> Vec<u8> {
+            let mut v = (d.len() as u32).to_be_bytes().to_vec();
+            let mut body = t.to_vec();
+            body.extend_from_slice(d);
+            let mut c = 0xFFFF_FFFFu32;
+            for b in &body {
+                c ^= *b as u32;
+                for _ in 0..8 {
+                    c = if c & 1 != 0 {
+                        0xEDB8_8320 ^ (c >> 1)
+                    } else {
+                        c >> 1
+                    };
+                }
+            }
+            v.extend_from_slice(&body);
+            v.extend_from_slice(&(!c).to_be_bytes());
+            v
+        }
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut ihdr = Vec::new();
+        ihdr.extend_from_slice(&60_000u32.to_be_bytes());
+        ihdr.extend_from_slice(&60_000u32.to_be_bytes());
+        ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+        png.extend(chunk(b"IHDR", &ihdr));
+        png.extend(chunk(
+            b"IDAT",
+            &[0x78, 0x9c, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01],
+        ));
+        png.extend(chunk(b"IEND", &[]));
+        let dir = std::env::temp_dir().join(format!("lgr-big-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("big.png");
+        std::fs::write(&f, &png).unwrap();
+        let e = load_image_direct(&f).unwrap_err();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(format!("{e:#}").contains("too large"), "{e:#}");
+    }
 
     #[test]
     fn multipage_g4_tiff_reads_back_page_by_page() {

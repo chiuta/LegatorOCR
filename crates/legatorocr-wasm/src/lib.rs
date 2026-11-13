@@ -34,7 +34,13 @@ fn decode(bytes: &[u8]) -> Result<image::DynamicImage, ()> {
     let mut limits = image::Limits::default();
     limits.max_alloc = Some(1 << 30);
     r.limits(limits);
-    r.decode().map_err(|_| ())
+    use image::ImageDecoder;
+    let dec = r.into_decoder().map_err(|_| ())?;
+    // refuse a picture whose buffer alone would not fit (a hostile 60 000 x 60 000 header)
+    if dec.total_bytes() > (1u64 << 30) {
+        return Err(());
+    }
+    image::DynamicImage::from_decoder(dec).map_err(|_| ())
 }
 
 fn settings(mode: u32, dpi: u32) -> Settings {

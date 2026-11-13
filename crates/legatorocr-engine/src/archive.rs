@@ -89,9 +89,58 @@ pub fn work_dir() -> PathBuf {
             b.mode(0o700);
         }
         let _ = b.create(&d);
+        sweep_stale(&d);
         d
     })
     .clone()
+}
+
+/// A run that was killed (power cut, `kill -9`, a crash) never reached [`cleanup`] and left what it
+/// had extracted in the temp folder, where nothing ever removed it. At the first extraction the
+/// folders of earlier runs are cleared: on Linux those whose process is gone, anywhere those not
+/// touched for a week. Only folders named like ours and owned by the same user are looked at.
+fn sweep_stale(own: &Path) {
+    let Some(tmp) = own.parent() else { return };
+    let Ok(rd) = std::fs::read_dir(tmp) else {
+        return;
+    };
+    let week = std::time::Duration::from_secs(7 * 24 * 3600);
+    for e in rd.flatten() {
+        let path = e.path();
+        if path == own {
+            continue;
+        }
+        let name = e.file_name().to_string_lossy().into_owned();
+        let Some(rest) = name.strip_prefix("legatorocr-archives-") else {
+            continue;
+        };
+        let Some(pid) = rest.split('-').next().and_then(|v| v.parse::<u32>().ok()) else {
+            continue;
+        };
+        let Ok(md) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !md.is_dir() || md.file_type().is_symlink() {
+            continue;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let mine = std::fs::metadata(own).map(|m| m.uid()).ok();
+            if mine != Some(md.uid()) {
+                continue;
+            }
+        }
+        let gone = cfg!(target_os = "linux") && !Path::new(&format!("/proc/{pid}")).exists();
+        let old = md
+            .modified()
+            .ok()
+            .and_then(|m| m.elapsed().ok())
+            .is_some_and(|a| a > week);
+        if gone || old {
+            let _ = std::fs::remove_dir_all(&path);
+        }
+    }
 }
 
 /// Remove everything extracted so far. Call when the program ends (the GUI keeps the files
@@ -543,6 +592,28 @@ fn extract_into(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn folders_of_dead_runs_are_swept_and_live_ones_and_strangers_are_not() {
+        let base = std::env::temp_dir().join(format!("lgr-sweep-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let mk = |n: &str| {
+            let d = base.join(n);
+            std::fs::create_dir_all(d.join("a0")).unwrap();
+            std::fs::write(d.join("a0/x.png"), b"x").unwrap();
+            d
+        };
+        let own = mk(&format!("legatorocr-archives-{}-aaaa", std::process::id()));
+        let dead = mk("legatorocr-archives-4000000000-bbbb");
+        let live = mk(&format!("legatorocr-archives-{}-cccc", std::process::id()));
+        let other = mk("not-ours-4000000000");
+        let odd = mk("legatorocr-archives-notanumber-dddd");
+        super::sweep_stale(&own);
+        assert!(own.exists() && live.exists() && other.exists() && odd.exists());
+        assert!(!dead.exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     use super::*;
 
     #[test]
