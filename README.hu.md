@@ -2,7 +2,7 @@
 
 [English](README.md) · [Română](README.ro.md) · [Français](README.fr.md) · [Italiano](README.it.md) · [Español](README.es.md) · [Português](README.pt.md) · [Deutsch](README.de.md) · **Magyar**
 
-Verzió: 0.2.0-pre.51 · Utolsó frissítés: 2026-11-12
+Verzió: 0.2.0-pre.52 · Utolsó frissítés: 2026-11-12
 
 Videóoktatóanyagok Alexandru Dumbravă (ASFAN) tollából: [részletes esettanulmány, 54 perc](https://drive.proton.me/urls/TY10AYCB1G#lis9oybHW8I7) · [videóoktatóanyag 2](https://drive.proton.me/urls/VRZCCZSMTW#dxmgAsJqIMtL) (Proton Drive).
 

@@ -571,6 +571,7 @@ fn recognize_raw(page: &PageImage, dpi: u32, o: &OcrOptions) -> Result<Vec<Word>
         }
     }
     rescue_page_numbers(&img, dpi, o, &mut words);
+    rescue_missed_lines(&img, dpi, o, &mut words);
     if k > 1 {
         for w in &mut words {
             let (x1, y1) = (w.x + w.w, w.y + w.h);
@@ -740,6 +741,232 @@ fn rescue_page_numbers(img: &image::DynamicImage, dpi: u32, o: &OcrOptions, word
             None => words.len(),
         };
         words.insert(at, c);
+    }
+}
+
+/// Lines of ink that no recognised word covers, as (x0, y0, x1, y1) boxes in pixels: a text line
+/// tall (0.6 to 2.5 times the median word height `med`), at least three heights wide, with real
+/// strokes in it. Ink is grouped on a grid of `med / 3` cells, joined across the gaps between
+/// words (two cells), not across lines. `covered` says whether a pixel belongs to a known word.
+fn uncovered_line_boxes(
+    g: &image::GrayImage,
+    med: u32,
+    covered: &dyn Fn(u32, u32) -> bool,
+) -> Vec<(u32, u32, u32, u32)> {
+    let (w, h) = g.dimensions();
+    let pad = (med / 3).max(4);
+    let edge = (w / 50).max(3);
+    if w <= 2 * edge + 2 || h <= 2 * edge + 2 {
+        return Vec::new();
+    }
+    let (gw, gh) = (w.div_ceil(pad) as usize, h.div_ceil(pad) as usize);
+    let mut cell = vec![false; gw * gh];
+    for y in edge..h - edge {
+        for x in edge..w - edge {
+            if g.get_pixel(x, y).0[0] < 110 && !covered(x, y) {
+                cell[(y / pad) as usize * gw + (x / pad) as usize] = true;
+            }
+        }
+    }
+    // join the words of one line: two cells to each side
+    let mut joined = cell.clone();
+    for cy in 0..gh {
+        for cx in 0..gw {
+            if cell[cy * gw + cx] {
+                for dx in 1..=2usize {
+                    if cx + dx < gw {
+                        joined[cy * gw + cx + dx] = true;
+                    }
+                    if cx >= dx {
+                        joined[cy * gw + cx - dx] = true;
+                    }
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let mut seen = vec![false; gw * gh];
+    for start in 0..gw * gh {
+        if !joined[start] || seen[start] {
+            continue;
+        }
+        let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0usize, 0usize);
+        let mut stack = vec![start];
+        seen[start] = true;
+        while let Some(c) = stack.pop() {
+            let (cx, cy) = (c % gw, c / gw);
+            if cell[c] {
+                x0 = x0.min(cx);
+                x1 = x1.max(cx);
+                y0 = y0.min(cy);
+                y1 = y1.max(cy);
+            }
+            for (dx, dy) in [
+                (-1i32, 0i32),
+                (1, 0),
+                (0, -1),
+                (0, 1),
+                (-1, -1),
+                (1, -1),
+                (-1, 1),
+                (1, 1),
+            ] {
+                let (nx, ny) = (cx as i32 + dx, cy as i32 + dy);
+                if nx < 0 || ny < 0 || nx as usize >= gw || ny as usize >= gh {
+                    continue;
+                }
+                let ni = ny as usize * gw + nx as usize;
+                if joined[ni] && !seen[ni] {
+                    seen[ni] = true;
+                    stack.push(ni);
+                }
+            }
+        }
+        if x0 == usize::MAX {
+            continue;
+        }
+        let (bx0, by0) = (x0 as u32 * pad, y0 as u32 * pad);
+        let (bx1, by1) = (
+            ((x1 + 1) as u32 * pad).min(w),
+            ((y1 + 1) as u32 * pad).min(h),
+        );
+        let (bw, bh) = (bx1 - bx0, by1 - by0);
+        if bh * 5 < med * 3 || bh > med * 5 / 2 + 2 * pad || bw < med * 3 {
+            continue;
+        }
+        let mut dark = 0u64;
+        for y in by0..by1 {
+            for x in bx0..bx1 {
+                if g.get_pixel(x, y).0[0] < 110 && !covered(x, y) {
+                    dark += 1;
+                }
+            }
+        }
+        // strokes, not a speck or a smear: at least 3 % of the box
+        if dark * 100 < (bw as u64) * (bh as u64) * 3 {
+            continue;
+        }
+        out.push((bx0, by0, bx1, by1));
+    }
+    out.sort_by_key(|b| (b.1, b.0));
+    out
+}
+
+/// Tesseract sometimes leaves whole lines out (seen on a table of contents photographed as a book
+/// page: the "Bibliografie 5" lines and some bold headings were not in the text at all). Lines of
+/// ink that no word covers are cut out and read again as a single line (`--psm 7`); a result is
+/// kept when its words are clean enough (confidence >= 55, mostly letters and digits, not a speck)
+/// and do not overlap known words. At most 25 lines per page; photographs and dark panels are
+/// left alone. Coordinates are those of `img`.
+fn rescue_missed_lines(img: &image::DynamicImage, dpi: u32, o: &OcrOptions, words: &mut Vec<Word>) {
+    let g = img.to_luma8();
+    let (w, h) = g.dimensions();
+    if w < 64 || h < 64 || words.len() < 5 {
+        return;
+    }
+    let mut hs: Vec<u32> = words.iter().map(|k| k.h).collect();
+    hs.sort_unstable();
+    let med = hs[hs.len() / 2].max(8);
+    let pad = (med / 3).max(4);
+    let covered = |x: u32, y: u32| {
+        words.iter().any(|k| {
+            x + pad >= k.x && x <= k.x + k.w + pad && y + pad >= k.y && y <= k.y + k.h + pad
+        })
+    };
+    let boxes = uncovered_line_boxes(&g, med, &covered);
+    let lang = canonical_lang(&o.lang);
+    let mut found: Vec<Vec<Word>> = Vec::new();
+    for (x0, y0, x1, y1) in boxes.into_iter().take(25) {
+        let m = (med / 2).max(8);
+        let (cx0, cy0) = (x0.saturating_sub(m), y0.saturating_sub(m));
+        let (cx1, cy1) = ((x1 + m).min(w - 1), (y1 + m).min(h - 1));
+        let crop = image::imageops::crop_imm(&g, cx0, cy0, cx1 - cx0 + 1, cy1 - cy0 + 1).to_image();
+        let bright = crop.pixels().filter(|p| p.0[0] > 140).count();
+        if bright * 100 < crop.pixels().len() * 85 {
+            continue;
+        }
+        let Ok(png) = png_bytes(&image::DynamicImage::ImageLuma8(crop)) else {
+            continue;
+        };
+        let mut cmd = base_cmd(o);
+        cmd.args(["stdin", "stdout", "-l", &lang, "--psm", "7"]);
+        if dpi > 0 {
+            cmd.args(["--dpi", &dpi.to_string()]);
+        }
+        cmd.arg("tsv");
+        let Ok(out) = run_stdin(cmd, png) else {
+            continue;
+        };
+        if !out.status.success() {
+            continue;
+        }
+        let mut line: Vec<Word> = parse_tsv(&String::from_utf8_lossy(&out.stdout), 55.0)
+            .into_iter()
+            .filter(|c| c.h * 3 >= med && c.h <= med * 3 + 2 * pad)
+            .collect();
+        if lang.split('+').any(|l| l == "ron") {
+            for c in &mut line {
+                c.text = legatorocr_core::text::normalize_ro(&c.text);
+            }
+        }
+        let chars: usize = line.iter().map(|c| c.text.chars().count()).sum();
+        let good: usize = line
+            .iter()
+            .map(|c| c.text.chars().filter(|ch| ch.is_alphanumeric()).count())
+            .sum();
+        let enough = line.len() >= 2 || line.iter().any(|c| c.text.chars().count() >= 4);
+        if line.is_empty() || !enough || good * 10 < chars * 6 {
+            continue;
+        }
+        for c in &mut line {
+            c.x += cx0;
+            c.y += cy0;
+        }
+        // not on top of words that are already there
+        let clash = line.iter().any(|c| {
+            words.iter().any(|k| {
+                let ox = (c.x + c.w).min(k.x + k.w).saturating_sub(c.x.max(k.x));
+                let oy = (c.y + c.h).min(k.y + k.h).saturating_sub(c.y.max(k.y));
+                (ox as u64) * (oy as u64) * 10 > (c.w as u64) * (c.h as u64) * 3
+            })
+        });
+        if !clash {
+            found.push(line);
+        }
+    }
+    for line in found {
+        place_line(words, line);
+    }
+}
+
+/// Put a line of words found later into the reading order: after the last word that lies above
+/// it (in a column it overlaps if there is one), on a line number of its own.
+fn place_line(words: &mut Vec<Word>, mut line: Vec<Word>) {
+    if line.is_empty() {
+        return;
+    }
+    line.sort_by_key(|c| c.x);
+    let cy = line.iter().map(|c| c.y + c.h / 2).sum::<u32>() / line.len() as u32;
+    let (lx0, lx1) = (line[0].x, line.iter().map(|c| c.x + c.w).max().unwrap_or(0));
+    let above = |k: &Word| k.y + k.h / 2 < cy;
+    let overlaps = |k: &Word| k.x < lx1 && k.x + k.w > lx0;
+    let at = words
+        .iter()
+        .rposition(|k| above(k) && overlaps(k))
+        .or_else(|| words.iter().rposition(above))
+        .map_or(0, |i| i + 1);
+    // after the whole line of that word, not in the middle of it
+    let at = match words.get(at.wrapping_sub(1)) {
+        Some(prev) => {
+            let id = prev.line;
+            at + words[at..].iter().take_while(|k| k.line == id).count()
+        }
+        None => at,
+    };
+    let id = words.iter().map(|k| k.line + 1).max().unwrap_or(0);
+    for (n, mut c) in line.into_iter().enumerate() {
+        c.line = id;
+        words.insert(at + n, c);
     }
 }
 
@@ -1177,6 +1404,77 @@ mod paragraph_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn word(t: &str, x: u32, y: u32, w: u32, line: u32) -> Word {
+        Word {
+            text: t.into(),
+            x,
+            y,
+            w,
+            h: 20,
+            conf: 90.0,
+            line,
+        }
+    }
+
+    #[test]
+    fn ink_no_word_covers_is_found_as_a_line_and_covered_ink_is_not() {
+        let mut g = image::GrayImage::from_pixel(1000, 400, image::Luma([240]));
+        // three text-like bars of dashes, 20 px tall
+        for y0 in [60u32, 140, 220] {
+            let mut x = 100;
+            while x < 800 {
+                for y in y0..y0 + 20 {
+                    for xx in x..x + 18 {
+                        g.put_pixel(xx, y, image::Luma([30]));
+                    }
+                }
+                x += 26;
+            }
+        }
+        let words = [word("a", 90, 60, 720, 0), word("b", 90, 140, 720, 1)];
+        let covered = |x: u32, y: u32| {
+            words
+                .iter()
+                .any(|k| x >= k.x && x <= k.x + k.w && y >= k.y && y <= k.y + k.h)
+        };
+        let boxes = uncovered_line_boxes(&g, 20, &covered);
+        assert_eq!(boxes.len(), 1, "{boxes:?}");
+        let (x0, y0, x1, y1) = boxes[0];
+        assert!(
+            y0 <= 220 && y1 >= 240 && x0 <= 110 && x1 >= 780,
+            "{boxes:?}"
+        );
+        // a single speck is no line
+        let mut g2 = image::GrayImage::from_pixel(1000, 400, image::Luma([240]));
+        for y in 200..212 {
+            for x in 300..312 {
+                g2.put_pixel(x, y, image::Luma([0]));
+            }
+        }
+        assert!(uncovered_line_boxes(&g2, 20, &|_, _| false).is_empty());
+    }
+
+    #[test]
+    fn a_line_found_later_goes_between_the_lines_it_lies_between() {
+        let mut words = vec![
+            word("top", 100, 50, 60, 0),
+            word("one", 170, 50, 60, 0),
+            word("bottom", 100, 250, 80, 1),
+        ];
+        place_line(
+            &mut words,
+            vec![word("mid2", 200, 148, 50, 9), word("mid1", 100, 150, 60, 9)],
+        );
+        let t: Vec<&str> = words.iter().map(|w| w.text.as_str()).collect();
+        assert_eq!(t, ["top", "one", "mid1", "mid2", "bottom"]);
+        assert_eq!(words[2].line, words[3].line);
+        assert!(words[2].line != words[1].line && words[2].line != words[4].line);
+        place_line(&mut words, vec![word("head", 100, 5, 60, 0)]);
+        place_line(&mut words, vec![word("foot", 100, 390, 60, 0)]);
+        assert_eq!(words.first().unwrap().text, "head");
+        assert_eq!(words.last().unwrap().text, "foot");
+    }
     #[test]
     fn paragraph_boxes_match_paragraph_text_and_enclose_words() {
         let w = |t: &str, x: u32, y: u32, line: u32, conf: f32| Word {
