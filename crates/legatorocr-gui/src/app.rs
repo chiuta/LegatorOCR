@@ -311,6 +311,8 @@ pub struct App {
     /// The profile last applied or saved, with the settings it gave; the box shows its name while
     /// the settings are still those, and "name *" once something was changed.
     active_profile: Option<(String, String)>,
+    /// What the last export wrote (a file, or a folder for images), for the "Open" buttons.
+    last_result: Option<PathBuf>,
     /// Last language written to config (so a menu change marks it dirty once).
     saved_lang: Lang,
 }
@@ -393,6 +395,7 @@ impl App {
             config_dirty: false,
             profile_name: String::new(),
             active_profile: None,
+            last_result: None,
             saved_lang: Lang::En,
             shot: std::env::var_os("LEGATOROCR_GUI_SCREENSHOT").map(|p| Shot {
                 path: p.into(),
@@ -662,6 +665,29 @@ impl App {
         }
     }
 
+    /// Apply a named profile to the settings; true when it was found.
+    fn apply_profile(&mut self, n: &str) -> bool {
+        match legatorocr_engine::profiles::load(n) {
+            Ok(p) => {
+                let ocr = self.s.ocr;
+                self.s.apply_project(&p);
+                self.s.ocr = ocr;
+                self.active_profile = Some((
+                    n.to_string(),
+                    format!("{:?}", self.s.to_project(Vec::new())),
+                ));
+                self.settings_gen += 1;
+                self.config_dirty = true;
+                self.say(format!("{}: {n}", self.tr("status.profile_applied")), false);
+                true
+            }
+            Err(e) => {
+                self.say(format!("{}: {e:#}", self.tr("status.error")), true);
+                false
+            }
+        }
+    }
+
     fn say(&mut self, text: String, error: bool) {
         self.status = Some((text, error));
     }
@@ -840,6 +866,7 @@ impl App {
                     match r {
                         Ok(d) => {
                             self.last_pages = d.pages;
+                            self.last_result = Some(d.target.clone());
                             // a single PDF with its text sidecars can be proofread in the window
                             if d.kind == JobKind::Pdf && d.docs == 0 && self.s.ocr {
                                 self.proof.last_export = Some(d.target.clone());
@@ -1276,14 +1303,20 @@ impl App {
                     ui.close();
                 }
                 ui.separator();
-                if ui.button(self.tr("menu.open_project")).clicked() {
+                if ui
+                    .add(
+                        egui::Button::new(self.tr("menu.open_project"))
+                            .shortcut_text("Ctrl+Shift+O"),
+                    )
+                    .clicked()
+                {
                     self.open_project();
                     ui.close();
                 }
                 if ui
                     .add_enabled(
                         !self.sheets.is_empty(),
-                        egui::Button::new(self.tr("menu.save_project")),
+                        egui::Button::new(self.tr("menu.save_project")).shortcut_text("Ctrl+S"),
                     )
                     .clicked()
                 {
@@ -1293,7 +1326,10 @@ impl App {
                 ui.separator();
                 let idle = self.job.is_none() && !self.sheets.is_empty();
                 if ui
-                    .add_enabled(idle, egui::Button::new(self.tr("menu.export_pdf")))
+                    .add_enabled(
+                        idle,
+                        egui::Button::new(self.tr("menu.export_pdf")).shortcut_text("Ctrl+E"),
+                    )
                     .clicked()
                 {
                     self.start_export(&ctx, JobKind::Pdf);
@@ -1913,8 +1949,20 @@ impl App {
                     job.cancel.store(true, Ordering::Relaxed);
                 }
                 ui.label(self.tr("status.working"));
-            } else if let Some((m, err)) = &self.status {
-                let c = if *err {
+            } else if let Some((m, err)) = self.status.clone() {
+                if let Some(r) = self.last_result.clone().filter(|r| r.exists() && !err) {
+                    if ui.button(self.tr("btn.open_result")).clicked() {
+                        open_with_system(&r);
+                    }
+                    if ui.button(self.tr("btn.show_folder")).clicked() {
+                        open_with_system(if r.is_dir() {
+                            &r
+                        } else {
+                            r.parent().unwrap_or(&r)
+                        });
+                    }
+                }
+                let c = if err {
                     Color32::from_rgb(220, 70, 60)
                 } else {
                     ui.visuals().text_color()
@@ -2142,6 +2190,27 @@ impl App {
     fn palette(&mut self, ctx: &egui::Context) {
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F)) {
             self.find.open();
+        }
+        // the usual shortcuts, only while no text box has the keyboard
+        if !ctx.egui_wants_keyboard_input() {
+            use egui::{Key, Modifiers};
+            let sh = Modifiers::COMMAND | Modifiers::SHIFT;
+            let c = ctx.input_mut(|i| {
+                if i.consume_key(sh, Key::O) {
+                    Some(Cmd::OpenProject)
+                } else if i.consume_key(Modifiers::COMMAND, Key::O) {
+                    Some(Cmd::AddImages)
+                } else if i.consume_key(Modifiers::COMMAND, Key::E) {
+                    Some(Cmd::ExportPdf)
+                } else if i.consume_key(Modifiers::COMMAND, Key::S) {
+                    Some(Cmd::SaveProject)
+                } else {
+                    None
+                }
+            });
+            if let Some(c) = c {
+                self.run_cmd(ctx, c);
+            }
         }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::K)) {
             self.palette_open = !self.palette_open;
@@ -2400,17 +2469,8 @@ impl App {
             }
         });
         if let Some(n) = chosen {
-            match legatorocr_engine::profiles::load(&n) {
-                Ok(p) => {
-                    let ocr = self.s.ocr;
-                    self.s.apply_project(&p);
-                    self.s.ocr = ocr;
-                    ch = true;
-                    self.active_profile =
-                        Some((n.clone(), format!("{:?}", self.s.to_project(Vec::new()))));
-                    self.say(format!("{}: {n}", self.tr("status.profile_applied")), false);
-                }
-                Err(e) => self.say(format!("{}: {e:#}", self.tr("status.error")), true),
+            if self.apply_profile(&n) {
+                ch = true;
             }
         }
         if let Some(n) = to_save {
@@ -3164,6 +3224,8 @@ impl App {
         let tr = |k: &'static str| t(lang, k);
         let Some(i) = self.selected.filter(|&i| i < self.sheets.len()) else {
             let mut picked: Vec<PathBuf> = Vec::new();
+            let mut quick: Option<String> = None;
+            let mut open_proj = false;
             ui.vertical_centered(|ui| {
                 ui.add_space(60.0);
                 ui.label(RichText::new(tr("welcome.title")).size(24.0).strong());
@@ -3187,9 +3249,38 @@ impl App {
                         picked = f;
                     }
                 }
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.add_space((ui.available_width() / 2.0 - 140.0).max(0.0));
+                    if ui.button(tr("menu.add_folder")).clicked() {
+                        if let Some(d) = self.pick(|| rfd::FileDialog::new().pick_folder()) {
+                            picked = vec![d];
+                        }
+                    }
+                    if ui.button(tr("menu.open_project")).clicked() {
+                        open_proj = true;
+                    }
+                });
+                ui.add_space(18.0);
+                ui.label(RichText::new(tr("welcome.profiles")).strong());
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    for (n, d) in legatorocr_engine::profiles::list() {
+                        let on = self.active_profile.as_ref().is_some_and(|(a, _)| *a == n);
+                        if ui.selectable_label(on, &n).on_hover_text(d).clicked() {
+                            quick = Some(n);
+                        }
+                    }
+                });
                 ui.add_space(8.0);
                 ui.label(RichText::new(tr("preview.empty")).weak());
             });
+            if let Some(n) = quick {
+                self.apply_profile(&n);
+            }
+            if open_proj {
+                self.open_project();
+            }
             if !picked.is_empty() {
                 self.add_files(&picked);
             }
@@ -5111,6 +5202,17 @@ impl ZoneSnap {
 }
 
 /// Distance from `p` to the segment `a`–`b`.
+/// Open a file or folder with the system's default program (best effort).
+fn open_with_system(p: &std::path::Path) {
+    #[cfg(target_os = "windows")]
+    let r = std::process::Command::new("explorer").arg(p).spawn();
+    #[cfg(target_os = "macos")]
+    let r = std::process::Command::new("open").arg(p).spawn();
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let r = std::process::Command::new("xdg-open").arg(p).spawn();
+    let _ = r;
+}
+
 fn dist_to_segment(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f32 {
     let ab = b - a;
     let l2 = ab.length_sq();
