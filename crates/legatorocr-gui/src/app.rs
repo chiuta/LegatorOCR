@@ -3424,6 +3424,15 @@ impl App {
                 adj.orient_locked = true;
                 adj_changed = true;
             }
+            if ui
+                .button("180°")
+                .on_hover_text(tr("adj.rot_180_tip"))
+                .clicked()
+            {
+                adj.rotate_quarters = (adj.rotate_quarters + 2) % 4;
+                adj.orient_locked = true;
+                adj_changed = true;
+            }
             // 45° steps: quarter turns plus the manual skew together make the total angle
             for (label, step) in [("-45°", -45.0f32), ("+45°", 45.0)] {
                 if ui.button(label).clicked() {

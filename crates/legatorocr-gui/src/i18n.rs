@@ -161,6 +161,7 @@ const TABLE: &[(&str, [&str; 8])] = &[
     ("view.fit", ["Potrivește", "Fit", "Ajuster", "Adatta", "Ajustar", "Ajustar", "Einpassen", "Illesztés"]),
     ("adj.title", ["Această pagină:", "This page:", "Cette page :", "Questa pagina:", "Esta página:", "Esta página:", "Diese Seite:", "Ez az oldal:"]),
     ("adj.rot_left", ["Rotește la stânga 90°", "Rotate left 90°", "Pivoter à gauche de 90°", "Ruota a sinistra di 90°", "Girar 90° a la izquierda", "Rodar 90° à esquerda", "90° nach links drehen", "Forgatás balra 90°-kal"]),
+    ("adj.rot_180_tip", ["Răstoarnă pagina (text cu susul în jos)", "Turn the page upside down (text is upside down)", "Retourner la page (texte à l’envers)", "Capovolgi la pagina (testo capovolto)", "Dar la vuelta a la página (texto boca abajo)", "Virar a página (texto de cabeça para baixo)", "Seite drehen (Text steht auf dem Kopf)", "Oldal megfordítása (fejjel lefelé áll a szöveg)"]),
     ("adj.rot_right", ["Rotește la dreapta 90°", "Rotate right 90°", "Pivoter à droite de 90°", "Ruota a destra di 90°", "Girar 90° a la derecha", "Rodar 90° à direita", "90° nach rechts drehen", "Forgatás jobbra 90°-kal"]),
     ("adj.split_default", ["implicit", "default", "par défaut", "predefinito", "predeterminado", "predefinido", "Standard", "alapértelmezett"]),
     ("adj.cut_angle", ["Înclinarea liniei", "Line lean", "Inclinaison de la ligne", "Inclinazione della linea", "Inclinación de la línea", "Inclinação da linha", "Neigung der Linie", "A vonal dőlése"]),
