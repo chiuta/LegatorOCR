@@ -25,6 +25,9 @@ pub mod split;
 pub mod text;
 pub mod transform;
 
+#[cfg(test)]
+mod gutter_tests;
+
 pub use binarize::Threshold;
 pub use bitimage::BitImage;
 pub use cleanup::Dropout;

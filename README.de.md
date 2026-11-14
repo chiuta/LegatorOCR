@@ -2,7 +2,7 @@
 
 [English](README.md) · [Română](README.ro.md) · [Français](README.fr.md) · [Italiano](README.it.md) · [Español](README.es.md) · [Português](README.pt.md) · **Deutsch** · [Magyar](README.hu.md)
 
-Version: 0.2.0-pre.58 · Letzte Aktualisierung: 2026-11-12
+Version: 0.2.0-pre.60 · Letzte Aktualisierung: 2026-11-12
 
 Video-Tutorials von Alexandru Dumbravă (ASFAN): [ausführliche Fallstudie, 54 Min.](https://drive.proton.me/urls/TY10AYCB1G#lis9oybHW8I7) · [Video-Tutorial 2](https://drive.proton.me/urls/VRZCCZSMTW#dxmgAsJqIMtL) (Proton Drive).
 
@@ -120,7 +120,7 @@ Ein Build **ohne das einkompilierte Erkennungsmodell** (zum Beispiel solange des
 | Trapez und Papierformate | `--keystone-v PROZENT` / `--keystone-h PROZENT` (±30) richten ein schräg fotografiertes Blatt von Hand vor dem Schnitt gerade (`keystone = v, h` in Projekten; auf dem Blatt gezeichnete Zonen entfallen, Führungslinien folgen); `--page-size` kennt auch `a2`–`a6`, `b3`–`b6`, `letter`, `legal`, `tabloid`. Im Fenster: Schieberegler in der Seitenleiste und eine längere Formatliste; die Schaltfläche **Auto trapez** misst jede Seite nach dem Schnitt (Zeilenneigung, Textbreite oben und unten) und merkt sich eine Korrektur nur für diese Seite (`pageN.page_keystone = v, h`). Auf synthetischen Blättern getestet; nicht an echten verzogenen Seiten |
 | Einstellungen einer Seite | In einem Projekt geben `page1.SCHLÜSSEL = WERT` / `page2.SCHLÜSSEL = WERT` unter `[sheet]` der linken (oder einzigen) und der rechten Seite eines geschnittenen Blatts eigene Ausgabe- und Bereinigungswerte (`mode`, `despeckle`, `content_adjust`, …; dieselben Schlüssel wie die globalen Einstellungen eines mit `--save-project` gespeicherten Projekts). Im Fenster: „Einstellungen für: alle Seiten / nur diese Seite“ über Ausgabe und Bereinigung, und der grüne Inhaltsrahmen ändert nur die Seite, auf der er gezogen wird. An synthetischen Blättern und in Unit-Tests erprobt; nicht von Hand in einem Fenster Ein Klick auf eine verarbeitete Seite wählt sie aus (blauer Rahmen); Ausgabemodus, Bereinigung, Trapezkorrektur, Rahmen und OCR-Stifte wirken dann nur auf sie; gezeichnete OCR-Zonen werden als `pageN.page_ocr_zones` / `pageN.page_ocr_ignore` gespeichert. |
 | OCR-Zonen | `--ocr-zone X,Y,W,H[=SPRACHE][#table]` liest OCR nur im Rechteck (mm auf der verarbeiteten Seite; `#table` = ein einziger Block, Zeile für Zeile, für Tabellen), `--ocr-ignore X,Y,W,H` lässt eine Zone aus (Stempel, Kopfzeile). Im Fenster drei Stifte auf verarbeiteten Seiten: grün = OCR-Zone, rot = ignorieren, violett = Tabelle; Rechtsklick löscht. Mit einer simulierten Engine getestet; nicht von Hand in einem Fenster |
-| Stapel | `--skip-duplicates` (aufeinanderfolgende Seiten mit einer Differenz der 96×128-Miniatur ≤ 2/255), `--split-on-blank` (leere Seiten trennen Dokumente → `name_001.pdf`, …), `--target-size MB` (JPEG-Qualität aus einer Stichprobe von Seiten gewählt, damit das PDF passt) |
+| Stapel | `--skip-duplicates` (aufeinanderfolgende Seiten mit einer Differenz der 96×128-Miniatur ≤ 2/255), `--split-on-blank` (leere Seiten trennen Dokumente → `name_001.pdf`, …), `--target-size MB` (JPEG-Qualität aus einer Stichprobe von Seiten gewählt, damit das PDF passt; reicht die Qualität (mindestens 40) nicht, werden Farb-/Graustufenseiten schrittweise bis höchstens 150 dpi verkleinert, 1-Bit-Seiten bleiben unberührt; wird das Ziel verfehlt, steht der Grund im Protokoll) |
 | OCR-Eingabe | Seiten unter 250 dpi werden vor Tesseract ×2–×4 vergrößert (Catmull-Rom); Wortboxen werden zurückgerechnet |
 | Handyfotos | `--perspective`: findet die Seite als großes helles Viereck (Otsu + extreme Ecken, mit Prüfungen auf Konvexität/Füllung) und entzerrt sie mit einer Homographie; tut nichts bei aufrechten oder bildfüllenden Scans |
 | QC und Archiv | `--report r.html` (Kontaktbogen, markiert leere / größenabweichende / stark geradegerückte Seiten), `--multitiff out.tif` (mehrseitiges Group-4-TIFF, nur Schwarzweiß) |
@@ -212,6 +212,25 @@ Form von `cite` und, mit `--images`, die Bild-Hashes gegen die geschriebenen Dat
 die Passagen jeder Seite mit derselben Seite der `--txt`-Ausgabe (Leerraum
 zusammengezogen) und gibt den Prozentsatz der Übereinstimmung aus. Das Format ist LegatorOCRs eigenes; ob ein bestimmtes
 Recherchewerkzeug (zum Beispiel TEZAUR) es importieren kann, wurde nicht geprüft.
+
+## Sammlungen (`legatorocr collection`)
+
+Eine Sammlung vereint Zeitungen, Zeitschriften, Bücher und Ähnliches in einer einzigen `.lgrcol`-Datei (JSON). Legen Sie sie in den Ordner mit den Scans: Pfade in der Datei werden relativ zu ihr geschrieben, wenn das Ziel unter einem gemeinsamen Ordner liegt, sodass der Ordner verschoben oder kopiert werden kann. Jeder Eintrag hat Art, Titel, Nummer oder Band, Datum oder Jahr, Sprachen, Quellen (Bilder, ein Bilderordner, ein PDF, ein gespeichertes `.lgr`-Projekt), das erzeugte PDF, ein Profil, einen Status (zu tun, verarbeitet, OCR fertig, geprüft), Seitenzahl, Schlagwörter und Notizen.
+
+```
+legatorocr collection new Archive/ --name "Old papers"
+legatorocr collection add Archive/old_papers.lgrcol --folder Archive/scans
+legatorocr collection list Archive/old_papers.lgrcol
+legatorocr collection run Archive/old_papers.lgrcol --out Archive/pdf
+legatorocr collection search Archive/old_papers.lgrcol "Scînteia"
+```
+
+- `add --folder`: Jedes PDF, `.lgr`-Projekt und jeder Bilder-Unterordner wird ein Eintrag. Titel, Art, Datum und Nummer werden aus dem Namen geschätzt: `scinteia_tineretului_1977_09_8801.pdf` ergibt eine Zeitung, „Scinteia Tineretului“, 1977-09, Nr. 8801. Das ist nur eine Vermutung (Dateinamen haben keine Diakritika; die Art beruht auf wenigen Schlüsselwörtern und der Nummerierung: ein volles Datum oder eine Nummer ab 500 gilt als Zeitung); korrigieren Sie sie im Fenster.
+- `run` verarbeitet die Einträge mit dem Status „zu tun“, jeden mit seinem Profil (sonst dem der Sammlung, sonst den Standardeinstellungen), mit demselben Code wie Kommandozeile und Fenster (`run_export`). Ein Eintrag, der scheitert (Quelle fehlt, Profil unbekannt, Seite unlesbar), wird mit dem Grund markiert, die übrigen laufen weiter; Sammlungsdatei und Index werden nach jedem Eintrag gespeichert, ein Abbruch oder Absturz verliert also nichts Fertiges. PDFs landen neben der Sammlungsdatei oder in `--out`. Mit OCR (standardmäßig an; `--no-ocr` schaltet ab) kommt der erkannte Text jeder Seite in `NAME.lgrindex`; die OCR-Sprache stammt aus den Sprachen des Eintrags, sonst aus `ocr_langs` des Profils, sonst Rumänisch. Ein gescheiterter Eintrag wird nur mit `--retry-failed` oder `--item ID` erneut versucht.
+- `search` sucht in diesem Index. Groß-/Kleinschreibung, Diakritika und die alte rumänische Schreibung spielen keine Rolle (`Scînteia` findet `Scânteia`, `sînt` findet `sunt`). Ausgegeben werden Eintrag, Seite und ein Ausschnitt: zuerst Seiten mit den Wörtern direkt nebeneinander, dann (markiert) Seiten, die alle Wörter getrennt enthalten.
+- Das Fenster **Sammlungen…** (Menü Datei oder Strg+K): eine Tabelle mit Art-Buchstabe, Titel, Nummer/Datum, Seiten und einem Statusfeld (Farbe und Text), mit Filter und Sortierung; rechts die Details; Dateien hinzufügen, Ordner hinzufügen, Auswahl verarbeiten, Alle offenen verarbeiten (mit Fortschritt und Abbrechen), PDF öffnen, Ordner zeigen; ein Suchfeld über die ganze Sammlung mit anklickbaren Treffern. Seine Texte gibt es in den 8 Sprachen des Fensters.
+
+Getestet: Unit-Tests (Namensschätzung, relative Pfade, beschädigte Dateien, Suche mit Diakritika, ein Stapel, der nach einem Fehler und nach einem Panic weiterläuft, Abbruch), ein Test des echten Programms und ein Lauf mit echtem Tesseract auf zwei synthetischen Seiten, auch nach dem Verschieben des Ordners. **Grenzen:** Das Fenster ist geschrieben und kompiliert, aber niemand hat es auf einem Bildschirm gesehen oder darin geklickt (nur Filter, Sortierung und Texte haben Unit-Tests); durchsuchbar ist nur der von `collection run` erkannte Text (ein PDF mit vorhandener Textebene wird nicht indexiert); der ganze Index wird in den Speicher gelesen (Sammlungen mit zehntausenden Seiten wurden nicht gemessen); ein Treffer nennt die Seite, der PDF-Betrachter öffnet aber auf Seite 1; zwei Programme, die dieselbe Datei gleichzeitig schreiben: das letzte gewinnt; das Fenster nutzt Tesseract aus dem PATH, nicht den im Hauptfenster gesetzten Pfad; die Regel der alten Schreibung ist die von `--ocr-modern-spelling` und kann verschiedene Wörter zusammenfallen lassen (`mână` / `mină`).
 
 ## Assistent für die Handy-Aufnahme
 

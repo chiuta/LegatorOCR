@@ -3,8 +3,77 @@
 
 use crate::{BitImage, Rect};
 
-/// `ink` with long straight runs removed, but only in the outer tenth of the image.
+/// Lines (columns or rows) of the outer fifth of the ink map that are inked over almost their
+/// whole length: the edge or body of a dark band hugging the border (spine shadow, page edge,
+/// scanner lid). A shadow's body is often not ink at all (a flat dark area has no local
+/// contrast), only its sharp inner edge is, so the lines are cleared where they are, not the
+/// whole strip up to the border, and text between them and the border is left alone. Text never
+/// gets there: even a dense page leaves each column inked over well under two thirds of its
+/// height, because of the line gaps. Returns the index ranges to clear along one axis.
+fn band_lines(cov: &[f32], from_end: bool) -> Vec<usize> {
+    const CORE: f32 = 0.85; // fraction of a line that is ink: certainly not text
+    const SHOULDER: f32 = 0.50; // soft side of the band (penumbra), still no text
+    let n = cov.len();
+    let limit = n / 5;
+    let at = |i: usize| if from_end { cov[n - 1 - i] } else { cov[i] };
+    let mut clear = vec![false; limit];
+    for i in 0..limit {
+        if at(i) < CORE {
+            continue;
+        }
+        let mut a = i;
+        while a > 0 && at(a - 1) >= SHOULDER {
+            a -= 1;
+        }
+        let mut b = i;
+        while b + 1 < n && at(b + 1) >= SHOULDER && b + 1 < limit + 8 {
+            b += 1;
+        }
+        for k in a.saturating_sub(2)..(b + 3).min(limit) {
+            clear[k] = true;
+        }
+    }
+    (0..limit)
+        .filter(|&i| clear[i])
+        .map(|i| if from_end { n - 1 - i } else { i })
+        .collect()
+}
+
+/// Remove dark bands that hug a border of the ink map (see `band_lines`).
+fn without_border_bands(ink: &BitImage) -> BitImage {
+    let (w, h) = (ink.w as usize, ink.h as usize);
+    let mut out = ink.clone();
+    if w < 20 || h < 20 {
+        return out;
+    }
+    let col: Vec<f32> = (0..w)
+        .map(|x| (0..h).filter(|&y| ink.data[y * w + x] != 0).count() as f32 / h as f32)
+        .collect();
+    let row: Vec<f32> = (0..h)
+        .map(|y| {
+            ink.data[y * w..(y + 1) * w]
+                .iter()
+                .filter(|&&v| v != 0)
+                .count() as f32
+                / w as f32
+        })
+        .collect();
+    for end in [false, true] {
+        for x in band_lines(&col, end) {
+            for y in 0..h {
+                out.data[y * w + x] = 0;
+            }
+        }
+        for y in band_lines(&row, end) {
+            out.data[y * w..(y + 1) * w].fill(0);
+        }
+    }
+    out
+}
+
+/// `ink` with dark border bands removed, and long straight runs removed in the outer tenth.
 fn edge_cleaned(ink: &BitImage, dpi: u32) -> BitImage {
+    let ink = &without_border_bands(ink);
     let long = crate::orient::without_long_runs(ink, (dpi as usize * 3 / 4).max(40));
     let (w, h) = (ink.w as usize, ink.h as usize);
     let (mx, my) = (w / 10, h / 10);
@@ -17,6 +86,20 @@ fn edge_cleaned(ink: &BitImage, dpi: u32) -> BitImage {
         }
     }
     out
+}
+
+/// Blocks laid out as separate lines along the long axis (at least four runs of occupied
+/// block rows, or columns, with gaps between, and most of the span empty): text, not a shadow.
+fn text_like(blocks: &[usize], gw: usize, vertical: bool) -> bool {
+    let key = |p: usize| if vertical { p / gw } else { p % gw };
+    let mut used: Vec<usize> = blocks.iter().map(|&p| key(p)).collect();
+    used.sort_unstable();
+    used.dedup();
+    let (Some(&first), Some(&last)) = (used.first(), used.last()) else {
+        return false;
+    };
+    let runs = 1 + used.windows(2).filter(|w| w[1] > w[0] + 1).count();
+    runs >= 4 && used.len() * 10 < (last - first + 1) * 8
 }
 
 pub fn detect_content(ink: &BitImage, dpi: u32) -> Option<Rect> {
@@ -123,7 +206,9 @@ pub fn detect_content(ink: &BitImage, dpi: u32) -> Option<Rect> {
         // Scanner-edge shadow: touches the border and is a long thin strip.
         let (cw, ch) = (c.x1 - c.x0 + 1, c.y1 - c.y0 + 1);
         let touches = c.x0 == 0 || c.y0 == 0 || c.x1 == gw - 1 || c.y1 == gh - 1;
-        if touches && (cw * 8 < ch || ch * 8 < cw) {
+        // A column of line numbers, a gloss or a page number hugging the cut edge is as thin,
+        // but it is made of separate lines with gaps; a shadow is one solid run.
+        if touches && (cw * 8 < ch || ch * 8 < cw) && !text_like(c.blocks.as_slice(), gw, ch > cw) {
             continue;
         }
         // Dark frame or L-shaped corner shadow (strips along two edges): its
@@ -249,6 +334,44 @@ mod edge_bar_tests {
         let r = detect_content(&ink, 300).expect("content");
         assert!(r.y <= 105 && r.y + r.h >= 470, "text lost: {r:?}");
         assert!(r.x >= 30, "bar included: {r:?}");
+    }
+
+    fn lines(img: &mut BitImage, x0: u32, x1: u32, y0: u32, y1: u32) {
+        let mut y = y0;
+        while y + 7 < y1 {
+            for yy in y..y + 7 {
+                for xx in x0..x1 {
+                    img.set(xx, yy, true);
+                }
+            }
+            y += 18;
+        }
+    }
+
+    #[test]
+    fn narrow_text_column_touching_the_border_is_content() {
+        // analysis-size ink map (150 dpi): body in the middle, a column of short lines at x = 0
+        let mut ink = BitImage::new(600, 800);
+        lines(&mut ink, 130, 500, 100, 700);
+        lines(&mut ink, 0, 14, 100, 700);
+        let r = detect_content(&ink, 150).expect("content");
+        assert!(r.x == 0, "column at the border dropped: {r:?}");
+    }
+
+    #[test]
+    fn a_folio_touching_the_border_is_content() {
+        let mut ink = BitImage::new(600, 800);
+        lines(&mut ink, 130, 500, 100, 700);
+        // a short line of text cut at the border, far below the body
+        for y in 760..768 {
+            for x in 0..18 {
+                if (x / 4) % 2 == 0 {
+                    ink.set(x, y, true);
+                }
+            }
+        }
+        let r = detect_content(&ink, 150).expect("content");
+        assert!(r.y + r.h >= 765, "folio at the border dropped: {r:?}");
     }
 
     #[test]

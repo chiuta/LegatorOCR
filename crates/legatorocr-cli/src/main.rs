@@ -1,3 +1,4 @@
+mod collection;
 mod escl;
 mod fff;
 use anyhow::{bail, Context, Result};
@@ -42,7 +43,12 @@ enum Fmt {
 /// LegatorOCR — independently implemented scan post-processor: split, deskew, crop, clean,
 /// then export to PDF with optional OCR text layer.
 #[derive(Parser)]
-#[command(name = "legatorocr", version, about)]
+#[command(
+    name = "legatorocr",
+    version,
+    about,
+    after_help = "Collections: `legatorocr collection --help` (new, add, list, run, search) gathers newspapers, magazines and books in one .lgrcol file, processes them in a batch and searches their text."
+)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
     #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "install_modules", "scan_escl", "watch", "verify_bag", "verify_epub", "verify_ocfl", "timestamp", "timestamp_verify", "sign_pdf", "pades_lt", "pades_lta", "pades_level", "verify_pdf_signatures", "pdfa_check", "decode_worker", "fuse_frames", "verify_document", "integrity_hints", "mcp", "measure_edge", "fadgi_levels", "backup_from", "efactura", "merkle_root", "merkle_verify", "merkle_verify_consistency", "verify_sums", "extract_project", "search_preset", "search_help"])]
@@ -1704,6 +1710,10 @@ fn parse_page_size(s: &str) -> Result<(f32, f32)> {
 }
 
 fn main() -> Result<()> {
+    // `legatorocr collection …` has its own small command line (new, add, list, run, search).
+    if collection::wanted() {
+        return collection::main();
+    }
     // `legatorocr … | head` closes our stdout early: end quietly like other Unix tools
     // instead of panicking inside println!.
     let default_hook = std::panic::take_hook();
@@ -3720,6 +3730,7 @@ fn real_main() -> Result<()> {
             .map(str::to_string)
     };
     let mut pdf_quality = cli.pdf_quality;
+    let mut pdf_max_dpi = 0u32;
     if !given("--pdf-quality") {
         if let Some(q) = carried("pdf_quality").and_then(|v| v.parse::<u8>().ok()) {
             pdf_quality = q.min(100);
@@ -3732,13 +3743,21 @@ fn real_main() -> Result<()> {
             bail!("--target-size needs --pdf and a positive number of megabytes");
         }
         if pdf_quality > 0 {
-            pdf_quality = legatorocr_engine::quality_for_target(
+            let target_bytes = (mb as f64 * 1e6) as u64;
+            let plan = legatorocr_engine::plan_for_target(
                 &sheets,
                 cli.auto_rotate.then_some(&ocr_opts),
-                (mb as f64 * 1e6) as u64,
+                target_bytes,
                 &AtomicBool::new(false),
             )?;
-            eprintln!("target {mb} MB: JPEG quality {pdf_quality}");
+            pdf_quality = plan.quality;
+            pdf_max_dpi = plan.max_dpi;
+            let tag = if plan.met {
+                "target"
+            } else {
+                "warning: target"
+            };
+            eprintln!("{tag} {mb} MB: {}", plan.summary(target_bytes));
         }
     }
     if (cli.split_on_blank || cli.split_on_barcode) && cli.pdf.is_none() {
@@ -3798,6 +3817,7 @@ fn real_main() -> Result<()> {
         sheets: &sheets,
         pdf: cli.pdf.as_ref().map(|pdf_path| PdfExport {
             quality: pdf_quality,
+            max_dpi: pdf_max_dpi,
             ocr: cli.ocr.then(|| ocr_opts.clone()),
             title: pdf_path
                 .file_stem()

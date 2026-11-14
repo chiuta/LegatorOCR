@@ -2,7 +2,7 @@
 
 **English** · [Română](README.ro.md) · [Français](README.fr.md) · [Italiano](README.it.md) · [Español](README.es.md) · [Português](README.pt.md) · [Deutsch](README.de.md) · [Magyar](README.hu.md)
 
-Version: 0.2.0-pre.58 · Last updated: 2026-11-12
+Version: 0.2.0-pre.60 · Last updated: 2026-11-12
 
 Video tutorials by Alexandru Dumbravă (ASFAN): [detailed case study, 54 min](https://drive.proton.me/urls/TY10AYCB1G#lis9oybHW8I7) · [video tutorial 2](https://drive.proton.me/urls/VRZCCZSMTW#dxmgAsJqIMtL) (Proton Drive).
 
@@ -123,7 +123,7 @@ A build **without the compiled-in recogniser model** (for example while its lice
 | Keystone and paper sizes | `--keystone-v PERCENT` / `--keystone-h PERCENT` (±30) straighten a sheet photographed at an angle by hand, before the cut (`keystone = v, h` in projects; zones drawn on the sheet are dropped, guide lines follow); `--page-size` also takes `a2`–`a6`, `b3`–`b6`, `letter`, `legal`, `tabloid`. In the window: sliders in the page toolbar and a longer size list; the **Auto trapez** button measures each page after the cut (tilt of the text lines, width of the text at top and bottom) and stores a keystone for that page only (`pageN.page_keystone = v, h`). Tested on synthetic sheets and on 67 real phone photos of a book (133 pages): the estimate is zero for most pages, and applying it lowered the tilt measured afterwards from 0.45 to 0.19 on average; a visual check of the result is still needed |
 | Settings of one page | In a project, `page1.KEY = VALUE` / `page2.KEY = VALUE` under `[sheet]` give the left (or only) and right page of a cut sheet their own output and clean-up values (`mode`, `despeckle`, `content_adjust`, …; same keys as the global settings of a project saved with `--save-project`). In the window: "Settings for: all pages / this page only" above Output and Clean-up, and the green content frame changes only the page it is dragged on. Tried on synthetic sheets and the unit tests; not tried by hand in a window A click on a processed page selects it (blue frame); output mode, clean-up, keystone, box and OCR pencils then work on that page alone, and drawn OCR zones are kept as `pageN.page_ocr_zones` / `pageN.page_ocr_ignore`. |
 | OCR zones | `--ocr-zone X,Y,W,H[=LANG][#table]` reads OCR only inside the rectangle (mm on the processed page; `#table` = one block read row by row, for tables), `--ocr-ignore X,Y,W,H` skips an area (stamp, header). In the window, three pencils on processed pages: green = OCR zone, red = ignore, violet = table; right-click deletes. Tested with a simulated engine; not tried by hand in a window |
-| Batch | `--skip-duplicates` (consecutive pages with a 96×128 thumbnail difference ≤ 2/255), `--split-on-blank` (blank pages separate documents → `name_001.pdf`, …), `--target-size MB` (JPEG quality chosen from a sample of pages so the PDF fits) |
+| Batch | `--skip-duplicates` (consecutive pages with a 96×128 thumbnail difference ≤ 2/255), `--split-on-blank` (blank pages separate documents → `name_001.pdf`, …), `--target-size MB` (JPEG quality chosen from a sample of pages so the PDF fits; when quality alone (floor 40) is not enough, colour/grey pages are also downscaled step by step to no less than 150 dpi, 1-bit pages are never touched, and the log says why when the target cannot be met) |
 | OCR input | pages below 250 dpi are enlarged ×2–×4 (Catmull-Rom) before Tesseract; word boxes are mapped back |
 | Phone photos | `--perspective`: finds the page as the large bright quadrilateral (Otsu + extreme corners, with convexity/fill checks) and warps it with a homography; does nothing for upright or full-frame scans |
 | QC and archive | `--report r.html` (contact sheet, flags blank / size-outlier / strongly deskewed pages), `--multitiff out.tif` (multi-page Group 4 TIFF, black & white only) |
@@ -218,6 +218,25 @@ It checks every key and type, that each box lies inside its page, the fractions,
 compares the passages of each page with the same page of the `--txt` output (white space
 collapsed) and prints the match percentage. The format is LegatorOCR's own; whether a given
 research tool (for example TEZAUR) can import it has not been checked.
+
+## Collections (`legatorocr collection`)
+
+A collection gathers newspapers, magazines, books and the like in one `.lgrcol` file (JSON). Keep it in the folder with the scans: paths inside the file are written relative to it when the target lies under a folder they share, so the folder can be moved or copied. Each item has a kind, title, issue or volume, date or year, languages, sources (images, a folder of images, a PDF, a saved `.lgr` project), the PDF made from it, a profile, a status (to do, processed, OCR done, checked), page count, tags and notes.
+
+```
+legatorocr collection new Archive/ --name "Old papers"
+legatorocr collection add Archive/old_papers.lgrcol --folder Archive/scans
+legatorocr collection list Archive/old_papers.lgrcol
+legatorocr collection run Archive/old_papers.lgrcol --out Archive/pdf
+legatorocr collection search Archive/old_papers.lgrcol "Scînteia"
+```
+
+- `add --folder`: each PDF, `.lgr` project and subfolder of images becomes an item. Title, kind, date and issue are guessed from the name: `scinteia_tineretului_1977_09_8801.pdf` gives a newspaper, "Scinteia Tineretului", 1977-09, no. 8801. It is only a guess (file names carry no diacritics; the kind rests on a few key words and on the numbering: a full date or an issue number of 500 or more is taken for a newspaper); correct it in the window.
+- `run` processes the items whose status is "to do", each with its own profile (else the collection's, else the engine defaults), through the same code as the command line and the window (`run_export`). An item that fails (missing source, unknown profile, unreadable page) is marked with the reason and the others go on; the collection file and the index are saved after every item, so a cancel or a crash loses nothing that was done. PDFs go next to the collection file, or to `--out`. With OCR (on by default; `--no-ocr` turns it off) the recognised text of every page goes to `NAME.lgrindex`; the OCR language comes from the item's languages, else the profile's `ocr_langs`, else Romanian. An item that failed is not tried again unless `--retry-failed` or `--item ID` is given.
+- `search` looks in that index. Case, diacritics and the old Romanian spelling do not matter (`Scînteia` finds `Scânteia`, `sînt` finds `sunt`). It prints item, page and a snippet: pages with the words next to each other first, then (marked) pages that have all the words apart.
+- The **Collections…** window (File menu, or Ctrl+K): a table with kind letter, title, issue/date, pages and a status chip (colour and text), with filter and sort; the details on the right; Add files, Add folder, Process selected, Process all pending (with progress and Cancel), Open PDF, Show folder; a search box over the whole collection with clickable results. Its texts exist in the 8 languages of the window.
+
+Tested: unit tests (name guess, relative paths, damaged files, search with diacritics, a batch that goes on after a failure and after a panic, cancel), a test of the real binary, and one run with real Tesseract on two synthetic pages, also after moving the folder. **Limits:** the window was written and compiled but nobody has looked at it on a screen or clicked through it (only its filter, sort and texts are unit-tested); only text recognised by `collection run` is searchable (a PDF that already has a text layer is not indexed); the whole index is read into memory (collections of tens of thousands of pages were not measured); a search hit names the page, but the PDF viewer opens at page 1; two programs writing the same file at once: the last one wins; the window runs Tesseract from the PATH, not the path set in the main window; the old-spelling rule is the one of `--ocr-modern-spelling` and can join different words (`mână` / `mină`).
 
 ## Phone capture assistant
 

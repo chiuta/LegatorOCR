@@ -53,6 +53,7 @@ enum Cmd {
     ExportImages,
     Modules,
     Proof,
+    Collections,
     Find,
     FirstPage,
     LastPage,
@@ -75,6 +76,7 @@ const CMDS: &[(Cmd, &str)] = &[
     (Cmd::ExportImages, "menu.export_images"),
     (Cmd::Modules, "menu.modules"),
     (Cmd::Proof, "menu.proof"),
+    (Cmd::Collections, "menu.collections"),
     (Cmd::Find, "menu.find"),
     (Cmd::FirstPage, "cmd.first_page"),
     (Cmd::LastPage, "cmd.last_page"),
@@ -179,6 +181,9 @@ struct Done {
     docs: usize,
     /// Sheets that could not be processed: (file name, reason).
     failed: Vec<(String, String)>,
+    /// With a size target: what was chosen (quality, resolution cap) and whether the
+    /// target was missed (then the text says why).
+    size_note: Option<(String, bool)>,
 }
 
 struct Job {
@@ -270,6 +275,7 @@ pub struct App {
     show_about: bool,
     modules: ModulesWindow,
     proof: crate::proof::ProofWindow,
+    collections: crate::collections::CollectionsWindow,
     find: crate::find::FindWindow,
     /// The corrected text is loaded into the engine for the running export.
     apply_pending: bool,
@@ -385,6 +391,7 @@ impl App {
             show_about: false,
             modules: ModulesWindow::default(),
             proof: crate::proof::ProofWindow::default(),
+            collections: crate::collections::CollectionsWindow::default(),
             find: Default::default(),
             apply_pending: false,
             last_pages: 0,
@@ -938,7 +945,12 @@ impl App {
                                     self.tr("status.failed")
                                 );
                             }
-                            self.say(msg, !d.failed.is_empty());
+                            let mut warn = !d.failed.is_empty();
+                            if let Some((note, missed)) = &d.size_note {
+                                msg += &format!(" — {note}");
+                                warn |= *missed;
+                            }
+                            self.say(msg, warn);
                         }
                         Err(e) if e == "cancelled" || e.ends_with(": cancelled") => {
                             let m = self.tr("status.cancelled").to_string();
@@ -1154,6 +1166,7 @@ impl App {
             .collect();
         let pdf = (kind == JobKind::Pdf).then(|| PdfExport {
             quality: self.s.pdf_quality,
+            max_dpi: 0,
             ocr: self.s.ocr.then(|| self.s.ocr_options()),
             title: target.file_stem().map(|s| s.to_string_lossy().into_owned()),
             meta: legatorocr_engine::PdfMeta {
@@ -1200,15 +1213,20 @@ impl App {
                     }
                     let first_err: Mutex<Option<String>> = Mutex::new(None);
                     let mut pdf = pdf;
+                    let mut size_note = None;
                     if let (Some(p), true) = (pdf.as_mut(), target_mb > 0) {
                         if p.quality > 0 {
-                            p.quality = legatorocr_engine::quality_for_target(
+                            let target_bytes = target_mb as u64 * 1_000_000;
+                            let plan = legatorocr_engine::plan_for_target(
                                 &sheets,
                                 osd.as_ref(),
-                                target_mb as u64 * 1_000_000,
+                                target_bytes,
                                 &c2,
                             )
                             .map_err(|e| format!("{e:#}"))?;
+                            p.quality = plan.quality;
+                            p.max_dpi = plan.max_dpi;
+                            size_note = Some((plan.summary(target_bytes), !plan.met));
                         }
                     }
                     let job = ExportJob {
@@ -1305,6 +1323,7 @@ impl App {
                         skipped: res.skipped_blank,
                         docs: res.docs.len(),
                         failed,
+                        size_note,
                     })
                 },
             ))
@@ -1399,6 +1418,14 @@ impl App {
                 }
                 if ui.button(self.tr("menu.proof")).clicked() {
                     self.proof.open();
+                    ui.close();
+                }
+                if ui
+                    .button(self.tr("menu.collections"))
+                    .on_hover_text(self.tr("menu.collections_tip"))
+                    .clicked()
+                {
+                    self.collections.open();
                     ui.close();
                 }
                 if ui
@@ -2343,6 +2370,7 @@ impl App {
             Cmd::ExportImages if idle => self.start_export(ctx, JobKind::Images),
             Cmd::Modules => self.modules.open(),
             Cmd::Proof => self.proof.open(),
+            Cmd::Collections => self.collections.open(),
             Cmd::Find => self.find.open(),
             Cmd::FirstPage if !self.sheets.is_empty() => {
                 self.selected = Some(0);
@@ -2533,7 +2561,10 @@ impl App {
     /// the first / last. Not while a text box has the focus, and not with Ctrl / Alt / Shift held.
     fn page_keys(&mut self, ctx: &egui::Context) {
         self.scroll_to_selected = false;
-        if self.sheets.is_empty() || ctx.egui_wants_keyboard_input() {
+        if self.sheets.is_empty()
+            || ctx.egui_wants_keyboard_input()
+            || self.collections.captures_keys()
+        {
             return;
         }
         let last = self.sheets.len() - 1;
@@ -5508,6 +5539,7 @@ impl eframe::App for App {
         {
             let lang = self.lang;
             self.proof.ui(&ctx, &|k| t(lang, k));
+            self.collections.ui(&ctx, &|k| t(lang, k));
             let files: Vec<PathBuf> = {
                 let mut v: Vec<PathBuf> = Vec::new();
                 for sh in &self.sheets {

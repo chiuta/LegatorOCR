@@ -2,7 +2,7 @@
 
 [English](README.md) · [Română](README.ro.md) · [Français](README.fr.md) · [Italiano](README.it.md) · [Español](README.es.md) · **Português** · [Deutsch](README.de.md) · [Magyar](README.hu.md)
 
-Versão: 0.2.0-pre.58 · Última atualização: 2026-11-12
+Versão: 0.2.0-pre.60 · Última atualização: 2026-11-12
 
 Tutoriais em vídeo de Alexandru Dumbravă (ASFAN): [estudo de caso detalhado, 54 min](https://drive.proton.me/urls/TY10AYCB1G#lis9oybHW8I7) · [tutorial em vídeo 2](https://drive.proton.me/urls/VRZCCZSMTW#dxmgAsJqIMtL) (Proton Drive).
 
@@ -121,7 +121,7 @@ Uma compilação **sem o modelo reconhecedor incorporado** (por exemplo enquanto
 | Trapézio e tamanhos de papel | `--keystone-v PERCENTAGEM` / `--keystone-h PERCENTAGEM` (±30) endireitam à mão uma folha fotografada em ângulo, antes do corte (`keystone = v, h` nos projetos; as zonas desenhadas na folha são eliminadas, as linhas guia acompanham); `--page-size` aceita também `a2`–`a6`, `b3`–`b6`, `letter`, `legal`, `tabloid`. Na janela: cursores na barra da página e uma lista de tamanhos mais longa; o botão **Auto trapez** mede cada página após o corte (inclinação das linhas, largura do texto em cima e em baixo) e guarda uma correção só para essa página (`pageN.page_keystone = v, h`). Testado em folhas sintéticas; não em páginas reais tortas |
 | Definições de uma página | Num projeto, `page1.CHAVE = VALOR` / `page2.CHAVE = VALOR` sob `[sheet]` dão à página esquerda (ou única) e à direita de uma folha cortada valores próprios de saída e limpeza (`mode`, `despeckle`, `content_adjust`, …; as mesmas chaves das definições globais de um projeto guardado com `--save-project`). Na janela: «Definições para: todas as páginas / só esta página» por cima de Saída e Limpeza, e a moldura verde do conteúdo altera só a página onde é arrastada. Experimentado em folhas sintéticas e em testes unitários; não à mão numa janela Um clique numa página processada seleciona-a (moldura azul); modo de saída, limpeza, trapézio, caixa e lápis OCR atuam só nela; as zonas OCR desenhadas guardam-se como `pageN.page_ocr_zones` / `pageN.page_ocr_ignore`. |
 | Zonas OCR | `--ocr-zone X,Y,W,H[=IDIOMA][#table]` lê o OCR só no retângulo (mm na página processada; `#table` = um só bloco, linha a linha, para tabelas), `--ocr-ignore X,Y,W,H` salta uma zona (carimbo, cabeçalho). Na janela, três lápis nas páginas processadas: verde = zona OCR, vermelho = ignorar, violeta = tabela; clique direito apaga. Testado com um motor simulado; não à mão numa janela |
-| Lote | `--skip-duplicates` (páginas consecutivas com uma diferença de miniatura 96×128 ≤ 2/255), `--split-on-blank` (páginas em branco separam documentos → `name_001.pdf`, …), `--target-size MB` (qualidade JPEG escolhida a partir de uma amostra de páginas para que o PDF caiba) |
+| Lote | `--skip-duplicates` (páginas consecutivas com uma diferença de miniatura 96×128 ≤ 2/255), `--split-on-blank` (páginas em branco separam documentos → `name_001.pdf`, …), `--target-size MB` (qualidade JPEG escolhida a partir de uma amostra de páginas para que o PDF caiba; se a qualidade (mínimo 40) não bastar, as páginas a cores ou cinzentas são reduzidas passo a passo até 150 dpi no mínimo, as de 1 bit não são tocadas; se o objetivo não for atingido, o motivo fica no registo) |
 | Entrada para OCR | páginas abaixo de 250 dpi são ampliadas ×2–×4 (Catmull-Rom) antes do Tesseract; as caixas de palavras são mapeadas de volta |
 | Fotografias de telemóvel | `--perspective`: encontra a página como o grande quadrilátero claro (Otsu + cantos extremos, com verificações de convexidade/preenchimento) e deforma-a com uma homografia; não faz nada em digitalizações direitas ou de quadro inteiro |
 | Controlo de qualidade e arquivo | `--report r.html` (folha de contactos, assinala páginas em branco / de tamanho atípico / muito inclinadas), `--multitiff out.tif` (TIFF Group 4 de várias páginas, apenas preto e branco) |
@@ -213,6 +213,25 @@ forma de `cite` e, com `--images`, os hashes das imagens contra os ficheiros esc
 compara as passagens de cada página com a mesma página da saída `--txt` (espaço em branco
 colapsado) e imprime a percentagem de correspondência. O formato é próprio do LegatorOCR; se uma determinada
 ferramenta de investigação (por exemplo o TEZAUR) o consegue importar, não foi verificado.
+
+## Coleções (`legatorocr collection`)
+
+Uma coleção reúne jornais, revistas, livros e semelhantes num único ficheiro `.lgrcol` (JSON). Guarde-o na pasta com as digitalizações: os caminhos no ficheiro são escritos relativos a ele quando o destino fica sob uma pasta comum, de modo que a pasta pode ser movida ou copiada. Cada elemento tem tipo, título, número ou volume, data ou ano, idiomas, fontes (imagens, uma pasta de imagens, um PDF, um projeto `.lgr` guardado), o PDF resultante, um perfil, um estado (por fazer, processado, OCR feito, verificado), número de páginas, etiquetas e notas.
+
+```
+legatorocr collection new Archive/ --name "Old papers"
+legatorocr collection add Archive/old_papers.lgrcol --folder Archive/scans
+legatorocr collection list Archive/old_papers.lgrcol
+legatorocr collection run Archive/old_papers.lgrcol --out Archive/pdf
+legatorocr collection search Archive/old_papers.lgrcol "Scînteia"
+```
+
+- `add --folder`: cada PDF, projeto `.lgr` e subpasta de imagens torna-se um elemento. Título, tipo, data e número são deduzidos do nome: `scinteia_tineretului_1977_09_8801.pdf` dá um jornal, «Scinteia Tineretului», 1977-09, n.º 8801. É apenas um palpite (os nomes de ficheiro não têm diacríticos; o tipo apoia-se em poucas palavras-chave e na numeração: uma data completa ou um número de 500 ou mais é tomado por jornal); corrija-o na janela.
+- `run` processa os elementos com estado «por fazer», cada um com o seu perfil (senão o da coleção, senão as definições predefinidas), com o mesmo código da linha de comandos e da janela (`run_export`). Um elemento que falha (fonte em falta, perfil desconhecido, página ilegível) fica marcado com o motivo e os outros continuam; o ficheiro da coleção e o índice são guardados após cada elemento, por isso um cancelamento ou uma falha não perde o que estava feito. Os PDF vão para junto do ficheiro da coleção ou para `--out`. Com OCR (ativo por omissão; `--no-ocr` desliga-o) o texto reconhecido de cada página vai para `NOME.lgrindex`; o idioma do OCR vem dos idiomas do elemento, senão de `ocr_langs` do perfil, senão o romeno. Um elemento falhado não é repetido, salvo com `--retry-failed` ou `--item ID`.
+- `search` procura neste índice. Maiúsculas, diacríticos e a antiga ortografia romena não contam (`Scînteia` encontra `Scânteia`, `sînt` encontra `sunt`). Mostra elemento, página e um excerto: primeiro as páginas com as palavras seguidas, depois (marcadas) as que têm todas as palavras mas afastadas.
+- A janela **Coleções…** (menu Ficheiro, ou Ctrl+K): uma tabela com a letra do tipo, título, número/data, páginas e uma etiqueta de estado (cor e texto), com filtro e ordenação; os detalhes à direita; Adicionar ficheiros, Adicionar pasta, Processar a seleção, Processar tudo o que espera (com progresso e Cancelar), Abrir PDF, Mostrar pasta; uma caixa de pesquisa em toda a coleção com resultados clicáveis. Os seus textos existem nos 8 idiomas da janela.
+
+Testado: testes unitários (dedução do nome, caminhos relativos, ficheiros danificados, pesquisa com diacríticos, um lote que continua após uma falha e após um pânico, cancelamento), um teste do programa real e uma execução com Tesseract real em duas páginas sintéticas, também depois de mover a pasta. **Limites:** a janela foi escrita e compilada, mas ninguém a viu no ecrã nem clicou nela (só o filtro, a ordenação e os textos têm testes unitários); só se pesquisa o texto reconhecido por `collection run` (um PDF que já tem camada de texto não é indexado); todo o índice é lido para a memória (coleções de dezenas de milhares de páginas não foram medidas); um resultado indica a página, mas o leitor de PDF abre na página 1; dois programas a escrever o mesmo ficheiro ao mesmo tempo: ganha o último; a janela usa o Tesseract do PATH, não o caminho definido na janela principal; a regra da ortografia antiga é a de `--ocr-modern-spelling` e pode juntar palavras diferentes (`mână` / `mină`).
 
 ## Assistente de captura com telemóvel
 

@@ -23,6 +23,7 @@ pub mod catalog;
 pub mod certify;
 pub mod checksums;
 pub mod classify;
+pub mod collection;
 pub mod corrections;
 pub mod djvu;
 pub mod dnssd;
@@ -113,6 +114,9 @@ pub use legatorocr_pdf::{
 pub struct PdfExport {
     /// JPEG quality for colour/gray pages; 0 = lossless Flate.
     pub quality: u8,
+    /// Colour/gray page images above this resolution are downscaled to it (0 = keep as is);
+    /// 1-bit pages are never touched. Set by [`plan_for_target`].
+    pub max_dpi: u32,
     /// `Some` → run OCR and embed an invisible text layer.
     pub ocr: Option<OcrOptions>,
     pub title: Option<String>,
@@ -130,6 +134,7 @@ impl Default for PdfExport {
     fn default() -> Self {
         Self {
             quality: 80,
+            max_dpi: 0,
             ocr: None,
             title: None,
             meta: PdfMeta::default(),
@@ -290,16 +295,94 @@ pub struct ExportResult {
     pub doc_names: Vec<Option<String>>,
 }
 
-/// Pick the JPEG quality (30–95) whose PDF is expected to stay within `target_bytes`:
-/// up to 6 evenly spaced sheets are exported at each quality of a ladder, the size is
-/// extrapolated to all sheets. Returns the best quality that fits, or 30 when none does.
-/// (1-bit pages do not depend on the quality, so they only add a fixed cost.)
-pub fn quality_for_target(
+/// Lowest JPEG quality the size target may use.
+pub const TARGET_MIN_QUALITY: u8 = 40;
+/// Lowest effective resolution (dpi) the size target may downscale colour/gray pages to.
+pub const TARGET_MIN_DPI: u32 = 150;
+
+/// What [`plan_for_target`] decided for a PDF size target.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TargetPlan {
+    /// JPEG quality to use (`TARGET_MIN_QUALITY..=95`).
+    pub quality: u8,
+    /// Resolution cap for colour/gray pages (0 = none; otherwise `>= TARGET_MIN_DPI`).
+    pub max_dpi: u32,
+    /// The estimate stays within the target.
+    pub met: bool,
+    /// Estimated size of the whole PDF with these settings, in bytes.
+    pub estimate_bytes: u64,
+    /// When `met` is false: why the target could not be reached (for the log / result).
+    pub note: Option<String>,
+}
+
+impl TargetPlan {
+    /// One line for the log: the chosen settings, and the reason when the target was missed.
+    pub fn summary(&self, target_bytes: u64) -> String {
+        let dpi = if self.max_dpi == 0 {
+            String::new()
+        } else {
+            format!(", pages capped at {} dpi", self.max_dpi)
+        };
+        let mb = |b: u64| b as f64 / 1e6;
+        let head = format!(
+            "JPEG quality {}{dpi} (estimated {:.1} MB, target {:.1} MB)",
+            self.quality,
+            mb(self.estimate_bytes),
+            mb(target_bytes)
+        );
+        match &self.note {
+            Some(n) if !self.met => format!("{head}; target NOT met: {n}"),
+            _ => head,
+        }
+    }
+}
+
+/// Estimated PDF size for `total` sheets from a sample exported with these settings.
+fn estimate_pdf_bytes(
+    sample: &[SheetInput],
+    total: usize,
+    osd: Option<&OcrOptions>,
+    quality: u8,
+    max_dpi: u32,
+    cancel: &AtomicBool,
+) -> Result<u64> {
+    let job = ExportJob {
+        sheets: sample,
+        pdf: Some(PdfExport {
+            quality,
+            max_dpi,
+            ..Default::default()
+        }),
+        skip_blank: false,
+        keep_going: true,
+        osd: osd.cloned(),
+        uniform_size: false,
+        text_ocr: None,
+        skip_duplicates: false,
+        split_on_blank: false,
+        split_on_barcode: false,
+    };
+    let res = run_export(&job, cancel, &|_, _| {}, &|_, _| {})?;
+    let bytes = res.pdf.map_or(0, |p| p.len() as u64);
+    Ok((bytes as f64 / res.pages.max(1) as f64 * total as f64) as u64)
+}
+
+/// Choose the PDF settings whose file is expected to stay within `target_bytes`.
+///
+/// Up to 6 evenly spaced sheets are exported at each step of a ladder and the size is
+/// extrapolated to all sheets. First only the JPEG quality is lowered (95 down to
+/// [`TARGET_MIN_QUALITY`]); when that is not enough, colour/gray pages are also downscaled
+/// step by step (300, 250, 200, 170 dpi, then [`TARGET_MIN_DPI`] at the minimum quality),
+/// re-estimating each time. 1-bit pages (CCITT/JBIG2 candidates, already small) are never
+/// resampled. The first step that fits wins, so a smaller target never yields a larger
+/// estimate. When nothing fits, the most aggressive step is returned with `met == false`
+/// and a `note` that tells why.
+pub fn plan_for_target(
     sheets: &[SheetInput],
     osd: Option<&OcrOptions>,
     target_bytes: u64,
     cancel: &AtomicBool,
-) -> Result<u8> {
+) -> Result<TargetPlan> {
     if sheets.is_empty() {
         bail!("no pages to export");
     }
@@ -307,30 +390,61 @@ pub fn quality_for_target(
     let sample: Vec<SheetInput> = (0..n)
         .map(|i| sheets[i * sheets.len() / n].clone())
         .collect();
-    for q in [95u8, 90, 85, 80, 70, 60, 50, 40] {
-        let job = ExportJob {
-            sheets: &sample,
-            pdf: Some(PdfExport {
+    let mut steps: Vec<(u8, u32)> = [95u8, 90, 85, 80, 70, 60, 50, TARGET_MIN_QUALITY]
+        .iter()
+        .map(|&q| (q, 0))
+        .collect();
+    steps.extend([(60, 300), (55, 250), (50, 200), (45, 170)]);
+    steps.push((TARGET_MIN_QUALITY, TARGET_MIN_DPI));
+    let mut first = None;
+    let mut last = (0u8, 0u32, 0u64);
+    for (q, dpi) in steps {
+        let est = estimate_pdf_bytes(&sample, sheets.len(), osd, q, dpi, cancel)?;
+        first.get_or_insert(est);
+        last = (q, dpi, est);
+        if est <= target_bytes {
+            return Ok(TargetPlan {
                 quality: q,
-                ..Default::default()
-            }),
-            skip_blank: false,
-            keep_going: true,
-            osd: osd.cloned(),
-            uniform_size: false,
-            text_ocr: None,
-            skip_duplicates: false,
-            split_on_blank: false,
-            split_on_barcode: false,
-        };
-        let res = run_export(&job, cancel, &|_, _| {}, &|_, _| {})?;
-        let bytes = res.pdf.map_or(0, |p| p.len() as u64);
-        let est = bytes as f64 / res.pages.max(1) as f64 * sheets.len() as f64;
-        if est <= target_bytes as f64 {
-            return Ok(q);
+                max_dpi: dpi,
+                met: true,
+                estimate_bytes: est,
+                note: None,
+            });
         }
     }
-    Ok(30)
+    let (quality, max_dpi, estimate_bytes) = last;
+    let first = first.unwrap_or(estimate_bytes);
+    let note = if estimate_bytes as f64 > first as f64 * 0.99 {
+        format!(
+            "the pages are 1-bit or already at or below {TARGET_MIN_DPI} dpi, so neither JPEG \
+             quality nor resolution can make the file smaller (estimated {:.1} MB)",
+            estimate_bytes as f64 / 1e6
+        )
+    } else {
+        format!(
+            "even at the lowest allowed settings (JPEG quality {TARGET_MIN_QUALITY}, \
+             {TARGET_MIN_DPI} dpi) the estimate is {:.1} MB; quality and resolution are not \
+             lowered further",
+            estimate_bytes as f64 / 1e6
+        )
+    };
+    Ok(TargetPlan {
+        quality,
+        max_dpi,
+        met: false,
+        estimate_bytes,
+        note: Some(note),
+    })
+}
+
+/// The JPEG quality part of [`plan_for_target`] (kept for callers that only need a quality).
+pub fn quality_for_target(
+    sheets: &[SheetInput],
+    osd: Option<&OcrOptions>,
+    target_bytes: u64,
+    cancel: &AtomicBool,
+) -> Result<u8> {
+    Ok(plan_for_target(sheets, osd, target_bytes, cancel)?.quality)
 }
 
 /// Sheets whose natural page size differs clearly from the book's typical size:
@@ -776,6 +890,7 @@ pub fn run_export(
             }
             w.set_meta(p.meta.clone());
             w.set_pdfa(p.pdfa);
+            w.set_max_image_dpi(p.max_dpi);
             w
         })
     };
@@ -2059,6 +2174,105 @@ mod batch_features_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    fn noisy_sheets(dir: &Path, n: usize, dpi: u32, bilevel: bool) -> Vec<SheetInput> {
+        std::fs::create_dir_all(dir).unwrap();
+        (0..n)
+            .map(|i| {
+                let mut img = RgbImage::new(600, 800);
+                let mut z = 777u32 + i as u32;
+                for p in img.pixels_mut() {
+                    z = z.wrapping_mul(1664525).wrapping_add(1013904223);
+                    *p = if bilevel {
+                        Rgb([if (z >> 28) < 3 { 0 } else { 255 }; 3])
+                    } else {
+                        Rgb([(z >> 24) as u8, (z >> 16) as u8, (z >> 8) as u8])
+                    };
+                }
+                let path = dir.join(format!("n{i}.png"));
+                img.save(&path).unwrap();
+                SheetInput {
+                    path,
+                    settings: Settings {
+                        dpi,
+                        mode: if bilevel {
+                            legatorocr_core::OutputMode::BlackWhite
+                        } else {
+                            legatorocr_core::OutputMode::Color
+                        },
+                        split: legatorocr_core::SplitMode::Off,
+                        deskew: false,
+                        auto_orient: false,
+                        ..Default::default()
+                    },
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn target_size_downscales_when_quality_alone_is_not_enough() {
+        let dir = std::env::temp_dir().join(format!("lgr-target-dpi-{}", std::process::id()));
+        let s = noisy_sheets(&dir, 3, 300, false);
+        let no = AtomicBool::new(false);
+        let loose = plan_for_target(&s, None, 1_000_000_000, &no).unwrap();
+        assert!(loose.met && loose.quality == 95 && loose.max_dpi == 0);
+        // smaller and smaller targets: estimate never grows, floors respected
+        let mut prev = u64::MAX;
+        let mut saw_cap = false;
+        let full = loose.estimate_bytes;
+        for target in [full, full / 2, full / 4, full / 8, full / 16] {
+            let p = plan_for_target(&s, None, target, &no).unwrap();
+            assert!(p.estimate_bytes <= prev, "{p:?} after {prev}");
+            prev = p.estimate_bytes;
+            assert!(p.quality >= TARGET_MIN_QUALITY, "{p:?}");
+            assert!(p.max_dpi == 0 || p.max_dpi >= TARGET_MIN_DPI, "{p:?}");
+            if p.met {
+                assert!(p.estimate_bytes <= target, "{p:?}");
+                assert!(p.note.is_none());
+            }
+            saw_cap |= p.max_dpi > 0;
+        }
+        assert!(saw_cap, "a small target must make the plan downscale");
+        // impossible target: lowest settings, reported as not met with a reason
+        let p = plan_for_target(&s, None, 1_000, &no).unwrap();
+        assert!(!p.met);
+        assert_eq!((p.quality, p.max_dpi), (TARGET_MIN_QUALITY, TARGET_MIN_DPI));
+        assert!(p
+            .note
+            .as_deref()
+            .is_some_and(|n| n.contains("lowest allowed")));
+        assert!(p.summary(1_000).contains("NOT met"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn target_size_cannot_help_pages_already_at_the_floor_resolution() {
+        let dir = std::env::temp_dir().join(format!("lgr-target-low-{}", std::process::id()));
+        let s = noisy_sheets(&dir, 2, 150, false);
+        let no = AtomicBool::new(false);
+        let p = plan_for_target(&s, None, 1_000, &no).unwrap();
+        assert!(!p.met);
+        assert!(p.max_dpi == TARGET_MIN_DPI);
+        // 150 dpi pages are not resampled, so the quality ladder is all there is
+        let q = plan_for_target(&s, None, 100_000_000, &no).unwrap();
+        assert_eq!(q.max_dpi, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn target_size_leaves_bilevel_pages_alone() {
+        let dir = std::env::temp_dir().join(format!("lgr-target-bw-{}", std::process::id()));
+        let s = noisy_sheets(&dir, 3, 300, true);
+        let no = AtomicBool::new(false);
+        let loose = plan_for_target(&s, None, 1_000_000_000, &no).unwrap();
+        let tight = plan_for_target(&s, None, 1_000, &no).unwrap();
+        assert!(!tight.met);
+        // 1-bit pages are never resampled or recompressed: the estimate does not move
+        assert_eq!(tight.estimate_bytes, loose.estimate_bytes);
+        assert!(tight.note.as_deref().is_some_and(|n| n.contains("1-bit")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn target_size_lowers_quality_only_when_needed() {
         let dir = std::env::temp_dir().join(format!("lgr-target-{}", std::process::id()));
@@ -2079,7 +2293,10 @@ mod batch_features_tests {
         assert_eq!(quality_for_target(&s, None, 100_000_000, &no).unwrap(), 95);
         let q = quality_for_target(&s, None, 400_000, &no).unwrap();
         assert!(q < 95, "got {q}");
-        assert_eq!(quality_for_target(&s, None, 1_000, &no).unwrap(), 30);
+        assert_eq!(
+            quality_for_target(&s, None, 1_000, &no).unwrap(),
+            TARGET_MIN_QUALITY
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

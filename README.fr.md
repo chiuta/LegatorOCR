@@ -2,7 +2,7 @@
 
 [English](README.md) · [Română](README.ro.md) · **Français** · [Italiano](README.it.md) · [Español](README.es.md) · [Português](README.pt.md) · [Deutsch](README.de.md) · [Magyar](README.hu.md)
 
-Version : 0.2.0-pre.58 · Dernière mise à jour : 2026-11-12
+Version : 0.2.0-pre.60 · Dernière mise à jour : 2026-11-12
 
 Tutoriels vidéo d’Alexandru Dumbravă (ASFAN) : [étude de cas détaillée, 54 min](https://drive.proton.me/urls/TY10AYCB1G#lis9oybHW8I7) · [tutoriel vidéo 2](https://drive.proton.me/urls/VRZCCZSMTW#dxmgAsJqIMtL) (Proton Drive).
 
@@ -122,7 +122,7 @@ Une compilation **sans le modèle de reconnaissance intégré** (par exemple tan
 | Trapèze et formats de papier | `--keystone-v POURCENT` / `--keystone-h POURCENT` (±30) redressent à la main une feuille photographiée en biais, avant la coupe (`keystone = v, h` dans les projets ; les zones dessinées sur la feuille sont supprimées, les lignes guides suivent) ; `--page-size` accepte aussi `a2`–`a6`, `b3`–`b6`, `letter`, `legal`, `tabloid`. Dans la fenêtre : curseurs dans la barre de page et une liste de formats plus longue ; le bouton **Auto trapez** mesure chaque page après la coupe (inclinaison des lignes, largeur du texte en haut et en bas) et retient une correction pour cette seule page (`pageN.page_keystone = v, h`). Testé sur des feuilles synthétiques ; pas sur de vraies pages courbées |
 | Réglages d'une page | Dans un projet, `page1.CLÉ = VALEUR` / `page2.CLÉ = VALEUR` sous `[sheet]` donnent à la page de gauche (ou seule) et à celle de droite d'une feuille coupée leurs propres valeurs de sortie et de nettoyage (`mode`, `despeckle`, `content_adjust`, … ; mêmes clés que les réglages globaux d'un projet enregistré avec `--save-project`). Dans la fenêtre : « Réglages pour : toutes les pages / cette page seulement » au-dessus de Sortie et Nettoyage, et le cadre vert du contenu ne change que la page sur laquelle il est tiré. Essayé sur des feuilles synthétiques et en tests unitaires ; pas à la main dans une fenêtre Un clic sur une page traitée la sélectionne (cadre bleu) ; mode de sortie, nettoyage, trapèze, cadre et crayons OCR n'agissent alors que sur elle ; les zones OCR dessinées sont gardées sous `pageN.page_ocr_zones` / `pageN.page_ocr_ignore`. |
 | Zones OCR | `--ocr-zone X,Y,W,H[=LANGUE][#table]` ne lit l'OCR que dans le rectangle (mm sur la page traitée ; `#table` = un seul bloc, ligne par ligne, pour les tableaux), `--ocr-ignore X,Y,W,H` écarte une zone (tampon, en-tête). Dans la fenêtre, trois crayons sur les pages traitées : vert = zone OCR, rouge = ignorer, violet = tableau ; clic droit supprime. Testé avec un moteur simulé ; pas à la main dans une fenêtre |
-| Lot | `--skip-duplicates` (pages consécutives dont la différence de vignette 96×128 est ≤ 2/255), `--split-on-blank` (les pages blanches séparent les documents → `name_001.pdf`, …), `--target-size MB` (qualité JPEG choisie d’après un échantillon de pages pour que le PDF tienne dans la taille) |
+| Lot | `--skip-duplicates` (pages consécutives dont la différence de vignette 96×128 est ≤ 2/255), `--split-on-blank` (les pages blanches séparent les documents → `name_001.pdf`, …), `--target-size MB` (qualité JPEG choisie d’après un échantillon de pages pour que le PDF tienne dans la taille ; si la qualité (minimum 40) ne suffit pas, les pages couleur ou gris sont réduites pas à pas jusqu’à 150 dpi au plus bas, les pages 1 bit ne sont pas touchées ; si la cible n’est pas atteinte, la raison figure dans le journal) |
 | Entrée OCR | les pages sous 250 dpi sont agrandies ×2–×4 (Catmull-Rom) avant Tesseract ; les boîtes de mots sont reportées à la taille d’origine |
 | Photos de téléphone | `--perspective` : trouve la page comme le grand quadrilatère clair (Otsu + coins extrêmes, avec contrôles de convexité/remplissage) et la redresse par une homographie ; ne fait rien pour les scans droits ou plein cadre |
 | Contrôle qualité et archive | `--report r.html` (planche contact, signale les pages blanches / de taille aberrante / fortement redressées), `--multitiff out.tif` (TIFF Groupe 4 multipage, noir et blanc seulement) |
@@ -214,6 +214,25 @@ forme de `cite` et, avec `--images`, les empreintes d’images par rapport aux f
 compare les passages de chaque page avec la même page de la sortie `--txt` (espaces
 réduits) et affiche le pourcentage de concordance. Le format est propre à LegatorOCR ; la capacité d’un outil de
 recherche donné (par exemple TEZAUR) à l’importer n’a pas été vérifiée.
+
+## Collections (`legatorocr collection`)
+
+Une collection réunit journaux, revues, livres et autres dans un seul fichier `.lgrcol` (JSON). Gardez-le dans le dossier des scans : les chemins du fichier sont écrits relativement à lui quand la cible se trouve sous un dossier commun, de sorte que le dossier peut être déplacé ou copié. Chaque élément a un type, un titre, un numéro ou volume, une date ou année, des langues, des sources (images, un dossier d'images, un PDF, un projet `.lgr` enregistré), le PDF obtenu, un profil, un état (à faire, traité, OCR fait, vérifié), un nombre de pages, des étiquettes et des notes.
+
+```
+legatorocr collection new Archive/ --name "Old papers"
+legatorocr collection add Archive/old_papers.lgrcol --folder Archive/scans
+legatorocr collection list Archive/old_papers.lgrcol
+legatorocr collection run Archive/old_papers.lgrcol --out Archive/pdf
+legatorocr collection search Archive/old_papers.lgrcol "Scînteia"
+```
+
+- `add --folder` : chaque PDF, projet `.lgr` et sous-dossier d'images devient un élément. Titre, type, date et numéro sont déduits du nom : `scinteia_tineretului_1977_09_8801.pdf` donne un journal, « Scinteia Tineretului », 1977-09, n° 8801. Ce n'est qu'une supposition (les noms de fichiers n'ont pas de diacritiques ; le type repose sur quelques mots-clés et sur la numérotation : une date complète ou un numéro de 500 ou plus passe pour un journal) ; corrigez-la dans la fenêtre.
+- `run` traite les éléments à l'état « à faire », chacun avec son profil (sinon celui de la collection, sinon les réglages par défaut), par le même code que la ligne de commande et la fenêtre (`run_export`). Un élément qui échoue (source absente, profil inconnu, page illisible) est marqué avec la raison et les autres continuent ; le fichier de la collection et l'index sont enregistrés après chaque élément, donc une annulation ou un plantage ne perd rien de ce qui était fait. Les PDF vont à côté du fichier de la collection, ou dans `--out`. Avec l'OCR (activé par défaut ; `--no-ocr` le coupe) le texte reconnu de chaque page va dans `NOM.lgrindex` ; la langue de l'OCR vient des langues de l'élément, sinon de `ocr_langs` du profil, sinon le roumain. Un élément en échec n'est pas retenté sauf avec `--retry-failed` ou `--item ID`.
+- `search` cherche dans cet index. Majuscules, diacritiques et ancienne orthographe roumaine sont ignorées (`Scînteia` trouve `Scânteia`, `sînt` trouve `sunt`). Elle affiche élément, page et un extrait : d'abord les pages où les mots se suivent, puis (marquées) les pages qui ont tous les mots mais séparés.
+- La fenêtre **Collections…** (menu Fichier, ou Ctrl+K) : un tableau avec la lettre du type, le titre, numéro/date, pages et une pastille d'état (couleur et texte), avec filtre et tri ; les détails à droite ; Ajouter des fichiers, Ajouter un dossier, Traiter la sélection, Traiter tout ce qui attend (avec progression et Annuler), Ouvrir le PDF, Afficher le dossier ; une zone de recherche sur toute la collection avec des résultats cliquables. Ses textes existent dans les 8 langues de la fenêtre.
+
+Testé : tests unitaires (déduction du nom, chemins relatifs, fichiers abîmés, recherche avec diacritiques, un lot qui continue après un échec et après une panique, annulation), un test du programme réel et une exécution avec le vrai Tesseract sur deux pages synthétiques, y compris après déplacement du dossier. **Limites :** la fenêtre a été écrite et compilée, mais personne ne l'a vue à l'écran ni n'a cliqué dedans (seuls son filtre, son tri et ses textes ont des tests unitaires) ; seul le texte reconnu par `collection run` est cherchable (un PDF qui a déjà une couche de texte n'est pas indexé) ; tout l'index est lu en mémoire (des collections de dizaines de milliers de pages n'ont pas été mesurées) ; un résultat nomme la page, mais le lecteur PDF s'ouvre à la page 1 ; deux programmes qui écrivent le même fichier en même temps : le dernier gagne ; la fenêtre utilise le Tesseract du PATH, pas le chemin réglé dans la fenêtre principale ; la règle de l'ancienne orthographe est celle de `--ocr-modern-spelling` et peut confondre des mots différents (`mână` / `mină`).
 
 ## Assistant de capture par téléphone
 
