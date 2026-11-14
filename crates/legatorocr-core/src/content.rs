@@ -90,16 +90,41 @@ fn edge_cleaned(ink: &BitImage, dpi: u32) -> BitImage {
 
 /// Blocks laid out as separate lines along the long axis (at least four runs of occupied
 /// block rows, or columns, with gaps between, and most of the span empty): text, not a shadow.
+/// Also regular and dense enough to be lines of text, not the patterned fabric or the fingers
+/// that a phone photo of an open book shows at the border (seen on real photos: strips of
+/// 9 x 97 blocks, 10 % filled, whose runs go from one block to 27): at least a quarter of the
+/// bounding box is occupied and no run is longer than four times the median one.
 fn text_like(blocks: &[usize], gw: usize, vertical: bool) -> bool {
     let key = |p: usize| if vertical { p / gw } else { p % gw };
+    let across = |p: usize| if vertical { p % gw } else { p / gw };
     let mut used: Vec<usize> = blocks.iter().map(|&p| key(p)).collect();
     used.sort_unstable();
     used.dedup();
     let (Some(&first), Some(&last)) = (used.first(), used.last()) else {
         return false;
     };
-    let runs = 1 + used.windows(2).filter(|w| w[1] > w[0] + 1).count();
-    runs >= 4 && used.len() * 10 < (last - first + 1) * 8
+    let mut lens: Vec<usize> = Vec::new();
+    let mut len = 1;
+    for w in used.windows(2) {
+        if w[1] > w[0] + 1 {
+            lens.push(len);
+            len = 1;
+        } else {
+            len += 1;
+        }
+    }
+    lens.push(len);
+    let (lo, hi) = blocks.iter().fold((usize::MAX, 0), |(a, b), &p| {
+        (a.min(across(p)), b.max(across(p)))
+    });
+    let area = (last - first + 1) * (hi - lo + 1);
+    let mut sorted = lens.clone();
+    sorted.sort_unstable();
+    let median = sorted[sorted.len() / 2];
+    lens.len() >= 4
+        && used.len() * 10 < (last - first + 1) * 8
+        && blocks.len() * 4 >= area
+        && sorted[sorted.len() - 1] <= 4 * median
 }
 
 pub fn detect_content(ink: &BitImage, dpi: u32) -> Option<Rect> {
@@ -356,6 +381,30 @@ mod edge_bar_tests {
         lines(&mut ink, 0, 14, 100, 700);
         let r = detect_content(&ink, 150).expect("content");
         assert!(r.x == 0, "column at the border dropped: {r:?}");
+    }
+
+    /// Phone photo of an open book: after the page crop, patterned fabric and fingers stick to
+    /// the border as thin, gappy, irregular strips. They are not lines of text (real photo:
+    /// 9 x 97 blocks, 10 % filled, runs from one block to 27) and must not widen the content.
+    #[test]
+    fn ragged_fabric_strip_touching_the_border_is_not_content() {
+        let mut ink = BitImage::new(600, 800);
+        lines(&mut ink, 130, 500, 100, 700);
+        // a thin vertical strip at the right border: irregular blobs (heights 1 to 27 blocks of
+        // 6 px at 300 dpi are scaled to this 150 dpi map), mostly gaps inside the strip
+        let mut y = 0u32;
+        for (i, hgt) in [110u32, 4, 30, 24, 12, 8, 4, 6, 30, 8].iter().enumerate() {
+            for yy in y..(y + hgt).min(800) {
+                for xx in 590..600 {
+                    if (xx + yy + i as u32).is_multiple_of(3) {
+                        ink.set(xx, yy, true);
+                    }
+                }
+            }
+            y += hgt + 14;
+        }
+        let r = detect_content(&ink, 150).expect("content");
+        assert!(r.x + r.w <= 520, "fabric strip widened the content: {r:?}");
     }
 
     #[test]

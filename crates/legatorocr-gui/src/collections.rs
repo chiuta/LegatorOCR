@@ -144,6 +144,7 @@ fn split_list(s: &str) -> Vec<String> {
 enum Msg {
     Progress(usize, usize, String),
     Done(Box<(Collection, Index, Result<col::BatchReport, String>)>),
+    Indexed(Box<(Collection, Index, Result<col::ReindexReport, String>)>),
 }
 
 struct Job {
@@ -178,6 +179,8 @@ pub struct CollectionsWindow {
     hovered: bool,
     focus_search: bool,
     tried_last: bool,
+    /// Tesseract program of the main window's settings (read each frame by `ui`).
+    tesseract: String,
 }
 
 impl Default for CollectionsWindow {
@@ -206,6 +209,7 @@ impl Default for CollectionsWindow {
             hovered: false,
             focus_search: false,
             tried_last: false,
+            tesseract: String::new(),
         }
     }
 }
@@ -317,6 +321,10 @@ impl CollectionsWindow {
         let total = ids.len();
         let (c2, ctx2, cancel2) = (cancel.clone(), ctx.clone(), cancel.clone());
         let mut ix = self.index.clone();
+        let cfg = RunConfig {
+            tesseract: col::configured_tesseract(&self.tesseract),
+            ..RunConfig::default()
+        };
         std::thread::spawn(move || {
             let mut col = c;
             let tx2 = tx.clone();
@@ -327,7 +335,7 @@ impl CollectionsWindow {
                     &mut col,
                     &mut ix,
                     &ids,
-                    &RunConfig::default(),
+                    &cfg,
                     &cancel2,
                     &col::run_item_with_engine,
                     &mut |n, t, title| {
@@ -350,9 +358,48 @@ impl CollectionsWindow {
         });
     }
 
+    /// Read the text layer of the PDFs of `ids` into the index (no reprocessing), in a thread.
+    fn start_index(&mut self, ctx: &egui::Context, ids: Vec<String>) {
+        let (Some(c), Some(f)) = (self.col.clone(), self.file.clone()) else {
+            return;
+        };
+        if ids.is_empty() || self.job.is_some() {
+            return;
+        }
+        self.save();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = mpsc::channel();
+        let total = ids.len();
+        let (c2, ctx2, cancel2) = (cancel.clone(), ctx.clone(), cancel.clone());
+        let mut ix = self.index.clone();
+        std::thread::spawn(move || {
+            let mut col = c;
+            let tx2 = tx.clone();
+            let ctx3 = ctx2.clone();
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                col::reindex(&f, &mut col, &mut ix, &ids, &cancel2, &mut |n, t, title| {
+                    let _ = tx2.send(Msg::Progress(n, t, title.to_string()));
+                    ctx3.request_repaint();
+                })
+                .map_err(|e| format!("{e:#}"))
+            }))
+            .unwrap_or_else(|_| Err("internal error".to_string()));
+            let _ = tx.send(Msg::Indexed(Box::new((col, ix, r))));
+            ctx2.request_repaint();
+        });
+        self.job = Some(Job {
+            rx,
+            cancel: c2,
+            done: 0,
+            total,
+            title: String::new(),
+        });
+    }
+
     fn pump(&mut self, tr: Tr) {
         let Some(job) = &mut self.job else { return };
         let mut finished = None;
+        let mut indexed = None;
         while let Ok(m) = job.rx.try_recv() {
             match m {
                 Msg::Progress(n, t, title) => {
@@ -361,7 +408,34 @@ impl CollectionsWindow {
                     job.title = title;
                 }
                 Msg::Done(b) => finished = Some(*b),
+                Msg::Indexed(b) => indexed = Some(*b),
             }
+        }
+        if let Some((c, ix, r)) = indexed {
+            self.job = None;
+            self.col = Some(c);
+            self.index = ix;
+            self.run_search();
+            self.message = Some(match r {
+                Ok(rep) => {
+                    let mut s = format!(
+                        "{}: {} ({} {}) · {}: {} · {}: {}",
+                        tr("col.indexed"),
+                        rep.indexed.len(),
+                        rep.pages,
+                        tr("col.pages_word"),
+                        tr("col.no_text"),
+                        rep.no_text.len(),
+                        tr("col.failed"),
+                        rep.failed.len()
+                    );
+                    if rep.cancelled {
+                        s.push_str(&format!(" · {}", tr("col.cancelled")));
+                    }
+                    (s, !rep.failed.is_empty())
+                }
+                Err(e) => (e, true),
+            });
         }
         if let Some((c, ix, r)) = finished {
             self.job = None;
@@ -408,19 +482,28 @@ impl CollectionsWindow {
 
     fn pdf_of(&self, it: &Item) -> Option<PathBuf> {
         let f = self.file.as_ref()?;
-        if it.output.is_empty() {
-            return None;
-        }
-        Some(col::from_stored(
-            f.parent().unwrap_or(Path::new(".")),
-            &it.output,
-        ))
+        it.text_pdf(f.parent().unwrap_or(Path::new(".")))
     }
 
     fn open_pdf(&mut self, tr: Tr) {
+        self.open_pdf_at(tr, None);
+    }
+
+    /// Open the selected item's PDF; with a `page` at that page when the default PDF viewer
+    /// is one known to honour it, else plainly, with the page number in the status line.
+    fn open_pdf_at(&mut self, tr: Tr, page: Option<usize>) {
         let p = self.selected_item().and_then(|i| self.pdf_of(i));
         match p {
-            Some(p) if p.is_file() => crate::alloptions::open_target(&p.to_string_lossy()),
+            Some(p) if p.is_file() => match page {
+                Some(n) if col::open_pdf_at_page(&p, n) => {
+                    self.message = Some((format!("{} {n}", tr("col.opened_at")), false));
+                }
+                Some(n) => {
+                    crate::alloptions::open_target(&p.to_string_lossy());
+                    self.message = Some((format!("{} {n}", tr("col.opened_go_to")), false));
+                }
+                None => crate::alloptions::open_target(&p.to_string_lossy()),
+            },
             _ => self.message = Some((tr("col.no_pdf").to_string(), true)),
         }
     }
@@ -543,9 +626,14 @@ impl CollectionsWindow {
         self.save();
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, tr: Tr) {
+    /// `tesseract` is the program named in the main window's settings; processing uses it
+    /// (an item's profile may still name its own).
+    pub fn ui(&mut self, ctx: &egui::Context, tr: Tr, tesseract: &str) {
         if !self.show {
             return;
+        }
+        if self.tesseract != tesseract {
+            self.tesseract = tesseract.to_string();
         }
         self.pump(tr);
         let mut open = true;
@@ -725,6 +813,47 @@ impl CollectionsWindow {
                     .map(|c| c.pending_ids(false))
                     .unwrap_or_default();
                 self.start(ctx, ids);
+            }
+            let has_text_pdf = self
+                .selected_item()
+                .and_then(|i| self.pdf_of(i))
+                .is_some_and(|p| p.is_file());
+            if ui
+                .add_enabled(
+                    has_sel && !busy && has_text_pdf,
+                    egui::Button::new(tr("col.index_sel")),
+                )
+                .on_hover_text(tr("col.index_tip"))
+                .clicked()
+            {
+                let ids = self.target_ids();
+                self.start_index(ctx, ids);
+            }
+            if ui
+                .add_enabled(
+                    !busy && self.col.is_some(),
+                    egui::Button::new(tr("col.index_all")),
+                )
+                .on_hover_text(tr("col.index_all_tip"))
+                .clicked()
+            {
+                let base = self
+                    .file
+                    .as_ref()
+                    .and_then(|f| f.parent().map(Path::to_path_buf))
+                    .unwrap_or_default();
+                let ids: Vec<String> = self
+                    .col
+                    .as_ref()
+                    .map(|c| {
+                        c.items
+                            .iter()
+                            .filter(|i| i.text_pdf(&base).is_some())
+                            .map(|i| i.id.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                self.start_index(ctx, ids);
             }
             let has_pdf = self
                 .selected_item()
@@ -1163,7 +1292,8 @@ impl CollectionsWindow {
                 self.scroll_to = Some(id);
                 self.marked.clear();
                 if open_pdf {
-                    self.open_pdf(tr);
+                    let page = self.hits[k].page;
+                    self.open_pdf_at(tr, Some(page));
                 }
             }
         }

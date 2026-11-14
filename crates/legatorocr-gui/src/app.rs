@@ -5539,7 +5539,8 @@ impl eframe::App for App {
         {
             let lang = self.lang;
             self.proof.ui(&ctx, &|k| t(lang, k));
-            self.collections.ui(&ctx, &|k| t(lang, k));
+            self.collections
+                .ui(&ctx, &|k| t(lang, k), &self.s.tesseract);
             let files: Vec<PathBuf> = {
                 let mut v: Vec<PathBuf> = Vec::new();
                 for sh in &self.sheets {

@@ -929,13 +929,7 @@ fn rescue_missed_lines(img: &image::DynamicImage, dpi: u32, o: &OcrOptions, word
                 c.text = legatorocr_core::text::normalize_ro(&c.text);
             }
         }
-        let chars: usize = line.iter().map(|c| c.text.chars().count()).sum();
-        let good: usize = line
-            .iter()
-            .map(|c| c.text.chars().filter(|ch| ch.is_alphanumeric()).count())
-            .sum();
-        let enough = line.len() >= 2 || line.iter().any(|c| c.text.chars().count() >= 4);
-        if line.is_empty() || !enough || good * 10 < chars * 6 {
+        if !rescued_line_ok(&line) {
             continue;
         }
         for c in &mut line {
@@ -957,6 +951,24 @@ fn rescue_missed_lines(img: &image::DynamicImage, dpi: u32, o: &OcrOptions, word
     for line in found {
         place_line(words, line);
     }
+}
+
+/// Is a line read again from a gap acceptable as text? Mostly letters and digits, not a lone
+/// short token, and at least one word with two letters: a bare number read from a blob of
+/// dots and digits (seen on a table of contents photo: the page number "299" came back as
+/// "2.200", on a line of its own) is not a line of text; real page numbers are the job of
+/// `rescue_page_numbers`, which accepts only clean one to four digit results.
+fn rescued_line_ok(line: &[Word]) -> bool {
+    let chars: usize = line.iter().map(|c| c.text.chars().count()).sum();
+    let good: usize = line
+        .iter()
+        .map(|c| c.text.chars().filter(|ch| ch.is_alphanumeric()).count())
+        .sum();
+    let enough = line.len() >= 2 || line.iter().any(|c| c.text.chars().count() >= 4);
+    let letters = line
+        .iter()
+        .any(|c| c.text.chars().filter(|ch| ch.is_alphabetic()).count() >= 2);
+    !line.is_empty() && enough && letters && good * 10 >= chars * 6
 }
 
 /// Put a line of words found later into the reading order: after the last word that lies above
@@ -1423,6 +1435,26 @@ mod paragraph_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rescued_line_needs_letters_not_just_a_number() {
+        let w = |t: &str| Word {
+            text: t.to_string(),
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 20,
+            conf: 80.0,
+            line: 0,
+        };
+        // the misread page number of a contents line
+        assert!(!rescued_line_ok(&[w("2.200")]));
+        assert!(!rescued_line_ok(&[w("299"), w("300")]));
+        // a heading and a "Bibliografie 5" line stay
+        assert!(rescued_line_ok(&[w("Bibliografie"), w("5")]));
+        assert!(rescued_line_ok(&[w("Introducere")]));
+        assert!(!rescued_line_ok(&[]));
+    }
+
     use super::*;
 
     fn word(t: &str, x: u32, y: u32, w: u32, line: u32) -> Word {
