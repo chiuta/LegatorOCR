@@ -1535,10 +1535,10 @@ mod tests {
         assert_eq!(from_stored(&base, "scans/a.png"), base.join("scans/a.png"));
         // a path with `..` inside is normalised, an absolute stored path is kept
         assert_eq!(to_stored(&base, &base.join("a/../b/c.pdf")), "b/c.pdf");
-        assert_eq!(
-            from_stored(&base, "/abs/x.pdf"),
-            PathBuf::from("/abs/x.pdf")
-        );
+        // (a path is absolute in the sense of the platform: on Windows "/abs/x.pdf" has no drive)
+        let abs = std::env::current_dir().unwrap().join("abs").join("x.pdf");
+        assert!(abs.is_absolute());
+        assert_eq!(from_stored(&base, &abs.to_string_lossy()), abs);
         // the folder can move: the stored text does not change
         let mut c = Collection::new("t");
         std::fs::create_dir_all(base.join("scans")).unwrap();
