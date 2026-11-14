@@ -2,7 +2,7 @@
 
 [English](README.md) · [Română](README.ro.md) · [Français](README.fr.md) · [Italiano](README.it.md) · [Español](README.es.md) · [Português](README.pt.md) · [Deutsch](README.de.md) · **Magyar**
 
-Verzió: 0.2.0-pre.59 · Utolsó frissítés: 2026-11-12
+Verzió: 0.2.0-pre.60 · Utolsó frissítés: 2026-11-12
 
 Videóoktatóanyagok Alexandru Dumbravă (ASFAN) tollából: [részletes esettanulmány, 54 perc](https://drive.proton.me/urls/TY10AYCB1G#lis9oybHW8I7) · [videóoktatóanyag 2](https://drive.proton.me/urls/VRZCCZSMTW#dxmgAsJqIMtL) (Proton Drive).
 
@@ -210,6 +210,25 @@ Ellenőrzi minden kulcsot és típust, hogy minden doboz az oldalán belül van-
 minden oldal szakaszait összeveti a `--txt` kimenet ugyanazon oldalával (a szóközök
 összevonva), és kiírja az egyezés százalékát. A formátum a LegatorOCR saját formátuma; hogy egy adott
 kutatóeszköz (például a TEZAUR) importálni tudja-e, azt nem ellenőriztük.
+
+## Gyűjtemények (`legatorocr collection`)
+
+A gyűjtemény újságokat, folyóiratokat, könyveket és hasonlókat fog össze egyetlen `.lgrcol` fájlban (JSON). Tartsa a szkennelések mappájában: a fájlbeli útvonalak hozzá képest relatívan íródnak, ha a cél egy közös mappa alatt van, így a mappa áthelyezhető vagy másolható. Minden elemnek van típusa, címe, száma vagy kötete, dátuma vagy éve, nyelvei, forrásai (képek, képmappa, PDF, mentett `.lgr` projekt), az abból készült PDF, profilja, állapota (teendő, feldolgozva, OCR kész, ellenőrizve), oldalszáma, címkéi és jegyzetei.
+
+```
+legatorocr collection new Archive/ --name "Old papers"
+legatorocr collection add Archive/old_papers.lgrcol --folder Archive/scans
+legatorocr collection list Archive/old_papers.lgrcol
+legatorocr collection run Archive/old_papers.lgrcol --out Archive/pdf
+legatorocr collection search Archive/old_papers.lgrcol "Scînteia"
+```
+
+- `add --folder`: minden PDF, `.lgr` projekt és képeket tartalmazó almappa egy elem lesz. A címet, típust, dátumot és számot a névből találja ki: a `scinteia_tineretului_1977_09_8801.pdf` újságot ad, „Scinteia Tineretului”, 1977-09, 8801. sz. Ez csak tipp (a fájlnevekben nincsenek ékezetek; a típus néhány kulcsszóra és a számozásra épül: a teljes dátum vagy az 500-as, nagyobb szám újságnak számít); javítsa az ablakban.
+- `run` a „teendő” állapotú elemeket dolgozza fel, mindegyiket a saját profiljával (különben a gyűjteményével, különben az alapbeállításokkal), ugyanazzal a kóddal, mint a parancssor és az ablak (`run_export`). A hibás elem (hiányzó forrás, ismeretlen profil, olvashatatlan oldal) az okkal megjelölve marad, a többi megy tovább; a gyűjteményfájl és az index minden elem után mentődik, így egy megszakítás vagy összeomlás nem veszít el semmi kész munkát. A PDF-ek a gyűjteményfájl mellé kerülnek, vagy a `--out` mappába. OCR-rel (alapból be; a `--no-ocr` kikapcsolja) minden oldal felismert szövege a `NÉV.lgrindex` fájlba kerül; az OCR nyelve az elem nyelveiből jön, különben a profil `ocr_langs` értékéből, különben a román. A hibás elemet csak `--retry-failed` vagy `--item ID` esetén próbálja újra.
+- A `search` ebben az indexben keres. A kis- és nagybetű, az ékezetek és a régi román helyesírás nem számít (a `Scînteia` megtalálja a `Scânteia` szót, a `sînt` a `sunt` szót). Kiírja az elemet, az oldalt és egy részletet: előbb az egymás melletti szavakat tartalmazó oldalak, aztán (megjelölve) azok, amelyeken minden szó szerepel, de külön.
+- A **Gyűjtemények…** ablak (Fájl menü vagy Ctrl+K): táblázat a típus betűjével, címmel, számmal/dátummal, oldalakkal és állapotjelvénnyel (szín és szöveg), szűréssel és rendezéssel; jobbra a részletek; Fájlok hozzáadása, Mappa hozzáadása, Kijelölt feldolgozása, Minden függő feldolgozása (állapotjelzéssel és Mégse gombbal), PDF megnyitása, Mappa megjelenítése; keresőmező a teljes gyűjteményre, kattintható találatokkal. Szövegei az ablak mind a 8 nyelvén megvannak.
+
+Tesztelve: egységtesztek (névből tippelés, relatív útvonalak, sérült fájlok, keresés ékezetekkel, hiba és pánik után folytatódó köteg, megszakítás), a valódi program tesztje, és egy futtatás valódi Tesseracttal két szintetikus oldalon, a mappa áthelyezése után is. **Korlátok:** az ablak megírva és lefordítva, de senki nem látta képernyőn és nem kattintott benne (csak a szűrőjének, rendezésének és szövegeinek van egységtesztje); csak a `collection run` által felismert szöveg kereshető (az a PDF, amelyben már van szövegréteg, nem kerül az indexbe); az egész index a memóriába töltődik (több tízezer oldalas gyűjteményt nem mértünk); a találat megnevezi az oldalt, de a PDF-megjelenítő az 1. oldalon nyílik meg; két program ugyanazt a fájlt egyszerre írva: az utolsó nyer; az ablak a PATH-beli Tesseractot használja, nem a főablakban beállított útvonalat; a régi helyesírás szabálya az `--ocr-modern-spelling` szabálya, és különböző szavakat vonhat össze (`mână` / `mină`).
 
 ## Telefonos rögzítési asszisztens
 

@@ -2,7 +2,7 @@
 
 [English](README.md) · [Română](README.ro.md) · [Français](README.fr.md) · [Italiano](README.it.md) · [Español](README.es.md) · [Português](README.pt.md) · **Deutsch** · [Magyar](README.hu.md)
 
-Version: 0.2.0-pre.59 · Letzte Aktualisierung: 2026-11-12
+Version: 0.2.0-pre.60 · Letzte Aktualisierung: 2026-11-12
 
 Video-Tutorials von Alexandru Dumbravă (ASFAN): [ausführliche Fallstudie, 54 Min.](https://drive.proton.me/urls/TY10AYCB1G#lis9oybHW8I7) · [Video-Tutorial 2](https://drive.proton.me/urls/VRZCCZSMTW#dxmgAsJqIMtL) (Proton Drive).
 
@@ -212,6 +212,25 @@ Form von `cite` und, mit `--images`, die Bild-Hashes gegen die geschriebenen Dat
 die Passagen jeder Seite mit derselben Seite der `--txt`-Ausgabe (Leerraum
 zusammengezogen) und gibt den Prozentsatz der Übereinstimmung aus. Das Format ist LegatorOCRs eigenes; ob ein bestimmtes
 Recherchewerkzeug (zum Beispiel TEZAUR) es importieren kann, wurde nicht geprüft.
+
+## Sammlungen (`legatorocr collection`)
+
+Eine Sammlung vereint Zeitungen, Zeitschriften, Bücher und Ähnliches in einer einzigen `.lgrcol`-Datei (JSON). Legen Sie sie in den Ordner mit den Scans: Pfade in der Datei werden relativ zu ihr geschrieben, wenn das Ziel unter einem gemeinsamen Ordner liegt, sodass der Ordner verschoben oder kopiert werden kann. Jeder Eintrag hat Art, Titel, Nummer oder Band, Datum oder Jahr, Sprachen, Quellen (Bilder, ein Bilderordner, ein PDF, ein gespeichertes `.lgr`-Projekt), das erzeugte PDF, ein Profil, einen Status (zu tun, verarbeitet, OCR fertig, geprüft), Seitenzahl, Schlagwörter und Notizen.
+
+```
+legatorocr collection new Archive/ --name "Old papers"
+legatorocr collection add Archive/old_papers.lgrcol --folder Archive/scans
+legatorocr collection list Archive/old_papers.lgrcol
+legatorocr collection run Archive/old_papers.lgrcol --out Archive/pdf
+legatorocr collection search Archive/old_papers.lgrcol "Scînteia"
+```
+
+- `add --folder`: Jedes PDF, `.lgr`-Projekt und jeder Bilder-Unterordner wird ein Eintrag. Titel, Art, Datum und Nummer werden aus dem Namen geschätzt: `scinteia_tineretului_1977_09_8801.pdf` ergibt eine Zeitung, „Scinteia Tineretului“, 1977-09, Nr. 8801. Das ist nur eine Vermutung (Dateinamen haben keine Diakritika; die Art beruht auf wenigen Schlüsselwörtern und der Nummerierung: ein volles Datum oder eine Nummer ab 500 gilt als Zeitung); korrigieren Sie sie im Fenster.
+- `run` verarbeitet die Einträge mit dem Status „zu tun“, jeden mit seinem Profil (sonst dem der Sammlung, sonst den Standardeinstellungen), mit demselben Code wie Kommandozeile und Fenster (`run_export`). Ein Eintrag, der scheitert (Quelle fehlt, Profil unbekannt, Seite unlesbar), wird mit dem Grund markiert, die übrigen laufen weiter; Sammlungsdatei und Index werden nach jedem Eintrag gespeichert, ein Abbruch oder Absturz verliert also nichts Fertiges. PDFs landen neben der Sammlungsdatei oder in `--out`. Mit OCR (standardmäßig an; `--no-ocr` schaltet ab) kommt der erkannte Text jeder Seite in `NAME.lgrindex`; die OCR-Sprache stammt aus den Sprachen des Eintrags, sonst aus `ocr_langs` des Profils, sonst Rumänisch. Ein gescheiterter Eintrag wird nur mit `--retry-failed` oder `--item ID` erneut versucht.
+- `search` sucht in diesem Index. Groß-/Kleinschreibung, Diakritika und die alte rumänische Schreibung spielen keine Rolle (`Scînteia` findet `Scânteia`, `sînt` findet `sunt`). Ausgegeben werden Eintrag, Seite und ein Ausschnitt: zuerst Seiten mit den Wörtern direkt nebeneinander, dann (markiert) Seiten, die alle Wörter getrennt enthalten.
+- Das Fenster **Sammlungen…** (Menü Datei oder Strg+K): eine Tabelle mit Art-Buchstabe, Titel, Nummer/Datum, Seiten und einem Statusfeld (Farbe und Text), mit Filter und Sortierung; rechts die Details; Dateien hinzufügen, Ordner hinzufügen, Auswahl verarbeiten, Alle offenen verarbeiten (mit Fortschritt und Abbrechen), PDF öffnen, Ordner zeigen; ein Suchfeld über die ganze Sammlung mit anklickbaren Treffern. Seine Texte gibt es in den 8 Sprachen des Fensters.
+
+Getestet: Unit-Tests (Namensschätzung, relative Pfade, beschädigte Dateien, Suche mit Diakritika, ein Stapel, der nach einem Fehler und nach einem Panic weiterläuft, Abbruch), ein Test des echten Programms und ein Lauf mit echtem Tesseract auf zwei synthetischen Seiten, auch nach dem Verschieben des Ordners. **Grenzen:** Das Fenster ist geschrieben und kompiliert, aber niemand hat es auf einem Bildschirm gesehen oder darin geklickt (nur Filter, Sortierung und Texte haben Unit-Tests); durchsuchbar ist nur der von `collection run` erkannte Text (ein PDF mit vorhandener Textebene wird nicht indexiert); der ganze Index wird in den Speicher gelesen (Sammlungen mit zehntausenden Seiten wurden nicht gemessen); ein Treffer nennt die Seite, der PDF-Betrachter öffnet aber auf Seite 1; zwei Programme, die dieselbe Datei gleichzeitig schreiben: das letzte gewinnt; das Fenster nutzt Tesseract aus dem PATH, nicht den im Hauptfenster gesetzten Pfad; die Regel der alten Schreibung ist die von `--ocr-modern-spelling` und kann verschiedene Wörter zusammenfallen lassen (`mână` / `mină`).
 
 ## Assistent für die Handy-Aufnahme
 

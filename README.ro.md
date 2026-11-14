@@ -2,7 +2,7 @@
 
 [English](README.md) · **Română** · [Français](README.fr.md) · [Italiano](README.it.md) · [Español](README.es.md) · [Português](README.pt.md) · [Deutsch](README.de.md) · [Magyar](README.hu.md)
 
-Versiune: 0.2.0-pre.59 · Ultima actualizare: 2026-11-12
+Versiune: 0.2.0-pre.60 · Ultima actualizare: 2026-11-12
 
 Tutoriale video de Alexandru Dumbravă (ASFAN): [studiu de caz detaliat, 54 min](https://drive.proton.me/urls/TY10AYCB1G#lis9oybHW8I7) · [tutorial video 2](https://drive.proton.me/urls/VRZCCZSMTW#dxmgAsJqIMtL) (Proton Drive).
 
@@ -213,6 +213,25 @@ Verifică fiecare cheie și tip, că fiecare casetă se află în interiorul pag
 compară pasajele fiecărei pagini cu aceeași pagină din ieșirea `--txt` (spațiile
 albe comprimate) și afișează procentul de potrivire. Formatul este propriu LegatorOCR; dacă un anumit
 instrument de cercetare (de exemplu TEZAUR) îl poate importa nu a fost verificat.
+
+## Colecții (`legatorocr collection`)
+
+O colecție adună ziare, reviste, cărți și altele într-un singur fișier `.lgrcol` (JSON). Țineți-l în folderul cu scanările: căile din fișier sunt scrise relativ la el când ținta se află sub un folder comun, deci folderul poate fi mutat sau copiat. Fiecare element are tip, titlu, număr sau volum, dată sau an, limbi, surse (imagini, un folder cu imagini, un PDF, un proiect `.lgr` salvat), PDF-ul rezultat, un profil, o stare (de făcut, procesat, OCR gata, verificat), numărul de pagini, etichete și note.
+
+```
+legatorocr collection new Archive/ --name "Old papers"
+legatorocr collection add Archive/old_papers.lgrcol --folder Archive/scans
+legatorocr collection list Archive/old_papers.lgrcol
+legatorocr collection run Archive/old_papers.lgrcol --out Archive/pdf
+legatorocr collection search Archive/old_papers.lgrcol "Scînteia"
+```
+
+- `add --folder`: fiecare PDF, proiect `.lgr` și subfolder cu imagini devine un element. Titlul, tipul, data și numărul sunt ghicite din nume: `scinteia_tineretului_1977_09_8801.pdf` dă ziar, „Scinteia Tineretului”, 1977-09, nr. 8801. E doar o presupunere (numele de fișiere nu au diacritice; tipul se sprijină pe câteva cuvinte-cheie și pe numerotare: o dată completă sau un număr de 500 sau mai mare e luat drept ziar); corectați-o în fereastră.
+- `run` procesează elementele cu starea „de făcut”, fiecare cu profilul lui (altfel cel al colecției, altfel setările implicite), prin același cod ca linia de comandă și fereastra (`run_export`). Un element care eșuează (sursă lipsă, profil necunoscut, pagină ilizibilă) e marcat cu motivul, iar celelalte merg mai departe; fișierul colecției și indexul se salvează după fiecare element, deci o anulare sau o cădere nu pierde ce era gata. PDF-urile se scriu lângă fișierul colecției sau în `--out`. Cu OCR (implicit; `--no-ocr` îl oprește) textul recunoscut al fiecărei pagini intră în `NUME.lgrindex`; limba OCR vine din limbile elementului, altfel din `ocr_langs` al profilului, altfel româna. Un element eșuat nu e reîncercat decât cu `--retry-failed` sau `--item ID`.
+- `search` caută în acest index. Majusculele, diacriticele și ortografia veche nu contează (`Scînteia` găsește `Scânteia`, `sînt` găsește `sunt`). Afișează elementul, pagina și un fragment: întâi paginile cu cuvintele alăturate, apoi (marcate) paginile care au toate cuvintele, dar depărtate.
+- Fereastra **Colecții…** (meniul Fișier sau Ctrl+K): un tabel cu litera tipului, titlu, număr/dată, pagini și o etichetă de stare (culoare și text), cu filtrare și sortare; detaliile în dreapta; Adaugă fișiere, Adaugă folder, Procesează selecția, Procesează tot ce așteaptă (cu progres și Anulare), Deschide PDF, Arată folderul; o casetă de căutare în toată colecția, cu rezultate pe care se poate apăsa. Textele ei există în cele 8 limbi ale ferestrei.
+
+Verificat: teste unitare (ghicirea numelui, căi relative, fișiere deteriorate, căutare cu diacritice, un lot care merge mai departe după o eroare și după un panic, anulare), un test al programului real și o rulare cu Tesseract real pe două pagini sintetice, inclusiv după mutarea folderului. **Limite:** fereastra a fost scrisă și compilată, dar nimeni nu a văzut-o pe ecran și nu a apăsat în ea (doar filtrul, sortarea și textele ei au teste unitare); se caută doar în textul recunoscut de `collection run` (un PDF care are deja strat de text nu e indexat); tot indexul se citește în memorie (colecții de zeci de mii de pagini nu au fost măsurate); un rezultat arată pagina, dar vizualizatorul PDF se deschide la pagina 1; două programe care scriu același fișier deodată: ultimul câștigă; fereastra folosește Tesseract din PATH, nu calea din fereastra principală; regula ortografiei vechi e cea din `--ocr-modern-spelling` și poate uni cuvinte diferite (`mână` / `mină`).
 
 ## Asistent de captură cu telefonul
 

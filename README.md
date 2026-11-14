@@ -2,7 +2,7 @@
 
 **English** · [Română](README.ro.md) · [Français](README.fr.md) · [Italiano](README.it.md) · [Español](README.es.md) · [Português](README.pt.md) · [Deutsch](README.de.md) · [Magyar](README.hu.md)
 
-Version: 0.2.0-pre.59 · Last updated: 2026-11-12
+Version: 0.2.0-pre.60 · Last updated: 2026-11-12
 
 Video tutorials by Alexandru Dumbravă (ASFAN): [detailed case study, 54 min](https://drive.proton.me/urls/TY10AYCB1G#lis9oybHW8I7) · [video tutorial 2](https://drive.proton.me/urls/VRZCCZSMTW#dxmgAsJqIMtL) (Proton Drive).
 
@@ -218,6 +218,25 @@ It checks every key and type, that each box lies inside its page, the fractions,
 compares the passages of each page with the same page of the `--txt` output (white space
 collapsed) and prints the match percentage. The format is LegatorOCR's own; whether a given
 research tool (for example TEZAUR) can import it has not been checked.
+
+## Collections (`legatorocr collection`)
+
+A collection gathers newspapers, magazines, books and the like in one `.lgrcol` file (JSON). Keep it in the folder with the scans: paths inside the file are written relative to it when the target lies under a folder they share, so the folder can be moved or copied. Each item has a kind, title, issue or volume, date or year, languages, sources (images, a folder of images, a PDF, a saved `.lgr` project), the PDF made from it, a profile, a status (to do, processed, OCR done, checked), page count, tags and notes.
+
+```
+legatorocr collection new Archive/ --name "Old papers"
+legatorocr collection add Archive/old_papers.lgrcol --folder Archive/scans
+legatorocr collection list Archive/old_papers.lgrcol
+legatorocr collection run Archive/old_papers.lgrcol --out Archive/pdf
+legatorocr collection search Archive/old_papers.lgrcol "Scînteia"
+```
+
+- `add --folder`: each PDF, `.lgr` project and subfolder of images becomes an item. Title, kind, date and issue are guessed from the name: `scinteia_tineretului_1977_09_8801.pdf` gives a newspaper, "Scinteia Tineretului", 1977-09, no. 8801. It is only a guess (file names carry no diacritics; the kind rests on a few key words and on the numbering: a full date or an issue number of 500 or more is taken for a newspaper); correct it in the window.
+- `run` processes the items whose status is "to do", each with its own profile (else the collection's, else the engine defaults), through the same code as the command line and the window (`run_export`). An item that fails (missing source, unknown profile, unreadable page) is marked with the reason and the others go on; the collection file and the index are saved after every item, so a cancel or a crash loses nothing that was done. PDFs go next to the collection file, or to `--out`. With OCR (on by default; `--no-ocr` turns it off) the recognised text of every page goes to `NAME.lgrindex`; the OCR language comes from the item's languages, else the profile's `ocr_langs`, else Romanian. An item that failed is not tried again unless `--retry-failed` or `--item ID` is given.
+- `search` looks in that index. Case, diacritics and the old Romanian spelling do not matter (`Scînteia` finds `Scânteia`, `sînt` finds `sunt`). It prints item, page and a snippet: pages with the words next to each other first, then (marked) pages that have all the words apart.
+- The **Collections…** window (File menu, or Ctrl+K): a table with kind letter, title, issue/date, pages and a status chip (colour and text), with filter and sort; the details on the right; Add files, Add folder, Process selected, Process all pending (with progress and Cancel), Open PDF, Show folder; a search box over the whole collection with clickable results. Its texts exist in the 8 languages of the window.
+
+Tested: unit tests (name guess, relative paths, damaged files, search with diacritics, a batch that goes on after a failure and after a panic, cancel), a test of the real binary, and one run with real Tesseract on two synthetic pages, also after moving the folder. **Limits:** the window was written and compiled but nobody has looked at it on a screen or clicked through it (only its filter, sort and texts are unit-tested); only text recognised by `collection run` is searchable (a PDF that already has a text layer is not indexed); the whole index is read into memory (collections of tens of thousands of pages were not measured); a search hit names the page, but the PDF viewer opens at page 1; two programs writing the same file at once: the last one wins; the window runs Tesseract from the PATH, not the path set in the main window; the old-spelling rule is the one of `--ocr-modern-spelling` and can join different words (`mână` / `mină`).
 
 ## Phone capture assistant
 

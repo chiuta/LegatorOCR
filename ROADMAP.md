@@ -292,6 +292,7 @@ No gate promises near-zero CER. Report CER with a confidence interval; zero erro
 | 7.10 | Open compression format with a reference WASM decoder | 5 | 5.2; needs standardisation effort, adoption not guaranteed |
 | 7.11 | Phone capture app (PWA / WASM): burst, remote trigger, live page verdict, same core as the desktop | 4 | 7.7, 3.8 |
 | 7.12 | PII finder and redaction (true removal of pixels and text) for GDPR hand-over | 4 | 6.1 |
+| 7.13 | Collections of newspapers, magazines and books: `.lgrcol` file, batch processing with a profile per item, full-text search over the OCR text, `legatorocr collection` and a Collections window | 3 | - |
 
 ## Source of these additions
 

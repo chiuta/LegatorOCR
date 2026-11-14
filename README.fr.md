@@ -2,7 +2,7 @@
 
 [English](README.md) · [Română](README.ro.md) · **Français** · [Italiano](README.it.md) · [Español](README.es.md) · [Português](README.pt.md) · [Deutsch](README.de.md) · [Magyar](README.hu.md)
 
-Version : 0.2.0-pre.59 · Dernière mise à jour : 2026-11-12
+Version : 0.2.0-pre.60 · Dernière mise à jour : 2026-11-12
 
 Tutoriels vidéo d’Alexandru Dumbravă (ASFAN) : [étude de cas détaillée, 54 min](https://drive.proton.me/urls/TY10AYCB1G#lis9oybHW8I7) · [tutoriel vidéo 2](https://drive.proton.me/urls/VRZCCZSMTW#dxmgAsJqIMtL) (Proton Drive).
 
@@ -214,6 +214,25 @@ forme de `cite` et, avec `--images`, les empreintes d’images par rapport aux f
 compare les passages de chaque page avec la même page de la sortie `--txt` (espaces
 réduits) et affiche le pourcentage de concordance. Le format est propre à LegatorOCR ; la capacité d’un outil de
 recherche donné (par exemple TEZAUR) à l’importer n’a pas été vérifiée.
+
+## Collections (`legatorocr collection`)
+
+Une collection réunit journaux, revues, livres et autres dans un seul fichier `.lgrcol` (JSON). Gardez-le dans le dossier des scans : les chemins du fichier sont écrits relativement à lui quand la cible se trouve sous un dossier commun, de sorte que le dossier peut être déplacé ou copié. Chaque élément a un type, un titre, un numéro ou volume, une date ou année, des langues, des sources (images, un dossier d'images, un PDF, un projet `.lgr` enregistré), le PDF obtenu, un profil, un état (à faire, traité, OCR fait, vérifié), un nombre de pages, des étiquettes et des notes.
+
+```
+legatorocr collection new Archive/ --name "Old papers"
+legatorocr collection add Archive/old_papers.lgrcol --folder Archive/scans
+legatorocr collection list Archive/old_papers.lgrcol
+legatorocr collection run Archive/old_papers.lgrcol --out Archive/pdf
+legatorocr collection search Archive/old_papers.lgrcol "Scînteia"
+```
+
+- `add --folder` : chaque PDF, projet `.lgr` et sous-dossier d'images devient un élément. Titre, type, date et numéro sont déduits du nom : `scinteia_tineretului_1977_09_8801.pdf` donne un journal, « Scinteia Tineretului », 1977-09, n° 8801. Ce n'est qu'une supposition (les noms de fichiers n'ont pas de diacritiques ; le type repose sur quelques mots-clés et sur la numérotation : une date complète ou un numéro de 500 ou plus passe pour un journal) ; corrigez-la dans la fenêtre.
+- `run` traite les éléments à l'état « à faire », chacun avec son profil (sinon celui de la collection, sinon les réglages par défaut), par le même code que la ligne de commande et la fenêtre (`run_export`). Un élément qui échoue (source absente, profil inconnu, page illisible) est marqué avec la raison et les autres continuent ; le fichier de la collection et l'index sont enregistrés après chaque élément, donc une annulation ou un plantage ne perd rien de ce qui était fait. Les PDF vont à côté du fichier de la collection, ou dans `--out`. Avec l'OCR (activé par défaut ; `--no-ocr` le coupe) le texte reconnu de chaque page va dans `NOM.lgrindex` ; la langue de l'OCR vient des langues de l'élément, sinon de `ocr_langs` du profil, sinon le roumain. Un élément en échec n'est pas retenté sauf avec `--retry-failed` ou `--item ID`.
+- `search` cherche dans cet index. Majuscules, diacritiques et ancienne orthographe roumaine sont ignorées (`Scînteia` trouve `Scânteia`, `sînt` trouve `sunt`). Elle affiche élément, page et un extrait : d'abord les pages où les mots se suivent, puis (marquées) les pages qui ont tous les mots mais séparés.
+- La fenêtre **Collections…** (menu Fichier, ou Ctrl+K) : un tableau avec la lettre du type, le titre, numéro/date, pages et une pastille d'état (couleur et texte), avec filtre et tri ; les détails à droite ; Ajouter des fichiers, Ajouter un dossier, Traiter la sélection, Traiter tout ce qui attend (avec progression et Annuler), Ouvrir le PDF, Afficher le dossier ; une zone de recherche sur toute la collection avec des résultats cliquables. Ses textes existent dans les 8 langues de la fenêtre.
+
+Testé : tests unitaires (déduction du nom, chemins relatifs, fichiers abîmés, recherche avec diacritiques, un lot qui continue après un échec et après une panique, annulation), un test du programme réel et une exécution avec le vrai Tesseract sur deux pages synthétiques, y compris après déplacement du dossier. **Limites :** la fenêtre a été écrite et compilée, mais personne ne l'a vue à l'écran ni n'a cliqué dedans (seuls son filtre, son tri et ses textes ont des tests unitaires) ; seul le texte reconnu par `collection run` est cherchable (un PDF qui a déjà une couche de texte n'est pas indexé) ; tout l'index est lu en mémoire (des collections de dizaines de milliers de pages n'ont pas été mesurées) ; un résultat nomme la page, mais le lecteur PDF s'ouvre à la page 1 ; deux programmes qui écrivent le même fichier en même temps : le dernier gagne ; la fenêtre utilise le Tesseract du PATH, pas le chemin réglé dans la fenêtre principale ; la règle de l'ancienne orthographe est celle de `--ocr-modern-spelling` et peut confondre des mots différents (`mână` / `mină`).
 
 ## Assistant de capture par téléphone
 
