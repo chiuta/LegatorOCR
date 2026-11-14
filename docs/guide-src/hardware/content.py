@@ -7,6 +7,11 @@ LANGS = ["ro", "en", "fr", "it", "es", "pt", "de", "hu"]
 T = {}
 
 T["ro"] = dict(
+    h_ex='Exemplu practic: o carte scanată, de la imagini la PDF căutabil',
+    ex_p='Test real cu un extras de 29 de pagini dintr-un manual tipărit în 1995, primit ca anexă de la autor (scanat alb-negru, aproximativ 3340 × 4900 px, 419 ppi, pe două coloane). Pagini din carte nu sunt incluse aici, din motive de drept de autor. Comanda a fost: profil book-bw, limba română, OCR pornit, ieșire PDF.',
+    ex_head=['Măsurat', 'Rezultat'],
+    ex_rows=[['Pagini prelucrate', '29 din 29'], ['Dimensiunea fișierului', '4,3 MB la intrare, 2,1 MB la ieșire'], ['Rezoluție după prelucrare', 'aproximativ 404 dpi'], ['Înclinare corectată', 'între −0,7° și +0,1°'], ['Cuvinte recunoscute', '9006'], ['Ordinea textului pe două coloane', 'corectă: se citește coloană cu coloană']],
+    ex_note='Greșeli rămase: literele mici sunt uneori confundate („în” citit „îo”) și s/ș, t/ț se amestecă la unele cuvinte; filigranul și antetul din scan rămân în imagine. Pentru un text de încredere, recitiți paginile importante. Timpul depinde de calculator (pe o versiune de test, neoptimizată, cele 29 de pagini au cerut aproximativ 18 minute).',
     title="Masa de digitizare cu telefonul (A.I.D.M.I.A.)",
     sub="Tutorial hardware în imagini pentru LegatorOCR",
     by="După lucrările lui Ion Alexandru Dumbravă („Abordare inovativă în digitizare prin mijloace inteligente accesibile”, 2024). Ilustrațiile cu masa de lucru îi aparțin.",
@@ -104,6 +109,11 @@ T["ro"] = dict(
 )
 
 T["en"] = dict(
+    h_ex='Worked example: a scanned book, from images to a searchable PDF',
+    ex_p='A real test with a 29-page excerpt of a manual printed in 1995, received as an annex from the author (black-and-white scan, about 3340 × 4900 px, 419 ppi, two columns). Pages of the book are not included here, for copyright reasons. Settings: the book-bw profile, Romanian language, OCR on, PDF output.',
+    ex_head=['Measured', 'Result'],
+    ex_rows=[['Pages processed', '29 of 29'], ['File size', '4.3 MB in, 2.1 MB out'], ['Resolution after processing', 'about 404 dpi'], ['Skew corrected', 'between −0.7° and +0.1°'], ['Words recognised', '9006'], ['Text order on two columns', 'correct: read column by column']],
+    ex_note='Mistakes that remain: small letters are sometimes confused (“în” read as “îo”) and s/ș, t/ț get mixed in some words; the watermark and header in the scan stay in the image. For text you can rely on, proofread the important pages. Time depends on the computer (on an unoptimised test build the 29 pages took about 18 minutes).',
     title="The phone digitisation table (A.I.D.M.I.A.)",
     sub="Illustrated hardware tutorial for LegatorOCR",
     by="After the works of Ion Alexandru Dumbravă (\"An innovative approach to digitisation by accessible smart means\", 2024). The illustrations of the work table are his.",
@@ -201,6 +211,11 @@ T["en"] = dict(
 )
 
 T["fr"] = dict(
+    h_ex='Exemple pratique : un livre numérisé, des images au PDF consultable',
+    ex_p="Test réel sur un extrait de 29 pages d'un manuel imprimé en 1995, reçu en annexe de l'auteur (numérisation noir et blanc, environ 3340 × 4900 px, 419 ppi, deux colonnes). Les pages du livre ne sont pas reproduites ici, pour des raisons de droit d'auteur. Réglages : profil book-bw, langue roumaine, OCR activé, sortie PDF.",
+    ex_head=['Mesuré', 'Résultat'],
+    ex_rows=[['Pages traitées', '29 sur 29'], ['Taille du fichier', '4,3 Mo en entrée, 2,1 Mo en sortie'], ['Résolution après traitement', 'environ 404 dpi'], ['Inclinaison corrigée', 'entre −0,7° et +0,1°'], ['Mots reconnus', '9006'], ['Ordre du texte sur deux colonnes', 'correct : lecture colonne par colonne']],
+    ex_note="Erreurs restantes : les petites lettres sont parfois confondues (« în » lu « îo ») et s/ș, t/ț se mélangent dans certains mots ; le filigrane et l'en-tête du scan restent dans l'image. Pour un texte fiable, relisez les pages importantes. La durée dépend de l'ordinateur (avec une version de test non optimisée, les 29 pages ont pris environ 18 minutes).",
     title="La table de numérisation au téléphone (A.I.D.M.I.A.)",
     sub="Tutoriel matériel illustré pour LegatorOCR",
     by="D'après les travaux de Ion Alexandru Dumbravă (« Approche innovante de la numérisation par des moyens intelligents accessibles », 2024). Les illustrations de la table de travail sont de lui.",
@@ -298,6 +313,11 @@ T["fr"] = dict(
 )
 
 T["it"] = dict(
+    h_ex='Esempio pratico: un libro scansionato, dalle immagini al PDF ricercabile',
+    ex_p="Prova reale con un estratto di 29 pagine di un manuale stampato nel 1995, ricevuto come allegato dall'autore (scansione in bianco e nero, circa 3340 × 4900 px, 419 ppi, due colonne). Le pagine del libro non sono incluse qui, per ragioni di diritto d'autore. Impostazioni: profilo book-bw, lingua rumena, OCR attivo, uscita PDF.",
+    ex_head=['Misurato', 'Risultato'],
+    ex_rows=[['Pagine elaborate', '29 su 29'], ['Dimensione del file', '4,3 MB in ingresso, 2,1 MB in uscita'], ["Risoluzione dopo l'elaborazione", 'circa 404 dpi'], ['Inclinazione corretta', 'tra −0,7° e +0,1°'], ['Parole riconosciute', '9006'], ['Ordine del testo su due colonne', 'corretto: lettura colonna per colonna']],
+    ex_note="Errori rimasti: le lettere piccole a volte si confondono («în» letto «îo») e s/ș, t/ț si mescolano in alcune parole; la filigrana e l'intestazione della scansione restano nell'immagine. Per un testo affidabile, rileggete le pagine importanti. Il tempo dipende dal computer (con una versione di prova non ottimizzata le 29 pagine hanno richiesto circa 18 minuti).",
     title="Il tavolo di digitalizzazione con il telefono (A.I.D.M.I.A.)",
     sub="Tutorial hardware illustrato per LegatorOCR",
     by="Dai lavori di Ion Alexandru Dumbravă (« Approccio innovativo alla digitalizzazione con mezzi intelligenti accessibili », 2024). Le illustrazioni del tavolo di lavoro sono sue.",
@@ -395,6 +415,11 @@ T["it"] = dict(
 )
 
 T["es"] = dict(
+    h_ex='Ejemplo práctico: un libro escaneado, de las imágenes al PDF con búsqueda',
+    ex_p='Prueba real con un extracto de 29 páginas de un manual impreso en 1995, recibido como anexo del autor (escaneo en blanco y negro, unos 3340 × 4900 px, 419 ppi, dos columnas). Las páginas del libro no se incluyen aquí, por razones de derechos de autor. Ajustes: perfil book-bw, idioma rumano, OCR activado, salida PDF.',
+    ex_head=['Medido', 'Resultado'],
+    ex_rows=[['Páginas procesadas', '29 de 29'], ['Tamaño del archivo', '4,3 MB de entrada, 2,1 MB de salida'], ['Resolución tras el procesado', 'unos 404 dpi'], ['Inclinación corregida', 'entre −0,7° y +0,1°'], ['Palabras reconocidas', '9006'], ['Orden del texto en dos columnas', 'correcto: se lee columna por columna']],
+    ex_note='Errores que quedan: las letras pequeñas a veces se confunden («în» leído «îo») y s/ș, t/ț se mezclan en algunas palabras; la marca de agua y el encabezado del escaneo siguen en la imagen. Para un texto fiable, revise las páginas importantes. El tiempo depende del ordenador (con una versión de prueba sin optimizar, las 29 páginas tardaron unos 18 minutos).',
     title="La mesa de digitalización con el teléfono (A.I.D.M.I.A.)",
     sub="Tutorial de hardware ilustrado para LegatorOCR",
     by="Según los trabajos de Ion Alexandru Dumbravă («Enfoque innovador de digitalización por medios inteligentes accesibles», 2024). Las ilustraciones de la mesa de trabajo son suyas.",
@@ -492,6 +517,11 @@ T["es"] = dict(
 )
 
 T["pt"] = dict(
+    h_ex='Exemplo prático: um livro digitalizado, das imagens ao PDF pesquisável',
+    ex_p='Teste real com um excerto de 29 páginas de um manual impresso em 1995, recebido em anexo do autor (digitalização a preto e branco, cerca de 3340 × 4900 px, 419 ppi, duas colunas). As páginas do livro não são incluídas aqui, por razões de direitos de autor. Definições: perfil book-bw, língua romena, OCR ligado, saída PDF.',
+    ex_head=['Medido', 'Resultado'],
+    ex_rows=[['Páginas processadas', '29 de 29'], ['Tamanho do ficheiro', '4,3 MB de entrada, 2,1 MB de saída'], ['Resolução após o processamento', 'cerca de 404 dpi'], ['Inclinação corrigida', 'entre −0,7° e +0,1°'], ['Palavras reconhecidas', '9006'], ['Ordem do texto em duas colunas', 'correta: lê-se coluna a coluna']],
+    ex_note='Erros que ficam: as letras pequenas por vezes confundem-se («în» lido «îo») e s/ș, t/ț misturam-se em algumas palavras; a marca de água e o cabeçalho da digitalização ficam na imagem. Para um texto fiável, reveja as páginas importantes. O tempo depende do computador (numa versão de teste não otimizada, as 29 páginas demoraram cerca de 18 minutos).',
     title="A mesa de digitalização com o telemóvel (A.I.D.M.I.A.)",
     sub="Tutorial de hardware ilustrado para o LegatorOCR",
     by="Segundo os trabalhos de Ion Alexandru Dumbravă («Abordagem inovadora na digitalização por meios inteligentes acessíveis», 2024). As ilustrações da mesa de trabalho são dele.",
@@ -589,6 +619,11 @@ T["pt"] = dict(
 )
 
 T["de"] = dict(
+    h_ex='Praxisbeispiel: ein gescanntes Buch, von den Bildern zum durchsuchbaren PDF',
+    ex_p='Echter Test mit einem Auszug von 29 Seiten aus einem 1995 gedruckten Handbuch, vom Autor als Anlage übergeben (Schwarzweiß-Scan, etwa 3340 × 4900 px, 419 ppi, zwei Spalten). Seiten des Buches sind hier aus urheberrechtlichen Gründen nicht abgebildet. Einstellungen: Profil book-bw, Sprache Rumänisch, OCR an, PDF-Ausgabe.',
+    ex_head=['Gemessen', 'Ergebnis'],
+    ex_rows=[['Verarbeitete Seiten', '29 von 29'], ['Dateigröße', '4,3 MB Eingang, 2,1 MB Ausgang'], ['Auflösung nach der Verarbeitung', 'etwa 404 dpi'], ['Korrigierte Schräglage', 'zwischen −0,7° und +0,1°'], ['Erkannte Wörter', '9006'], ['Textreihenfolge bei zwei Spalten', 'richtig: Spalte für Spalte gelesen']],
+    ex_note='Verbleibende Fehler: kleine Buchstaben werden manchmal verwechselt („în“ als „îo“ gelesen), und s/ș, t/ț vermischen sich in einigen Wörtern; Wasserzeichen und Kopfzeile des Scans bleiben im Bild. Für einen verlässlichen Text die wichtigen Seiten korrekturlesen. Die Dauer hängt vom Rechner ab (mit einer nicht optimierten Testversion brauchten die 29 Seiten etwa 18 Minuten).',
     title="Der Digitalisierungstisch mit dem Smartphone (A.I.D.M.I.A.)",
     sub="Bebildertes Hardware-Tutorial für LegatorOCR",
     by="Nach den Arbeiten von Ion Alexandru Dumbravă („Innovativer Ansatz der Digitalisierung mit zugänglichen intelligenten Mitteln“, 2024). Die Abbildungen des Arbeitstisches stammen von ihm.",
@@ -686,6 +721,11 @@ T["de"] = dict(
 )
 
 T["hu"] = dict(
+    h_ex='Gyakorlati példa: egy beolvasott könyv, a képektől a kereshető PDF-ig',
+    ex_p='Valódi teszt egy 1995-ben nyomtatott kézikönyv 29 oldalas kivonatával, amelyet a szerzőtől kaptunk mellékletként (fekete-fehér beolvasás, kb. 3340 × 4900 px, 419 ppi, két hasáb). A könyv oldalait szerzői jogi okokból nem közöljük. Beállítások: book-bw profil, román nyelv, OCR bekapcsolva, PDF kimenet.',
+    ex_head=['Mért adat', 'Eredmény'],
+    ex_rows=[['Feldolgozott oldalak', '29 a 29-ből'], ['Fájlméret', '4,3 MB bemenet, 2,1 MB kimenet'], ['Felbontás feldolgozás után', 'kb. 404 dpi'], ['Kijavított dőlés', '−0,7° és +0,1° között'], ['Felismert szavak', '9006'], ['Szövegsorrend két hasábnál', 'helyes: hasábonként olvasva']],
+    ex_note='Megmaradó hibák: a kis betűket néha összetéveszti („în” helyett „îo”), és egyes szavaknál az s/ș, t/ț keveredik; a beolvasás vízjele és fejléce a képen marad. Megbízható szöveghez olvassa át a fontos oldalakat. Az idő a géptől függ (egy nem optimalizált tesztváltozattal a 29 oldal kb. 18 percet vett igénybe).',
     title="A telefonos digitalizálóasztal (A.I.D.M.I.A.)",
     sub="Képes hardver-útmutató a LegatorOCR-hez",
     by="Ion Alexandru Dumbravă munkái alapján („Innovatív megközelítés a digitalizálásban elérhető intelligens eszközökkel”, 2024). A munkaasztal ábrái az övéi.",
