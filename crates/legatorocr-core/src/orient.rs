@@ -130,6 +130,76 @@ pub fn needs_quarter_turn(ink: &BitImage, dpi: u32) -> bool {
     ec > MIN_RATIO * er && ec > MIN_BAND_ENERGY
 }
 
+/// Ink above and below the dense x-height core of every text line, summed over the page:
+/// `(above, below, lines)`. In Latin script ascenders and capitals (b d f h k l t, A..Z, digits)
+/// are far more common than descenders (g j p q y), so an upright page has more ink above the
+/// core than below it; an upside-down page has the opposite.
+pub fn ascender_balance(ink: &BitImage, dpi: u32) -> (f64, f64, usize) {
+    let cleaned = without_long_runs(ink, (dpi as usize * 3 / 4).max(40));
+    let (letters, n_letters) = letters_only(&cleaned, dpi);
+    if n_letters < MIN_LETTERS {
+        return (0.0, 0.0, 0);
+    }
+    let (w, h) = (letters.w as usize, letters.h as usize);
+    let mut rows = vec![0f64; h];
+    for y in 0..h {
+        rows[y] = letters.data[y * w..(y + 1) * w]
+            .iter()
+            .filter(|v| **v != 0)
+            .count() as f64;
+    }
+    // line bands: the page profile, lightly smoothed, split at its low points
+    let sm = box_smooth(&rows, (dpi / 100).max(1) as usize);
+    let peak = sm.iter().cloned().fold(0.0, f64::max);
+    if peak <= 0.0 {
+        return (0.0, 0.0, 0);
+    }
+    let gap = peak * 0.04;
+    let (mut above, mut below, mut lines) = (0.0, 0.0, 0usize);
+    let min_h = (dpi as f64 / 25.0).max(4.0) as usize; // 1 mm
+    let mut y = 0;
+    while y < h {
+        if sm[y] <= gap {
+            y += 1;
+            continue;
+        }
+        let top = y;
+        while y < h && sm[y] > gap {
+            y += 1;
+        }
+        let bot = y; // exclusive
+        if bot - top < min_h || bot - top > (dpi as usize * 2 / 5) {
+            continue; // a speck, or several lines run together / a picture
+        }
+        let bmax = rows[top..bot].iter().cloned().fold(0.0, f64::max);
+        if bmax <= 0.0 {
+            continue;
+        }
+        // the dense core: rows holding at least 55 % of the line's densest row
+        let core: Vec<usize> = (top..bot).filter(|&r| rows[r] >= 0.55 * bmax).collect();
+        let (Some(&c0), Some(&c1)) = (core.first(), core.last()) else {
+            continue;
+        };
+        let a: f64 = rows[top..c0].iter().sum();
+        let b: f64 = rows[c1 + 1..bot].iter().sum();
+        above += a;
+        below += b;
+        lines += 1;
+    }
+    (above, below, lines)
+}
+
+/// `true` when the text is upside down (a half turn is needed). Deliberately cautious: it needs
+/// plenty of lines and a clear surplus of ink below the x-height cores; anything else is left
+/// alone, because turning an upright page by mistake is worse than missing a flipped one.
+pub fn is_upside_down(ink: &BitImage, dpi: u32) -> bool {
+    let (above, below, lines) = ascender_balance(ink, dpi);
+    lines >= UPSIDE_MIN_LINES && above + below > 0.0 && below > UPSIDE_RATIO * above
+}
+
+const UPSIDE_MIN_LINES: usize = 12;
+const UPSIDE_RATIO: f64 = 1.3;
+
 /// Fewest letter-sized pieces a page needs before its direction is judged at all.
 const MIN_LETTERS: usize = 100;
 
@@ -233,5 +303,63 @@ mod tests {
         let p = page(true, 0.0);
         let c = without_long_runs(&p, 112);
         assert_eq!(c.count_ink(), page(false, 0.0).count_ink());
+    }
+
+    /// Latin-like lines: a core band, ascender stubs above on 40 % of the letters and descender
+    /// stubs below on 12 % of them.
+    fn latin_page(lines: u32) -> BitImage {
+        let (w, h) = (900u32, 1200u32);
+        let mut b = BitImage::new(w, h);
+        let mut seed: u32 = 7;
+        let mut rnd = move |m: u32| {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            (seed >> 16) % m
+        };
+        for l in 0..lines {
+            let y = 80 + l * 40;
+            let mut x = 60;
+            while x + 14 < w - 60 {
+                for yy in y..y + 12 {
+                    for xx in x..x + 8 {
+                        b.data[(yy * w + xx) as usize] = 1;
+                    }
+                }
+                let r = rnd(100);
+                if r < 40 {
+                    for yy in y - 8..y {
+                        b.data[(yy * w + x + 3) as usize] = 1;
+                        b.data[(yy * w + x + 4) as usize] = 1;
+                    }
+                } else if r < 52 {
+                    for yy in y + 12..y + 20 {
+                        b.data[(yy * w + x + 3) as usize] = 1;
+                        b.data[(yy * w + x + 4) as usize] = 1;
+                    }
+                }
+                x += 12;
+            }
+        }
+        b
+    }
+
+    fn turned(b: &BitImage) -> BitImage {
+        let mut o = BitImage::new(b.w, b.h);
+        let n = b.data.len();
+        for i in 0..n {
+            o.data[n - 1 - i] = b.data[i];
+        }
+        o
+    }
+
+    #[test]
+    fn upside_down_text_is_found_and_upright_text_is_not() {
+        let up = latin_page(24);
+        assert!(!is_upside_down(&up, 150));
+        assert!(is_upside_down(&turned(&up), 150));
+    }
+
+    #[test]
+    fn a_few_lines_are_not_enough_to_turn_a_page() {
+        assert!(!is_upside_down(&turned(&latin_page(5)), 150));
     }
 }
