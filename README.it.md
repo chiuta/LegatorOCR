@@ -2,9 +2,11 @@
 
 [English](README.md) · [Română](README.ro.md) · [Français](README.fr.md) · **Italiano** · [Español](README.es.md) · [Português](README.pt.md) · [Deutsch](README.de.md) · [Magyar](README.hu.md)
 
-Versione: 0.2.0-pre.54 · Ultimo aggiornamento: 2026-11-12
+Versione: 0.2.0-pre.55 · Ultimo aggiornamento: 2026-11-12
 
 Video tutorial di Alexandru Dumbravă (ASFAN): [caso di studio dettagliato, 54 min](https://drive.proton.me/urls/TY10AYCB1G#lis9oybHW8I7) · [video tutorial 2](https://drive.proton.me/urls/VRZCCZSMTW#dxmgAsJqIMtL) (Proton Drive).
+
+Tutorial hardware in immagini e clip (tavolo di digitalizzazione con il telefono, secondo A.I.D.M.I.A. di Alexandru Dumbravă): [libro PDF](docs/Tutorial-hardware-LegatorOCR.it.pdf) · clip in [`docs/video/hardware`](docs/video/hardware) (sottotitoli in 8 lingue).
 
 Sito di presentazione: <https://legatorocr.chiuta.ro> (sorgenti in `docs/`).
 
