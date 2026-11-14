@@ -243,6 +243,7 @@ pub struct App {
     thumb_rx: mpsc::Receiver<(u64, u8, Option<egui::ColorImage>)>,
     thumbs_in_flight: usize,
     show_thumbs: bool,
+    thumb_size: ThumbSize,
     /// Where the divider of the slider view is (0..1 of the frame width).
     slider_frac: f32,
     next_id: u64,
@@ -362,6 +363,7 @@ impl App {
             thumb_rx,
             thumbs_in_flight: 0,
             show_thumbs: true,
+            thumb_size: ThumbSize::Medium,
             slider_frac: 0.5,
             next_id: 1,
             pv_tx,
@@ -2097,7 +2099,19 @@ impl App {
             return;
         }
         let lbl = self.tr("list.thumbs");
-        ui.checkbox(&mut self.show_thumbs, lbl);
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut self.show_thumbs, lbl);
+            if self.show_thumbs {
+                for z in [ThumbSize::Small, ThumbSize::Medium, ThumbSize::Large] {
+                    ui.selectable_value(&mut self.thumb_size, z, z.letter())
+                        .on_hover_text(format!(
+                            "{} × {} px",
+                            z.width() as u32,
+                            (z.width() * 0.75) as u32
+                        ));
+                }
+            }
+        });
         let mut want_thumb: Vec<((u64, u8), PathBuf)> = Vec::new();
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -2131,19 +2145,47 @@ impl App {
                     };
                     let label = format!("{:>3}  {}{}", i + 1, s.name, edited);
                     let tkey = (self.sheets[i].id, self.sheets[i].adj.rotate_quarters % 4);
-                    ui.horizontal(|ui| {
-                        let (rect, _) =
-                            ui.allocate_exact_size(Vec2::splat(10.0), egui::Sense::hover());
-                        ui.painter().circle_filled(rect.center(), 4.0, color);
-                        if self.show_thumbs {
-                            let (r, _) = ui.allocate_exact_size(
-                                Vec2::new(THUMB_W, THUMB_H),
-                                egui::Sense::hover(),
+                    if self.show_thumbs {
+                        // a card: the picture, the name under it, one blue frame round both
+                        let avail = ui.available_width();
+                        let tw = self.thumb_size.width().min(avail - 12.0).max(60.0);
+                        let th = tw * 0.75;
+                        let text_h = ui.text_style_height(&egui::TextStyle::Body) + 6.0;
+                        let (card, resp) = ui.allocate_exact_size(
+                            Vec2::new(avail, th + text_h + 12.0),
+                            egui::Sense::click(),
+                        );
+                        let selected = self.selected == Some(i);
+                        if ui.is_rect_visible(card) {
+                            let vis = ui.visuals();
+                            let blue = Color32::from_rgb(60, 140, 235);
+                            if selected {
+                                ui.painter().rect_filled(
+                                    card.shrink(1.0),
+                                    4.0,
+                                    blue.gamma_multiply(0.15),
+                                );
+                                ui.painter().rect_stroke(
+                                    card.shrink(1.0),
+                                    4.0,
+                                    egui::Stroke::new(2.0, blue),
+                                    egui::StrokeKind::Inside,
+                                );
+                            } else if resp.hovered() {
+                                ui.painter().rect_filled(
+                                    card.shrink(1.0),
+                                    4.0,
+                                    vis.widgets.hovered.weak_bg_fill,
+                                );
+                            }
+                            let r = egui::Rect::from_min_size(
+                                egui::pos2(card.center().x - tw / 2.0, card.top() + 6.0),
+                                Vec2::new(tw, th),
                             );
                             match self.thumbs.get(&tkey) {
                                 Some(Thumb::Ready(t)) => {
                                     let sz = t.size_vec2();
-                                    let k = (THUMB_W / sz.x).min(THUMB_H / sz.y);
+                                    let k = (tw / sz.x).min(th / sz.y);
                                     let fit = egui::Rect::from_center_size(r.center(), sz * k);
                                     ui.painter().image(
                                         t.id(),
@@ -2161,17 +2203,62 @@ impl App {
                                         egui::StrokeKind::Outside,
                                     );
                                 }
-                                Some(_) => {}
+                                Some(_) => {
+                                    ui.painter().rect_filled(r, 2.0, Color32::from_gray(40));
+                                }
                                 None => {
                                     ui.painter().rect_filled(r, 2.0, Color32::from_gray(40));
-                                    if ui.is_rect_visible(r) && self.thumbs_in_flight < 2 {
+                                    if self.thumbs_in_flight < 2 {
                                         want_thumb.push((tkey, self.sheets[i].path.clone()));
                                         self.thumbs.insert(tkey, Thumb::Loading);
                                         self.thumbs_in_flight += 1;
                                     }
                                 }
                             }
+                            // state dot in the corner of the picture
+                            ui.painter().circle_filled(
+                                r.left_top() + Vec2::splat(9.0),
+                                6.0,
+                                Color32::BLACK,
+                            );
+                            ui.painter()
+                                .circle_filled(r.left_top() + Vec2::splat(9.0), 4.5, color);
+                            let mut job = egui::text::LayoutJob::simple(
+                                format!("{}  {}{}", i + 1, s_name(&self.sheets[i]), edited),
+                                egui::TextStyle::Body.resolve(ui.style()),
+                                if selected {
+                                    vis.strong_text_color()
+                                } else {
+                                    vis.text_color()
+                                },
+                                tw,
+                            );
+                            job.wrap.max_rows = 1;
+                            job.wrap.break_anywhere = true;
+                            let g = ui.painter().layout_job(job);
+                            ui.painter().galley(
+                                egui::pos2(r.left(), r.bottom() + 4.0),
+                                g,
+                                Color32::WHITE,
+                            );
                         }
+                        let mut resp = resp;
+                        if let Some(w) = warn {
+                            resp = resp.on_hover_text(self.tr(w));
+                        }
+                        if self.scroll_to_selected && selected {
+                            resp.scroll_to_me(None);
+                        }
+                        if resp.clicked() {
+                            self.selected = Some(i);
+                            self.sheets[i].failed = None;
+                        }
+                        continue;
+                    }
+                    ui.horizontal(|ui| {
+                        let (rect, _) =
+                            ui.allocate_exact_size(Vec2::splat(10.0), egui::Sense::hover());
+                        ui.painter().circle_filled(rect.center(), 4.0, color);
                         let mut resp = ui.selectable_label(self.selected == Some(i), label);
                         if let Some(w) = warn {
                             resp = resp.on_hover_text(self.tr(w));
@@ -5300,13 +5387,39 @@ impl ZoneSnap {
 }
 
 /// Distance from `p` to the segment `a`–`b`.
-const THUMB_W: f32 = 72.0;
-const THUMB_H: f32 = 54.0;
+/// Size of the page pictures in the list: small, medium (240 × 180) or large (320 × 240).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ThumbSize {
+    Small,
+    Medium,
+    Large,
+}
+
+impl ThumbSize {
+    fn width(self) -> f32 {
+        match self {
+            Self::Small => 120.0,
+            Self::Medium => 240.0,
+            Self::Large => 320.0,
+        }
+    }
+    fn letter(self) -> &'static str {
+        match self {
+            Self::Small => "S",
+            Self::Medium => "M",
+            Self::Large => "L",
+        }
+    }
+}
+
+fn s_name(s: &Sheet) -> &str {
+    &s.name
+}
 
 /// A small picture of the page for the list (decoded off the interface thread).
 fn make_thumb(path: &Path, quarters: u8) -> Option<egui::ColorImage> {
     let img = legatorocr_engine::load_image(path).ok()?;
-    let mut small = img.thumbnail(216, 162).to_rgb8();
+    let mut small = img.thumbnail(320, 240).to_rgb8();
     for _ in 0..quarters % 4 {
         small = image::imageops::rotate90(&small);
     }
@@ -5364,7 +5477,7 @@ impl eframe::App for App {
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
         egui::Panel::left("pages")
-            .default_size(230.0)
+            .default_size(272.0)
             .min_size(160.0)
             .show(ui, |ui| self.page_list(ui));
         egui::Panel::right("settings")
