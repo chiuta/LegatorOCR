@@ -5,7 +5,7 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use legatorocr_engine::collection::{
-    self as col, Collection, Index, Item, Kind, RunConfig, Status,
+    self as col, Collection, Index, Item, ItemEdit, Kind, RunConfig, Status,
 };
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -98,6 +98,53 @@ enum Cmd {
         #[arg(long)]
         tesseract: Option<PathBuf>,
     },
+    /// Change the details of one item: title, issue, date, kind, profile, status, tags, notes.
+    /// Only the options given are changed; nothing is changed if one value is not valid.
+    Set {
+        file: PathBuf,
+        /// Item id (from `list`).
+        item: String,
+        #[arg(long)]
+        title: Option<String>,
+        /// Issue, number or volume as written (`8801`, `vol. 3`); empty clears it.
+        #[arg(long)]
+        issue: Option<String>,
+        /// YYYY, YYYY-MM or YYYY-MM-DD; empty clears it.
+        #[arg(long)]
+        date: Option<String>,
+        /// newspaper, magazine, book or other.
+        #[arg(long)]
+        kind: Option<String>,
+        /// Profile to process with (see `legatorocr --list-profiles`); empty = the collection's.
+        #[arg(long)]
+        profile: Option<String>,
+        /// todo, processed, ocr_done or checked. `todo` makes the next `run` process it again.
+        #[arg(long)]
+        status: Option<String>,
+        /// Comma-separated; replaces the tags.
+        #[arg(long)]
+        tags: Option<String>,
+        #[arg(long)]
+        notes: Option<String>,
+    },
+    /// Take items out of the collection and out of the search index. The PDFs and the source
+    /// files are not touched.
+    Remove {
+        file: PathBuf,
+        #[arg(required = true)]
+        items: Vec<String>,
+    },
+    /// Read the text layer of the items' PDFs into the search index without processing
+    /// anything again: for items whose source is a PDF that already has text, and for items
+    /// processed earlier. Default: every item that has a PDF to read. A scan without text is
+    /// reported and not indexed (process it with OCR instead).
+    #[command(alias = "index")]
+    Reindex {
+        file: PathBuf,
+        /// Only these items (ids from `list`; repeat the option).
+        #[arg(long = "item", value_name = "ID")]
+        items: Vec<String>,
+    },
     /// Search the recognised text of all processed items: item, page and a short snippet.
     /// Case, diacritics and the old Romanian spelling do not matter (Scînteia finds Scânteia).
     Search {
@@ -146,6 +193,32 @@ pub fn main() -> Result<()> {
             profile,
             tesseract,
         } => run(&file, items, retry_failed, out, no_ocr, profile, tesseract),
+        Cmd::Set {
+            file,
+            item,
+            title,
+            issue,
+            date,
+            kind,
+            profile,
+            status,
+            tags,
+            notes,
+        } => {
+            let e = ItemEdit {
+                title,
+                issue,
+                date,
+                kind,
+                profile,
+                status,
+                tags,
+                notes,
+            };
+            set(&file, &item, &e)
+        }
+        Cmd::Remove { file, items } => remove(&file, &items),
+        Cmd::Reindex { file, items } => reindex(&file, items),
         Cmd::Search { file, query, max } => search(&file, &query, max),
     }
 }
@@ -369,11 +442,112 @@ fn run(
     Ok(())
 }
 
+fn set(file: &Path, id: &str, e: &ItemEdit) -> Result<()> {
+    if e.is_empty() {
+        bail!("nothing to change: give at least one of --title --issue --date --kind --profile --status --tags --notes");
+    }
+    if let Some(p) = e
+        .profile
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    {
+        check_profile(p)?;
+    }
+    let mut c = Collection::load(file)?;
+    let it = c.item_mut(id).with_context(|| {
+        format!("no item '{id}' in the collection (see `legatorocr collection list`)")
+    })?;
+    it.apply(e)?;
+    let line = row(it);
+    c.save(file)?;
+    println!("{line}");
+    Ok(())
+}
+
+fn remove(file: &Path, ids: &[String]) -> Result<()> {
+    let mut c = Collection::load(file)?;
+    if let Some(bad) = ids.iter().find(|i| c.item(i).is_none()) {
+        bail!("no item '{bad}' in the collection (see `legatorocr collection list`)");
+    }
+    let idx = col::index_path(file);
+    let mut ix = Index::load(&idx)?;
+    let mut in_index = false;
+    for id in ids {
+        c.remove(id);
+        in_index |= ix.has(id);
+        ix.remove(id);
+    }
+    c.save(file)?;
+    if in_index {
+        ix.save(&idx)?;
+    }
+    println!(
+        "{} item(s) removed (PDFs and sources left as they were)",
+        ids.len()
+    );
+    Ok(())
+}
+
+fn reindex(file: &Path, items: Vec<String>) -> Result<()> {
+    let mut c = Collection::load(file)?;
+    let mut ix = Index::load(&col::index_path(file))?;
+    let ids: Vec<String> = if items.is_empty() {
+        let base = file.parent().unwrap_or(Path::new("."));
+        c.items
+            .iter()
+            .filter(|i| i.text_pdf(base).is_some())
+            .map(|i| i.id.clone())
+            .collect()
+    } else {
+        if let Some(bad) = items.iter().find(|i| c.item(i).is_none()) {
+            bail!("no item '{bad}' in the collection (see `legatorocr collection list`)");
+        }
+        items
+    };
+    if ids.is_empty() {
+        println!("nothing to do: no item has a PDF to read");
+        return Ok(());
+    }
+    let cancel = AtomicBool::new(false);
+    let rep = col::reindex(
+        file,
+        &mut c,
+        &mut ix,
+        &ids,
+        &cancel,
+        &mut |n, total, title| {
+            if n < total {
+                eprintln!("[{}/{}] {}", n + 1, total, title);
+            }
+        },
+    )?;
+    for id in &rep.no_text {
+        let t = c.item(id).map_or("", |i| i.title.as_str());
+        eprintln!("no text layer {id} {t}: a scan; process it with OCR (`run --item {id}`)");
+    }
+    for (id, msg) in &rep.failed {
+        let t = c.item(id).map_or("", |i| i.title.as_str());
+        eprintln!("FAILED {id} {t}: {msg}");
+    }
+    println!(
+        "{} indexed ({} pages), {} without text, {} failed",
+        rep.indexed.len(),
+        rep.pages,
+        rep.no_text.len(),
+        rep.failed.len()
+    );
+    if !rep.failed.is_empty() {
+        std::process::exit(2);
+    }
+    Ok(())
+}
+
 fn search(file: &Path, query: &str, max: usize) -> Result<()> {
     let c = Collection::load(file)?;
     let ix = Index::load(&col::index_path(file))?;
     if ix.page_count() == 0 {
-        eprintln!("note: nothing is indexed yet; process items with OCR first (`legatorocr collection run`)");
+        eprintln!("note: nothing is indexed yet; process items with OCR (`collection run`) or read the text of PDFs that have it (`collection reindex`)");
     }
     let hits = ix.search(query, max);
     for h in &hits {

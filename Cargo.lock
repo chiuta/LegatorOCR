@@ -1312,6 +1312,7 @@ dependencies = [
  "image",
  "legatorocr-core",
  "legatorocr-engine",
+ "legatorocr-pdf",
  "rayon",
  "wat",
 ]

@@ -26,3 +26,4 @@ builtin-model = ["legatorocr-engine/builtin-model"]
 
 [dev-dependencies]
 wat = "1"
+legatorocr-pdf = { path = "../legatorocr-pdf" }
