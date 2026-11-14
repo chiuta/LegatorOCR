@@ -3,6 +3,7 @@ use crate::settings::{ModeChoice, PageSizeChoice, SheetAdjust, SplitChoice, UiSe
 use crate::worker::{self, PreviewRequest, PreviewResult};
 use eframe::egui::{self, Color32, RichText, TextureHandle, TextureOptions, Vec2};
 use legatorocr_engine::{check_ocr, run_export, write_atomic, ExportJob, PdfExport, SheetInput};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -136,6 +137,12 @@ struct TurnBatch {
     rx: mpsc::Receiver<(u64, Option<f32>)>,
 }
 
+enum Thumb {
+    Loading,
+    Ready(TextureHandle),
+    Failed,
+}
+
 struct Sheet {
     id: u64,
     path: PathBuf,
@@ -230,6 +237,12 @@ pub struct App {
     palette_sel: usize,
     /// The page list shows only the pages flagged for attention.
     only_attention: bool,
+    /// Small pictures of the pages in the list on the left: (sheet id, quarter turns) -> state.
+    thumbs: HashMap<(u64, u8), Thumb>,
+    thumb_tx: mpsc::Sender<(u64, u8, Option<egui::ColorImage>)>,
+    thumb_rx: mpsc::Receiver<(u64, u8, Option<egui::ColorImage>)>,
+    thumbs_in_flight: usize,
+    show_thumbs: bool,
     /// Where the divider of the slider view is (0..1 of the frame width).
     slider_frac: f32,
     next_id: u64,
@@ -329,6 +342,7 @@ type Cell<'a> = (
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, files: Vec<PathBuf>) -> Self {
         let (pv_tx, pv_rx) = mpsc::channel();
+        let (thumb_tx, thumb_rx) = mpsc::channel();
         let mut app = Self {
             tick: 0,
             lang: Lang::detect(),
@@ -343,6 +357,11 @@ impl App {
             palette_q: String::new(),
             palette_sel: 0,
             only_attention: false,
+            thumbs: HashMap::new(),
+            thumb_tx,
+            thumb_rx,
+            thumbs_in_flight: 0,
+            show_thumbs: true,
             slider_frac: 0.5,
             next_id: 1,
             pv_tx,
@@ -813,6 +832,18 @@ impl App {
             }
         }
         // preview results
+        while let Ok((id, q, img)) = self.thumb_rx.try_recv() {
+            self.thumbs_in_flight = self.thumbs_in_flight.saturating_sub(1);
+            let t = match img {
+                Some(ci) => Thumb::Ready(ctx.load_texture(
+                    format!("thumb{id}_{q}"),
+                    ci,
+                    egui::TextureOptions::LINEAR,
+                )),
+                None => Thumb::Failed,
+            };
+            self.thumbs.insert((id, q), t);
+        }
         while let Ok(res) = self.pv_rx.try_recv() {
             let cur = self.sheets.iter().position(|s| s.id == res.id);
             let Some(i) = cur else { continue };
@@ -2059,6 +2090,9 @@ impl App {
             ui.label(self.tr("list.empty"));
             return;
         }
+        let lbl = self.tr("list.thumbs");
+        ui.checkbox(&mut self.show_thumbs, lbl);
+        let mut want_thumb: Vec<((u64, u8), PathBuf)> = Vec::new();
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -2090,10 +2124,48 @@ impl App {
                         ""
                     };
                     let label = format!("{:>3}  {}{}", i + 1, s.name, edited);
+                    let tkey = (self.sheets[i].id, self.sheets[i].adj.rotate_quarters % 4);
                     ui.horizontal(|ui| {
                         let (rect, _) =
                             ui.allocate_exact_size(Vec2::splat(10.0), egui::Sense::hover());
                         ui.painter().circle_filled(rect.center(), 4.0, color);
+                        if self.show_thumbs {
+                            let (r, _) = ui.allocate_exact_size(
+                                Vec2::new(THUMB_W, THUMB_H),
+                                egui::Sense::hover(),
+                            );
+                            match self.thumbs.get(&tkey) {
+                                Some(Thumb::Ready(t)) => {
+                                    let sz = t.size_vec2();
+                                    let k = (THUMB_W / sz.x).min(THUMB_H / sz.y);
+                                    let fit = egui::Rect::from_center_size(r.center(), sz * k);
+                                    ui.painter().image(
+                                        t.id(),
+                                        fit,
+                                        egui::Rect::from_min_max(
+                                            egui::pos2(0.0, 0.0),
+                                            egui::pos2(1.0, 1.0),
+                                        ),
+                                        Color32::WHITE,
+                                    );
+                                    ui.painter().rect_stroke(
+                                        fit,
+                                        0.0,
+                                        egui::Stroke::new(1.0, Color32::from_gray(90)),
+                                        egui::StrokeKind::Outside,
+                                    );
+                                }
+                                Some(_) => {}
+                                None => {
+                                    ui.painter().rect_filled(r, 2.0, Color32::from_gray(40));
+                                    if ui.is_rect_visible(r) && self.thumbs_in_flight < 2 {
+                                        want_thumb.push((tkey, self.sheets[i].path.clone()));
+                                        self.thumbs.insert(tkey, Thumb::Loading);
+                                        self.thumbs_in_flight += 1;
+                                    }
+                                }
+                            }
+                        }
                         let mut resp = ui.selectable_label(self.selected == Some(i), label);
                         if let Some(w) = warn {
                             resp = resp.on_hover_text(self.tr(w));
@@ -2110,6 +2182,17 @@ impl App {
                     });
                 }
             });
+        for ((id, q), path) in want_thumb {
+            let tx = self.thumb_tx.clone();
+            let ctx = ui.ctx().clone();
+            std::thread::spawn(move || {
+                let img = std::panic::catch_unwind(|| make_thumb(&path, q))
+                    .ok()
+                    .flatten();
+                let _ = tx.send((id, q, img));
+                ctx.request_repaint();
+            });
+        }
     }
 
     /// Indices of the sheets whose processed preview looks suspicious (see [`attention`]).
@@ -3421,6 +3504,15 @@ impl App {
             }
             if ui.button(tr("adj.rot_right")).clicked() {
                 adj.rotate_quarters = (adj.rotate_quarters + 1) % 4;
+                adj.orient_locked = true;
+                adj_changed = true;
+            }
+            if ui
+                .button("180°")
+                .on_hover_text(tr("adj.rot_180_tip"))
+                .clicked()
+            {
+                adj.rotate_quarters = (adj.rotate_quarters + 2) % 4;
                 adj.orient_locked = true;
                 adj_changed = true;
             }
@@ -5202,6 +5294,20 @@ impl ZoneSnap {
 }
 
 /// Distance from `p` to the segment `a`–`b`.
+const THUMB_W: f32 = 72.0;
+const THUMB_H: f32 = 54.0;
+
+/// A small picture of the page for the list (decoded off the interface thread).
+fn make_thumb(path: &Path, quarters: u8) -> Option<egui::ColorImage> {
+    let img = legatorocr_engine::load_image(path).ok()?;
+    let mut small = img.thumbnail(216, 162).to_rgb8();
+    for _ in 0..quarters % 4 {
+        small = image::imageops::rotate90(&small);
+    }
+    let (w, h) = (small.width() as usize, small.height() as usize);
+    Some(egui::ColorImage::from_rgb([w, h], small.as_raw()))
+}
+
 /// Open a file or folder with the system's default program (best effort).
 fn open_with_system(p: &std::path::Path) {
     #[cfg(target_os = "windows")]

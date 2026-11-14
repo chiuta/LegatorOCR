@@ -1315,6 +1315,26 @@ fn prepare(
         }
     }
 
+    // --- upside down? --------------------------------------------------------
+    // a page photographed or scanned the wrong way up: more ink below the x-height core of its
+    // text lines than above it. Only for a sheet nobody turned by hand, and only on a clear
+    // verdict (see orient::is_upside_down).
+    if s.auto_orient && s.rotate_quarters.is_multiple_of(4) && !s.sheet_orient_locked {
+        let a = crate::stage("page/upside-down", || {
+            analyse(&transform::gray_of(&img), s.dpi)
+        });
+        if orient::is_upside_down(&a.ink, a.dpi) {
+            let (w, h) = (img.width() as f32, img.height() as f32);
+            for z in pictures.iter_mut() {
+                *z = [w - z[0] - z[2], h - z[1] - z[3], z[2], z[3], z[4]];
+            }
+            for p in guides.iter_mut().flat_map(|g| g.iter_mut()) {
+                *p = (w - p.0, h - p.1);
+            }
+            img = transform::rot90(&img, 2);
+        }
+    }
+
     // --- dewarp -----------------------------------------------------------
     // typed guides are fractions of the deskewed page, drawn ones follow the sheet to here
     let (iw, ih) = (img.width().max(1) as f32, img.height().max(1) as f32);
@@ -2876,6 +2896,46 @@ mod tests {
         let g = image::GrayImage::from_pixel(800, 800, Luma([240]));
         let ink = binarize::sauvola(&g, 41, 0.3);
         assert!(content::detect_content(&ink, DPI).is_none());
+    }
+
+    /// Real photos in $LGR_PHOTOS (upright pages): print the ascender balance upright and turned.
+    #[test]
+    #[ignore]
+    fn probe_upside_down_on_real_photos() {
+        let dir = std::env::var("LGR_PHOTOS").unwrap();
+        let dpi: u32 = std::env::var("LGR_DPI")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(150);
+        let mut names: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .collect();
+        names.sort();
+        for p in names.iter().take(60) {
+            let Ok(img) = image::open(p) else { continue };
+            let g = img.to_luma8();
+            let a = Analysis {
+                ink: binarize::sauvola(&g, 25, 0.3),
+                factor: 1,
+                dpi,
+            };
+            let (u, d, n) = orient::ascender_balance(&a.ink, a.dpi);
+            let t = imageops::rotate180(&g);
+            let b = Analysis {
+                ink: binarize::sauvola(&t, 25, 0.3),
+                factor: 1,
+                dpi,
+            };
+            let (u2, d2, n2) = orient::ascender_balance(&b.ink, b.dpi);
+            println!(
+                "{} up: {u:.0}/{d:.0} n={n} flag={} | turned: {u2:.0}/{d2:.0} n={n2} flag={}",
+                p.file_name().unwrap().to_string_lossy(),
+                orient::is_upside_down(&a.ink, a.dpi),
+                orient::is_upside_down(&b.ink, b.dpi)
+            );
+        }
     }
 
     #[test]

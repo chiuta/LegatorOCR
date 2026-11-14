@@ -267,8 +267,8 @@ pub fn plan(modules: &[Module], manager: Manager) -> Vec<Step> {
                 false,
             )),
             (Module::Renderers, Manager::Winget) => {
+                // Poppler is enough; the winget id of Ghostscript is not found on every system
                 v.push(winget(m, "oschwartz10612.Poppler"));
-                v.push(winget(m, "ArtifexSoftware.GhostScript"));
             }
 
             (Module::Qpdf, Manager::Winget) => v.push(winget(m, "QPDF.QPDF")),
@@ -376,6 +376,13 @@ pub struct Outcome {
     pub detail: String,
 }
 
+/// winget answers "nothing to do" with an error code: 0x8A15002B (no newer version) and
+/// 0x8A150061 (already installed). For a module that only has to be present that is success.
+fn winget_nothing_to_do(program: &str, code: Option<i32>) -> bool {
+    program == "winget"
+        && matches!(code, Some(c) if c as u32 == 0x8A15_002B || c as u32 == 0x8A15_0061)
+}
+
 /// Run the steps one after another, output going straight to the terminal. A failing step is
 /// recorded and the next one still runs. `on_start` is called with the command before each.
 pub fn run(steps: &[Step], on_start: &mut dyn FnMut(&str)) -> Vec<Outcome> {
@@ -402,7 +409,7 @@ pub fn run(steps: &[Step], on_start: &mut dyn FnMut(&str)) -> Vec<Outcome> {
             let mut cmd = Command::new(&prog);
             cmd.args(&args).env("DEBIAN_FRONTEND", "noninteractive");
             match cmd.status() {
-                Ok(st) if st.success() => Outcome {
+                Ok(st) if st.success() || winget_nothing_to_do(&prog, st.code()) => Outcome {
                     command: shown,
                     ok: true,
                     detail: "done".into(),
@@ -454,11 +461,15 @@ pub fn run_captured(steps: &[Step]) -> Vec<Outcome> {
                 .stdin(std::process::Stdio::null())
                 .output()
             {
-                Ok(o) if o.status.success() => Outcome {
-                    command: shown,
-                    ok: true,
-                    detail: "done".into(),
-                },
+                Ok(o)
+                    if o.status.success() || winget_nothing_to_do(&s.program, o.status.code()) =>
+                {
+                    Outcome {
+                        command: shown,
+                        ok: true,
+                        detail: "done".into(),
+                    }
+                }
                 Ok(o) => {
                     let mut text = String::from_utf8_lossy(&o.stderr).into_owned();
                     if text.trim().is_empty() {
@@ -485,6 +496,17 @@ pub fn run_captured(steps: &[Step]) -> Vec<Outcome> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn winget_already_installed_is_not_a_failure() {
+        assert!(winget_nothing_to_do("winget", Some(0x8A15_002Bu32 as i32)));
+        assert!(winget_nothing_to_do("winget", Some(0x8A15_0061u32 as i32)));
+        assert!(!winget_nothing_to_do("winget", Some(1)));
+        assert!(!winget_nothing_to_do(
+            "apt-get",
+            Some(0x8A15_002Bu32 as i32)
+        ));
+    }
 
     #[test]
     fn module_lists_parse() {
