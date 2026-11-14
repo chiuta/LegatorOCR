@@ -122,6 +122,7 @@ fn export_is_robust_to_bad_sheets_and_cancellation() {
             sheets: &sheets,
             pdf: (r.below(5) != 0).then(|| PdfExport {
                 quality: [0u8, 50, 90][r.below(3) as usize],
+                max_dpi: [0u32, 150][r.below(2) as usize],
                 ocr: None,
                 title: Some("fuzz".into()),
                 pdfa: r.below(3) == 0,

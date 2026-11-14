@@ -33,6 +33,12 @@ use legatorocr_core::{BitImage, Page, PageImage, Word};
 use std::collections::BTreeMap;
 use std::io::Write;
 
+/// Result of resampling an image of type `I`.
+type ResizedBuf<I> = image::ImageBuffer<
+    <I as image::GenericImageView>::Pixel,
+    Vec<<<I as image::GenericImageView>::Pixel as image::Pixel>::Subpixel>,
+>;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Compress {
     /// JPEG for colour/gray pages (quality 1..=100); B/W pages stay lossless.
@@ -47,6 +53,9 @@ pub struct PdfWriter {
     page_ids: Vec<u32>,
     chars: BTreeMap<char, u16>, // char -> CID
     compress: Compress,
+    /// Colour/gray images with a higher effective resolution are downscaled to this dpi
+    /// (0 = never). 1-bit images and text masks are never touched.
+    max_image_dpi: u32,
     title: Option<String>,
     meta: Meta,
     /// (title, page index, heading size relative to body text; 0 = not a heading)
@@ -202,6 +211,7 @@ impl PdfWriter {
             page_ids: vec![],
             chars: BTreeMap::new(),
             compress,
+            max_image_dpi: 0,
             title: None,
             meta: Meta::default(),
             bookmarks: Vec::new(),
@@ -221,6 +231,36 @@ impl PdfWriter {
         };
         w.buf.extend_from_slice(b"%PDF-1.5\n%\xE2\xE3\xCF\xD3\n");
         w
+    }
+
+    /// Downscale colour and gray images whose effective resolution is above `dpi` down to it
+    /// (the page size on paper does not change). 0 turns it off. 1-bit images (G4/JBIG2
+    /// candidates) and the text mask of layered pages are never resampled.
+    pub fn set_max_image_dpi(&mut self, dpi: u32) {
+        self.max_image_dpi = dpi;
+    }
+
+    /// `img` reduced so that its resolution, given as `eff_dpi`, does not exceed the cap.
+    fn capped<I>(&self, img: &I, eff_dpi: f32) -> Option<ResizedBuf<I>>
+    where
+        I: image::GenericImageView,
+        I::Pixel: 'static,
+    {
+        let cap = self.max_image_dpi as f32;
+        if self.max_image_dpi == 0
+            || eff_dpi.partial_cmp(&(cap * 1.02)) != Some(std::cmp::Ordering::Greater)
+        {
+            return None;
+        }
+        let k = cap / eff_dpi;
+        let nw = ((img.width() as f32 * k).round() as u32).max(1);
+        let nh = ((img.height() as f32 * k).round() as u32).max(1);
+        Some(image::imageops::resize(
+            img,
+            nw,
+            nh,
+            image::imageops::FilterType::Triangle,
+        ))
     }
 
     /// Outline entry pointing at the next page that will be added.
@@ -422,40 +462,58 @@ impl PdfWriter {
                     &z,
                 );
             }
-            PageImage::Gray(g) => match compress {
-                Compress::Jpeg(q) => {
-                    let mut out = Vec::new();
-                    JpegEncoder::new_with_quality(&mut out, q)
-                        .encode(g.as_raw(), pw, ph, ExtendedColorType::L8)
-                        .expect("jpeg encode");
-                    self.stream_obj(
-                        img_id,
-                        &image_dict(pw, ph, self.gray_cs(), "DCTDecode"),
-                        &out,
-                    );
+            PageImage::Gray(g0) => {
+                let small = self.capped(g0, dpi);
+                let g = small.as_ref().unwrap_or(g0);
+                let (pw, ph) = g.dimensions();
+                match compress {
+                    Compress::Jpeg(q) => {
+                        let mut out = Vec::new();
+                        JpegEncoder::new_with_quality(&mut out, q)
+                            .encode(g.as_raw(), pw, ph, ExtendedColorType::L8)
+                            .expect("jpeg encode");
+                        self.stream_obj(
+                            img_id,
+                            &image_dict(pw, ph, self.gray_cs(), "DCTDecode"),
+                            &out,
+                        );
+                    }
+                    Compress::Flate => {
+                        let z = deflate(g.as_raw());
+                        self.stream_obj(
+                            img_id,
+                            &image_dict(pw, ph, self.gray_cs(), "FlateDecode"),
+                            &z,
+                        );
+                    }
                 }
-                Compress::Flate => {
-                    let z = deflate(g.as_raw());
-                    self.stream_obj(
-                        img_id,
-                        &image_dict(pw, ph, self.gray_cs(), "FlateDecode"),
-                        &z,
-                    );
+            }
+            PageImage::Rgb(c0) => {
+                let small = self.capped(c0, dpi);
+                let c = small.as_ref().unwrap_or(c0);
+                let (pw, ph) = c.dimensions();
+                match compress {
+                    Compress::Jpeg(q) => {
+                        let mut out = Vec::new();
+                        JpegEncoder::new_with_quality(&mut out, q)
+                            .encode(c.as_raw(), pw, ph, ExtendedColorType::Rgb8)
+                            .expect("jpeg encode");
+                        self.stream_obj(
+                            img_id,
+                            &image_dict(pw, ph, "/DeviceRGB", "DCTDecode"),
+                            &out,
+                        );
+                    }
+                    Compress::Flate => {
+                        let z = deflate(c.as_raw());
+                        self.stream_obj(
+                            img_id,
+                            &image_dict(pw, ph, "/DeviceRGB", "FlateDecode"),
+                            &z,
+                        );
+                    }
                 }
-            },
-            PageImage::Rgb(c) => match compress {
-                Compress::Jpeg(q) => {
-                    let mut out = Vec::new();
-                    JpegEncoder::new_with_quality(&mut out, q)
-                        .encode(c.as_raw(), pw, ph, ExtendedColorType::Rgb8)
-                        .expect("jpeg encode");
-                    self.stream_obj(img_id, &image_dict(pw, ph, "/DeviceRGB", "DCTDecode"), &out);
-                }
-                Compress::Flate => {
-                    let z = deflate(c.as_raw());
-                    self.stream_obj(img_id, &image_dict(pw, ph, "/DeviceRGB", "FlateDecode"), &z);
-                }
-            },
+            }
         }
 
         let mut cs = format!("q {wpt:.3} 0 0 {hpt:.3} 0 0 cm /Im0 Do Q\n");
@@ -716,14 +774,21 @@ impl PdfWriter {
         let mut cs = String::new();
         match &l.bg {
             Some(b) => {
-                let id = self.rgb_xobject(&b.img);
+                let bg_dpi = b.img.width() as f32 * 72.0 / wpt.max(1.0);
+                let id = match self.capped(&b.img, bg_dpi) {
+                    Some(small) => self.rgb_xobject(&small),
+                    None => self.rgb_xobject(&b.img),
+                };
                 xo.push_str(&format!("/Bg {id} 0 R "));
                 cs.push_str(&format!("q {wpt:.3} 0 0 {hpt:.3} 0 0 cm /Bg Do Q\n"));
             }
             None => cs.push_str(&format!("q 1 1 1 rg 0 0 {wpt:.3} {hpt:.3} re f Q\n")),
         }
         for (i, p) in l.patches.iter().enumerate() {
-            let id = self.rgb_xobject(&p.img);
+            let id = match self.capped(&p.img, dpi) {
+                Some(small) => self.rgb_xobject(&small),
+                None => self.rgb_xobject(&p.img),
+            };
             xo.push_str(&format!("/P{i} {id} 0 R "));
             let (w, h) = (
                 p.img.width() as f32 * 72.0 / dpi,
@@ -1243,6 +1308,62 @@ mod tests {
             content_box: None,
             layers: None,
         }
+    }
+
+    fn noise_rgb(w: u32, h: u32) -> RgbImage {
+        let mut img = RgbImage::new(w, h);
+        let mut z = 987_654_321u32;
+        for p in img.pixels_mut() {
+            z = z.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            *p = image::Rgb([(z >> 24) as u8, (z >> 16) as u8, (z >> 8) as u8]);
+        }
+        img
+    }
+
+    fn pdf_len(img: PageImage, dpi: u32, cap: u32) -> usize {
+        let mut w = PdfWriter::new(Compress::Jpeg(80));
+        w.set_max_image_dpi(cap);
+        let mut p = page(img);
+        p.dpi = dpi;
+        w.add_page(&p, &[]);
+        w.finish().len()
+    }
+
+    #[test]
+    fn image_dpi_cap_shrinks_colour_and_gray_pages_only_above_the_cap() {
+        let rgb = || PageImage::Rgb(noise_rgb(600, 800));
+        let full = pdf_len(rgb(), 300, 0);
+        let c200 = pdf_len(rgb(), 300, 200);
+        let c150 = pdf_len(rgb(), 300, 150);
+        assert!(c200 < full && c150 < c200, "{full} {c200} {c150}");
+        // already at or below the cap: unchanged
+        assert_eq!(pdf_len(rgb(), 150, 150), pdf_len(rgb(), 150, 0));
+        assert_eq!(pdf_len(rgb(), 120, 150), pdf_len(rgb(), 120, 0));
+        let gray =
+            || PageImage::Gray(image::DynamicImage::ImageRgb8(noise_rgb(600, 800)).to_luma8());
+        assert!(pdf_len(gray(), 300, 150) < pdf_len(gray(), 300, 0));
+        // the page size on paper does not change
+        let txt = |cap| {
+            let mut w = PdfWriter::new(Compress::Jpeg(80));
+            w.set_max_image_dpi(cap);
+            w.add_page(&page(rgb()), &[]);
+            String::from_utf8_lossy(&w.finish()).contains("/MediaBox [0 0 144.000 192.000]")
+        };
+        assert_eq!(txt(0), txt(150));
+    }
+
+    #[test]
+    fn image_dpi_cap_never_touches_one_bit_pages() {
+        let bw = || {
+            let mut b = BitImage::new(1200, 1600);
+            for y in (0..1600).step_by(7) {
+                for x in 0..900 {
+                    b.set(100 + x, y, true);
+                }
+            }
+            PageImage::Bw(b)
+        };
+        assert_eq!(pdf_len(bw(), 600, 0), pdf_len(bw(), 600, 150));
     }
 
     #[test]
