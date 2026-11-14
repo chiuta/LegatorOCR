@@ -142,6 +142,17 @@ jobs:
             l="${g%.pdf}"; l="${l##*.}"
             cp "$g" "dist/LegatorOCR-${tag#v}-ghid.${l}.pdf"
           done
+          # the hardware tutorial (picture book per language) and its two clips
+          if [ -f docs/Tutorial-hardware-LegatorOCR.pdf ]; then cp docs/Tutorial-hardware-LegatorOCR.pdf "dist/LegatorOCR-${tag#v}-hardware-tutorial.pdf"; fi
+          for g in docs/Tutorial-hardware-LegatorOCR.??.pdf; do
+            [ -f "$g" ] || continue
+            l="${g%.pdf}"; l="${l##*.}"
+            cp "$g" "dist/LegatorOCR-${tag#v}-hardware-tutorial.${l}.pdf"
+          done
+          for v in docs/video/hardware/*.mp4; do
+            [ -f "$v" ] || continue
+            cp "$v" "dist/LegatorOCR-${tag#v}-hardware-$(basename "$v")"
+          done
           SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) python3 scripts/sbom.py > "dist/LegatorOCR-${tag#v}-sbom.cdx.json"
           python3 -c "import json,sys; b=json.load(open(sys.argv[1])); assert b['bomFormat']=='CycloneDX' and len(b['components'])>10" "dist/LegatorOCR-${tag#v}-sbom.cdx.json"
           (cd dist && sha256sum LegatorOCR-* > SHA256SUMS.txt && cat SHA256SUMS.txt)

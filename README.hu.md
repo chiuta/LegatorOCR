@@ -2,9 +2,11 @@
 
 [English](README.md) · [Română](README.ro.md) · [Français](README.fr.md) · [Italiano](README.it.md) · [Español](README.es.md) · [Português](README.pt.md) · [Deutsch](README.de.md) · **Magyar**
 
-Verzió: 0.2.0-pre.54 · Utolsó frissítés: 2026-11-12
+Verzió: 0.2.0-pre.56 · Utolsó frissítés: 2026-11-12
 
 Videóoktatóanyagok Alexandru Dumbravă (ASFAN) tollából: [részletes esettanulmány, 54 perc](https://drive.proton.me/urls/TY10AYCB1G#lis9oybHW8I7) · [videóoktatóanyag 2](https://drive.proton.me/urls/VRZCCZSMTW#dxmgAsJqIMtL) (Proton Drive).
+
+Hardver-útmutató képekben és klipekben (telefonos digitalizálóasztal, Alexandru Dumbravă A.I.D.M.I.A.-ja alapján): [PDF-könyv](docs/Tutorial-hardware-LegatorOCR.hu.pdf) · klipek a [`docs/video/hardware`](docs/video/hardware) mappában (feliratok 8 nyelven).
 
 Bemutatóoldal: <https://legatorocr.chiuta.ro> (a forrás a `docs/` mappában van).
 

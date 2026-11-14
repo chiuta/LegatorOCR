@@ -8,11 +8,12 @@ const { chromium } = require('playwright');
   const version = /^version\s*=\s*"([^"]+)"/m.exec(fs.readFileSync(path.join(root, 'Cargo.toml'), 'utf8'))[1];
   // guide.html is the Romanian original (-> Ghid-LegatorOCR.pdf); guide.<xx>.html are its translations
   // (-> Ghid-LegatorOCR.<xx>.pdf).
-  const files = fs.readdirSync(__dirname).filter(f => /^guide(\.[a-z]{2})?\.html$/.test(f)).sort();
+  const files = fs.readdirSync(__dirname).filter(f => /^(guide|hardware)(\.[a-z]{2})?\.html$/.test(f)).sort();
   const b = await chromium.launch();
   for (const f of files) {
-    const lang = (/^guide\.([a-z]{2})\.html$/.exec(f) || [])[1];
-    const out = lang ? `Ghid-LegatorOCR.${lang}.pdf` : 'Ghid-LegatorOCR.pdf';
+    const lang = (/^(?:guide|hardware)\.([a-z]{2})\.html$/.exec(f) || [])[1];
+    const base = f.startsWith('hardware') ? 'Tutorial-hardware-LegatorOCR' : 'Ghid-LegatorOCR';
+    const out = lang ? `${base}.${lang}.pdf` : `${base}.pdf`;
     const html = fs.readFileSync(path.join(__dirname, f), 'utf8').split('{{VERSION}}').join(version);
     const tmp = path.join(__dirname, '.build.html');
     fs.writeFileSync(tmp, html);

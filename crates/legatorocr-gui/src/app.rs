@@ -832,6 +832,12 @@ impl App {
             }
         }
         // preview results
+        // pictures of pages that were removed from the list are dropped
+        if self.thumbs.len() > self.sheets.len() * 2 + 8 {
+            let ids: std::collections::HashSet<u64> = self.sheets.iter().map(|s| s.id).collect();
+            self.thumbs
+                .retain(|(id, _), t| ids.contains(id) || matches!(t, Thumb::Loading));
+        }
         while let Ok((id, q, img)) = self.thumb_rx.try_recv() {
             self.thumbs_in_flight = self.thumbs_in_flight.saturating_sub(1);
             let t = match img {
@@ -5310,6 +5316,9 @@ fn make_thumb(path: &Path, quarters: u8) -> Option<egui::ColorImage> {
 
 /// Open a file or folder with the system's default program (best effort).
 fn open_with_system(p: &std::path::Path) {
+    // an absolute path cannot be taken for an option of the opener (a name starting with "-")
+    let p = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let p = p.as_path();
     #[cfg(target_os = "windows")]
     let r = std::process::Command::new("explorer").arg(p).spawn();
     #[cfg(target_os = "macos")]

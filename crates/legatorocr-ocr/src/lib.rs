@@ -601,11 +601,21 @@ fn rescue_page_numbers(img: &image::DynamicImage, dpi: u32, o: &OcrOptions, word
     hs.sort_unstable();
     let med = hs.get(hs.len() / 2).copied().unwrap_or(h / 40).max(8);
     let pad = (med / 3).max(4);
-    let covered = |x: u32, y: u32| {
-        words.iter().any(|k| {
-            x + pad >= k.x && x <= k.x + k.w + pad && y + pad >= k.y && y <= k.y + k.h + pad
-        })
-    };
+    // one mask of the padded word boxes, so that a pixel is looked up in O(1) (a page has
+    // millions of dark pixels and hundreds of words)
+    let mut mask = vec![false; w as usize * h as usize];
+    for k in words.iter() {
+        let (mx0, my0) = (k.x.saturating_sub(pad), k.y.saturating_sub(pad));
+        let (mx1, my1) = ((k.x + k.w + pad).min(w - 1), (k.y + k.h + pad).min(h - 1));
+        for y in my0..=my1 {
+            if mx0 <= mx1 {
+                mask[y as usize * w as usize + mx0 as usize
+                    ..=y as usize * w as usize + mx1 as usize]
+                    .fill(true);
+            }
+        }
+    }
+    let covered = |x: u32, y: u32| mask[y as usize * w as usize + x as usize];
     // grid of cells of `pad` px that hold uncovered dark ink, grouped by 8-neighbour contact
     let edge = (w / 50).max(3);
     let (gw, gh) = (w.div_ceil(pad) as usize, h.div_ceil(pad) as usize);
@@ -868,11 +878,21 @@ fn rescue_missed_lines(img: &image::DynamicImage, dpi: u32, o: &OcrOptions, word
     hs.sort_unstable();
     let med = hs[hs.len() / 2].max(8);
     let pad = (med / 3).max(4);
-    let covered = |x: u32, y: u32| {
-        words.iter().any(|k| {
-            x + pad >= k.x && x <= k.x + k.w + pad && y + pad >= k.y && y <= k.y + k.h + pad
-        })
-    };
+    // one mask of the padded word boxes, so that a pixel is looked up in O(1) (a page has
+    // millions of dark pixels and hundreds of words)
+    let mut mask = vec![false; w as usize * h as usize];
+    for k in words.iter() {
+        let (mx0, my0) = (k.x.saturating_sub(pad), k.y.saturating_sub(pad));
+        let (mx1, my1) = ((k.x + k.w + pad).min(w - 1), (k.y + k.h + pad).min(h - 1));
+        for y in my0..=my1 {
+            if mx0 <= mx1 {
+                mask[y as usize * w as usize + mx0 as usize
+                    ..=y as usize * w as usize + mx1 as usize]
+                    .fill(true);
+            }
+        }
+    }
+    let covered = |x: u32, y: u32| mask[y as usize * w as usize + x as usize];
     let boxes = uncovered_line_boxes(&g, med, &covered);
     let lang = canonical_lang(&o.lang);
     let mut found: Vec<Vec<Word>> = Vec::new();
