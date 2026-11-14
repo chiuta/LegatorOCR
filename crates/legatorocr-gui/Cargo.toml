@@ -18,7 +18,7 @@ image.workspace = true
 anyhow.workspace = true
 rayon.workspace = true
 eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
-rfd = "0.17"
+rfd = "0.18"
 sys-locale = "0.3"
 
 [features]
