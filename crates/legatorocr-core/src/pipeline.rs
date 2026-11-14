@@ -2921,14 +2921,14 @@ mod tests {
                 factor: 1,
                 dpi,
             };
-            let (u, d, n) = orient::ascender_balance(&a.ink, a.dpi);
+            let (u, d, n, _) = orient::ascender_balance(&a.ink, a.dpi);
             let t = imageops::rotate180(&g);
             let b = Analysis {
                 ink: binarize::sauvola(&t, 25, 0.3),
                 factor: 1,
                 dpi,
             };
-            let (u2, d2, n2) = orient::ascender_balance(&b.ink, b.dpi);
+            let (u2, d2, n2, _) = orient::ascender_balance(&b.ink, b.dpi);
             println!(
                 "{} up: {u:.0}/{d:.0} n={n} flag={} | turned: {u2:.0}/{d2:.0} n={n2} flag={}",
                 p.file_name().unwrap().to_string_lossy(),

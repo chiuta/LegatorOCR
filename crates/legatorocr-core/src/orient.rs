@@ -131,14 +131,14 @@ pub fn needs_quarter_turn(ink: &BitImage, dpi: u32) -> bool {
 }
 
 /// Ink above and below the dense x-height core of every text line, summed over the page:
-/// `(above, below, lines)`. In Latin script ascenders and capitals (b d f h k l t, A..Z, digits)
+/// `(above, below, lines, lines with more below than above)`. In Latin script ascenders and capitals (b d f h k l t, A..Z, digits)
 /// are far more common than descenders (g j p q y), so an upright page has more ink above the
 /// core than below it; an upside-down page has the opposite.
-pub fn ascender_balance(ink: &BitImage, dpi: u32) -> (f64, f64, usize) {
+pub fn ascender_balance(ink: &BitImage, dpi: u32) -> (f64, f64, usize, usize) {
     let cleaned = without_long_runs(ink, (dpi as usize * 3 / 4).max(40));
     let (letters, n_letters) = letters_only(&cleaned, dpi);
     if n_letters < MIN_LETTERS {
-        return (0.0, 0.0, 0);
+        return (0.0, 0.0, 0, 0);
     }
     let (w, h) = (letters.w as usize, letters.h as usize);
     let mut rows = vec![0f64; h];
@@ -152,10 +152,10 @@ pub fn ascender_balance(ink: &BitImage, dpi: u32) -> (f64, f64, usize) {
     let sm = box_smooth(&rows, (dpi / 100).max(1) as usize);
     let peak = sm.iter().cloned().fold(0.0, f64::max);
     if peak <= 0.0 {
-        return (0.0, 0.0, 0);
+        return (0.0, 0.0, 0, 0);
     }
     let gap = peak * 0.04;
-    let (mut above, mut below, mut lines) = (0.0, 0.0, 0usize);
+    let (mut above, mut below, mut lines, mut down) = (0.0, 0.0, 0usize, 0usize);
     let min_h = (dpi as f64 / 25.0).max(4.0) as usize; // 1 mm
     let mut y = 0;
     while y < h {
@@ -185,20 +185,29 @@ pub fn ascender_balance(ink: &BitImage, dpi: u32) -> (f64, f64, usize) {
         above += a;
         below += b;
         lines += 1;
+        if b > a {
+            down += 1;
+        }
     }
-    (above, below, lines)
+    (above, below, lines, down)
 }
 
 /// `true` when the text is upside down (a half turn is needed). Deliberately cautious: it needs
 /// plenty of lines and a clear surplus of ink below the x-height cores; anything else is left
 /// alone, because turning an upright page by mistake is worse than missing a flipped one.
 pub fn is_upside_down(ink: &BitImage, dpi: u32) -> bool {
-    let (above, below, lines) = ascender_balance(ink, dpi);
-    lines >= UPSIDE_MIN_LINES && above + below > 0.0 && below > UPSIDE_RATIO * above
+    let (above, below, lines, down) = ascender_balance(ink, dpi);
+    // the totals and the lines must agree: a few heavy lines (a table, a title) cannot decide alone
+    lines >= UPSIDE_MIN_LINES
+        && above + below > 0.0
+        && below > UPSIDE_RATIO * above
+        && down as f64 >= UPSIDE_VOTES * lines as f64
 }
 
 const UPSIDE_MIN_LINES: usize = 12;
 const UPSIDE_RATIO: f64 = 1.3;
+/// Share of the lines that must individually have more ink below the core than above it.
+const UPSIDE_VOTES: f64 = 0.7;
 
 /// Fewest letter-sized pieces a page needs before its direction is judged at all.
 const MIN_LETTERS: usize = 100;
@@ -361,5 +370,22 @@ mod tests {
     #[test]
     fn a_few_lines_are_not_enough_to_turn_a_page() {
         assert!(!is_upside_down(&turned(&latin_page(5)), 150));
+    }
+}
+
+#[cfg(test)]
+mod degenerate {
+    use super::*;
+
+    #[test]
+    fn empty_tiny_and_solid_images_are_never_turned() {
+        for (w, h) in [(0u32, 0u32), (1, 1), (3, 500), (500, 3), (64, 64)] {
+            assert!(!is_upside_down(&BitImage::new(w, h), 150), "{w}x{h} blank");
+            let mut full = BitImage::new(w, h);
+            full.data.iter_mut().for_each(|v| *v = 1);
+            assert!(!is_upside_down(&full, 150), "{w}x{h} solid");
+        }
+        assert!(!is_upside_down(&BitImage::new(200, 200), 0));
+        assert!(!is_upside_down(&BitImage::new(200, 200), u32::MAX));
     }
 }
