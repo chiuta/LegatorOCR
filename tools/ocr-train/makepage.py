@@ -1,5 +1,7 @@
 """Render a synthetic test page (two paragraphs, optional two columns) with known text.
-Usage: makepage.py OUT.png OUT.txt lang [columns] [dpi]"""
+Usage: makepage.py OUT.png OUT.txt lang [columns] [dpi]
+Environment: FRACTAL=1 adds fractal paper, ink and show-through textures (see fractal.py; FRACTAL_STRENGTH,
+FRACTAL_TINT=1 for a warm colour page); DEGRADE, PHOTO, RULES, WIDE, INVERT, ROT, FONT as before."""
 import sys, random, os
 from PIL import Image, ImageDraw, ImageFont
 import synth
@@ -51,6 +53,13 @@ if os.environ.get("PHOTO"):
     from PIL import ImageFilter as IF
     ph = Image.fromarray(base.astype(np.uint8)).filter(IF.GaussianBlur(3))
     im.paste(ph, (W - dpi * 2, H - dpi * 2))
+if os.environ.get("FRACTAL"):
+    from fractal import texturize
+    im = texturize(im, seed=int(sys.argv[6]) if len(sys.argv) > 6 else 3,
+                   strength=float(os.environ.get("FRACTAL_STRENGTH", "1.0")),
+                   tint=bool(os.environ.get("FRACTAL_TINT")))
+    if im.mode == "RGB" and os.environ.get("DEGRADE"):
+        im = im.convert("L")
 if os.environ.get("DEGRADE"):
     import numpy as np
     from PIL import ImageFilter
