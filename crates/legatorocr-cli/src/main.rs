@@ -1,3 +1,4 @@
+mod collection;
 mod escl;
 mod fff;
 use anyhow::{bail, Context, Result};
@@ -42,7 +43,12 @@ enum Fmt {
 /// LegatorOCR — independently implemented scan post-processor: split, deskew, crop, clean,
 /// then export to PDF with optional OCR text layer.
 #[derive(Parser)]
-#[command(name = "legatorocr", version, about)]
+#[command(
+    name = "legatorocr",
+    version,
+    about,
+    after_help = "Collections: `legatorocr collection --help` (new, add, list, run, search) gathers newspapers, magazines and books in one .lgrcol file, processes them in a batch and searches their text."
+)]
 struct Cli {
     /// Input page images (PNG, JPEG, TIFF, BMP) and scanned PDFs, in reading order.
     #[arg(required_unless_present_any = ["project", "list_profiles", "save_profile", "make_separator", "ocr_languages", "doctor", "install_modules", "scan_escl", "watch", "verify_bag", "verify_epub", "verify_ocfl", "timestamp", "timestamp_verify", "sign_pdf", "pades_lt", "pades_lta", "pades_level", "verify_pdf_signatures", "pdfa_check", "decode_worker", "fuse_frames", "verify_document", "integrity_hints", "mcp", "measure_edge", "fadgi_levels", "backup_from", "efactura", "merkle_root", "merkle_verify", "merkle_verify_consistency", "verify_sums", "extract_project", "search_preset", "search_help"])]
@@ -1704,6 +1710,10 @@ fn parse_page_size(s: &str) -> Result<(f32, f32)> {
 }
 
 fn main() -> Result<()> {
+    // `legatorocr collection …` has its own small command line (new, add, list, run, search).
+    if collection::wanted() {
+        return collection::main();
+    }
     // `legatorocr … | head` closes our stdout early: end quietly like other Unix tools
     // instead of panicking inside println!.
     let default_hook = std::panic::take_hook();

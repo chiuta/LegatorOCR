@@ -53,6 +53,7 @@ enum Cmd {
     ExportImages,
     Modules,
     Proof,
+    Collections,
     Find,
     FirstPage,
     LastPage,
@@ -75,6 +76,7 @@ const CMDS: &[(Cmd, &str)] = &[
     (Cmd::ExportImages, "menu.export_images"),
     (Cmd::Modules, "menu.modules"),
     (Cmd::Proof, "menu.proof"),
+    (Cmd::Collections, "menu.collections"),
     (Cmd::Find, "menu.find"),
     (Cmd::FirstPage, "cmd.first_page"),
     (Cmd::LastPage, "cmd.last_page"),
@@ -269,6 +271,7 @@ pub struct App {
     show_about: bool,
     modules: ModulesWindow,
     proof: crate::proof::ProofWindow,
+    collections: crate::collections::CollectionsWindow,
     find: crate::find::FindWindow,
     /// The corrected text is loaded into the engine for the running export.
     apply_pending: bool,
@@ -383,6 +386,7 @@ impl App {
             show_about: false,
             modules: ModulesWindow::default(),
             proof: crate::proof::ProofWindow::default(),
+            collections: crate::collections::CollectionsWindow::default(),
             find: Default::default(),
             apply_pending: false,
             last_pages: 0,
@@ -1400,6 +1404,14 @@ impl App {
                     ui.close();
                 }
                 if ui
+                    .button(self.tr("menu.collections"))
+                    .on_hover_text(self.tr("menu.collections_tip"))
+                    .clicked()
+                {
+                    self.collections.open();
+                    ui.close();
+                }
+                if ui
                     .add(egui::Button::new(self.tr("menu.find")).shortcut_text("Ctrl+F"))
                     .clicked()
                 {
@@ -2256,6 +2268,7 @@ impl App {
             Cmd::ExportImages if idle => self.start_export(ctx, JobKind::Images),
             Cmd::Modules => self.modules.open(),
             Cmd::Proof => self.proof.open(),
+            Cmd::Collections => self.collections.open(),
             Cmd::Find => self.find.open(),
             Cmd::FirstPage if !self.sheets.is_empty() => {
                 self.selected = Some(0);
@@ -2446,7 +2459,10 @@ impl App {
     /// the first / last. Not while a text box has the focus, and not with Ctrl / Alt / Shift held.
     fn page_keys(&mut self, ctx: &egui::Context) {
         self.scroll_to_selected = false;
-        if self.sheets.is_empty() || ctx.egui_wants_keyboard_input() {
+        if self.sheets.is_empty()
+            || ctx.egui_wants_keyboard_input()
+            || self.collections.captures_keys()
+        {
             return;
         }
         let last = self.sheets.len() - 1;
@@ -5395,6 +5411,7 @@ impl eframe::App for App {
         {
             let lang = self.lang;
             self.proof.ui(&ctx, &|k| t(lang, k));
+            self.collections.ui(&ctx, &|k| t(lang, k));
             let files: Vec<PathBuf> = {
                 let mut v: Vec<PathBuf> = Vec::new();
                 for sh in &self.sheets {

@@ -3,6 +3,7 @@
 
 mod alloptions;
 mod app;
+mod collections;
 mod find;
 mod i18n;
 mod proof;
