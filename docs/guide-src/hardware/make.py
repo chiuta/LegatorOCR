@@ -35,7 +35,7 @@ def table(head, rows, total=False):
 
 def page(L):
     t = T[L]
-    heads = [t[k] for k in ("h_intro", "h_cmp", "h_cost", "h_rig", "h_shoot", "h_sw", "h_tips", "h_law", "h_src")]
+    heads = [t[k] for k in ("h_intro", "h_cmp", "h_cost", "h_rig", "h_shoot", "h_sw", "h_tips", "h_law", "h_ex", "h_src")]
     toc = ''.join(f'<li>{e(h)}</li>' for h in heads)
     p = []
     p.append(f'<!doctype html><html lang="{L}"><head><meta charset="utf-8"><title>{e(t["title"])} ({{{{VERSION}}}})</title><style>{CSS}</style></head><body>')
@@ -54,6 +54,7 @@ def page(L):
     p.append(f'<h2>{e(t["h_sw"])}</h2><p>{e(t["sw_p"])}</p>{steps(t["sw_steps"])}')
     p.append(f'<h2>{e(t["h_tips"])}</h2>{table(t["tips_head"], t["tips_rows"])}')
     p.append(f'<h2>{e(t["h_law"])}</h2><ul>{"".join(f"<li>{e(x)}</li>" for x in t["law_items"])}</ul><p><i>{e(t["law_note"])}</i></p>')
+    p.append(f'<h2>{e(t["h_ex"])}</h2><p>{e(t["ex_p"])}</p>{table(t["ex_head"], t["ex_rows"])}<p>{e(t["ex_note"])}</p>')
     p.append(f'<h2>{e(t["h_src"])}</h2><ul>{"".join(f"<li>{e(x)}</li>" for x in t["src_items"])}</ul>')
     p.append(f'<h3>{e(t["video_h"])}</h3><p>{e(t["video_p"])}</p></body></html>')
     return ''.join(p)

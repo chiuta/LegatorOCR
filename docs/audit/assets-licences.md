@@ -78,3 +78,5 @@ numbers in ROADMAP 4.12 / 4.17 are the author's measurements and were not re-run
 - Contents of the JPX fixtures and the tool that made the video (not documented).
 - The legal effect of training on copyrighted or CC BY-SA material (open question; not decidable by reading licences).
 - Whether the numbers in ROADMAP 4.12 / 4.17 are reproducible (not re-run; not my topic).
+
+Note: `Anexa1_Dumbrava.pdf` (29 scanned pages of a 1995 Teora manual, supplied by the project owner) was used only as a local test; none of its pages is stored in the repository or reproduced in the tutorial (publisher's copyright). Only measured results are quoted.
