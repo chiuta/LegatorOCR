@@ -3720,6 +3720,7 @@ fn real_main() -> Result<()> {
             .map(str::to_string)
     };
     let mut pdf_quality = cli.pdf_quality;
+    let mut pdf_max_dpi = 0u32;
     if !given("--pdf-quality") {
         if let Some(q) = carried("pdf_quality").and_then(|v| v.parse::<u8>().ok()) {
             pdf_quality = q.min(100);
@@ -3732,13 +3733,21 @@ fn real_main() -> Result<()> {
             bail!("--target-size needs --pdf and a positive number of megabytes");
         }
         if pdf_quality > 0 {
-            pdf_quality = legatorocr_engine::quality_for_target(
+            let target_bytes = (mb as f64 * 1e6) as u64;
+            let plan = legatorocr_engine::plan_for_target(
                 &sheets,
                 cli.auto_rotate.then_some(&ocr_opts),
-                (mb as f64 * 1e6) as u64,
+                target_bytes,
                 &AtomicBool::new(false),
             )?;
-            eprintln!("target {mb} MB: JPEG quality {pdf_quality}");
+            pdf_quality = plan.quality;
+            pdf_max_dpi = plan.max_dpi;
+            let tag = if plan.met {
+                "target"
+            } else {
+                "warning: target"
+            };
+            eprintln!("{tag} {mb} MB: {}", plan.summary(target_bytes));
         }
     }
     if (cli.split_on_blank || cli.split_on_barcode) && cli.pdf.is_none() {
@@ -3798,6 +3807,7 @@ fn real_main() -> Result<()> {
         sheets: &sheets,
         pdf: cli.pdf.as_ref().map(|pdf_path| PdfExport {
             quality: pdf_quality,
+            max_dpi: pdf_max_dpi,
             ocr: cli.ocr.then(|| ocr_opts.clone()),
             title: pdf_path
                 .file_stem()
