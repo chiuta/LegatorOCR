@@ -547,6 +547,10 @@ fn recognize_raw(page: &PageImage, dpi: u32, o: &OcrOptions) -> Result<Vec<Word>
     } else {
         img
     };
+    let key = cache_key(&img, dpi, o);
+    if let Some(w) = cache_get(key) {
+        return Ok(w);
+    }
     let png = png_bytes(&img)?;
     let lang = canonical_lang(&o.lang);
     let mut cmd = base_cmd(o);
@@ -581,7 +585,48 @@ fn recognize_raw(page: &PageImage, dpi: u32, o: &OcrOptions) -> Result<Vec<Word>
             w.h = (y1.div_ceil(k)).saturating_sub(w.y).max(1);
         }
     }
+    cache_put(key, &words);
     Ok(words)
+}
+
+/// Words already read from a page with exactly these pixels and these options: exporting again
+/// after changing only what does not touch the pixels (JPEG quality, PDF options) skips the
+/// slowest step. In memory only, the last [`CACHE_PAGES`] pages.
+const CACHE_PAGES: usize = 64;
+type Cache = std::collections::VecDeque<(u64, Vec<Word>)>;
+static CACHE: std::sync::Mutex<Cache> = std::sync::Mutex::new(std::collections::VecDeque::new());
+
+fn cache_key(img: &image::DynamicImage, dpi: u32, o: &OcrOptions) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    img.as_bytes().hash(&mut h);
+    (img.width(), img.height(), img.color() as u8, dpi).hash(&mut h);
+    (
+        &o.lang,
+        o.psm,
+        o.min_conf.to_bits(),
+        &o.tesseract,
+        &o.tessdata,
+    )
+        .hash(&mut h);
+    h.finish()
+}
+
+fn cache_get(key: u64) -> Option<Vec<Word>> {
+    let c = CACHE.lock().ok()?;
+    c.iter().find(|(k, _)| *k == key).map(|(_, w)| w.clone())
+}
+
+fn cache_put(key: u64, words: &[Word]) {
+    if let Ok(mut c) = CACHE.lock() {
+        if c.iter().any(|(k, _)| *k == key) {
+            return;
+        }
+        if c.len() >= CACHE_PAGES {
+            c.pop_front();
+        }
+        c.push_back((key, words.to_vec()));
+    }
 }
 
 /// Tesseract's page layout analysis sometimes leaves out a lone number: a page number in the
@@ -1588,6 +1633,28 @@ mod tests {
             }
         }
         assert!(uncovered_line_boxes(&g2, 20, &|_, _| false).is_empty());
+    }
+
+    #[test]
+    fn the_cache_key_follows_pixels_and_options_and_the_cache_returns_what_was_put() {
+        let a =
+            image::DynamicImage::ImageLuma8(image::GrayImage::from_pixel(8, 8, image::Luma([9])));
+        let mut b = a.to_luma8();
+        b.put_pixel(3, 3, image::Luma([200]));
+        let b = image::DynamicImage::ImageLuma8(b);
+        let o = OcrOptions::default();
+        assert_eq!(cache_key(&a, 300, &o), cache_key(&a.clone(), 300, &o));
+        assert_ne!(cache_key(&a, 300, &o), cache_key(&b, 300, &o));
+        assert_ne!(cache_key(&a, 300, &o), cache_key(&a, 150, &o));
+        let o2 = OcrOptions {
+            lang: "ron".into(),
+            ..o.clone()
+        };
+        assert_ne!(cache_key(&a, 300, &o), cache_key(&a, 300, &o2));
+        let k = cache_key(&b, 77, &o);
+        assert!(cache_get(k).is_none());
+        cache_put(k, &[]);
+        assert_eq!(cache_get(k), Some(vec![]));
     }
 
     #[test]
