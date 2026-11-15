@@ -160,6 +160,8 @@ struct Sheet {
     last_edit: Option<std::time::Instant>,
     ready: Option<Ready>,
     pending: Option<u64>,
+    /// The pending preview is a read-ahead of a neighbouring page, not the one being looked at.
+    prefetch: bool,
     failed: Option<(u64, String)>,
     /// Last time (App::tick) this sheet was on screen; used to evict old previews.
     used: u64,
@@ -254,6 +256,9 @@ pub struct App {
     next_id: u64,
     pv_tx: mpsc::Sender<PreviewResult>,
     pv_rx: mpsc::Receiver<PreviewResult>,
+    /// The key of the selected page as last seen, and since when it has not changed.
+    seen_key: u64,
+    seen_since: std::time::Instant,
     view: View,
     fit: bool,
     /// Zoomed preview (fit off): the mouse drags the picture instead of drawing.
@@ -374,6 +379,8 @@ impl App {
             next_id: 1,
             pv_tx,
             pv_rx,
+            seen_key: 0,
+            seen_since: std::time::Instant::now(),
             view: View::Both,
             fit: true,
             hand: false,
@@ -744,6 +751,7 @@ impl App {
                 adj_gen: 0,
                 ready: None,
                 pending: None,
+                prefetch: false,
                 used: 0,
                 zone_undo: Vec::new(),
                 zone_redo: Vec::new(),
@@ -783,7 +791,7 @@ impl App {
     // ----------------------------------------------------------------- background plumbing
     /// Keep at most `KEEP` rendered previews (each is up to ~40 MB of textures).
     fn evict_old_previews(&mut self) {
-        const KEEP: usize = 4;
+        const KEEP: usize = 5;
         self.tick += 1;
         if let Some(sh) = self.selected.and_then(|i| self.sheets.get_mut(i)) {
             sh.used = self.tick;
@@ -866,6 +874,11 @@ impl App {
             let sheet = &mut self.sheets[i];
             if sheet.pending == Some(res.key) {
                 sheet.pending = None;
+                if sheet.prefetch {
+                    // a read-ahead counts as recently used, so it is not the first to be dropped
+                    sheet.used = self.tick;
+                }
+                sheet.prefetch = false;
             }
             if res.key != key_now {
                 continue; // stale
@@ -1062,18 +1075,59 @@ impl App {
             return;
         };
         let key = self.key_of(sheet);
-        if sheet.ready.as_ref().map(|r| r.key) == Some(key)
-            || sheet.pending.is_some()
-            || sheet.failed.as_ref().map(|f| f.0) == Some(key)
-        {
+        if key != self.seen_key {
+            self.seen_key = key;
+            self.seen_since = std::time::Instant::now();
+        }
+        let shown = sheet.ready.as_ref().map(|r| r.key) == Some(key)
+            || sheet.failed.as_ref().map(|f| f.0) == Some(key);
+        if shown {
+            self.read_ahead(ctx, i);
             return;
         }
-        // One preview at a time: scrolling quickly through big scans must not
-        // decode dozens of full-size images concurrently.
-        if self.sheets.iter().any(|s| s.pending.is_some()) {
+        if sheet.pending.is_some() {
+            return;
+        }
+        // One preview of the page being looked at at a time: scrolling quickly through big scans
+        // must not decode dozens of full-size images concurrently. A read-ahead does not count.
+        if self
+            .sheets
+            .iter()
+            .any(|s| s.pending.is_some() && !s.prefetch)
+        {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
             return;
         }
+        self.launch_preview(ctx, i, false);
+    }
+
+    /// While the page on screen is done and the settings have been still for a moment, render the
+    /// next and the previous page in the background, so that turning the page shows it at once
+    /// (the wait on large phone photos is the processing, not the display).
+    fn read_ahead(&mut self, ctx: &egui::Context, i: usize) {
+        const QUIET: std::time::Duration = std::time::Duration::from_millis(700);
+        if self.sheets.iter().any(|s| s.pending.is_some()) {
+            return;
+        }
+        if self.seen_since.elapsed() < QUIET {
+            ctx.request_repaint_after(QUIET);
+            return;
+        }
+        let next = [i + 1, i.wrapping_sub(1)].into_iter().find(|&j| {
+            self.sheets.get(j).is_some_and(|s| {
+                let key = self.key_of(s);
+                s.ready.as_ref().map(|r| r.key) != Some(key)
+                    && s.failed.as_ref().map(|f| f.0) != Some(key)
+            })
+        });
+        if let Some(j) = next {
+            self.launch_preview(ctx, j, true);
+        }
+    }
+
+    fn launch_preview(&mut self, ctx: &egui::Context, i: usize, prefetch: bool) {
+        let sheet = &self.sheets[i];
+        let key = self.key_of(sheet);
         let req = PreviewRequest {
             id: sheet.id,
             key,
@@ -1082,6 +1136,7 @@ impl App {
             osd: self.osd_options(),
         };
         self.sheets[i].pending = Some(key);
+        self.sheets[i].prefetch = prefetch;
         self.preview_started = Some(std::time::Instant::now());
         let (tx, ctx) = (self.pv_tx.clone(), ctx.clone());
         std::thread::spawn(move || {
@@ -2751,9 +2806,22 @@ impl App {
                         });
                         ui.horizontal(|ui| {
                             ui.label(tr("set.margin"));
+                            // 2-40 mm, as a slider and as a typed value
+                            let m0 = self.s.margin_mm;
+                            self.s.margin_mm = m0.clamp(2.0, 40.0);
+                            ch |= self.s.margin_mm != m0;
                             ch |= ui
                                 .add(
-                                    egui::Slider::new(&mut self.s.margin_mm, 0.0..=30.0)
+                                    egui::Slider::new(&mut self.s.margin_mm, 2.0..=40.0)
+                                        .show_value(false),
+                                )
+                                .changed();
+                            ch |= ui
+                                .add(
+                                    egui::DragValue::new(&mut self.s.margin_mm)
+                                        .range(2.0..=40.0)
+                                        .speed(0.5)
+                                        .max_decimals(1)
                                         .suffix(" mm"),
                                 )
                                 .changed();

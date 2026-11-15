@@ -841,7 +841,9 @@ fn uncovered_line_boxes(
             ((y1 + 1) as u32 * pad).min(h),
         );
         let (bw, bh) = (bx1 - bx0, by1 - by0);
-        if bh * 5 < med * 3 || bh > med * 5 / 2 + 2 * pad || bw < med * 3 {
+        // too low or too narrow for a line; a box taller than a line is a block of several lines
+        // (a folded page where Tesseract left half of the text out): the caller reads it whole
+        if bh * 5 < med * 3 || bw < med * 3 {
             continue;
         }
         let mut dark = 0u64;
@@ -896,6 +898,64 @@ fn rescue_missed_lines(img: &image::DynamicImage, dpi: u32, o: &OcrOptions, word
     let boxes = uncovered_line_boxes(&g, med, &covered);
     let lang = canonical_lang(&o.lang);
     let mut found: Vec<Vec<Word>> = Vec::new();
+    let tall = |b: &(u32, u32, u32, u32)| b.3 - b.1 > med * 5 / 2 + 2 * pad;
+    let (blocks, boxes): (Vec<_>, Vec<_>) = boxes.into_iter().partition(tall);
+    // a block taller than 70 % of the page is a picture or a dark panel, not text left out
+    for (x0, y0, x1, y1) in blocks
+        .into_iter()
+        .filter(|b| (b.3 - b.1) * 10 < h * 7)
+        .take(4)
+    {
+        let m = (med / 2).max(8);
+        let (cx0, cy0) = (x0.saturating_sub(m), y0.saturating_sub(m));
+        let (cx1, cy1) = ((x1 + m).min(w - 1), (y1 + m).min(h - 1));
+        let crop = image::imageops::crop_imm(&g, cx0, cy0, cx1 - cx0 + 1, cy1 - cy0 + 1).to_image();
+        // dense text is ~85-92 % paper; a picture is not
+        let bright = crop.pixels().filter(|p| p.0[0] > 140).count();
+        if bright * 100 < crop.pixels().len() * 75 {
+            continue;
+        }
+        let Ok(png) = png_bytes(&image::DynamicImage::ImageLuma8(crop)) else {
+            continue;
+        };
+        let mut cmd = base_cmd(o);
+        cmd.args(["stdin", "stdout", "-l", &lang, "--psm", "6"]);
+        if dpi > 0 {
+            cmd.args(["--dpi", &dpi.to_string()]);
+        }
+        cmd.arg("tsv");
+        let Ok(out) = run_stdin(cmd, png) else {
+            continue;
+        };
+        if !out.status.success() {
+            continue;
+        }
+        let mut block: Vec<Word> = parse_tsv(&String::from_utf8_lossy(&out.stdout), 55.0)
+            .into_iter()
+            .filter(|c| c.h * 3 >= med && c.h <= med * 3 + 2 * pad)
+            .collect();
+        if lang.split('+').any(|l| l == "ron") {
+            for c in &mut block {
+                c.text = legatorocr_core::text::normalize_ro(&c.text);
+            }
+        }
+        if !rescued_line_ok(&block) {
+            continue;
+        }
+        for c in &mut block {
+            c.x += cx0;
+            c.y += cy0;
+        }
+        // words that lie on known words are dropped one by one
+        block.retain(|c| {
+            !words.iter().any(|k| {
+                let ox = (c.x + c.w).min(k.x + k.w).saturating_sub(c.x.max(k.x));
+                let oy = (c.y + c.h).min(k.y + k.h).saturating_sub(c.y.max(k.y));
+                (ox as u64) * (oy as u64) * 10 > (c.w as u64) * (c.h as u64) * 3
+            })
+        });
+        found.extend(split_into_lines(block, med));
+    }
     for (x0, y0, x1, y1) in boxes.into_iter().take(25) {
         let m = (med / 2).max(8);
         let (cx0, cy0) = (x0.saturating_sub(m), y0.saturating_sub(m));
@@ -951,6 +1011,29 @@ fn rescue_missed_lines(img: &image::DynamicImage, dpi: u32, o: &OcrOptions, word
     for line in found {
         place_line(words, line);
     }
+}
+
+/// Words read from a block, cut into lines by the height of their centres (a new line starts when
+/// the centre is more than 0.6 of a text height away from the mean of the line so far).
+fn split_into_lines(mut words: Vec<Word>, med: u32) -> Vec<Vec<Word>> {
+    words.sort_by_key(|c| c.y + c.h / 2);
+    let mut lines: Vec<Vec<Word>> = Vec::new();
+    for c in words {
+        let cy = (c.y + c.h / 2) as i64;
+        match lines.last_mut() {
+            Some(l)
+                if (cy
+                    - l.iter().map(|k| (k.y + k.h / 2) as i64).sum::<i64>() / l.len() as i64)
+                    .unsigned_abs()
+                    * 10
+                    <= med as u64 * 6 =>
+            {
+                l.push(c)
+            }
+            _ => lines.push(vec![c]),
+        }
+    }
+    lines
 }
 
 /// Is a line read again from a gap acceptable as text? Mostly letters and digits, not a lone
@@ -1505,6 +1588,42 @@ mod tests {
             }
         }
         assert!(uncovered_line_boxes(&g2, 20, &|_, _| false).is_empty());
+    }
+
+    #[test]
+    fn a_whole_block_left_out_is_found_as_one_tall_box() {
+        let mut g = image::GrayImage::from_pixel(1000, 600, image::Luma([240]));
+        // twelve lines of dashes, 20 px tall, close together; the upper three are covered by words
+        let ys: Vec<u32> = (0..12).map(|i| 40 + i * 24).collect();
+        for &y0 in &ys {
+            let mut x = 100;
+            while x < 800 {
+                for y in y0..y0 + 20 {
+                    for xx in x..x + 18 {
+                        g.put_pixel(xx, y, image::Luma([30]));
+                    }
+                }
+                x += 26;
+            }
+        }
+        let covered = |_: u32, y: u32| y < 40 + 3 * 24;
+        let boxes = uncovered_line_boxes(&g, 20, &covered);
+        assert_eq!(boxes.len(), 1, "{boxes:?}");
+        let (_, y0, _, y1) = boxes[0];
+        assert!(y1 - y0 > 6 * 24, "{boxes:?}");
+    }
+
+    #[test]
+    fn words_of_a_block_are_cut_into_lines_by_height() {
+        let ws = vec![
+            word("c", 10, 200, 50, 0),
+            word("a", 10, 100, 50, 0),
+            word("b", 80, 104, 50, 0),
+            word("d", 80, 203, 50, 0),
+        ];
+        let lines = split_into_lines(ws, 20);
+        assert_eq!(lines.len(), 2);
+        assert!(lines.iter().all(|l| l.len() == 2));
     }
 
     #[test]
