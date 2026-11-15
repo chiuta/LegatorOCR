@@ -739,6 +739,17 @@ fn turn_point(p: (f32, f32), w: u32, h: u32, rad: f32) -> (f32, f32) {
 /// Where the user's cut line (a fraction `f` of the loaded sheet's width, or of its height for a
 /// sheet turned by a quarter) falls on the sheet as it is now: through the middle of the line when
 /// the sheet was turned by a fine angle, plain `f * size` otherwise.
+/// The gutter of a two-page spread found on the ink, in pixels of `rgb` (None: no clear gutter).
+fn auto_gutter(rgb: &RgbImage, s: &Settings) -> Option<u32> {
+    let a = analyse(&transform::gray_of(rgb), s.dpi);
+    // a spread scanned crooked has a leaning gutter: look for it on the levelled ink
+    let ink = match crate::deskew::detect_skew(&a.ink, s.max_skew_deg) {
+        Some(ang) if ang.abs() > 0.1f32.to_radians() => split::level(&a.ink, ang),
+        _ => a.ink,
+    };
+    split::find_gutter(&ink).map(|x| (x * a.factor).min(rgb.width().saturating_sub(1)))
+}
+
 fn cut_coordinate(f: f32, along_x: bool, size_now: u32, turned: Option<(u32, u32, f32)>) -> f32 {
     match turned {
         Some((w, h, rad)) if along_x => turn_point((f * w as f32, h as f32 / 2.0), w, h, rad).0,
@@ -926,18 +937,16 @@ fn split_sheet_left_first(src: &DynamicImage, s: &Settings) -> Vec<SheetPart> {
             _ if manual.is_some() => {
                 manual.map(|f| cut_coordinate(f, true, rgb.width(), turned).round() as u32)
             }
-            SplitMode::Middle => {
-                (rgb.width() as f32 >= 1.15 * rgb.height() as f32).then_some(rgb.width() / 2)
-            }
-            _ => {
-                let a = analyse(&transform::gray_of(&rgb), s.dpi);
-                // a spread scanned crooked has a leaning gutter: look for it on the levelled ink
-                let ink = match crate::deskew::detect_skew(&a.ink, s.max_skew_deg) {
-                    Some(ang) if ang.abs() > 0.1f32.to_radians() => split::level(&a.ink, ang),
-                    _ => a.ink,
-                };
-                split::find_gutter(&ink).map(|x| (x * a.factor).min(rgb.width().saturating_sub(1)))
-            }
+            SplitMode::Middle => (rgb.width() as f32 >= 1.15 * rgb.height() as f32).then(|| {
+                // the middle, nudged into the gutter when one lies close by: a spread whose spine
+                // is a little off-centre would otherwise lose the beginnings of the right page's lines
+                let mid = rgb.width() / 2;
+                match auto_gutter(&rgb, s) {
+                    Some(x) if x.abs_diff(mid) as f32 <= 0.10 * rgb.width() as f32 => x,
+                    _ => mid,
+                }
+            }),
+            _ => auto_gutter(&rgb, s),
         };
         cut_at = cut.filter(|&x| x > 0 && x < rgb.width());
         if manual.is_some() && s.sheet_split_angle_deg.abs() >= 0.05 {
@@ -2006,6 +2015,34 @@ mod tests {
             want,
             (0.4 * parts[0].0.width() as f32 + 0.4 * parts[1].0.width() as f32) as u32
         );
+    }
+
+    #[test]
+    fn middle_cut_moves_into_a_gutter_that_is_a_little_off_centre() {
+        // the spine lies at 44 % of the width: lines of the right page start at x = 560
+        let mut flat = RgbImage::from_pixel(1200, 800, Rgb([240, 240, 240]));
+        for (x0, x1) in [(80u32, 470u32), (560, 1120)] {
+            for y in (100..700).step_by(24) {
+                for x in x0..x1 {
+                    for dy in 0..8 {
+                        if (x / 6) % 4 != 0 {
+                            flat.put_pixel(x, y + dy, Rgb([20, 20, 20]));
+                        }
+                    }
+                }
+            }
+        }
+        let img = DynamicImage::ImageRgb8(flat);
+        let s = Settings {
+            split: SplitMode::Middle,
+            ..Settings::default()
+        }
+        .sanitized();
+        let parts = split_sheet(&img, &s);
+        assert_eq!(parts.len(), 2);
+        // the cut falls in the empty strip 470..560, not at 600 (inside the right page's text)
+        let w = parts[0].0.width();
+        assert!((470..=560).contains(&w), "cut at {w}");
     }
 
     #[test]
