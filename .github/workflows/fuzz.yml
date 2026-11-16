@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   fuzz:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     env:
       # through the environment, never pasted into a script
       ITERS: ${{ inputs.iterations || '3000' }}
