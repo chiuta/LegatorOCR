@@ -40,7 +40,7 @@ Not used: softprops/*, setup-* actions (none exist in the workflows). dependabot
 
 1. The macOS release job builds x86_64-apple-darwin on an arm64 `macos-latest` and then executes it in the smoke test: needs Rosetta on the runner (unverified).
 2. windows-latest moved to the VS 2026 image; the release check that the .exe does not reference VCRUNTIME140 should be watched on the next run.
-3. Release builds moved from ubuntu-22.04 to ubuntu-26.04 (pre.66, on the owner's instruction). The glibc floor of the Linux binaries rises from 2.35 to that of 26.04; the Portability step now prints the version each binary needs instead of enforcing 2.35. Systems older than Ubuntu 26.04 / Debian 14 may not run the prebuilt Linux binaries; building from source still works.
+3. Release builds: the main Linux files are built on ubuntu-26.04 (pre.66, owner's instruction); a second pair, `*-linux-gnu-glibc2.35.tar.gz`, is still built on ubuntu-22.04 for older systems, and the Portability step enforces the glibc 2.35 floor for those only. Remove the pair when ubuntu-22.04 runners disappear (EOL 2027-04).
 
 ## Could not verify
 veraPDF installer file existence (HEAD blocked), apt package availability, docs.github.com runner pages (the runner-images README was read instead), every action's full release notes.
