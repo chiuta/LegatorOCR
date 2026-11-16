@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Build and package LegatorOCR (CLI + GUI) for one target triple.
-#   scripts/package.sh <target-triple> [version]
+#   scripts/package.sh <target-triple> [version] [name-suffix]   (suffix e.g. -glibc2.35 for the older-Linux build)
 # Output: dist/LegatorOCR-<version>-<target>.(tar.gz|zip) and a .sha256 next to it.
 set -euo pipefail
 
 TARGET="${1:?usage: package.sh <target-triple> [version]}"
 cd "$(dirname "$0")/.."
 VERSION="${2:-$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)}"
-NAME="LegatorOCR-${VERSION}-${TARGET}"
+SUFFIX="${3:-}"
+NAME="LegatorOCR-${VERSION}-${TARGET}${SUFFIX}"
 # Staging lives outside dist/ so that dist/ holds only the archives and checksums.
 OUT="target/package-stage/${NAME}"
 

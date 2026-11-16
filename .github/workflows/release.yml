@@ -29,8 +29,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-22.04,     target: x86_64-unknown-linux-gnu }
-          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu }
+          - { os: ubuntu-26.04,     target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-26.04-arm, target: aarch64-unknown-linux-gnu }
+          # the same two for older Linux: built on Ubuntu 22.04, glibc 2.35 (Ubuntu 22.04, Debian 12 and later)
+          - { os: ubuntu-22.04,     target: x86_64-unknown-linux-gnu,  suffix: -glibc2.35 }
+          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, suffix: -glibc2.35 }
           - { os: windows-latest,   target: x86_64-pc-windows-msvc }
           - { os: macos-latest,     target: aarch64-apple-darwin }
           - { os: macos-latest,     target: x86_64-apple-darwin }
@@ -57,18 +60,21 @@ jobs:
           if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
             [ "$(git rev-parse "refs/tags/$TAG^{commit}")" = "$GITHUB_SHA" ] || { echo "tag $TAG points at another commit than the one built"; exit 1; }
           fi
-          scripts/package.sh "${{ matrix.target }}" "${TAG#v}"
+          scripts/package.sh "${{ matrix.target }}" "${TAG#v}" "${{ matrix.suffix }}"
       - name: Portability checks (fail the release instead of shipping an unrunnable binary)
         shell: bash
         run: |
           set -e
           case "${{ matrix.target }}" in
             *linux-gnu)
-              # built on Ubuntu 22.04 (glibc 2.35): must not need anything newer
+              # the -glibc2.35 builds (Ubuntu 22.04) must not need anything newer than glibc 2.35;
+              # the others (Ubuntu 26.04) only say which version they need
               for b in legatorocr legatorocr-gui; do
                 v=$(objdump -T "target/${{ matrix.target }}/release/$b" | grep -o 'GLIBC_[0-9.]*' | sort -V | tail -1)
-                echo "$b needs $v"
-                [ "$(printf '%s\n' "$v" GLIBC_2.35 | sort -V | tail -1)" = GLIBC_2.35 ] || { echo "glibc too new"; exit 1; }
+                echo "$b needs $v (builder: $(ldd --version | head -1))"
+                if [ "${{ matrix.suffix }}" = "-glibc2.35" ]; then
+                  [ "$(printf '%s\n' "$v" GLIBC_2.35 | sort -V | tail -1)" = GLIBC_2.35 ] || { echo "glibc too new"; exit 1; }
+                fi
               done;;
             *windows-msvc)
               for b in legatorocr legatorocr-gui; do
@@ -103,7 +109,7 @@ jobs:
           test "$(wc -c < smoke_out.pdf)" -gt 500
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: LegatorOCR-${{ matrix.target }}
+          name: LegatorOCR-${{ matrix.target }}${{ matrix.suffix }}
           path: dist/LegatorOCR-*
           if-no-files-found: error
 
