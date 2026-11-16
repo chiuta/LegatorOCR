@@ -20,7 +20,7 @@ Not used: softprops/*, setup-* actions (none exist in the workflows). dependabot
 
 | Label in repo | Status now |
 |---|---|
-| ubuntu-latest | = ubuntu-24.04 (26.04 exists but is not `latest`) |
+| ubuntu-latest | moves to ubuntu-26.04 between 2026-10-19 and 2026-11-19; the repo now names `ubuntu-26.04` explicitly (owner's choice: Ubuntu 26 everywhere) |
 | windows-latest | = Windows Server 2025 (now the VS 2026 image) |
 | macos-latest | = macOS 26 **arm64** |
 | ubuntu-22.04, ubuntu-22.04-arm | still offered. Third-party endoflife page: end of active support 2026-09-17 (already passed), EOL 2027-04-17 (one source, medium confidence) |
@@ -40,7 +40,7 @@ Not used: softprops/*, setup-* actions (none exist in the workflows). dependabot
 
 1. The macOS release job builds x86_64-apple-darwin on an arm64 `macos-latest` and then executes it in the smoke test: needs Rosetta on the runner (unverified).
 2. windows-latest moved to the VS 2026 image; the release check that the .exe does not reference VCRUNTIME140 should be watched on the next run.
-3. Release builds on ubuntu-22.04 are deliberate (glibc 2.35 floor, checked in the Portability step); moving to 24.04 would raise the floor, so it stays until 22.04 is actually removed.
+3. Release builds moved from ubuntu-22.04 to ubuntu-26.04 (pre.66, on the owner's instruction). The glibc floor of the Linux binaries rises from 2.35 to that of 26.04; the Portability step now prints the version each binary needs instead of enforcing 2.35. Systems older than Ubuntu 26.04 / Debian 14 may not run the prebuilt Linux binaries; building from source still works.
 
 ## Could not verify
 veraPDF installer file existence (HEAD blocked), apt package availability, docs.github.com runner pages (the runner-images README was read instead), every action's full release notes.
