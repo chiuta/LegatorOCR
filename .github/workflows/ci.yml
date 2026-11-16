@@ -13,11 +13,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-26.04, windows-latest, macos-latest]
         include:
           # the other platforms the releases are built for; a failure here is reported, not fatal,
           # until their runners have proved stable
-          - { os: ubuntu-24.04-arm, experimental: true }
+          - { os: ubuntu-26.04-arm, experimental: true }
           - { os: macos-15-intel, experimental: true }
           - { os: windows-11-arm, experimental: true }
     runs-on: ${{ matrix.os }}
@@ -53,19 +53,19 @@ jobs:
           test -s smoke.pdf
           head -c 5 smoke.pdf | grep -q '%PDF-'
       - name: Build and test without the compiled-in OCR model
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-26.04'
         run: cargo test --locked --workspace --no-default-features --features lexicon
       - name: Every option used in docs/tasks exists
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-26.04'
         run: python3 scripts/check-docs.py target/debug/legatorocr
       - name: Every option is documented (strict) and the rare ones run
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-26.04'
         run: |
           pip install pillow
           python3 scripts/check-options.py target/debug/legatorocr
           python3 scripts/smoke-options.py target/debug/legatorocr
       - name: Whole chain with the network cut off
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-26.04'
         shell: bash
         run: |
           # the tool must work with no network at all (privacy claim): run it in an empty network namespace
@@ -85,7 +85,7 @@ jobs:
           test -s offline.pdf
           head -c 5 offline.pdf | grep -q '%PDF-'
       - name: Clippy
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-26.04'
         shell: bash
         run: |
           set +e
@@ -100,7 +100,7 @@ jobs:
   ocr-regression:
     # synthetic pages with exact ground truth in 8 languages: guards against OCR / clean-up regressions
     # (not an accuracy claim for real scans)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -119,7 +119,7 @@ jobs:
   crossread:
     # second opinion: poppler, pdfium, MuPDF, qpdf, pikepdf, pypdf and pyHanko read what we write
     # (encrypted, linearized, object streams, JBIG2 symbols, signed, tagged PDF/A) and must agree
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -138,7 +138,7 @@ jobs:
 
   msrv:
     # the declared minimum Rust version must really build the workspace
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -149,7 +149,7 @@ jobs:
 
   wasm:
     # roadmap 7.7 / 7.11: the core builds for the browser and the module really works (run in Node)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -159,6 +159,8 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Build the module
         run: cargo build --locked --release --target wasm32-unknown-unknown -p legatorocr-wasm
+      - name: Node is the newest line (24 or later)
+        run: node -e "const m=+process.versions.node.split('.')[0]; console.log('node',process.version); process.exit(m>=24?0:1)"
       - name: Run it in Node
         run: node web/test-wasm.mjs target/wasm32-unknown-unknown/release/legatorocr_wasm.wasm
       - name: Size
