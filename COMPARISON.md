@@ -1,5 +1,7 @@
 # LegatorOCR compared with the field (as of 6 November 2026; most cells compiled 2 November, re-verified 4 and 6 November 2026)
 
+> **17 Nov 2026 update (adversarial study; nothing below was re-run):** section 2 was rewritten with the current figures and their caveats. Re-read today: OCRmyPDF's documentation is now titled 17.14.2; the EVB Viewer documentation says scan clean-up exists only in the desktop app, lists no OCR languages and names DOCX, images and TIFF as exports (no searchable PDF), so its row below stays unconfirmed for Romanian; the Gitea mirror of ScanTailor Experimental lists 1.2025.12.21 as newest while the 4 Nov GitHub reading said 1.2026.10.10 (mirror lag assumed, not confirmed); Capterra (21 Oct 2026) gives ABBYY FineReader PDF Standard for Windows as US$16 per month, which conflicts with the vendor's EUR 99 per year read on 5 Nov (unreconciled). The removal of two model files and five transcriptions from the tree is described in `docs/clean-room/PROVENANCE.md`.
+>
 > **6 Nov 2026 update (re-read today where the sources could be opened; nothing filled from memory):**
 > - *Changed:* PDF24 Creator is **11.32.0** (changelog entry dated 2 Nov 2026). OCRmyPDF's release notes now list **17.13.1** (17.13.0 is dated 28 Sep on GitHub; the 17.13.1 date was not shown) and say that PDF/A validation uses pikepdf and that there is a new `--pdfa-backend` option. **Surya 2.5** was published 2026-10-30 (689M-parameter vision-language model, 91 languages claimed; code Apache-2.0, weights OpenRAIL-M, free below US$5M revenue). PaddleOCR-VL-1.6 was open-sourced 2026-05-28 and PP-OCRv6 followed on 2026-06-11. Foxit cut its lineup to three plans in June 2026 (about US$10.83-13.33 per licence per month). Nitro's "Classic" is a US$270 three-year Windows licence, not a perpetual one, and pre-v13 perpetual licences stop working on 2026-12-31 (so the old "Win 14 perpetual" figure is stale).
 > - *Confirmed unchanged:* Tesseract 5.5.4 (2026-10-28, project release notes); ScanTailor Advanced v1.2.1 (Linux) and v1.1.1 (Windows), Gitea fork 1.0.21 (2025-12-20); ABBYY prices (US$99 / 165 per year, Mac US$69); Power PDF, PDFelement, Readiris, Google Document AI (US$1.50 per 1,000 pages) and Mistral OCR 4 prices; Microsoft Lens ended on 2026-03-09; Google Drive OCR limits.
@@ -37,19 +39,27 @@ It is **not** a state-of-the-art OCR engine. Its own OCR (`nocr`) is a small nat
 
 ## 2. Measured OCR accuracy (our test, not a benchmark)
 
-12 real scanned Romanian book pages (clean, two-column and difficult layouts), character error rate against a hand-checked
-reference where available; ABBYY output was used only as a cross-check because it is not ground truth (it mis-ordered one
-page and read a cover differently).
+*Replaced 17 Nov 2026: the earlier table (Tesseract 14.6 %, native 17.5 %) predated ROADMAP 4.12-4.38 and no longer describes the program.*
 
-| Engine | CER on the 12 pages |
-|---|---|
-| Tesseract 5.3.4, `ron` | **14.6 %** |
-| LegatorOCR native OCR, before this round of fixes | 38.9 % |
-| LegatorOCR native OCR, now | **17.5 %** |
+12 real scanned pages of one Romanian magazine (8 plain pages = GOOD8; ALL12 adds pages with illustrations, a cover and a diagram).
+References are the ABBYY text layer, **not** hand-verified text; the same pages were never used to train. Character error rate with
+diacritics, from `ROADMAP.md` 4.33-4.38:
 
-Reading: the native engine is **still behind Tesseract** on this set. Remaining weak spots: a narrow column gutter (one
-page), a few pages with heavy noise, and "." read as ",". Twelve pages is a sample, not a benchmark. We did not run
-ABBYY, PaddleOCR or any cloud engine on the same pages. Synthetic results for 8 languages are in `docs/OCR-BENCH.md`.
+| Engine | GOOD8 CER | ALL12 CER | GOOD8 exact word recall |
+|---|---|---|---|
+| LegatorOCR native engine (fine-tuned on other pages of the **same magazine**) | 2.76 % | 3.67 % | 92.1 % |
+| Tesseract `ron`, fast model (what apt installs) | 5.25 % | 8.20 % | 91.3 % |
+| Tesseract `ron`, best model | 4.87 % | 7.78 % | 91.6 % |
+| docTR bridge with Romanian head (opt-in, needs Python and onnxruntime) | 4.26 % | 6.02 % | 88.2 % |
+| OCRmyPDF 17.13.0 (Tesseract fast, no unpaper) on 8 good pages, folded CER | 4.62 % | - | 91.3 % |
+
+Reading, in the strictest form the evidence allows:
+
+- The native engine's lead comes from fine-tuning on the same magazine and typeface. Before that fine-tuning it was behind Tesseract on plain pages (GOOD8 5.72 % against 4.54 %). On other typefaces, scans or publishers it is **not measured**.
+- The docTR bridge is level with Tesseract on plain pages and ahead only where Tesseract is confused by pictures (its GOOD8 lead rests on one page, ROADMAP 4.36); it is behind on word recall.
+- The OCRmyPDF difference to LegatorOCR with the same Tesseract is under one point (4.82 % against 4.54 %, 5 Nov), inside the noise of an ABBYY-derived reference.
+- No hand-verified reference set exists. No vision-language model, FineReader or Acrobat was run on these pages.
+- Synthetic 8-language regression pages are in `docs/OCR-BENCH.md` (a regression guard, not an accuracy figure).
 
 Tesseract's Romanian models (`ron`, both `best` 9.6 MB and `fast` 2.4 MB, stamped 2017) contain both the comma-below
 (ș, ț) and the cedilla (ş, ţ) forms, and a public issue (langdata_lstm #37, open when fetched; still open and unanswered since the maintainers' questions, re-read 2026-11-04) reports that the training

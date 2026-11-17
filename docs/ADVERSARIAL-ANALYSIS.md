@@ -81,3 +81,12 @@ Two rows of section 2 changed. Everything is on the same 12 magazine pages with 
 - **Costs and limits:** needs onnxruntime and a 25 MB model download, is not the default engine, is untested on other typefaces, tables, three-column layouts and phone photos, and the Tesseract-versus-bridge gap on CER is about one point on 8 pages. Page p21 (a page with a diagram) shows 142 % CER with the bridge, but the ABBYY reference omits the diagram text (458 reference characters against 1087 read); the bridge recovers 93.5 % of the reference's own words (ROADMAP 4.35), so p21 says more about the reference than about the engine.
 - **What it does not change:** the native Rust engine's standing against Tesseract is unsettled: behind on the older measurement (section 2, row 1), ahead on this magazine after fine-tuning on it (ROADMAP 4.37, same-domain caveat); the 2026 vision-language models were not run.
 - **Against the better Tesseract model (added the same evening):** `tessdata_best` gives GOOD8 CER 4.87 % and exact recall 91.6 % (ROADMAP 4.34). The docTR bridge is 0.6 points ahead on CER (4.26 %), but that lead comes from page p31 alone (ROADMAP 4.36: level without it), and it is 3.4 points behind on recall (88.2 %); the gap is smaller than the one quoted against the fast model that apt installs.
+
+## 8. Update, 17 November 2026 (pre.67)
+
+- Row 11 of section 2 ("Cross-platform") changed: at least one external tester now runs the program on phone photos (video case study linked in the README), but his operating system is not recorded in the repository, and no Windows or macOS GUI run is documented. Still **unsupported** for those GUIs.
+- Row 13 ("Production ready"): version 0.2.0-pre.67, 479 commits on all branches by one human author, 934 tests. Still **refuted**.
+- Provenance (new row, **weak**): the README already says "independent implementation, not a documented clean-room one". The shipped model `multi.lnm` was fine-tuned on pages whose rights are not documented; two candidate models and five verbatim transcriptions were removed from the tree in pre.67 (they stay in history). See `docs/clean-room/PROVENANCE.md`.
+- The native engine's accuracy lead remains same-domain (section 2, row 1). `COMPARISON.md` section 2 now carries the current figures.
+- Competitor movement since 4 Nov that could be re-read today is in `docs/audit/competitors.md` (17 Nov block). The ScanTailor OCR 1.0.11 conflict and the EVB Viewer searchable-PDF claim stay unresolved because GitHub is not reachable from this environment.
+

@@ -48,3 +48,17 @@ Deleted afterwards: scratch downloads in the session scratchpad.
 Not read, seen only in lists or search results: scantailor-deviant, mrcpdf / mrc-pdf-kompressor (MRC compression), scanbutler, ocrmypdf-rs (Rust crate), franken_ocr, hocr-files-template-repo, ScanPostProcess. Commercial book tools (BookDrive Editor Pro, Booksorber, LIMB, ScanGate LWF) come from an awesome-list; activity today not checked.
 
 Measured on 2026-11-05 on the 12 evaluation pages: OCRmyPDF 17.13.0 (Tesseract `ron` fast, PDF/A-2b, no unpaper/pngquant/JBIG2) CER 4.82 % GOOD8, 7.88 % ALL12, against 4.54 % / 7.81 % for LegatorOCR with the same Tesseract; PDFs 4.2-7.6 MB against 0.7-1.4 MB (not equal image quality); 3.3-7.7 s against 2.0-5.7 s (Tesseract) and 1.6-3.3 s (native) per page. Prices read from vendor pages: ABBYY FineReader PDF 99 EUR/yr Standard, 165 EUR/yr Corporate, 69 EUR/yr Mac (pdf.abbyy.com/pricing); Adobe Acrobat Pro 24.19 EUR/month, Standard 18.30 EUR/month incl. VAT, annual billed monthly (adobe.com/acrobat/pricing, Romania). IRIS lists Readiris 16 and its Readiris 17 page returned 404.
+
+## Re-checked 2026-11-17 (pages opened through the web tools; GitHub pages are not reachable from this environment)
+
+| Item | Result | Source |
+|---|---|---|
+| ScanTailor Advanced (Gitea fork) | 1.0.21 "snake", 2025-12-20, GPL-3; README: scanning, OCR and assembling documents are out of scope | gitea.com/ImageProcessing-ElectronicPublications/scantailor-advanced |
+| ScanTailor Experimental (Gitea mirror) | newest listed 1.2025.12.21; 4 Nov GitHub reading was 1.2026.10.10; mirror lag assumed, unconfirmed | gitea.com/.../scantailor-experimental/releases |
+| ScanTailor Advanced on Flathub (4lex4 id) | v1.0.16, "more than 8 years ago" | flathub.org/it/apps/com.github._4lex4.ScanTailor-Advanced |
+| OCRmyPDF | docs titled 17.14.2; v17.7.1 notes read (Windows read-buffer fix, variable fonts, CJK fonts) | ocrmypdf.readthedocs.io; newreleases.io |
+| ABBYY FineReader PDF | Capterra as of 2026-10-21: Windows Standard US$16/month, Corporate US$24/month, Mac US$69/year; 4.7 from 451 reviews, many invited; reviewers report uneven OCR | capterra.com/p/65868 |
+| EVB Viewer | MIT; scan clean-up desktop only; OCR languages not listed; exports DOCX, images, multi-page TIFF; searchable PDF not stated; version not stated | evb-viewer.vercel.app/docs |
+| page-dewarp | MIT library; hosted service with credits (from GBP 2 per pack) | page-dewarp-web.pages.dev |
+| Not reachable | GitHub release pages, pdf.abbyy.com buy page, Book Restorer (i2S) | - |
+
