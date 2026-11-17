@@ -1,3 +1,5 @@
-# Notice on the `mobila1960_*_hand_reference.txt` files
+# Notice on the removed `mobila1960_*_hand_reference.txt` files
 
-These files are hand transcriptions of pages of a 1960 Romanian textbook ("Tehnologia producerii mobilei"), made to measure OCR recall. They reproduce the text of that book and are kept only as test references. The rights holder is unknown and no licence is documented. Do not redistribute them or the source scans; remove them from the repository if the rights cannot be confirmed (see `docs/clean-room/PROVENANCE.md`).
+Until 0.2.0-pre.66 this folder held five hand transcriptions of pages of a 1960 Romanian textbook ("Tehnologia producerii mobilei"), made to measure OCR recall. They reproduced about 900 words of that book and its rights holder is unknown, so they were removed from the tree in 0.2.0-pre.67. They remain in the git history of earlier commits.
+
+The scripts `mobila1960_score.py`, `mobila1960_word_recall.py` and `book_vote.py` are kept as method only: they expect reference files that you supply (a hand transcription of part of a page, one `.txt` per page). The results they produced are recorded in `ROADMAP.md` (4.15, 4.16); those numbers can no longer be reproduced from this repository.

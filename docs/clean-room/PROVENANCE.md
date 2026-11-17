@@ -67,3 +67,12 @@ Sursa: conversația claude.ai 0f5714f8-… („Clon ScanTaylor în Rust", 856 tu
 - **Imaginea `02_spread_picture.jpg`:** origine nedeterminată în istoric: ______
 
 **Limite:** comparația cu ScanTailor a fost parțială (doar ramura `master` și doar fișiere selectate); nu s-a rulat test automat de similaritate; nu s-au citit toate cele 163 de fișiere `.rs`; videoclipurile și modelele nu au fost inspectate. Nu este opinie juridică.
+
+### Corecturi și stare la 2026-11-17 (versiunea 0.2.0-pre.67)
+
+Verificate în arborele de lucru, nu din memorie:
+
+- **Eliminate din arbore:** modelele `candidate-books.lnm` și `candidate-digital.lnm` (antrenate pe PDF-uri ale unor terți, niciodată într-un build) și cele cinci transcrieri `docs/experiments/mobila1960_*_hand_reference.txt`. Rămân în istoricul git; o ștergere completă a istoricului nu s-a făcut. Scripturile asociate rămân doar ca metodă.
+- **Deja corectat înainte de 17 nov.:** README-urile în 8 limbi spun „implementare independentă, nu clean-room documentat” și avertizează asupra drepturilor modelului `multi.lnm`; creditul SUBTLEX există în `crates/legatorocr-nocr/lexicons/README.md`.
+- **Rămân deschise (decizii ale titularului, nu se pot rezolva din cod):** drepturile asupra numerelor din Revista StrING și asupra manualului din 1960 folosite la antrenarea lui `multi.lnm`; acordul scris și natura contribuției lui Alexandru Dumbravă; originea imaginii `02_spread_picture.jpg`; un test de similaritate (scancode/MOSS) față de ScanTailor; opinia unui avocat.
+- **Rămâne neverificat:** expunerea modelului AI care a scris codul la cod GPL.
