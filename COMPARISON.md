@@ -59,7 +59,7 @@ Reading, in the strictest form the evidence allows:
 - The docTR bridge is level with Tesseract on plain pages and ahead only where Tesseract is confused by pictures (its GOOD8 lead rests on one page, ROADMAP 4.36); it is behind on word recall.
 - The OCRmyPDF difference to LegatorOCR with the same Tesseract is under one point (4.82 % against 4.54 %, 5 Nov), inside the noise of an ABBYY-derived reference.
 - No hand-verified reference set exists. No vision-language model, FineReader or Acrobat was run on these pages.
-- Synthetic 8-language regression pages are in `docs/OCR-BENCH.md` (a regression guard, not an accuracy figure).
+- Synthetic 8-language regression pages are in `docs/OCR-BENCH.md` (a regression guard, not an accuracy figure). A head-to-head with OCRmyPDF, unpaper and plain Tesseract on 12 new synthetic pages in two typefaces is in `docs/DUEL.md` (native engine ahead on both, clean-up before Tesseract roughly neutral, home-ground caveats listed there).
 
 Tesseract's Romanian models (`ron`, both `best` 9.6 MB and `fast` 2.4 MB, stamped 2017) contain both the comma-below
 (ș, ț) and the cedilla (ş, ţ) forms, and a public issue (langdata_lstm #37, open when fetched; still open and unanswered since the maintainers' questions, re-read 2026-11-04) reports that the training

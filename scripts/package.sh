@@ -20,6 +20,14 @@ EXE=""; case "$TARGET" in *windows*) EXE=".exe";; esac
 cp "$BIN/legatorocr${EXE}" "$OUT/"
 cp README.md LICENSE THIRD_PARTY_LICENSES.md "$OUT/"
 cp crates/legatorocr-nocr/lexicons/README.md "$OUT/LEXICONS-NOTICE.md"
+# licence texts and notices of every Rust crate in the binaries (docs/audit/assets-licences.md, R6)
+PY="$(command -v python3 || command -v python || true)"
+if [ -n "$PY" ]; then
+  "$PY" scripts/gen-licenses.py --target "$TARGET" --out "$OUT/LICENSES-DEPENDENCIES.txt" \
+    || echo "::warning::licence bundle could not be generated"
+else
+  echo "::warning::no python found: licence bundle not generated"
+fi
 # the guide of this edition travels with the program (the window opens it from the Help menu)
 GUIDE=docs/Ghid-LegatorOCR.pdf
 [ -f "$GUIDE" ] && cp "$GUIDE" "$OUT/"
