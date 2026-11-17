@@ -2,7 +2,7 @@ name: Security audit
 # Known-vulnerability check of the dependency tree (RustSec advisory database).
 on:
   push:
-    paths: ["Cargo.lock", "**/Cargo.toml", ".github/workflows/audit.yml"]
+    paths: ["Cargo.lock", "**/Cargo.toml", ".github/workflows/audit.yml", "scripts/gen-licenses.py"]
   pull_request:
     paths: ["Cargo.lock", "**/Cargo.toml"]
   schedule:
@@ -24,3 +24,7 @@ jobs:
         run: |
           cargo install cargo-audit --locked
           cargo audit --deny warnings
+      - name: Licence bundle can be generated
+        run: |
+          python3 scripts/gen-licenses.py --target x86_64-unknown-linux-gnu --out "$RUNNER_TEMP/LICENSES-DEPENDENCIES.txt"
+          test -s "$RUNNER_TEMP/LICENSES-DEPENDENCIES.txt"

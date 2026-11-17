@@ -90,3 +90,7 @@ Two rows of section 2 changed. Everything is on the same 12 magazine pages with 
 - The native engine's accuracy lead remains same-domain (section 2, row 1). `COMPARISON.md` section 2 now carries the current figures.
 - Competitor movement since 4 Nov that could be re-read today is in `docs/audit/competitors.md` (17 Nov block). The ScanTailor OCR 1.0.11 conflict and the EVB Viewer searchable-PDF claim stay unresolved because GitHub is not reachable from this environment.
 
+## 9. Duel on new synthetic pages, 17 November 2026
+
+`docs/DUEL.md` (script `scripts/duel.py`): 12 synthetic Romanian pages in two typefaces, same Tesseract `ron` for every pipeline. Row 1 of section 2 gets a partial answer: the native engine is ahead of Tesseract also on a typeface it was not trained on (Poppins: CER 0.50 % against 1.09 %), but the text comes from the word lists the model is built on and the pages are rendered text, so the home-ground objection is reduced, not removed. LegatorOCR's clean-up before Tesseract gives no reliable gain on mildly degraded pages (1.37 % against 1.60 % on one typeface, 1.19 % against 1.09 % on the other); OCRmyPDF with unpaper changes nothing and takes about three times as long. ScanTailor could not be installed or downloaded here, so the dewarp comparison (section 2, row 6) is still not made.
+
