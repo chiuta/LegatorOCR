@@ -51,6 +51,7 @@ enum Cmd {
     SaveProjectFolder,
     ExportPdf,
     ExportImages,
+    ExportDocx,
     Modules,
     Proof,
     Collections,
@@ -74,6 +75,7 @@ const CMDS: &[(Cmd, &str)] = &[
     (Cmd::SaveProjectFolder, "menu.save_project_folder"),
     (Cmd::ExportPdf, "menu.export_pdf"),
     (Cmd::ExportImages, "menu.export_images"),
+    (Cmd::ExportDocx, "menu.export_docx"),
     (Cmd::Modules, "menu.modules"),
     (Cmd::Proof, "menu.proof"),
     (Cmd::Collections, "menu.collections"),
@@ -171,6 +173,8 @@ struct Sheet {
 enum JobKind {
     Pdf,
     Images,
+    /// Editable Word document from OCR (with the image boxes drawn on the pages).
+    Docx,
 }
 
 struct Done {
@@ -731,10 +735,10 @@ impl App {
         let files = &collect_images(files);
         // First files of a session: adopt the resolution stored in the scan, if any.
         if self.sheets.is_empty() {
-            if let Some(d) = files
-                .first()
-                .and_then(|f| legatorocr_engine::files::detect_dpi(f))
-            {
+            if let Some(d) = files.first().and_then(|f| {
+                legatorocr_engine::files::detect_dpi(f)
+                    .or_else(|| legatorocr_engine::files::photo_dpi_guess(f))
+            }) {
                 self.s.dpi = d;
             }
         }
@@ -932,6 +936,8 @@ impl App {
                             }
                             let key = if d.docs > 0 {
                                 "status.split_saved"
+                            } else if d.kind == JobKind::Docx {
+                                "status.docx_saved"
                             } else if d.kind == JobKind::Pdf {
                                 "status.pdf_saved"
                             } else {
@@ -944,7 +950,7 @@ impl App {
                                 d.pages,
                                 self.tr("status.pages")
                             );
-                            if d.kind == JobKind::Pdf && self.s.ocr {
+                            if (d.kind == JobKind::Pdf && self.s.ocr) || d.kind == JobKind::Docx {
                                 msg += &format!(", {} {}", d.words, self.tr("status.words"));
                             }
                             if d.skipped > 0 {
@@ -1175,6 +1181,10 @@ impl App {
                 .add_filter("PDF", &["pdf"])
                 .set_file_name("LegatorOCR.pdf")
                 .save_file(),
+            JobKind::Docx => rfd::FileDialog::new()
+                .add_filter("Word", &["docx"])
+                .set_file_name("LegatorOCR.docx")
+                .save_file(),
             JobKind::Images => rfd::FileDialog::new().pick_folder(),
         });
         let Some(target) = target else { return };
@@ -1233,6 +1243,7 @@ impl App {
             front_matter: self.s.front_matter,
             pdfa: self.s.pdfa,
         });
+        let text_ocr = (kind == JobKind::Docx).then(|| self.s.ocr_options());
         let (side_txt, side_hocr) = (
             self.s.sidecar_txt && self.s.ocr,
             self.s.sidecar_hocr && self.s.ocr,
@@ -1256,14 +1267,18 @@ impl App {
         std::thread::spawn(move || {
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
                 || -> Result<Done, String> {
-                    if kind == JobKind::Pdf {
+                    if kind != JobKind::Images {
                         legatorocr_engine::check_writable(&target2)
                             .map_err(|e| format!("{e:#}"))?;
                     } else {
                         std::fs::create_dir_all(&target2)
                             .map_err(|e| format!("{}: {e}", target2.display()))?;
                     }
-                    if let Some(o) = pdf.as_ref().and_then(|p| p.ocr.as_ref()) {
+                    if let Some(o) = pdf
+                        .as_ref()
+                        .and_then(|p| p.ocr.as_ref())
+                        .or(text_ocr.as_ref())
+                    {
                         check_ocr(o).map_err(|e| e.to_string())?;
                     }
                     let first_err: Mutex<Option<String>> = Mutex::new(None);
@@ -1291,7 +1306,7 @@ impl App {
                         keep_going: true,
                         osd,
                         uniform_size,
-                        text_ocr: None,
+                        text_ocr: text_ocr.clone(),
                         skip_duplicates,
                         split_on_blank,
                         split_on_barcode,
@@ -1346,6 +1361,23 @@ impl App {
                     }
                     if let Some(bytes) = &res.pdf {
                         write_atomic(&target2, bytes).map_err(|e| e.to_string())?;
+                    }
+                    if kind == JobKind::Docx {
+                        let title = stem.clone();
+                        let bytes = match (&res.docx_blocks, res.paragraph_text.as_ref()) {
+                            (Some(b), _) if !b.is_empty() => {
+                                legatorocr_engine::docx::from_blocks(b, &title)
+                            }
+                            (_, Some(t)) => {
+                                let pages: Vec<String> = t
+                                    .split('\x0c')
+                                    .map(|s| s.trim_start_matches('\n').to_string())
+                                    .collect();
+                                legatorocr_engine::docx::from_pages(&pages, &title)
+                            }
+                            _ => return Err(String::from("no text recognised")),
+                        };
+                        write_atomic(&target2, &bytes).map_err(|e| e.to_string())?;
                     }
                     // the text sidecars belong to the export whether or not it was split
                     if kind == JobKind::Pdf {
@@ -1453,6 +1485,13 @@ impl App {
                     .clicked()
                 {
                     self.start_export(&ctx, JobKind::Images);
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(idle, egui::Button::new(self.tr("menu.export_docx")))
+                    .clicked()
+                {
+                    self.start_export(&ctx, JobKind::Docx);
                     ui.close();
                 }
                 ui.separator();
@@ -2423,6 +2462,7 @@ impl App {
             Cmd::SaveProjectFolder if !self.sheets.is_empty() => self.save_project_folder(),
             Cmd::ExportPdf if idle => self.start_export(ctx, JobKind::Pdf),
             Cmd::ExportImages if idle => self.start_export(ctx, JobKind::Images),
+            Cmd::ExportDocx if idle => self.start_export(ctx, JobKind::Docx),
             Cmd::Modules => self.modules.open(),
             Cmd::Proof => self.proof.open(),
             Cmd::Collections => self.collections.open(),
@@ -3363,6 +3403,13 @@ impl App {
                     {
                         self.start_export(&ctx, JobKind::Images);
                     }
+                    if ui
+                        .add_enabled(idle, egui::Button::new(tr("menu.export_docx")))
+                        .on_hover_text(tr("docx.hint"))
+                        .clicked()
+                    {
+                        self.start_export(&ctx, JobKind::Docx);
+                    }
                 });
             });
         if let Some(undo) = swap {
@@ -3443,10 +3490,15 @@ impl App {
                 (1u8, "ocr.tool_zone"),
                 (2u8, "ocr.tool_ignore"),
                 (3u8, "ocr.tool_table"),
+                (4u8, "ocr.tool_imagebox"),
             ] {
                 if ui
                     .selectable_label(self.ocr_tool == v, tr(k))
-                    .on_hover_text(tr("ocr.tool_hint"))
+                    .on_hover_text(if v == 4 {
+                        tr("ocr.imagebox_hint")
+                    } else {
+                        tr("ocr.tool_hint")
+                    })
                     .clicked()
                 {
                     self.ocr_tool = if self.ocr_tool == v { 0 } else { v };
@@ -4381,6 +4433,11 @@ impl App {
                     v.push(([r.x, r.y, r.w, r.h], 1));
                 }
             }
+            for z in get("page_image_boxes").split(';').map(str::trim) {
+                if let Ok(r) = legatorocr_engine::ocrzones::parse_rect(z) {
+                    v.push(([r.x, r.y, r.w, r.h], 4));
+                }
+            }
             v
         });
         let mut remove_ocr: Option<OcrSrc> = None;
@@ -5073,7 +5130,7 @@ impl App {
                             // OCR zones (green) and ignored areas (red) of the output page, in mm
                             let slot = (page_part.unwrap_or(0) as usize).min(1);
                             let own = &own_rects[slot];
-                            let own_zones = own.iter().any(|(_, k)| *k != 1);
+                            let own_zones = own.iter().any(|(_, k)| *k != 1 && *k != 4);
                             // the page's own zones replace the general ones; ignored areas add up
                             let mut shown: Vec<([f32; 4], u8, OcrSrc)> = Vec::new();
                             for (n, (r, k)) in ocr_rects.iter().enumerate() {
@@ -5098,7 +5155,12 @@ impl App {
                             };
                             let painter = ui.painter_at(rect);
                             for (r, kind, src) in shown.iter() {
-                                let (fill, line) = if *kind == 2 {
+                                let (fill, line) = if *kind == 4 {
+                                    (
+                                        Color32::from_rgba_unmultiplied(240, 150, 20, 55),
+                                        Color32::from_rgb(235, 140, 10),
+                                    )
+                                } else if *kind == 2 {
                                     (
                                         Color32::from_rgba_unmultiplied(120, 70, 200, 50),
                                         Color32::from_rgb(110, 60, 190),
@@ -5152,7 +5214,9 @@ impl App {
                                     ui.input(|i| i.pointer.latest_pos()),
                                 ) {
                                     let r = egui::Rect::from_two_pos(a, b).intersect(rect);
-                                    let col = if ocr_tool == 3 {
+                                    let col = if ocr_tool == 4 {
+                                        Color32::from_rgb(235, 140, 10)
+                                    } else if ocr_tool == 3 {
                                         Color32::from_rgb(110, 60, 190)
                                     } else if ocr_tool == 2 {
                                         Color32::from_rgb(230, 50, 80)
@@ -5227,7 +5291,9 @@ impl App {
                 r[3],
                 if kind == 3 { "#table" } else { "" }
             );
-            let key = if kind == 2 {
+            let key = if kind == 4 {
+                "page_image_boxes"
+            } else if kind == 2 {
                 "page_ocr_ignore"
             } else {
                 "page_ocr_zones"
@@ -5283,12 +5349,19 @@ impl App {
                     };
                     let mut zones = get(a, "page_ocr_zones");
                     let mut ign = get(a, "page_ocr_ignore");
+                    let mut boxes = get(a, "page_image_boxes");
                     if n < zones.len() {
                         zones.remove(n);
                     } else if n - zones.len() < ign.len() {
                         ign.remove(n - zones.len());
+                    } else if n - zones.len() - ign.len() < boxes.len() {
+                        boxes.remove(n - zones.len() - ign.len());
                     }
-                    for (key, list) in [("page_ocr_zones", zones), ("page_ocr_ignore", ign)] {
+                    for (key, list) in [
+                        ("page_ocr_zones", zones),
+                        ("page_ocr_ignore", ign),
+                        ("page_image_boxes", boxes),
+                    ] {
                         a.page_pairs[slot].retain(|(k, _)| k != key);
                         if !list.is_empty() {
                             a.page_pairs[slot].push((key.to_string(), list.join("; ")));

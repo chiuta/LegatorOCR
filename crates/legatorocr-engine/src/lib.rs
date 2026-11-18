@@ -513,6 +513,42 @@ pub fn find_outliers(
 /// Save a processed page as an image file. PNG gets its resolution (`pHYs`);
 /// black & white TIFF is written Group 4 compressed (a typical page is ~30 KB);
 /// everything else goes through the `image` crate.
+/// The image boxes of a page cut out of the processed page as PNG pictures, with the pixel
+/// rectangle each one covers. A box that falls outside the page is skipped.
+fn cut_images(pg: &Page, boxes: &[ocrzones::Rect]) -> Vec<(docx::Rect, docx::Image)> {
+    let (pw, ph) = (pg.image.width(), pg.image.height());
+    let mut out = Vec::new();
+    for b in boxes {
+        let Some((x, y, w, h)) = ocrzones::px_box(b, pg.dpi, pw, ph) else {
+            continue;
+        };
+        let crop = pg.image.to_dynamic().crop_imm(x, y, w, h);
+        let mut buf = std::io::Cursor::new(Vec::new());
+        if crop.write_to(&mut buf, image::ImageFormat::Png).is_err() {
+            continue;
+        }
+        let png = png_with_dpi(buf.into_inner(), pg.dpi);
+        let k = 25.4 / pg.dpi.max(1) as f32;
+        let cx = (x + w / 2) as f32 / pw.max(1) as f32;
+        out.push((
+            docx::Rect { x, y, w, h },
+            docx::Image {
+                png,
+                w_mm: w as f32 * k,
+                h_mm: h as f32 * k,
+                align: if cx < 0.4 {
+                    0
+                } else if cx > 0.6 {
+                    2
+                } else {
+                    1
+                },
+            },
+        ));
+    }
+    out
+}
+
 pub fn save_page_image(pg: &Page, path: &Path) -> Result<()> {
     save_page_image_q(pg, path, 90)
 }
@@ -992,7 +1028,16 @@ pub fn run_export(
                         .part_settings
                         .get(pg.split_index.unwrap_or(0) as usize)
                         .and_then(|p| p.as_deref())
-                        .and_then(|p| ocrzones::for_page(&p.page_ocr_zones, &p.page_ocr_ignore));
+                        .and_then(|p| {
+                            // the text inside an image box is not recognised: it is a picture
+                            let ign = [p.page_ocr_ignore.as_str(), p.page_image_boxes.as_str()]
+                                .iter()
+                                .filter(|t| !t.trim().is_empty())
+                                .copied()
+                                .collect::<Vec<_>>()
+                                .join("; ");
+                            ocrzones::for_page(&p.page_ocr_zones, &ign)
+                        });
                     let words = match ocr_opts {
                         Some(o) => {
                             if cancel.load(Ordering::Relaxed) {
@@ -1120,10 +1165,23 @@ pub fn run_export(
                 res.pages += 1;
                 res.words += words.len();
                 if ocr_opts.is_some() {
+                    // image boxes of this page (Word export): cut from the final page image
+                    let image_boxes = chunk[i]
+                        .settings
+                        .part_settings
+                        .get(pg.split_index.unwrap_or(0) as usize)
+                        .and_then(|p| p.as_deref())
+                        .map(|p| ocrzones::parse_boxes(&p.page_image_boxes))
+                        .unwrap_or_default();
                     texts.push(legatorocr_ocr::words_to_text(&words));
                     if let Some(dir) = &facs_dir {
                         let geo = docx::blocks_from_words_geo(&words);
-                        block_pages.push(geo.iter().map(|g| g.block.clone()).collect());
+                        block_pages.push(
+                            docx::insert_images(geo.clone(), cut_images(&pg, &image_boxes))
+                                .into_iter()
+                                .map(|g| g.block)
+                                .collect(),
+                        );
                         let name = format!("page-{:04}.png", res.pages);
                         std::fs::create_dir_all(dir)
                             .with_context(|| format!("{}: cannot create", dir.display()))?;
@@ -1136,7 +1194,13 @@ pub fn run_export(
                             blocks: geo,
                         });
                     } else {
-                        block_pages.push(docx::blocks_from_words(&words));
+                        let geo = docx::blocks_from_words_geo(&words);
+                        block_pages.push(
+                            docx::insert_images(geo, cut_images(&pg, &image_boxes))
+                                .into_iter()
+                                .map(|g| g.block)
+                                .collect(),
+                        );
                     }
                     par_texts.push(legatorocr_ocr::words_to_paragraphs(&words));
                     json_pages.push(legatorocr_ocr::json_page(

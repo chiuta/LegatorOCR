@@ -42,6 +42,8 @@ fn blocks_html(
                 }
                 out.push_str("</table>\n");
             }
+            // pictures cut for the Word export are not embedded in the EPUB
+            Block::Image(_) => {}
             Block::Columns(cols) => {
                 for c in cols {
                     blocks_html(c, out, toc, page, n);

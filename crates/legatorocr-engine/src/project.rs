@@ -315,6 +315,7 @@ pub fn settings_to_pairs(s: &Settings) -> Vec<(&'static str, String)> {
     for (key, val) in [
         ("page_ocr_zones", &s.page_ocr_zones),
         ("page_ocr_ignore", &s.page_ocr_ignore),
+        ("page_image_boxes", &s.page_image_boxes),
     ] {
         if !val.trim().is_empty() {
             pairs.push((key, val.clone()));
@@ -437,6 +438,17 @@ pub fn apply_pair(s: &mut Settings, k: &str, v: &str) -> Result<bool> {
             } else {
                 s.page_ocr_ignore = v.trim().to_string();
             }
+        }
+        "page_image_boxes" => {
+            if v.len() > 4000 {
+                return Err(bad());
+            }
+            for item in v.split(';').map(str::trim).filter(|t| !t.is_empty()) {
+                if crate::ocrzones::parse_rect(item).is_err() {
+                    return Err(bad());
+                }
+            }
+            s.page_image_boxes = v.trim().to_string();
         }
         "page_skew" => {
             // the manual tilt of one page: "auto" lets the program measure it, otherwise degrees

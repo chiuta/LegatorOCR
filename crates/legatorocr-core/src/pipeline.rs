@@ -186,6 +186,9 @@ pub struct Settings {
     /// them, from the settings of the page (`part_settings`); the pipeline itself ignores them.
     pub page_ocr_zones: String,
     pub page_ocr_ignore: String,
+    /// Image boxes of this page for the Word export (`X,Y,W,H;…`, mm on the processed page): the
+    /// area is cut out as a picture, placed in reading order, and its text is not recognised.
+    pub page_image_boxes: String,
     /// Complete settings for one half of a cut sheet (`[0]` left page, `[1]` right page), used
     /// instead of the sheet's own for everything done to the page after the cut: clean-up, content
     /// box, output mode. Built by the caller from the general settings plus the page's own values
@@ -265,6 +268,7 @@ impl Default for Settings {
             part_settings: [None, None],
             page_ocr_zones: String::new(),
             page_ocr_ignore: String::new(),
+            page_image_boxes: String::new(),
             dropout: Dropout::Off,
             despeckle_strength: 1.0,
             show_through: false,
@@ -3449,6 +3453,7 @@ mod tests {
                 part_settings: [None, None],
                 page_ocr_zones: String::new(),
                 page_ocr_ignore: String::new(),
+                page_image_boxes: String::new(),
                 sheet_picture_zones: if rnd(3) == 0 {
                     vec![[
                         rnd(300) as f32 - 50.0,

@@ -3170,6 +3170,7 @@ fn real_main() -> Result<()> {
         part_settings: [None, None],
         page_ocr_zones: String::new(),
         page_ocr_ignore: String::new(),
+        page_image_boxes: String::new(),
         sheet_dewarp_guides: Vec::new(),
         sheet_picture_zones: Vec::new(),
         sheet_no_picture_zones: Vec::new(),
@@ -3634,6 +3635,13 @@ fn real_main() -> Result<()> {
                     phone_paper
                         .filter(|_| !from_project)
                         .and_then(|pp| legatorocr_engine::files::dpi_from_paper(p, pp))
+                })
+                .or_else(|| {
+                    if from_project {
+                        None
+                    } else {
+                        legatorocr_engine::files::photo_dpi_guess(p)
+                    }
                 })
                 .unwrap_or(settings.dpi);
             SheetInput {
