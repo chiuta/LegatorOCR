@@ -20,7 +20,11 @@ pub fn set(mb: u64) {
 
 /// Estimated bytes of one page in flight.
 pub fn page_bytes(w: u32, h: u32) -> u64 {
-    w as u64 * h as u64 * 3 * FACTOR
+    // saturating: a header that declares 2^31 x 2^31 pixels must read as "enormous", not wrap
+    // around to a small number (or panic in a debug build) and defeat the batch limit
+    (w as u64)
+        .saturating_mul(h as u64)
+        .saturating_mul(3 * FACTOR)
 }
 
 /// How many pages may run at once given the cap, the thread count and the largest page.
@@ -56,6 +60,12 @@ mod tests {
         assert!((1..8).contains(&b), "{b}");
         set(1);
         assert_eq!(batch_size(8, a4_600dpi), 1);
+        // a header declaring 2^31 x 2^31 pixels reads as enormous (one page at a time), it
+        // does not wrap around to a small number or panic
+        assert_eq!(page_bytes(u32::MAX, u32::MAX), u64::MAX);
+        assert_eq!(page_bytes(0x7FFF_FFFF, 0x7FFF_FFFF), u64::MAX);
+        set(1000);
+        assert_eq!(batch_size(8, page_bytes(u32::MAX, u32::MAX)), 1);
         set(0);
     }
 }

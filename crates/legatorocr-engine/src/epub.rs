@@ -8,7 +8,15 @@ use crate::docx::Block;
 use crate::zipmini;
 
 fn esc(s: &str) -> String {
-    s.replace('&', "&amp;")
+    // characters that XML 1.0 forbids (controls other than tab / line feed / carriage return,
+    // U+FFFE, U+FFFF) are dropped: one form feed from an OCR engine or a hostile text layer
+    // would otherwise make the whole file unreadable for an XML parser
+    s.chars()
+        .filter(|&c| {
+            matches!(c, '\t' | '\n' | '\r') || (c >= ' ' && c != '\u{FFFE}' && c != '\u{FFFF}')
+        })
+        .collect::<String>()
+        .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
@@ -134,6 +142,29 @@ mod tests {
         let l = zipmini::list(z).unwrap();
         let e = l.iter().find(|e| e.name == name).expect(name);
         String::from_utf8(zipmini::read(z, e).expect(name)).unwrap()
+    }
+
+    #[test]
+    fn forbidden_xml_characters_never_reach_the_book() {
+        let bad = "a\u{0}b\u{b}c\u{c}d\u{1f}e\u{fffe}f\u{ffff}g";
+        let pages = vec![vec![Block::Head(bad.into()), Block::Para(bad.into())]];
+        let z = from_blocks(&pages, bad, bad);
+        for e in zipmini::list(&z).unwrap() {
+            if e.name.ends_with(".xhtml") || e.name.ends_with(".opf") || e.name.ends_with(".ncx") {
+                let t = read(&z, &e.name);
+                let body = t.split_once('\n').map_or(t.as_str(), |(_, r)| r);
+                assert!(
+                    !body
+                        .chars()
+                        .any(|c| (c < ' ' && !matches!(c, '\t' | '\n' | '\r'))
+                            || c == '\u{fffe}'
+                            || c == '\u{ffff}'),
+                    "{}",
+                    e.name
+                );
+            }
+        }
+        assert!(read(&z, "OEBPS/content.xhtml").contains("abcdefg"));
     }
 
     #[test]
