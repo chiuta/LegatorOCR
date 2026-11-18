@@ -20,12 +20,15 @@ impl TempDir {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let p = std::env::temp_dir().join(format!("lgr_sign_{}_{n}", std::process::id()));
-        std::fs::create_dir(&p)?;
+        // created private from the start (no window between create and chmod in which the
+        // decrypted key could land in a directory others can read)
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o700))?;
+            use std::os::unix::fs::DirBuilderExt;
+            std::fs::DirBuilder::new().mode(0o700).create(&p)?;
         }
+        #[cfg(not(unix))]
+        std::fs::create_dir(&p)?;
         Ok(Self(p))
     }
 }

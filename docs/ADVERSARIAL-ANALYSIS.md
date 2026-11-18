@@ -102,3 +102,10 @@ Two rows of section 2 changed. Everything is on the same 12 magazine pages with 
 - **Feature from a tester:** image boxes for the Word export and an "Export DOCX" command in the window (see README, "Image boxes for Word"). Not yet opened in Word itself.
 - **PDF/A check widened:** Romanian text with comma-below diacritics in three more validated PDF/A files (bw OCR, hybrid OCR, colour OCR), plus a check that the diacritics reach the text layer.
 - Unchanged and not doable from here: rights to the `multi.lnm` training data, co-author agreement, human-written references, original phone photos, Windows/macOS runs, code signing, `winget validate`, ScanTailor head-to-head.
+
+## 11. Audit pre.71 (hostile inputs and options)
+
+Method: `scripts/hostile.py` (corrupt and bomb inputs under memory/time limits, also in the `hostile` workflow) plus 1,644 runs over 137 value-taking CLI options with 12 hostile values (empty, 0, -1, 20-digit, nan, 1e999, 100 kB string, `../` path, `$(...)`, `-x`, list separators).
+
+Found and repaired (each with a test): forbidden XML characters in EPUB/TEI/XLSX; page-size overflow in the memory cap; signing temp dir permissions; curl scheme/option injection through the time-stamp URL; file names starting with `-` passed to pdftoppm and veraPDF.
+Not found: panics, hangs, command injection through option values. Slow but bounded: 400 MP PNG (31 s, 3.8 GB), 3,000-page PDF (~0.5 s/page).

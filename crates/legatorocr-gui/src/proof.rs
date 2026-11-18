@@ -173,7 +173,7 @@ fn render_pdf(pdf: &Path, dir: &Path) -> Result<Vec<PathBuf>, String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let out = std::process::Command::new("pdftoppm")
         .args(["-r", "150", "-png"])
-        .arg(pdf)
+        .arg(legatorocr_engine::pdfapreflight::operand(pdf))
         .arg(dir.join("p"))
         .output()
         .map_err(|e| format!("pdftoppm: {e}"))?;

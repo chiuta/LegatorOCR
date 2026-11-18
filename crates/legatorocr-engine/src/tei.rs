@@ -19,7 +19,15 @@ pub fn facsimile_dir() -> Option<PathBuf> {
 }
 
 fn esc(s: &str) -> String {
-    s.replace('&', "&amp;")
+    // characters that XML 1.0 forbids (controls other than tab / line feed / carriage return,
+    // U+FFFE, U+FFFF) are dropped: one form feed from an OCR engine or a hostile text layer
+    // would otherwise make the whole file unreadable for an XML parser
+    s.chars()
+        .filter(|&c| {
+            matches!(c, '\t' | '\n' | '\r') || (c >= ' ' && c != '\u{FFFE}' && c != '\u{FFFF}')
+        })
+        .collect::<String>()
+        .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
@@ -255,6 +263,16 @@ pub fn render_facs(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forbidden_xml_characters_never_reach_the_tei() {
+        let bad = "a\u{0}b\u{b}c\u{c}d\u{1f}e\u{fffe}f";
+        let x = render(&[vec![Block::Para(bad.into())]], bad, Some(bad), &[Some(1)]);
+        assert!(x.contains("<p>abcdef</p>"), "{x}");
+        assert!(!x
+            .chars()
+            .any(|c| c < ' ' && !matches!(c, '\t' | '\n' | '\r')));
+    }
 
     #[test]
     fn structure_and_escaping() {

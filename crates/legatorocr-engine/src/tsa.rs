@@ -154,11 +154,24 @@ pub fn tsr_path(file: &Path) -> PathBuf {
 
 /// Ask the authority at `url` to time-stamp `digest` (HTTP POST with curl); returns the raw
 /// `TimeStampResp` after checking status, hash and nonce.
+/// Only `http://` and `https://` addresses go to curl: a value such as `-o/etc/passwd` or
+/// `file:///etc/shadow` would otherwise be read by curl as an option or another protocol.
+fn check_url(url: &str) -> Result<()> {
+    let low = url.to_ascii_lowercase();
+    if !(low.starts_with("http://") || low.starts_with("https://"))
+        || url.chars().any(|c| c.is_control() || c == ' ')
+    {
+        bail!("the time-stamp authority address must start with http:// or https://");
+    }
+    Ok(())
+}
+
 pub fn request(url: &str, digest: &[u8; 32]) -> Result<(Vec<u8>, Reply)> {
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         bail!("the time-stamp authority address must start with http:// or https://");
     }
     crate::offline::refuse("a time-stamp request")?;
+    check_url(url)?;
     let n = nonce();
     let req = build_request(digest, n);
     let tmp = std::env::temp_dir().join(format!("lgr_tsq_{}_{n}.tsq", std::process::id()));
@@ -167,6 +180,8 @@ pub fn request(url: &str, digest: &[u8; 32]) -> Result<(Vec<u8>, Reply)> {
         .args([
             "-sS",
             "--fail",
+            "--proto",
+            "=http,https",
             "--max-time",
             "60",
             "-H",
@@ -174,6 +189,7 @@ pub fn request(url: &str, digest: &[u8; 32]) -> Result<(Vec<u8>, Reply)> {
             "--data-binary",
         ])
         .arg(format!("@{}", tmp.display()))
+        .arg("--")
         .arg(url)
         .output()
         .context("cannot run curl (needed to reach the time-stamp authority)");
@@ -312,6 +328,22 @@ mod tests {
         std::fs::write(&doc, b"registry root changed").unwrap();
         assert!(verify(&doc, None).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_web_addresses_reach_curl() {
+        for bad in [
+            "-o/tmp/x",
+            "file:///etc/passwd",
+            "ftp://h/",
+            "",
+            "http://a b",
+            "--config",
+        ] {
+            assert!(check_url(bad).is_err(), "{bad}");
+        }
+        assert!(check_url("https://freetsa.org/tsr").is_ok());
+        assert!(check_url("HTTP://h/").is_ok());
     }
 
     #[test]
