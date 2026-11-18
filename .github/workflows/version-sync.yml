@@ -1,0 +1,37 @@
+# Keeps the published page, app.json and the version text in step with the single
+# source of truth (Cargo.toml, or `version_from` in .version-sync.json).
+# After a version bump lands on main this commits the stamps once; it never loops
+# (the commit carries [skip ci] and changes nothing the script reads).
+name: version-sync
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Cargo.toml
+      - .version-sync.json
+      - scripts/sync-version.py
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: version-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Sync version stamps
+        run: python3 -I scripts/sync-version.py
+      - name: Commit and push if anything changed
+        run: |
+          git add -A
+          git diff --cached --quiet && { echo "nothing to commit"; exit 0; }
+          git config user.name "version-sync (CI)"
+          git config user.email "alexio@trom.tf"
+          git commit -m "chore: sync version stamps [skip ci]"
+          git push

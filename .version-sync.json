@@ -1,0 +1,26 @@
+{
+  "pages": "docs",
+  "html": [
+    "index.html"
+  ],
+  "patterns": [
+    {
+      "file": "README*.md",
+      "regex": "^(?:Version|Versiune|Verzió|Versione|Versión|Versão)\\s*:\\s*([\\w.\\-]+)"
+    },
+    {
+      "file": "docs/index.html",
+      "regex": "\"k082\":\"[^\"]*?(\\d+\\.\\d+\\.\\d+-pre\\.\\d+)"
+    },
+    {
+      "file": "docs/index.html",
+      "regex": "data-i18n=\"k082\">[^<]*?(\\d+\\.\\d+\\.\\d+-pre\\.\\d+)"
+    }
+  ],
+  "date_patterns": [
+    {
+      "file": "README*.md",
+      "regex": "(?:Last updated|Ultima actualizare|Dernière mise à jour|Letzte Aktualisierung|Última actualización|Utolsó frissítés|Ultimo aggiornamento|Última atualização)\\s*:\\s*(\\d{4}-\\d{2}-\\d{2})"
+    }
+  ]
+}
