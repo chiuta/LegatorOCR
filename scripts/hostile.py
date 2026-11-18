@@ -11,6 +11,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("exe")
 ap.add_argument("--work")
 ap.add_argument("--verbose", action="store_true")
+ap.add_argument("--quick", action="store_true", help="skip the cases that are slow on purpose (400 MP image, 3000-page PDF)")
 ap.add_argument("--timeout", type=int, default=60)
 ap.add_argument("--mem-mb", type=int, default=6000)
 a = ap.parse_args()
@@ -102,6 +103,9 @@ cases["random.png"] = rnd_blob
 cases["random.pdf"] = b"%PDF-1.4\n" + rnd_blob
 cases["flipbits.png"] = bytes(b ^ (1 << rnd.randrange(8)) if rnd.random() < 0.02 else b for b in base)
 
+if a.quick:
+    for k in ("bomb_valid_20000.png", "bomb_valid_wide.png", "pdf_3000_pages.pdf"):
+        cases.pop(k, None)
 for n, d in cases.items():
     (W / n).write_bytes(d)
 (W / "-dash.png").write_bytes(base)  # a name that looks like an option

@@ -1,0 +1,27 @@
+name: Hostile inputs
+# Feeds the command line truncated, corrupted and absurd files and options (scripts/hostile.py).
+# A clean error is fine; a panic, a hang, running out of memory or a signal fails the job.
+on:
+  push:
+    branches: [main]
+    paths: ["crates/**", "scripts/hostile.py", ".github/workflows/hostile.yml", "Cargo.lock"]
+  pull_request:
+    paths: ["crates/**", "scripts/hostile.py", ".github/workflows/hostile.yml", "Cargo.lock"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hostile:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: Build the command line (release)
+        run: cargo build --release --locked -p legatorocr-cli
+      - name: Hostile inputs (quick set)
+        run: python3 scripts/hostile.py target/release/legatorocr --quick --timeout 120 --mem-mb 6000 --verbose
