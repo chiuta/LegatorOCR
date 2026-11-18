@@ -94,6 +94,15 @@ pub fn parse_rect(s: &str) -> Result<Rect> {
     })
 }
 
+/// The rectangles of a `;`-separated list (image boxes); entries that do not parse are skipped.
+pub fn parse_boxes(list: &str) -> Vec<Rect> {
+    list.split(';')
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .filter_map(|t| parse_rect(t).ok())
+        .collect()
+}
+
 pub fn parse_zone(s: &str) -> Result<Zone> {
     let s = s.trim();
     let (s, table) = match s.len().checked_sub(6).and_then(|i| s.get(i..)) {
@@ -139,7 +148,7 @@ pub fn active() -> bool {
 }
 
 /// Pixel box of a rectangle on a page, clamped to the page; `None` when nothing is left.
-fn px_box(r: &Rect, dpi: u32, w: u32, h: u32) -> Option<(u32, u32, u32, u32)> {
+pub(crate) fn px_box(r: &Rect, dpi: u32, w: u32, h: u32) -> Option<(u32, u32, u32, u32)> {
     let k = dpi as f32 / 25.4;
     let x0 = ((r.x * k).round().max(0.0) as u32).min(w);
     let y0 = ((r.y * k).round().max(0.0) as u32).min(h);

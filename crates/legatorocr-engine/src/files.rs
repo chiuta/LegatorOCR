@@ -245,6 +245,25 @@ pub fn dpi_from_paper(path: &Path, paper: (f64, f64)) -> Option<u32> {
     dpi.is_finite().then(|| (dpi as u32).clamp(100, 1200))
 }
 
+/// Resolution to assume for a very large picture that carries no usable resolution of its own
+/// (a 24–48 MP phone photo): it is taken to frame an A4 page, so its long side is the long side
+/// of the paper. A scan of an A3 sheet at 300 dpi (4961 px) is not that big, so only pictures
+/// longer than 5600 px qualify; smaller photos are close enough to the usual 300 dpi. Without
+/// it a 48 MP photo is read as a 677 mm page, every size in millimetres in the clean-up is off
+/// by half and Tesseract gets a resolution hint that is too low (42 of 64 words read, many wrong,
+/// against all 64 with the right hint).
+pub fn photo_dpi_guess(path: &Path) -> Option<u32> {
+    if detect_dpi(path).is_some() {
+        return None;
+    }
+    let (p, _) = &split_frame(path);
+    if is_pdf(p) {
+        return None;
+    }
+    let (w, h) = image::image_dimensions(p).ok()?;
+    (w.max(h) > 5600).then(|| dpi_from_paper(path, (210.0, 297.0)))?
+}
+
 /// Is `w`×`h` pixels at `dpi` a believable sheet of paper (2–24 in, at most ~2:1 beyond A-series)?
 fn plausible_page(w: u32, h: u32, dpi: u32) -> bool {
     let (a, b) = (w as f64 / dpi as f64, h as f64 / dpi as f64);
@@ -308,6 +327,22 @@ mod tests {
         image::RgbImage::new(4000, 3000).save(&p).unwrap();
         // 4000 px over 297 mm = 342 dpi
         assert_eq!(dpi_from_paper(&p, (210.0, 297.0)), Some(342));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn huge_photo_without_resolution_gets_an_a4_guess_and_normal_pictures_do_not() {
+        let d = std::env::temp_dir().join(format!("lgr-photo-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        for (name, w, h, want) in [
+            ("p48.png", 8000u32, 6000u32, Some(684)),
+            ("p12.png", 4000, 3000, None),
+            ("a3.png", 4961, 3508, None),
+        ] {
+            let p = d.join(name);
+            image::GrayImage::new(w, h).save(&p).unwrap();
+            assert_eq!(photo_dpi_guess(&p), want, "{name}");
+        }
         let _ = std::fs::remove_dir_all(&d);
     }
 

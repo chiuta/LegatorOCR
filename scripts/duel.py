@@ -38,6 +38,9 @@ def main():
     ap.add_argument("--lang", default="ron")
     ap.add_argument("--only", help="comma list of pipelines to run")
     ap.add_argument("--work", default=None)
+    ap.add_argument("--dewarp", action="store_true",
+                    help="also run legatorocr --dewarp (both engines) and page-dewarp followed by tesseract; use with curved pages "
+                         "(tools/ocr-train/warp.py). Combine with --only to skip the other pipelines")
     a = ap.parse_args()
     work = a.work or tempfile.mkdtemp(prefix="duel-")
     os.makedirs(work, exist_ok=True)
@@ -51,7 +54,7 @@ def main():
     if have("ocrmypdf") and have("pdftotext"):
         def omp(extra):
             def f(img, base):
-                r = run(["ocrmypdf", "-l", a.lang, "--force-ocr", "--output-type", "pdf", *extra, img, base + ".pdf"], env)
+                r = run(["ocrmypdf", "-l", a.lang, "--force-ocr", "--output-type", "pdf", "--image-dpi", "300", *extra, img, base + ".pdf"], env)
                 txt = subprocess.run(["pdftotext", "-raw", base + ".pdf", "-"], capture_output=True, text=True).stdout
                 return r, txt
             return f
@@ -69,6 +72,28 @@ def main():
                     txt = ""
                 return r, txt
             pipes["legatorocr+" + eng] = f
+    if a.dewarp and os.path.exists(a.legatorocr):
+        for eng in ("tesseract", "native"):
+            def f(img, base, eng=eng):
+                r = run([a.legatorocr, img, "--ocr", "--engine", eng, "--lang", a.lang, "--tessdata", a.tessdata, "--dewarp",
+                         "--split", "off", "--txt", base + ".txt", "--mode", "gray", "--format", "none"], env)
+                try:
+                    txt = open(base + ".txt", encoding="utf8").read()
+                except OSError:
+                    txt = ""
+                return r, txt
+            pipes["legatorocr+dewarp+" + eng] = f
+    if a.dewarp and have("page-dewarp") and have("tesseract"):
+        def pdw(img, base):
+            od = base + "_pd"
+            os.makedirs(od, exist_ok=True)
+            r, secs = run(["page-dewarp", "-nb", "1", "-o", od, img], env, timeout=900)
+            outs = sorted(glob.glob(os.path.join(od, "*_thresh.png")) + glob.glob(os.path.join(od, "*.png")))
+            if not outs:
+                return (r, secs), ""
+            r2, s2 = run(["tesseract", outs[0], base, "-l", a.lang, "--psm", "3"], env)
+            return (r2, secs + s2), open(base + ".txt", encoding="utf8").read()
+        pipes["page-dewarp+tesseract"] = pdw
     if a.only:
         pipes = {k: v for k, v in pipes.items() if k in a.only.split(",")}
     res = collections.defaultdict(lambda: collections.defaultdict(list))   # pipe -> group -> [(cer, secs)]

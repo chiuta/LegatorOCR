@@ -50,6 +50,7 @@ fn blocks(bs: &[Block], depth: usize, out: &mut String) {
                 }
                 out.push_str(&format!("{pad}</table>\n"));
             }
+            Block::Image(_) => {}
             Block::Columns(cols) => {
                 for c in cols {
                     out.push_str(&format!("{pad}<div type=\"column\">\n"));
@@ -172,6 +173,7 @@ fn geo_blocks(
                 }
                 out.push_str(&format!("{pad}</table>\n"));
             }
+            Block::Image(_) => {}
             Block::Columns(_) => {
                 for c in &g.columns {
                     out.push_str(&format!("{pad}<div type=\"column\">\n"));

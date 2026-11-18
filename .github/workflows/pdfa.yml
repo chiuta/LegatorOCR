@@ -21,7 +21,7 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Tools
-        run: sudo apt-get update && sudo apt-get install -y python3-pil tesseract-ocr tesseract-ocr-eng
+        run: sudo apt-get update && sudo apt-get install -y python3-pil tesseract-ocr tesseract-ocr-eng tesseract-ocr-ron fonts-dejavu-core
       - name: Build
         run: cargo build --locked --release -p legatorocr-cli
       - name: Make sample PDF/A files
@@ -39,6 +39,18 @@ jobs:
               if mode == "RGB":
                   d.rectangle((300, 1300, 900, 1600), fill=(180, 60, 40))
               im.save(name + ".png", dpi=(150, 150))
+          # Romanian text with comma-below diacritics: the text layer then holds non-ASCII
+          # characters (ToUnicode / font embedding paths that ASCII-only samples never reach)
+          from PIL import ImageFont
+          font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf", 34)
+          for name, mode in (("ro_bw", "L"), ("ro_color", "RGB")):
+              im = Image.new(mode, (1240, 1754), 255 if mode == "L" else (238, 228, 205))
+              d = ImageDraw.Draw(im)
+              for i in range(20):
+                  d.text((120, 140 + i * 60), "Șoarecele țese în pădure, înșiră câteva ațe fine %d" % i, font=font, fill=0 if mode == "L" else (20, 20, 40))
+              if mode == "RGB":
+                  d.rectangle((300, 1300, 900, 1600), fill=(180, 60, 40))
+              im.save(name + ".png", dpi=(150, 150))
           PY
           B=../target/release/legatorocr
           $B bw.png    --mode bw    --pdfa --pdf bw_plain.pdf  -o o1
@@ -49,6 +61,12 @@ jobs:
           $B bw.png color.png --mode bw --pdfa --ocr --lang eng --pdf two_pages.pdf -o o6
           $B bw.png color.png --mode gray --pdfa --pdf gray_two.pdf -o o7
           $B bw.png color.png --mode bw --pdfa --ocr --lang eng --tagged en --pdf tagged_ocr.pdf -o o8
+          $B ro_bw.png    --mode bw     --pdfa --ocr --lang ron --pdf ro_bw_ocr.pdf -o o9
+          $B ro_color.png --mode hybrid --pdfa --ocr --lang ron --pdf ro_hybrid_ocr.pdf -o o10
+          $B ro_color.png --mode color  --pdfa --ocr --lang ron --pdf ro_color_ocr.pdf -o o11
+          # the diacritics really are in the text layer (a text layer of '?' would still validate)
+          sudo apt-get install -y poppler-utils >/dev/null
+          pdftotext ro_bw_ocr.pdf - | grep -q 'ă' || { echo "::error::no Romanian diacritics in the PDF/A text layer"; exit 1; }
           mkdir -p ../pdfa1 ../pdfa3
           for f in bw_plain:bw color_mixed:mixed; do
             n=${f%%:*}; m=${f##*:}; src=bw.png; [ "$m" = mixed ] && src=color.png

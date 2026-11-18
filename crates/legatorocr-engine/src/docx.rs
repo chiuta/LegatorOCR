@@ -52,6 +52,19 @@ pub enum Block {
     Table(Vec<Vec<String>>),
     /// A section laid out in columns (left to right), each a list of blocks.
     Columns(Vec<Vec<Block>>),
+    /// A picture cut from the processed page (an "image box": figure, diagram, scheme, photo).
+    Image(Image),
+}
+
+/// A picture for the Word export: PNG bytes and the size it should have on the page.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Image {
+    pub png: Vec<u8>,
+    /// Size on paper in millimetres (the box as drawn, shrunk to the text width if wider).
+    pub w_mm: f32,
+    pub h_mm: f32,
+    /// Horizontal place on the page: 0 left, 1 centre, 2 right.
+    pub align: u8,
 }
 
 /// A rectangle in pixels of the page image: top-left corner and size.
@@ -126,6 +139,57 @@ pub fn blocks_from_words_geo(words: &[legatorocr_core::text::Word]) -> Vec<GeoBl
         }
         None => blocks_flat_geo(words),
     }
+}
+
+/// Puts pictures (image boxes) among the blocks of a page in reading order: before the first block
+/// that starts lower than the picture's top. A picture whose centre lies inside one column of a
+/// column section goes into that column. Nothing else is changed.
+pub fn insert_images(mut geo: Vec<GeoBlock>, images: Vec<(Rect, Image)>) -> Vec<GeoBlock> {
+    for (r, img) in images {
+        insert_one(&mut geo, r, img);
+    }
+    geo
+}
+
+fn insert_one(geo: &mut Vec<GeoBlock>, r: Rect, img: Image) {
+    let (cx, cy) = (r.x + r.w / 2, r.y + r.h / 2);
+    for g in geo.iter_mut() {
+        if !matches!(g.block, Block::Columns(_)) {
+            continue;
+        }
+        let Some(gr) = g.rect else { continue };
+        if cy < gr.y || cy > gr.y + gr.h {
+            continue;
+        }
+        let hit = g.columns.iter().position(|c| {
+            c.iter()
+                .filter_map(|b| b.rect)
+                .reduce(Rect::union)
+                .is_some_and(|cr| cx >= cr.x && cx <= cr.x + cr.w)
+        });
+        if let Some(k) = hit {
+            insert_one(&mut g.columns[k], r, img);
+            g.block = Block::Columns(
+                g.columns
+                    .iter()
+                    .map(|c| c.iter().map(|b| b.block.clone()).collect())
+                    .collect(),
+            );
+            return;
+        }
+    }
+    let at = geo
+        .iter()
+        .position(|g| g.rect.is_some_and(|b| b.y > r.y))
+        .unwrap_or(geo.len());
+    geo.insert(
+        at,
+        GeoBlock {
+            block: Block::Image(img),
+            rect: Some(r),
+            columns: Vec::new(),
+        },
+    );
 }
 
 /// A page set in two columns: a gutter of at least 1.2 line heights, free of text on nearly
@@ -520,11 +584,41 @@ fn para_xml(t: &str) -> String {
     }
 }
 
-fn blocks_xml(blocks: &[Block]) -> String {
+/// Text width of the A4 page with 25.4 mm margins, in millimetres.
+const TEXT_W_MM: f32 = 159.2;
+
+fn image_xml(img: &Image, rid: usize, id: usize) -> String {
+    let (mut w, mut h) = (img.w_mm.max(1.0), img.h_mm.max(1.0));
+    if w > TEXT_W_MM {
+        h *= TEXT_W_MM / w;
+        w = TEXT_W_MM;
+    }
+    let (cx, cy) = ((w * 36000.0) as i64, (h * 36000.0) as i64); // EMU per mm
+    let jc = ["left", "center", "right"][img.align.min(2) as usize];
+    format!(
+        "<w:p><w:pPr><w:keepNext w:val=\"0\"/><w:jc w:val=\"{jc}\"/></w:pPr><w:r><w:drawing>\
+         <wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\"><wp:extent cx=\"{cx}\" cy=\"{cy}\"/>\
+         <wp:docPr id=\"{id}\" name=\"Imagebox {id}\" descr=\"Imagebox {id}\"/>\
+         <a:graphic xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\">\
+         <a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">\
+         <pic:pic xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">\
+         <pic:nvPicPr><pic:cNvPr id=\"{id}\" name=\"image{id}.png\"/><pic:cNvPicPr/></pic:nvPicPr>\
+         <pic:blipFill><a:blip r:embed=\"rIdImg{rid}\"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>\
+         <pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm>\
+         <a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic>\
+         </wp:inline></w:drawing></w:r></w:p>"
+    )
+}
+
+fn blocks_xml(blocks: &[Block], media: &mut Vec<Vec<u8>>) -> String {
     let mut body = String::new();
     for b in blocks {
         match b {
             Block::Para(t) | Block::Head(t) => body.push_str(&para_xml(t)),
+            Block::Image(img) => {
+                media.push(img.png.clone());
+                body.push_str(&image_xml(img, media.len(), media.len()));
+            }
             Block::Columns(cols) => {
                 // the single-column part so far ends here; the columns form a continuous
                 // section of their own, closed by the paragraph that carries its properties
@@ -533,7 +627,7 @@ fn blocks_xml(blocks: &[Block]) -> String {
                      <w:pgSz w:w=\"11906\" w:h=\"16838\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"708\" w:footer=\"708\" w:gutter=\"0\"/></w:sectPr></w:pPr></w:p>",
                 );
                 for (k, c) in cols.iter().enumerate() {
-                    let x = blocks_xml(c);
+                    let x = blocks_xml(c, media);
                     if k > 0 {
                         // the break goes into the column's first paragraph (no empty line at
                         // the top of the column); before a table it needs a paragraph of its own
@@ -608,21 +702,25 @@ pub fn from_pages(pages: &[String], title: &str) -> Vec<u8> {
 /// One entry per page; a page break separates them.
 pub fn from_blocks(pages: &[Vec<Block>], title: &str) -> Vec<u8> {
     let mut body = String::new();
+    let mut media: Vec<Vec<u8>> = Vec::new();
     for (i, p) in pages.iter().enumerate() {
         if i > 0 {
             body.push_str("<w:p><w:r><w:br w:type=\"page\"/></w:r></w:p>");
         }
-        body.push_str(&blocks_xml(p));
+        body.push_str(&blocks_xml(p, &mut media));
     }
     let doc = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n\
-         <w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body>{body}\
+         <w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" \
+         xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" \
+         xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\"><w:body>{body}\
          <w:sectPr><w:type w:val=\"continuous\"/><w:pgSz w:w=\"11906\" w:h=\"16838\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"708\" w:footer=\"708\" w:gutter=\"0\"/></w:sectPr></w:body></w:document>"
     );
     let ct = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n\
         <Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
         <Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\
         <Default Extension=\"xml\" ContentType=\"application/xml\"/>\
+        <Default Extension=\"png\" ContentType=\"image/png\"/>\
         <Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>\
         <Override PartName=\"/docProps/core.xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/>\
         </Types>";
@@ -637,12 +735,32 @@ pub fn from_blocks(pages: &[Vec<Block>], title: &str) -> Vec<u8> {
          xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:title>{}</dc:title><dc:creator>LegatorOCR</dc:creator></cp:coreProperties>",
         esc(title)
     );
-    zipmini::write(&[
+    let mut docrels = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n\
+         <Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">",
+    );
+    for i in 1..=media.len() {
+        docrels.push_str(&format!(
+            "<Relationship Id=\"rIdImg{i}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"media/image{i}.png\"/>"
+        ));
+    }
+    docrels.push_str("</Relationships>");
+    let names: Vec<String> = (1..=media.len())
+        .map(|i| format!("word/media/image{i}.png"))
+        .collect();
+    let mut entries: Vec<(&str, &[u8])> = vec![
         ("[Content_Types].xml", ct.as_bytes()),
         ("_rels/.rels", rels.as_bytes()),
         ("word/document.xml", doc.as_bytes()),
         ("docProps/core.xml", core.as_bytes()),
-    ])
+    ];
+    if !media.is_empty() {
+        entries.push(("word/_rels/document.xml.rels", docrels.as_bytes()));
+        for (n, m) in names.iter().zip(&media) {
+            entries.push((n.as_str(), m.as_slice()));
+        }
+    }
+    zipmini::write(&entries)
 }
 
 #[cfg(test)]
@@ -670,6 +788,44 @@ mod tests {
             conf: 90.0,
             line,
         }
+    }
+
+    #[test]
+    fn image_box_is_placed_in_reading_order_and_embedded() {
+        let v = vec![w("sus", 100, 100, 60, 0), w("jos", 100, 900, 60, 1)];
+        let geo = blocks_from_words_geo(&v);
+        let img = Image {
+            png: b"\x89PNG fake".to_vec(),
+            w_mm: 80.0,
+            h_mm: 40.0,
+            align: 1,
+        };
+        let r = Rect {
+            x: 200,
+            y: 400,
+            w: 600,
+            h: 300,
+        };
+        let b: Vec<Block> = insert_images(geo, vec![(r, img)])
+            .into_iter()
+            .map(|g| g.block)
+            .collect();
+        assert_eq!(b.len(), 3, "{b:?}");
+        assert!(matches!(b[0], Block::Para(_)));
+        assert!(matches!(b[1], Block::Image(_)));
+        assert!(matches!(&b[2], Block::Para(t) if t == "jos"));
+        let doc = from_blocks(&[b], "t");
+        let l = zipmini::list(&doc).unwrap();
+        let names: Vec<&str> = l.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"word/media/image1.png"), "{names:?}");
+        assert!(names.contains(&"word/_rels/document.xml.rels"));
+        let e = l.iter().find(|e| e.name == "word/document.xml").unwrap();
+        let x = String::from_utf8(zipmini::read(&doc, e).unwrap()).unwrap();
+        assert!(x.contains("r:embed=\"rIdImg1\""));
+        assert!(x.contains("cx=\"2880000\"")); // 80 mm
+        assert!(x.contains("w:jc w:val=\"center\""));
+        assert!(x.find("sus").unwrap() < x.find("rIdImg1").unwrap());
+        assert!(x.find("rIdImg1").unwrap() < x.find("jos").unwrap());
     }
 
     #[test]
@@ -822,14 +978,14 @@ mod tests {
     #[test]
     fn right_to_left_paragraphs_are_marked_and_column_breaks_leave_no_empty_line() {
         let b = vec![Block::Para("שלום עולם".into()), Block::Para("plain".into())];
-        let x = blocks_xml(&b);
+        let x = blocks_xml(&b, &mut Vec::new());
         assert!(x.contains("<w:bidi/>") && x.contains("<w:rtl/>"));
         assert_eq!(x.matches("<w:bidi/>").count(), 1, "{x}");
         let cols = vec![Block::Columns(vec![
             vec![Block::Para("left".into())],
             vec![Block::Para("right".into())],
         ])];
-        let x = blocks_xml(&cols);
+        let x = blocks_xml(&cols, &mut Vec::new());
         assert!(
             x.contains(
                 "<w:p><w:r><w:br w:type=\"column\"/></w:r><w:r><w:t xml:space=\"preserve\">right"
