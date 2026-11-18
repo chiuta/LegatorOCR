@@ -151,15 +151,30 @@ pub fn sign_pdf(
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     let tmp = TempDir::new()?;
     let pem = tmp.0.join("key.pem");
-    let st = openssl()
-        .args(["pkcs12", "-in"])
-        .arg(p12)
-        .args(["-nodes", "-passin"])
-        .arg(format!("env:{pass_env}"))
-        .arg("-out")
-        .arg(&pem)
-        .output()
-        .context("cannot run openssl")?;
+    // old files (RC2-40 / 3DES from LibreSSL, Windows exports) need OpenSSL 3's `-legacy`
+    // provider: try the normal way first and retry with it only when the first attempt failed
+    let read_p12 = |legacy: bool| -> Result<std::process::Output> {
+        let mut c = openssl();
+        c.args(["pkcs12", "-in"]).arg(p12);
+        if legacy {
+            c.arg("-legacy");
+        }
+        c.args(["-nodes", "-passin"])
+            .arg(format!("env:{pass_env}"))
+            .arg("-out")
+            .arg(&pem)
+            .output()
+            .context("cannot run openssl")
+    };
+    let mut st = read_p12(false)?;
+    let mut legacy = false;
+    if !st.status.success() {
+        let retry = read_p12(true)?;
+        if retry.status.success() {
+            st = retry;
+            legacy = true;
+        }
+    }
     if !st.status.success() {
         bail!(
             "openssl could not open the PKCS#12 file (wrong password?): {}",
@@ -168,9 +183,12 @@ pub fn sign_pdf(
     }
     // intermediate / root certificates of the file, if any (the signer's own is embedded already)
     let chain = tmp.0.join("chain.pem");
-    let ok = openssl()
-        .args(["pkcs12", "-in"])
-        .arg(p12)
+    let mut chain_cmd = openssl();
+    chain_cmd.args(["pkcs12", "-in"]).arg(p12);
+    if legacy {
+        chain_cmd.arg("-legacy");
+    }
+    let ok = chain_cmd
         .args(["-nokeys", "-cacerts", "-passin"])
         .arg(format!("env:{pass_env}"))
         .arg("-out")
