@@ -44,7 +44,9 @@ pub fn find(pages: &[Vec<Block>]) -> Vec<Found> {
 
 fn esc(s: &str) -> String {
     s.chars()
-        .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+        .filter(|&c| {
+            (!c.is_control() || matches!(c, '\n' | '\t')) && c != '\u{FFFE}' && c != '\u{FFFF}'
+        })
         .collect::<String>()
         .replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -222,6 +224,11 @@ mod tests {
         assert_eq!(col_name(0), "A");
         assert_eq!(col_name(25), "Z");
         assert_eq!(col_name(26), "AA");
+    }
+
+    #[test]
+    fn xml_forbidden_characters_are_dropped_from_cells() {
+        assert_eq!(esc("a\u{fffe}b\u{ffff}c\u{0}d\u{b}e"), "abcde");
     }
 
     #[test]

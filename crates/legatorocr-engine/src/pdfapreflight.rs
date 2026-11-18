@@ -131,13 +131,22 @@ pub fn check_bytes(b: &[u8]) -> Vec<Finding> {
 }
 
 /// Result of running veraPDF: `(command, compliant?, one line of its report)`.
+/// A path that an external program cannot mistake for an option (`-x.pdf` becomes `./-x.pdf`).
+pub fn operand(p: &Path) -> std::path::PathBuf {
+    if p.to_string_lossy().starts_with('-') {
+        Path::new(".").join(p)
+    } else {
+        p.to_path_buf()
+    }
+}
+
 pub fn run_verapdf(cmd: &str, file: &Path, flavour: &str) -> Result<(bool, String), String> {
     let out = Command::new(cmd)
         .arg("--format")
         .arg("text")
         .arg("--flavour")
         .arg(flavour)
-        .arg(file)
+        .arg(operand(file))
         .output()
         .map_err(|e| format!("cannot run {cmd}: {e}"))?;
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -156,6 +165,12 @@ mod tests {
     use super::*;
 
     const GOOD: &str = "%PDF-1.7\n1 0 obj << /OutputIntents [<< /S /GTS_PDFA1 >>] >> endobj\n<pdfaid:part>2</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance>\n/Type /FontDescriptor /FontFile2 3 0 R\ntrailer << /ID [<aa><aa>] >>";
+
+    #[test]
+    fn operands_starting_with_a_dash_get_a_dot_slash() {
+        assert_eq!(operand(Path::new("-x.pdf")), Path::new("./-x.pdf"));
+        assert_eq!(operand(Path::new("a/-x.pdf")), Path::new("a/-x.pdf"));
+    }
 
     #[test]
     fn a_file_with_the_usual_parts_passes() {
