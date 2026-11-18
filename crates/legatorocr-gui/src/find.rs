@@ -5,6 +5,7 @@
 //! diacritics are ignored, and the old Romanian spelling (1953-1993) can be matched as well.
 //! Scans without a text layer cannot be searched; the window says how many and that they need OCR.
 
+use crate::bounded::Bounded;
 use eframe::egui;
 use legatorocr_engine::search::{self, Hit, SearchOptions, Summary};
 use std::path::PathBuf;
@@ -108,6 +109,7 @@ impl FindWindow {
         let mut open = true;
         let mut go = false;
         egui::Window::new(tr("find.title"))
+            .bounded(ctx)
             .open(&mut open)
             .default_size([620.0, 460.0])
             .show(ctx, |ui| {

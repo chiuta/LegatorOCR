@@ -3,6 +3,7 @@
 //! recognised text of the whole collection, and batch processing with progress and cancel.
 //! All the work is done by `legatorocr_engine::collection`; this file is the window.
 
+use crate::bounded::Bounded;
 use eframe::egui::{self, Color32, RichText};
 use legatorocr_engine::collection::{
     self as col, Collection, Hit, Index, Item, Kind, RunConfig, Status,
@@ -638,6 +639,7 @@ impl CollectionsWindow {
         self.pump(tr);
         let mut open = true;
         let resp = egui::Window::new(tr("col.title"))
+            .bounded(ctx)
             .open(&mut open)
             .default_size([1100.0, 700.0])
             .min_size([640.0, 420.0])

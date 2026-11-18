@@ -3,6 +3,7 @@
 //! feed); the corrected file is saved the same way and goes back through `--apply-text`.
 //! The window never touches the OCR words itself, it only edits and saves the text file.
 
+use crate::bounded::Bounded;
 use eframe::egui::{self, TextureHandle, TextureOptions};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -420,6 +421,7 @@ impl ProofWindow {
         }
         let mut open = true;
         egui::Window::new(tr("proof.title"))
+            .bounded(ctx)
             .open(&mut open)
             .default_size([1000.0, 700.0])
             .show(ctx, |ui| {

@@ -1,3 +1,4 @@
+use crate::bounded::Bounded;
 use crate::i18n::{t, Lang};
 use crate::settings::{ModeChoice, PageSizeChoice, SheetAdjust, SplitChoice, UiSettings};
 use crate::worker::{self, PreviewRequest, PreviewResult};
@@ -1638,6 +1639,7 @@ impl App {
         let running = self.allopts.run.is_some();
         let mut a = std::mem::take(&mut self.allopts);
         egui::Window::new(self.tr("all.title"))
+            .bounded(ctx)
             .open(&mut open)
             .default_size([860.0, 780.0])
             .min_size([640.0, 560.0])
@@ -1927,6 +1929,7 @@ impl App {
         let sudo = inst::needs_sudo();
         let running = self.modules.run_rx.is_some();
         egui::Window::new(self.tr("modules.title"))
+            .bounded(ctx)
             .open(&mut open)
             .collapsible(false)
             .default_width(560.0)
@@ -2552,6 +2555,7 @@ impl App {
         let none = self.tr("palette.none");
         let hint = self.tr("palette.hint");
         egui::Window::new(title)
+            .bounded(ctx)
             .anchor(egui::Align2::CENTER_TOP, [0.0, 60.0])
             .collapsible(false)
             .resizable(false)
@@ -5741,6 +5745,7 @@ impl eframe::App for App {
         if self.show_about {
             let mut open = true;
             egui::Window::new(self.tr("menu.about"))
+                .bounded(&ctx)
                 .open(&mut open)
                 .collapsible(false)
                 .show(&ctx, |ui| {
