@@ -94,6 +94,31 @@ pub fn parse_rect(s: &str) -> Result<Rect> {
     })
 }
 
+/// The rectangles (mm) of the zones marked `#table` that apply to a page: its own zones when it
+/// has any, else the general ones. The Word export builds a real table from the words inside.
+pub fn table_boxes(page_zones: &str) -> Vec<Rect> {
+    let own: Vec<Zone> = page_zones
+        .split(';')
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .filter_map(|t| parse_zone(t).ok())
+        .collect();
+    let zones = if own.is_empty() {
+        CFG.lock()
+            .ok()
+            .and_then(|c| c.clone())
+            .map(|c| c.0)
+            .unwrap_or_default()
+    } else {
+        own
+    };
+    zones
+        .into_iter()
+        .filter(|z| z.table)
+        .map(|z| z.rect)
+        .collect()
+}
+
 /// The rectangles of a `;`-separated list (image boxes); entries that do not parse are skipped.
 pub fn parse_boxes(list: &str) -> Vec<Rect> {
     list.split(';')

@@ -141,6 +141,322 @@ pub fn blocks_from_words_geo(words: &[legatorocr_core::text::Word]) -> Vec<GeoBl
     }
 }
 
+/// Like [`blocks_from_words_geo`], with the zones the user marked `#table` (rectangles in page
+/// pixels) turned into tables whatever the page geometry looks like: the words inside a zone
+/// are cut into rows and cells (a contents page with dot leaders becomes title | page), and the
+/// table is placed among the other blocks by its position. Words outside the zones are read as
+/// usual; a zone that holds no table (fewer than two rows or columns) leaves its words as text.
+pub fn blocks_with_tables(words: &[legatorocr_core::text::Word], tables: &[Rect]) -> Vec<GeoBlock> {
+    if tables.is_empty() {
+        return blocks_from_words_geo(words);
+    }
+    let mut rest: Vec<legatorocr_core::text::Word> = Vec::new();
+    let mut inside: Vec<Vec<legatorocr_core::text::Word>> = vec![Vec::new(); tables.len()];
+    for w in words {
+        let (cx, cy) = (w.x.saturating_add(w.w / 2), w.y.saturating_add(w.h / 2));
+        match tables.iter().position(|t| {
+            cx >= t.x && cx <= t.x.saturating_add(t.w) && cy >= t.y && cy <= t.y.saturating_add(t.h)
+        }) {
+            Some(k) => inside[k].push(w.clone()),
+            None => rest.push(w.clone()),
+        }
+    }
+    let mut built: Vec<GeoBlock> = Vec::new();
+    for ws in inside {
+        match forced_table(&ws) {
+            Some((rows, rect)) => built.push(GeoBlock {
+                block: Block::Table(rows),
+                rect: Some(rect),
+                columns: Vec::new(),
+            }),
+            None => rest.extend(ws),
+        }
+    }
+    let mut out = blocks_from_words_geo(&rest);
+    for t in built {
+        let y = t.rect.map_or(0, |r| r.y);
+        let at = out
+            .iter()
+            .position(|g| g.rect.is_some_and(|b| b.y > y))
+            .unwrap_or(out.len());
+        out.insert(at, t);
+    }
+    out
+}
+
+fn is_leader(c: char) -> bool {
+    matches!(
+        c,
+        '.' | '\u{2026}' | '_' | '\u{b7}' | '\u{201e}' | ',' | '-'
+    )
+}
+
+/// A page number as OCR gives it: digits, perhaps one misread character (`5?`).
+fn page_token(t: &str) -> bool {
+    !t.is_empty()
+        && t.chars().count() <= 4
+        && t.chars().any(|c| c.is_ascii_digit())
+        && t.chars().all(|c| c.is_ascii_digit() || c == '?')
+}
+
+type Entry = (String, String);
+type Cell = (f32, f32, String);
+
+/// A contents line `Title ........ 59` as (title, page); dot leaders are required (two dots in a
+/// row before the number), so a title that merely ends in a number is left alone.
+fn split_leader(text: &str) -> Option<Entry> {
+    let text = text.trim();
+    let digits = text
+        .chars()
+        .rev()
+        .take_while(|c| c.is_ascii_digit() || *c == '?')
+        .count();
+    let page = &text[text.len() - digits..];
+    if !page_token(page) {
+        return None;
+    }
+    // the number must stand apart from the title: after a space or a leader, not glued to a word
+    let head = &text[..text.len() - digits];
+    if !head.ends_with(|c: char| c.is_whitespace() || is_leader(c)) {
+        return None;
+    }
+    let before = head.trim_end();
+    if !before.contains("..") && !before.contains('\u{2026}') && !before.contains("__") {
+        return None;
+    }
+    let cut = before
+        .find("..")
+        .or_else(|| before.find('\u{2026}'))
+        .or_else(|| before.find("__"))
+        .unwrap_or(before.len());
+    let mut title = before[..cut].trim_end_matches(|c: char| is_leader(c) && c != '.' || c == ' ');
+    title = title.trim_end();
+    // a stray single lower-case letter left from the leaders ("sol. a ..")
+    loop {
+        let t = title.trim_end();
+        match t.rsplit_once(' ') {
+            Some((head, tail))
+                if tail.chars().count() == 1 && tail.chars().all(char::is_lowercase) =>
+            {
+                title = head;
+            }
+            _ => {
+                title = t;
+                break;
+            }
+        }
+    }
+    if title.is_empty() {
+        return None;
+    }
+    Some((title.to_string(), page.to_string()))
+}
+
+/// Inside a page already known to be a contents list: a line whose leaders OCR turned into a few
+/// stray characters (`... Salvia (L.). eoa o u 87`) still ends in a page number.
+fn split_loose(text: &str) -> Option<Entry> {
+    let mut toks: Vec<&str> = text.split_whitespace().collect();
+    let page = toks.pop()?;
+    if toks.len() < 2 || !page_token(page) || page.contains('?') || page.len() > 3 {
+        return None;
+    }
+    let junk = |t: &str| t.chars().count() <= 3 && !t.chars().any(|c| c.is_ascii_digit());
+    if !junk(toks.last()?) {
+        return None;
+    }
+    while toks.len() > 1 && junk(toks.last()?) {
+        toks.pop();
+    }
+    Some((toks.join(" "), page.to_string()))
+}
+
+/// A contents line whose number stands at the right edge of the list, with whatever OCR made of
+/// the dot leaders (`Irigarea cece ececece 53`) between title and number.
+fn split_edge(text: &str) -> Option<Entry> {
+    let mut toks: Vec<&str> = text.split_whitespace().collect();
+    let page = toks.pop()?;
+    if toks.len() < 2 || !page_token(page) || page.contains('?') || page.len() > 3 {
+        return None;
+    }
+    let junk = |t: &str| {
+        !t.chars().any(|c| c.is_ascii_digit())
+            && (t.chars().count() <= 3
+                || t.chars()
+                    .all(|c| matches!(c, 'e' | 'c' | 'o' | 'u' | '.' | '_' | ',')))
+    };
+    while toks.len() > 1 && junk(toks.last()?) {
+        toks.pop();
+    }
+    Some((toks.join(" "), page.to_string()))
+}
+
+/// Whether a contents line starts a new entry (a section number, `Capitolul`, `Anexa`…) rather
+/// than continuing the title of the one before.
+fn starts_entry(t: &str) -> bool {
+    let t = t.trim_start();
+    let num: String = t
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    if num.chars().any(|c| c.is_ascii_digit()) && t[num.len()..].starts_with(char::is_whitespace) {
+        return true;
+    }
+    let low = t.to_lowercase();
+    [
+        "capitolul",
+        "anexa",
+        "anexe",
+        "bibliografie",
+        "introducere",
+        "cuprins",
+        "partea",
+    ]
+    .iter()
+    .any(|k| low.starts_with(k))
+}
+
+/// The rows of a table read from the words of one zone, and the rectangle they cover.
+fn forced_table(ws: &[legatorocr_core::text::Word]) -> Option<(Vec<Vec<String>>, Rect)> {
+    let ws: Vec<&legatorocr_core::text::Word> =
+        ws.iter().filter(|w| !w.text.trim().is_empty()).collect();
+    if ws.len() < 2 {
+        return None;
+    }
+    let x0 = ws.iter().map(|w| w.x).min()?;
+    let y0 = ws.iter().map(|w| w.y).min()?;
+    let x1 = ws.iter().map(|w| w.x.saturating_add(w.w)).max()?;
+    let y1 = ws.iter().map(|w| w.y.saturating_add(w.h)).max()?;
+    let rect = Rect {
+        x: x0,
+        y: y0,
+        w: x1 - x0,
+        h: y1 - y0,
+    };
+    // text lines (by id), top to bottom, words left to right
+    let mut ids: Vec<u32> = ws.iter().map(|w| w.line).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    struct L {
+        top: f32,
+        h: f32,
+        words: Vec<(f32, f32, String)>,
+    }
+    let mut lines: Vec<L> = ids
+        .iter()
+        .map(|&id| {
+            let mut g: Vec<&&legatorocr_core::text::Word> =
+                ws.iter().filter(|w| w.line == id).collect();
+            g.sort_by_key(|w| w.x);
+            L {
+                top: g.iter().map(|w| w.y).min().unwrap_or(0) as f32,
+                h: g.iter().map(|w| w.h).max().unwrap_or(1).max(1) as f32,
+                words: g
+                    .iter()
+                    .map(|w| (w.x as f32, (w.x + w.w) as f32, w.text.trim().to_string()))
+                    .collect(),
+            }
+        })
+        .collect();
+    lines.sort_by(|a, b| a.top.total_cmp(&b.top));
+    let right = lines
+        .iter()
+        .filter_map(|l| l.words.last().map(|w| w.1))
+        .fold(f32::MIN, f32::max);
+    // a number at the right edge of a line with no wide gap (so not a cell of a wider table)
+    let at_edge: Vec<bool> = lines
+        .iter()
+        .map(|l| {
+            l.words.last().is_some_and(|w| w.1 >= right - 4.0 * l.h)
+                && l.words.windows(2).all(|p| p[1].0 - p[0].1 <= 1.5 * l.h)
+        })
+        .collect();
+    let texts: Vec<String> = lines
+        .iter()
+        .map(|l| {
+            l.words
+                .iter()
+                .map(|w| w.2.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect();
+    let with_leader = texts
+        .iter()
+        .zip(&at_edge)
+        .filter(|(t, edge)| split_leader(t).is_some() || (**edge && split_edge(t).is_some()))
+        .count();
+    if with_leader >= 2 && with_leader * 5 >= texts.len() * 2 {
+        // a table of contents: title | page
+        let mut rows: Vec<Vec<String>> = Vec::new();
+        let mut pending: Option<String> = None;
+        for (t, edge) in texts.iter().zip(&at_edge) {
+            match split_leader(t)
+                .or_else(|| split_loose(t))
+                .or_else(|| edge.then(|| split_edge(t)).flatten())
+            {
+                Some((title, page)) => match pending.take() {
+                    Some(p) if !starts_entry(&title) => {
+                        rows.push(vec![format!("{p} {title}"), page])
+                    }
+                    Some(p) => {
+                        rows.push(vec![p, String::new()]);
+                        rows.push(vec![title, page]);
+                    }
+                    None => rows.push(vec![title, page]),
+                },
+                None => match pending.take() {
+                    Some(p) if !starts_entry(t) => pending = Some(format!("{p} {}", t.trim())),
+                    Some(p) => {
+                        rows.push(vec![p, String::new()]);
+                        pending = Some(t.trim().to_string());
+                    }
+                    None => pending = Some(t.trim().to_string()),
+                },
+            }
+        }
+        if let Some(p) = pending {
+            rows.push(vec![p, String::new()]);
+        }
+        return (rows.len() >= 2).then_some((rows, rect));
+    }
+    // any other table: rows are lines whose centres agree, cells are separated by wide gaps
+    let mut hs: Vec<f32> = lines.iter().map(|l| l.h).collect();
+    hs.sort_by(|a, b| a.total_cmp(b));
+    let med = hs[hs.len() / 2];
+    let mut rows: Vec<(f32, Vec<Cell>)> = Vec::new();
+    for l in &lines {
+        let c = l.top + l.h / 2.0;
+        match rows.last_mut() {
+            Some((rc, cells)) if (c - *rc).abs() < 0.5 * med => cells.extend(l.words.clone()),
+            _ => rows.push((c, l.words.clone())),
+        }
+    }
+    let mut grid: Vec<Vec<String>> = Vec::new();
+    for (_, mut cells) in rows {
+        cells.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut row: Vec<(f32, String)> = Vec::new();
+        for (l, r, t) in cells {
+            match row.last_mut() {
+                Some((pr, s)) if l - *pr <= 1.5 * med => {
+                    *pr = pr.max(r);
+                    s.push(' ');
+                    s.push_str(&t);
+                }
+                _ => row.push((r, t)),
+            }
+        }
+        grid.push(row.into_iter().map(|c| c.1).collect());
+    }
+    let width = grid.iter().map(Vec::len).max().unwrap_or(0);
+    if grid.len() < 2 || width < 2 {
+        return None;
+    }
+    for r in grid.iter_mut() {
+        r.resize(width, String::new());
+    }
+    Some((grid, rect))
+}
+
 /// Puts pictures (image boxes) among the blocks of a page in reading order: before the first block
 /// that starts lower than the picture's top. A picture whose centre lies inside one column of a
 /// column section goes into that column. Nothing else is changed.
@@ -766,6 +1082,183 @@ pub fn from_blocks(pages: &[Vec<Block>], title: &str) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn line(y: u32, id: u32, parts: &[&str]) -> Vec<legatorocr_core::text::Word> {
+        let mut x = 100;
+        parts
+            .iter()
+            .map(|p| {
+                let wd = 12 * p.chars().count() as u32;
+                let r = w(p, x, y, wd, id);
+                x += wd + 12;
+                r
+            })
+            .collect()
+    }
+
+    fn zone() -> Rect {
+        Rect {
+            x: 0,
+            y: 0,
+            w: 3000,
+            h: 3000,
+        }
+    }
+
+    #[test]
+    fn a_table_zone_turns_a_contents_page_with_dot_leaders_into_title_and_page() {
+        let mut ws = Vec::new();
+        ws.extend(line(
+            100,
+            1,
+            &["2.5.2.4.", "Metode", "biochimice", "......51"],
+        ));
+        ws.extend(line(
+            140,
+            2,
+            &["2.5.3.", "Combaterea", "dăunătorilor..............", "52"],
+        ));
+        ws.extend(line(
+            180,
+            3,
+            &[
+                "2.5.4.",
+                "Irigarea",
+                "...........",
+                "e",
+                "oa",
+                "u",
+                "u.",
+                "53",
+            ],
+        ));
+        // a title that runs onto a second line
+        ws.extend(line(
+            220,
+            4,
+            &["2.8.", "Distilarea", "materialului", "vegetal"],
+        ));
+        ws.extend(line(260, 5, &["și", "aromatice...............", "57"]));
+        ws.extend(line(
+            300,
+            6,
+            &[
+                "3.1.",
+                "Gălbenelele",
+                "(Calendula",
+                "officinalis",
+                "L.)...59",
+            ],
+        ));
+        // without a zone nothing here is a table: leaders leave no gap between title and number
+        assert!(!blocks_with_tables(&ws, &[])
+            .iter()
+            .any(|g| matches!(g.block, Block::Table(_))));
+        let g = blocks_with_tables(&ws, &[zone()]);
+        let Some(Block::Table(rows)) = g
+            .iter()
+            .map(|g| &g.block)
+            .find(|b| matches!(b, Block::Table(_)))
+        else {
+            panic!(
+                "no table: {:?}",
+                g.iter().map(|g| &g.block).collect::<Vec<_>>()
+            );
+        };
+        assert_eq!(rows.len(), 5, "{rows:?}");
+        assert_eq!(rows[0], vec!["2.5.2.4. Metode biochimice", "51"]);
+        assert_eq!(rows[1], vec!["2.5.3. Combaterea dăunătorilor", "52"]);
+        assert_eq!(rows[2][1], "53");
+        assert!(rows[2][0].starts_with("2.5.4. Irigarea"), "{:?}", rows[2]);
+        assert_eq!(
+            rows[3],
+            vec!["2.8. Distilarea materialului vegetal și aromatice", "57"]
+        );
+        assert_eq!(
+            rows[4],
+            vec!["3.1. Gălbenelele (Calendula officinalis L.)", "59"]
+        );
+    }
+
+    #[test]
+    fn contents_numbers_at_the_right_edge_are_pages_even_when_the_leaders_are_garbage() {
+        let mut ws = Vec::new();
+        ws.extend(line(
+            100,
+            1,
+            &["2.5.4.", "Irigarea", "cece", "ececececee", "53"],
+        ));
+        ws.extend(line(
+            140,
+            2,
+            &["2.6.", "Recoltarea", "plantelor", "ocococ", "54"],
+        ));
+        ws.extend(line(180, 3, &["2.7.", "Uscarea", "......", "55"]));
+        let g = blocks_with_tables(&ws, &[zone()]);
+        let Some(Block::Table(rows)) = g
+            .iter()
+            .map(|g| &g.block)
+            .find(|b| matches!(b, Block::Table(_)))
+        else {
+            panic!("no table");
+        };
+        assert_eq!(rows[0], vec!["2.5.4. Irigarea", "53"], "{rows:?}");
+        assert_eq!(rows[1][1], "54");
+    }
+
+    #[test]
+    fn a_table_zone_only_takes_the_words_inside_it_and_keeps_reading_order() {
+        let mut ws = Vec::new();
+        ws.extend(line(50, 1, &["Titlu", "mare"]));
+        ws.extend(line(400, 2, &["1.", "Intro", "......", "5"]));
+        ws.extend(line(440, 3, &["2.", "Final", "......", "9"]));
+        ws.extend(line(900, 4, &["Text", "dupa", "tabel"]));
+        let z = Rect {
+            x: 0,
+            y: 380,
+            w: 3000,
+            h: 120,
+        };
+        let g = blocks_with_tables(&ws, &[z]);
+        let kinds: Vec<&str> = g
+            .iter()
+            .map(|g| match g.block {
+                Block::Table(_) => "table",
+                Block::Para(_) | Block::Head(_) => "text",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(kinds, ["text", "table", "text"], "{kinds:?}");
+    }
+
+    #[test]
+    fn a_table_zone_without_leaders_cuts_cells_at_wide_gaps_and_pads_rows() {
+        let mut ws = Vec::new();
+        let at = |t: &str, x: u32, y: u32, id: u32| w(t, x, y, 12 * t.chars().count() as u32, id);
+        ws.push(at("Nume", 100, 100, 1));
+        ws.push(at("Suma", 700, 100, 1));
+        ws.push(at("Ana", 100, 140, 2));
+        ws.push(at("12", 700, 140, 2));
+        ws.push(at("Total", 100, 180, 3));
+        let g = blocks_with_tables(&ws, &[zone()]);
+        let Some(Block::Table(rows)) = g
+            .iter()
+            .map(|g| &g.block)
+            .find(|b| matches!(b, Block::Table(_)))
+        else {
+            panic!("no table");
+        };
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[2], vec!["Total", ""]);
+        assert!(rows.iter().all(|r| r.len() == 2));
+    }
+
+    #[test]
+    fn a_table_zone_with_one_line_stays_text() {
+        let ws = line(100, 1, &["doar", "un", "rand"]);
+        let g = blocks_with_tables(&ws, &[zone()]);
+        assert!(g.iter().all(|g| !matches!(g.block, Block::Table(_))));
+    }
 
     #[test]
     fn document_xml_has_the_text() {

@@ -1173,9 +1173,23 @@ pub fn run_export(
                         .and_then(|p| p.as_deref())
                         .map(|p| ocrzones::parse_boxes(&p.page_image_boxes))
                         .unwrap_or_default();
+                    // zones marked #table become real tables in the Word / EPUB / sheet export
+                    let table_rects: Vec<docx::Rect> = chunk[i]
+                        .settings
+                        .part_settings
+                        .get(pg.split_index.unwrap_or(0) as usize)
+                        .and_then(|p| p.as_deref())
+                        .map(|p| ocrzones::table_boxes(&p.page_ocr_zones))
+                        .unwrap_or_else(|| ocrzones::table_boxes(""))
+                        .iter()
+                        .filter_map(|b| {
+                            ocrzones::px_box(b, pg.dpi, pg.image.width(), pg.image.height())
+                        })
+                        .map(|(x, y, w, h)| docx::Rect { x, y, w, h })
+                        .collect();
                     texts.push(legatorocr_ocr::words_to_text(&words));
                     if let Some(dir) = &facs_dir {
-                        let geo = docx::blocks_from_words_geo(&words);
+                        let geo = docx::blocks_with_tables(&words, &table_rects);
                         block_pages.push(
                             docx::insert_images(geo.clone(), cut_images(&pg, &image_boxes))
                                 .into_iter()
@@ -1194,7 +1208,7 @@ pub fn run_export(
                             blocks: geo,
                         });
                     } else {
-                        let geo = docx::blocks_from_words_geo(&words);
+                        let geo = docx::blocks_with_tables(&words, &table_rects);
                         block_pages.push(
                             docx::insert_images(geo, cut_images(&pg, &image_boxes))
                                 .into_iter()
