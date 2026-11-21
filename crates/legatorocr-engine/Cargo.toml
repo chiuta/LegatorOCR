@@ -20,7 +20,7 @@ tiff = "0.11"
 flate2.workspace = true
 getrandom = "0.4"
 rqrr = "0.11.0"
-djvu-rs = "0.45"
+djvu-rs = "0.46"
 wasmi = "2.0.0"
 
 [features]
