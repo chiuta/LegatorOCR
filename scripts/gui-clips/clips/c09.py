@@ -10,7 +10,9 @@ def act(tl, d, sc):
     out = sc.parent / "export"; out.mkdir(exist_ok=True)
     tl.at(0.5); d.click(20, 12); tl.at(2); d.click(56, 150)          # File > Export PDF…
     tl.at(6); d.shot("/tmp/gui/c09_dialog.png"); name(d, out / "livre.pdf")
+    tl.at(18); d.shot("/tmp/gui/c09_s2.png")
     tl.at(26); d.click(20, 12); tl.at(28); d.click(56, 172)          # Export images…
+    tl.at(31); d.shot("/tmp/gui/c09_s3.png")
     tl.at(33); d.key("l", ["Control_L"]); name(d, out)
     tl.at(51); d.click(20, 12); tl.at(53); d.click(56, 117)          # Save project…
     tl.at(56); name(d, out / "proiect.lgr")

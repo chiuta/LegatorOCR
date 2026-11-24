@@ -10,7 +10,7 @@ on:
         default: "c01 c09"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   film:
@@ -65,6 +65,15 @@ jobs:
           cp /tmp/gui/*.png "$CLIPS_OUT"/ 2>/dev/null || true
           cp /tmp/portal*.log /tmp/openbox.log "$CLIPS_OUT"/ 2>/dev/null || true
           ls -la "$CLIPS_OUT"
+      - name: Publish the results on the branch gui-clips-out (the artifact host may be unreachable)
+        if: always()
+        run: |
+          cd "$RUNNER_TEMP/film/out"
+          git init -q -b gui-clips-out
+          git config user.name "Alexio"; git config user.email "alexio@trom.tf"
+          git add -A; git commit -q -m "gui clips run ${{ github.run_id }}"
+          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          git push -f origin gui-clips-out
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
