@@ -89,7 +89,7 @@ $("start").onclick = async () => {
 // flat) is not kept and counts as a retake; after two retakes in the last six shots the interval
 // grows by 2 s, after six clean shots in a row it shrinks by 1 s (never below 5 s).
 let auto = null, left = 0, recent = [], clean = 0, busy = false;
-const secsNow = () => { const n = Math.round(Number($("secs").value)); return Number.isFinite(n) ? Math.min(60, Math.max(3, n)) : 15; };
+const secsNow = () => { const n = Math.round(parseFloat($("secs").value)); return Number.isFinite(n) ? Math.min(60, Math.max(3, n)) : 15; }; // blank or text: 15 s
 async function frameUsable() {
   const v = $("cam");
   if (!v.videoWidth || !v.videoHeight) return false; // no picture yet: nothing to keep
