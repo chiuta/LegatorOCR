@@ -1,0 +1,72 @@
+name: GUI clips (dialog scenes)
+# Films the two window clips that need a real file dialog (c01, c09) on a Linux runner with
+# xdg-desktop-portal-gtk and a window manager, and uploads the videos and debugging screenshots.
+# Run by hand: Actions > "GUI clips (dialog scenes)" > Run workflow.
+on:
+  workflow_dispatch:
+    inputs:
+      clips:
+        description: "clips to film, space separated"
+        default: "c01 c09"
+
+permissions:
+  contents: read
+
+jobs:
+  film:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: System packages
+        run: |
+          sudo apt-get update
+          for p in xvfb openbox ffmpeg imagemagick dbus dbus-x11 xdg-desktop-portal xdg-desktop-portal-gtk \
+                   libgl1-mesa-dri libglx-mesa0 libegl1 libxkbcommon-x11-0 libxcb-cursor0 libgtk-3-0t64 libgtk-3-0 \
+                   fonts-dejavu-core python3-pil python3-numpy python3-pip; do
+            sudo apt-get install -y --no-install-recommends "$p" || echo "skipped $p"
+          done
+          pip install --break-system-packages python-xlib pillow numpy
+      - name: Build the window
+        run: cargo build --locked --release -p legatorocr-gui -p legatorocr-cli
+      - name: Sample pages
+        run: python3 -I scripts/gui-clips/make_samples.py "$RUNNER_TEMP/film/scans"
+      - name: Window manager and dialog provider
+        run: |
+          mkdir -p ~/.config/openbox
+          cat > ~/.config/openbox/rc.xml <<'XML'
+          <openbox_config xmlns="http://openbox.org/3.4/rc">
+            <applications>
+              <application type="normal"><decor>no</decor><position force="yes"><x>0</x><y>0</y></position></application>
+            </applications>
+          </openbox_config>
+          XML
+      - name: Film
+        env:
+          GUI: ${{ github.workspace }}/target/release/legatorocr-gui
+        run: |
+          export SCANS="$RUNNER_TEMP/film/scans" CLIPS_OUT="$RUNNER_TEMP/film/out" DISPLAY=:99
+          mkdir -p "$CLIPS_OUT" /tmp/gui
+          Xvfb :99 -screen 0 1360x860x24 >/dev/null 2>&1 &
+          sleep 2
+          cat > "$RUNNER_TEMP/film/run.sh" <<'SH'
+          set -x
+          (xdg-desktop-portal-gtk >/tmp/portal-gtk.log 2>&1 &)
+          (/usr/libexec/xdg-desktop-portal >/tmp/portal.log 2>&1 &)
+          openbox >/tmp/openbox.log 2>&1 &
+          sleep 4
+          cd "$GITHUB_WORKSPACE/scripts/gui-clips"
+          for c in $CLIPS; do python3 runclip.py "$c" || true; done
+          SH
+          CLIPS="${{ github.event.inputs.clips }}" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+            dbus-run-session -- bash "$RUNNER_TEMP/film/run.sh" || true
+          cp /tmp/gui/*.png "$CLIPS_OUT"/ 2>/dev/null || true
+          cp /tmp/portal*.log /tmp/openbox.log "$CLIPS_OUT"/ 2>/dev/null || true
+          ls -la "$CLIPS_OUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: gui-clips
+          path: ${{ runner.temp }}/film/out
