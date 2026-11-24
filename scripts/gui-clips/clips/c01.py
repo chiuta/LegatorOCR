@@ -12,6 +12,7 @@ def pick(d, path):
 
 def pick_folder(d, path="/tmp/s"):
     import time
+    d.click(186, 78); time.sleep(1.2)
     d.key("l", ["Control_L"]); d.type_text(path, 0.02); d.key("Return"); time.sleep(1.5); d.shot("/tmp/gui/c01_pf.png"); d.click(1170, 832)      # type the folder, enter it, then "Select"
 
 def act(tl, d, sc):
