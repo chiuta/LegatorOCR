@@ -55,7 +55,7 @@ CASES = {
 "ocfl": ["--ocfl", "{d}/ocfl-obj"],
  "sheet-turn": ["--sheet-turn", "-1.5", "--split", "auto"], "auto-sheet-turn": ["--auto-sheet-turn", "--split", "auto"],
  "accurate": ["--ocr", "--accurate"], "cedilla": ["--ocr", "--clean-text", "--cedilla"],
- "epub": ["--ocr", "--epub", "{o}.epub"],
+ "epub": ["--ocr", "--epub", "{o}.epub"], "markdown": ["--ocr", "--markdown", "{o}.md"],
  "vectorize": ["--vectorize", "{d}/svg", "--vectorize-min-area", "20", "--vectorize-tolerance", "1.5"],
  "verify-pack": ["--ocr", "--verify-pack", "{o}.vp.html", "--verify-conf", "95", "--verify-per-page", "10"],
  "skip-dup": ["--skip-duplicates"], "burst-drop-unusable": ["--burst", "--burst-drop-unusable"], "dewarp-guide": ["--dewarp", "--dewarp-guide", "0.1,0.5 0.5,0.5 0.9,0.5"],

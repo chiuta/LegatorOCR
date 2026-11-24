@@ -255,6 +255,12 @@ struct Cli {
     #[arg(long)]
     epub: Option<PathBuf>,
 
+    /// Also write the recognised text as Markdown (needs --ocr): headings as `##`, tables as pipe
+    /// tables, columns read one after the other, `<!-- page N -->` before every page. For notes
+    /// tools, static sites and language-model pipelines.
+    #[arg(long)]
+    markdown: Option<PathBuf>,
+
     /// With --tei: also write a TEI facsimile. Each page image (the processed page, PNG) is
     /// written into DIR, and the TEI file gets a facsimile element with one surface per page
     /// (pixel extent) and one rectangular zone per paragraph, heading and table; page breaks
@@ -1191,6 +1197,17 @@ struct Cli {
     #[arg(long)]
     ocr_modern_spelling: bool,
 
+    /// A word list for the recognition (one word per line): names, terms and abbreviations of
+    /// this book that the language model does not know. Tesseract only; the native engine
+    /// ignores it. Needs --ocr.
+    #[arg(long, value_name = "FILE")]
+    user_words: Option<PathBuf>,
+
+    /// A pattern file for the recognition (Tesseract `--user-patterns`): shapes of codes and
+    /// numbers, e.g. `\d\d\d-\d\d`. Tesseract only. Needs --ocr.
+    #[arg(long, value_name = "FILE")]
+    user_patterns: Option<PathBuf>,
+
     /// Disable skew correction.
     #[arg(long)]
     no_deskew: bool,
@@ -2094,6 +2111,7 @@ fn real_main() -> Result<()> {
             &mut cli.json,
             &mut cli.docx,
             &mut cli.epub,
+            &mut cli.markdown,
             &mut cli.tei,
             &mut cli.package,
         ] {
@@ -2160,6 +2178,7 @@ fn real_main() -> Result<()> {
             &cli.json,
             &cli.docx,
             &cli.epub,
+            &cli.markdown,
             &cli.package,
         ]
         .iter()
@@ -2469,6 +2488,8 @@ fn real_main() -> Result<()> {
             tesseract: cli.tesseract.clone(),
             tessdata: cli.tessdata.clone(),
             modern_spelling: cli.ocr_modern_spelling,
+            user_words: cli.user_words.clone(),
+            user_patterns: cli.user_patterns.clone(),
         };
         let want_words = cli.ocr && signals.contains(&"line_size");
         if want_words {
@@ -3317,6 +3338,8 @@ fn real_main() -> Result<()> {
         tesseract: cli.tesseract.clone(),
         tessdata: cli.tessdata.clone(),
         modern_spelling: cli.ocr_modern_spelling,
+        user_words: cli.user_words.clone(),
+        user_patterns: cli.user_patterns.clone(),
     };
     if let Some(d) = cli.dpi.filter(|_| cli.ocr) {
         if d < 200 {
@@ -3351,6 +3374,7 @@ fn real_main() -> Result<()> {
         || cli.page_xml.is_some()
         || cli.docx.is_some()
         || cli.epub.is_some()
+        || cli.markdown.is_some()
         || cli.tei.is_some()
         || cli.json.is_some()
         || cli.passages_jsonl.is_some()
@@ -3380,6 +3404,7 @@ fn real_main() -> Result<()> {
         .chain(cli.json.iter())
         .chain(cli.docx.iter())
         .chain(cli.epub.iter())
+        .chain(cli.markdown.iter())
         .chain(cli.tei.iter())
         .chain(cli.passages_jsonl.iter())
     {
@@ -3398,6 +3423,7 @@ fn real_main() -> Result<()> {
         && cli.fff_out.is_none()
         && cli.docx.is_none()
         && cli.epub.is_none()
+        && cli.markdown.is_none()
         && cli.tei.is_none()
         && cli.passages_jsonl.is_none()
         && cli.article_crops.is_none()
@@ -3483,6 +3509,13 @@ fn real_main() -> Result<()> {
                     "--burst: {} shots, typical {:.0} s between pages (90 % within {:.0} s), {} retake(s); suggested timer: {} s",
                     p.shots, p.median_s, p.p90_s, p.retakes, p.suggested_s
                 );
+                if let (Some(t), n) = (p.interval_s, p.implied_retakes) {
+                    if n > 0 {
+                        eprintln!(
+                            "--burst: timer rhythm of {t:.0} s; {n} shot(s) missing from it (taken and deleted, usually retakes)"
+                        );
+                    }
+                }
             }
             if r.reordered {
                 eprintln!("--burst: pages put in capture-time order (EXIF)");
@@ -3729,6 +3762,7 @@ fn real_main() -> Result<()> {
             &cli.fff_out,
             &cli.docx,
             &cli.epub,
+            &cli.markdown,
             &cli.multitiff,
             &cli.package,
             &cli.report,
@@ -4124,6 +4158,7 @@ fn real_main() -> Result<()> {
             &mut cli.json,
             &mut cli.docx,
             &mut cli.epub,
+            &mut cli.markdown,
             &mut cli.tei,
             &mut cli.package,
         ] {
@@ -4409,6 +4444,11 @@ fn real_main() -> Result<()> {
             res.page_xml.len(),
             dir.display()
         );
+    }
+    if let (Some(p), Some(b)) = (&cli.markdown, &res.docx_blocks) {
+        write_atomic(p, legatorocr_engine::markdown::from_blocks(b).as_bytes())?;
+        eprintln!("wrote {}", p.display());
+        written.push(p.clone());
     }
     if let (Some(p), Some(b)) = (&cli.epub, &res.docx_blocks) {
         let title = p

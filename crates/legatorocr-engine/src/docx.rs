@@ -784,7 +784,26 @@ fn blocks_flat_geo(words: &[legatorocr_core::text::Word]) -> Vec<GeoBlock> {
             .filter(|&&(_, li, ci)| lines[li].cells[ci].text.split_whitespace().count() > 6)
             .count();
         let all_cells: usize = row_cells[k..e.max(k)].iter().map(Vec::len).sum();
-        if e - k >= 3 && long_cells * 2 <= all_cells {
+        // a picture's OCR noise ("~", "u = |", a lone letter) next to a column of text lines up
+        // like a second column, but no table has junk cells: most cells must hold a real word
+        // (two letters or digits), and every column of a table but at most none must be junk
+        let junk_free = e - k >= 3 && {
+            let real = |&&(_, li, ci): &&(f32, usize, usize)| real_cell(&lines[li].cells[ci].text);
+            let n = row_cells[k].len();
+            let real_cells = row_cells[k..e].iter().flatten().filter(real).count();
+            let real_cols = (0..n)
+                .filter(|&c| {
+                    let rc = row_cells[k..e]
+                        .iter()
+                        .filter_map(|r| r.get(c))
+                        .filter(real)
+                        .count();
+                    rc * 10 >= (e - k) * 7
+                })
+                .count();
+            real_cells * 10 >= all_cells * 8 && real_cols == n
+        };
+        if e - k >= 3 && long_cells * 2 <= all_cells && junk_free {
             let mut first = usize::MAX;
             let mut table: Vec<Vec<String>> = Vec::new();
             let mut trect: Option<Rect> = None;
@@ -876,6 +895,14 @@ fn blocks_flat_geo(words: &[legatorocr_core::text::Word]) -> Vec<GeoBlock> {
     }
     flush(&mut para, &mut para_rect, &mut out);
     out
+}
+
+/// A cell with a real word in it: some token of two or more letters or digits, or a digit.
+fn real_cell(t: &str) -> bool {
+    t.split_whitespace().any(|w| {
+        w.chars().filter(|c| c.is_alphanumeric()).count() >= 2
+            || w.chars().any(|c| c.is_ascii_digit())
+    })
 }
 
 /// Whether most letters of `t` are from a right-to-left script (Hebrew, Arabic, Syriac, Thaana…).
@@ -1596,5 +1623,41 @@ mod tests {
             })
         );
         assert_eq!(blocks_from_words(&words), vec![g[0].block.clone()]);
+    }
+
+    #[test]
+    fn ocr_noise_beside_text_lines_is_not_a_table() {
+        let mut v = Vec::new();
+        for (i, (left, noise)) in [
+            ("Executati clic pe caseta", "~"),
+            ("Canvas Color din panou", "u"),
+            ("apoi alegeti culoarea", "|"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let y = 100 + 40 * i as u32;
+            v.push(w(left, 100, y, 400, 1 + i as u32));
+            v.push(w(noise, 900, y, 12, 1 + i as u32));
+        }
+        assert!(
+            blocks_from_words(&v)
+                .iter()
+                .all(|b| !matches!(b, Block::Table(_))),
+            "junk next to prose must stay prose"
+        );
+        // the same geometry with real words in both columns is a table
+        let mut real = Vec::new();
+        for (i, (a, b)) in [("Nume", "Pret"), ("Mere", "Pere"), ("Prune", "Nuci")]
+            .iter()
+            .enumerate()
+        {
+            let y = 100 + 40 * i as u32;
+            real.push(w(a, 100, y, 80, 1 + i as u32));
+            real.push(w(b, 900, y, 80, 1 + i as u32));
+        }
+        assert!(blocks_from_words(&real)
+            .iter()
+            .any(|b| matches!(b, Block::Table(_))));
     }
 }

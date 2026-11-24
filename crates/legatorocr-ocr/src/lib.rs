@@ -71,6 +71,11 @@ pub struct OcrOptions {
     /// Romanian output in today's spelling (`pînză` -> `pânză`, `sînt` -> `sunt`);
     /// see [`legatorocr_core::text::old_ro_to_modern`]. Only for `ron` text.
     pub modern_spelling: bool,
+    /// A word list (one word per line) Tesseract should accept next to its own dictionary:
+    /// names, terms, abbreviations of the book. Tesseract only.
+    pub user_words: Option<PathBuf>,
+    /// A pattern file (Tesseract `--user-patterns`): shapes such as `\d\d\d-\d\d` for codes.
+    pub user_patterns: Option<PathBuf>,
 }
 
 impl Default for OcrOptions {
@@ -83,6 +88,8 @@ impl Default for OcrOptions {
             tesseract: "tesseract".into(),
             tessdata: None,
             modern_spelling: false,
+            user_words: None,
+            user_patterns: None,
         }
     }
 }
@@ -555,6 +562,12 @@ fn recognize_raw(page: &PageImage, dpi: u32, o: &OcrOptions) -> Result<Vec<Word>
     let lang = canonical_lang(&o.lang);
     let mut cmd = base_cmd(o);
     cmd.args(["stdin", "stdout", "-l", &lang, "--psm", &o.psm.to_string()]);
+    if let Some(w) = &o.user_words {
+        cmd.arg("--user-words").arg(w);
+    }
+    if let Some(p) = &o.user_patterns {
+        cmd.arg("--user-patterns").arg(p);
+    }
     // an unknown resolution is left for Tesseract to estimate; "--dpi 0" would only make it complain
     if dpi > 0 {
         cmd.args(["--dpi", &dpi.to_string()]);
@@ -609,6 +622,9 @@ fn cache_key(img: &image::DynamicImage, dpi: u32, o: &OcrOptions) -> u64 {
         &o.tessdata,
     )
         .hash(&mut h);
+    for p in [&o.user_words, &o.user_patterns] {
+        p.as_ref().map(std::fs::read).transpose().ok().hash(&mut h);
+    }
     h.finish()
 }
 

@@ -46,6 +46,7 @@ pub mod install;
 pub mod integrity;
 pub mod iso;
 pub mod isolate;
+pub mod markdown;
 pub mod mcp;
 pub mod memcap;
 pub mod merkle;

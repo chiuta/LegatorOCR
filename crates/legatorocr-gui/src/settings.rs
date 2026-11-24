@@ -688,6 +688,8 @@ impl UiSettings {
             tesseract: self.tesseract.clone().into(),
             tessdata: None,
             modern_spelling: false,
+            user_words: None,
+            user_patterns: None,
         }
     }
 }

@@ -31,12 +31,22 @@ pub fn stats() -> (usize, usize) {
     (HITS.load(Ordering::Relaxed), MISSES.load(Ordering::Relaxed))
 }
 
+/// Identity of a word or pattern list: what is in it, not where it lies.
+fn list_id(p: &Option<std::path::PathBuf>) -> String {
+    match p {
+        None => String::new(),
+        Some(p) => std::fs::read(p)
+            .map(|b| crate::checksums::sha256_hex(&b))
+            .unwrap_or_else(|_| "unreadable".into()),
+    }
+}
+
 fn key(page: &PageImage, dpi: u32, o: &OcrOptions, salt: &str) -> String {
     let img = page.to_dynamic();
     let mut buf = Vec::with_capacity(img.as_bytes().len() + 128);
     buf.extend_from_slice(
         format!(
-            "{salt}|{}x{}|{dpi}|{:?}|{}|{}|{}|{:?}|{}|",
+            "{salt}|{}x{}|{dpi}|{:?}|{}|{}|{}|{:?}|{}|{}|{}|",
             img.width(),
             img.height(),
             o.engine,
@@ -44,7 +54,10 @@ fn key(page: &PageImage, dpi: u32, o: &OcrOptions, salt: &str) -> String {
             o.psm,
             o.min_conf,
             o.tessdata,
-            o.modern_spelling
+            o.modern_spelling,
+            // the lists decide what is recognised: a changed list must not hit old results
+            list_id(&o.user_words),
+            list_id(&o.user_patterns)
         )
         .as_bytes(),
     );

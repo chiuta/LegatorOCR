@@ -142,6 +142,11 @@ pub struct Pace {
     pub shots: usize,
     /// Unusable frames followed by a good frame: the "hand over the lens, then retake" pattern.
     pub retakes: usize,
+    /// Frames that are missing from a regular timer rhythm: with a 10 s timer, a 20 s gap between
+    /// two kept frames means one shot was taken and deleted in between (usually a retake).
+    pub implied_retakes: usize,
+    /// The timer interval when the session shows a regular rhythm (most gaps equal, in seconds).
+    pub interval_s: Option<f64>,
     /// Median seconds between a good frame and the next good one (pauses over 120 s ignored).
     pub median_s: f64,
     /// 90th percentile of the same gaps.
@@ -154,7 +159,8 @@ pub struct Pace {
 /// Rhythm of a session. `times` are in shooting order, `bad[i]` marks unusable frames. `None`
 /// with fewer than 4 usable gaps.
 pub fn pace(times: &[i64], bad: &[bool]) -> Option<Pace> {
-    let mut gaps: Vec<f64> = Vec::new();
+    // (gap, no frame at all between the two kept frames)
+    let mut gaps: Vec<(f64, bool)> = Vec::new();
     let mut last_good: Option<usize> = None;
     let mut retakes = 0;
     for i in 0..times.len() {
@@ -167,7 +173,7 @@ pub fn pace(times: &[i64], bad: &[bool]) -> Option<Pace> {
             }
             let g = (times[i] - times[j]) as f64;
             if (1.0..=120.0).contains(&g) {
-                gaps.push(g);
+                gaps.push((g, i == j + 1));
             }
         } else if i > 0 {
             retakes += 1;
@@ -177,13 +183,35 @@ pub fn pace(times: &[i64], bad: &[bool]) -> Option<Pace> {
     if gaps.len() < 4 {
         return None;
     }
-    gaps.sort_by(|a, b| a.total_cmp(b));
-    let at = |f: f64| gaps[((gaps.len() - 1) as f64 * f).round() as usize];
+    let mut sorted: Vec<f64> = gaps.iter().map(|g| g.0).collect();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let at = |f: f64| sorted[((sorted.len() - 1) as f64 * f).round() as usize];
     let (median, p90, p75) = (at(0.5), at(0.9), at(0.75));
-    let extra = if retakes * 10 > times.len() { 3.0 } else { 0.0 };
+    // a timer rhythm: most gaps sit on one value (the lower quartile), a few on its multiples
+    let base = at(0.25);
+    let tol = (0.15 * base).max(1.0);
+    let regular =
+        sorted.iter().filter(|g| (**g - base).abs() <= tol).count() * 10 >= sorted.len() * 6;
+    let mut implied = 0;
+    if regular {
+        for (g, consecutive) in &gaps {
+            let m = (g / base).round();
+            if *consecutive && m >= 2.0 && (g - m * base).abs() <= tol * 1.5 {
+                implied += m as usize - 1;
+            }
+        }
+    }
+    let wasted = retakes + implied;
+    let extra = if wasted * 10 > times.len() + implied {
+        3.0
+    } else {
+        0.0
+    };
     Some(Pace {
         shots: times.len(),
         retakes,
+        implied_retakes: implied,
+        interval_s: regular.then_some(base),
         median_s: median,
         p90_s: p90,
         suggested_s: ((p75 + extra).ceil() as u32).clamp(3, 60),
@@ -347,5 +375,27 @@ mod tests {
         bad[5] = true;
         let rushed = pace(&times, &bad).unwrap();
         assert!(rushed.suggested_s > calm.suggested_s);
+    }
+
+    #[test]
+    fn deleted_retakes_show_up_as_gaps_that_are_multiples_of_the_timer() {
+        // 10 s timer; two shots were deleted before the photos were collected
+        let mut t = vec![0i64];
+        for g in [10, 10, 20, 10, 10, 10, 20, 10, 10, 10, 10, 10] {
+            t.push(t.last().unwrap() + g);
+        }
+        let p = pace(&t, &vec![false; t.len()]).unwrap();
+        assert_eq!(p.interval_s, Some(10.0));
+        assert_eq!(p.implied_retakes, 2);
+        assert_eq!(p.retakes, 0);
+        // 2 of 15 slots wasted: more than 10 %, so a few seconds are added to the 10 s
+        assert_eq!(p.suggested_s, 13);
+    }
+    #[test]
+    fn irregular_hand_shooting_has_no_implied_retakes() {
+        let t = [0i64, 7, 19, 24, 41, 52, 58, 79, 90];
+        let p = pace(&t, &[false; 9]).unwrap();
+        assert_eq!(p.interval_s, None);
+        assert_eq!(p.implied_retakes, 0);
     }
 }
