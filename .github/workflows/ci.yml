@@ -63,6 +63,7 @@ jobs:
         run: |
           pip install pillow
           python3 scripts/check-options.py target/debug/legatorocr
+          python3 scripts/check-readme-options.py target/debug/legatorocr
           python3 scripts/smoke-options.py target/debug/legatorocr
       - name: Whole chain with the network cut off
         if: matrix.os == 'ubuntu-26.04'
