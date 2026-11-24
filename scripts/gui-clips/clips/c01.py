@@ -10,8 +10,9 @@ S = pathlib.Path("/tmp/s")        # short link to the scans folder: the file dia
 def pick(d, path):
     d.key("l", ["Control_L"]); d.type_text(str(path), 0.02); d.key("Return")
 
-def pick_folder(d):
-    d.click(339, 112, double=True); import time; time.sleep(1.5); d.click(1170, 832)      # the first folder of the dialog's list, then "Select"
+def pick_folder(d, path="/tmp/s"):
+    import time
+    d.key("l", ["Control_L"]); d.type_text(path, 0.02); d.key("Return"); time.sleep(1.5); d.shot("/tmp/gui/c01_pf.png"); d.click(1170, 832)      # type the folder, enter it, then "Select"
 
 def act(tl, d, sc):
     tl.at(0.5); d.shot("/tmp/gui/c01_welcome.png")

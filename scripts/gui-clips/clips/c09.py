@@ -9,8 +9,9 @@ O = pathlib.Path("/tmp/o")        # short link to the export folder
 def name(d, path):
     d.type_text(str(path), 0.02); d.key("Return")
 
-def pick_folder(d):
-    d.click(339, 112, double=True); import time; time.sleep(1.5); d.click(1170, 832)
+def pick_folder(d, path="/tmp/o"):
+    import time
+    d.key("l", ["Control_L"]); d.type_text(path, 0.02); d.key("Return"); time.sleep(1.5); d.shot("/tmp/gui/c09_pf.png"); d.click(1170, 832)      # type the folder, enter it, then "Select"
 
 def act(tl, d, sc):
     out = O
