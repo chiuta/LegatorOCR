@@ -58,7 +58,7 @@ CASES = {
  "epub": ["--ocr", "--epub", "{o}.epub"],
  "vectorize": ["--vectorize", "{d}/svg", "--vectorize-min-area", "20", "--vectorize-tolerance", "1.5"],
  "verify-pack": ["--ocr", "--verify-pack", "{o}.vp.html", "--verify-conf", "95", "--verify-per-page", "10"],
- "skip-dup": ["--skip-duplicates"], "dewarp-guide": ["--dewarp", "--dewarp-guide", "0.1,0.5 0.5,0.5 0.9,0.5"],
+ "skip-dup": ["--skip-duplicates"], "burst-drop-unusable": ["--burst", "--burst-drop-unusable"], "dewarp-guide": ["--dewarp", "--dewarp-guide", "0.1,0.5 0.5,0.5 0.9,0.5"],
 }
 import os
 os.environ.setdefault("LEGATOROCR_PDF_USER_PASSWORD", "smoke")

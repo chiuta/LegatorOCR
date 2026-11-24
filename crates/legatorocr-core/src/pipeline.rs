@@ -1268,14 +1268,21 @@ fn prepare(
         Some(deg) => Some(deg.to_radians()),
         None if s.deskew => {
             let gray = crate::stage("deskew/grayscale", || transform::gray_of(&img));
-            let mut a = crate::stage("deskew/analyse", || analyse(&gray, s.dpi));
+            // the ink map and the picture search read the same grey image and do not depend
+            // on each other: they run side by side
+            let (mut a, zones) = rayon::join(
+                || crate::stage("deskew/analyse", || analyse(&gray, s.dpi)),
+                || {
+                    crate::stage("deskew/pictures", || {
+                        pictures::detect(&gray, s.dpi, s.picture_sensitivity)
+                    })
+                },
+            );
             // Photographs have no text lines: their edges and tones would steer the estimate
             // (a mounted photo on a straight page came out rotated by 4°). Judge the skew
             // from what is left outside the picture zones.
             let f = a.factor.max(1);
-            for z in crate::stage("deskew/pictures", || {
-                pictures::detect(&gray, s.dpi, s.picture_sensitivity)
-            }) {
+            for z in zones {
                 let pad = (z.rect.w.min(z.rect.h) / 25).max(f);
                 let x0 = z.rect.x.saturating_sub(pad) / f;
                 let y0 = z.rect.y.saturating_sub(pad) / f;
@@ -1328,15 +1335,21 @@ fn prepare(
         }
     }
 
+    // grey picture and ink map of the page as it stands, valid only while `img` is untouched
+    let mut same_view: Option<(GrayImage, Analysis)> = None;
     // --- upside down? --------------------------------------------------------
     // a page photographed or scanned the wrong way up: more ink below the x-height core of its
     // text lines than above it. Only for a sheet nobody turned by hand, and only on a clear
     // verdict (see orient::is_upside_down).
     if s.auto_orient && s.rotate_quarters.is_multiple_of(4) && !s.sheet_orient_locked {
-        let a = crate::stage("page/upside-down", || {
-            analyse(&transform::gray_of(&img), s.dpi)
-        });
-        if orient::is_upside_down(&a.ink, a.dpi) {
+        let g = transform::gray_of(&img);
+        let a = crate::stage("page/upside-down", || analyse(&g, s.dpi));
+        let upside_down = orient::is_upside_down(&a.ink, a.dpi);
+        if !upside_down {
+            // kept for the content step when nothing changes the picture before it
+            same_view = Some((g, a));
+        }
+        if upside_down {
             let (w, h) = (img.width() as f32, img.height() as f32);
             for z in pictures.iter_mut() {
                 *z = [w - z[0] - z[2], h - z[1] - z[3], z[2], z[3], z[4]];
@@ -1363,11 +1376,13 @@ fn prepare(
         if let Some(flat) = dewarp::dewarp_guides(&img, &all, bg) {
             img = flat;
             guided = true;
+            same_view = None;
         }
     }
     if !guided && s.dewarp {
         if let Some(flat) = dewarp::dewarp(&img, s.dpi, bg) {
             img = flat;
+            same_view = None;
         }
     }
 
@@ -1376,6 +1391,7 @@ fn prepare(
             dewarp::straighten_margins(&img, s.dpi, bg)
         }) {
             img = flat;
+            same_view = None;
         }
     }
 
@@ -1386,11 +1402,18 @@ fn prepare(
         crate::stage("clean-up/trim", || {
             cleanup::trim_to_paper(&mut img, s.dpi, paper)
         });
+        same_view = None;
     }
 
     // --- content ----------------------------------------------------------
-    let gray_full = crate::stage("content/grayscale", || transform::gray_of(&img));
-    let mut a = crate::stage("content/analyse", || analyse(&gray_full, s.dpi));
+    let (gray_full, mut a) = match same_view.take() {
+        Some(v) => v,
+        None => {
+            let g = crate::stage("content/grayscale", || transform::gray_of(&img));
+            let a = crate::stage("content/analyse", || analyse(&g, s.dpi));
+            (g, a)
+        }
+    };
     let mut found = crate::stage("content/detect", || content::detect_content(&a.ink, a.dpi));
     if found.is_none() {
         // a page that looks blank may carry very faint writing: look again with a gentler test

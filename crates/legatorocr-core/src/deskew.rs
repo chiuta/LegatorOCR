@@ -2,6 +2,7 @@
 //! profile of the ink (text lines produce sharp peaks when level).
 
 use crate::BitImage;
+use rayon::prelude::*;
 
 /// Returns the angle (radians) by which the page must be rotated clockwise to
 /// level the text lines, or `None` when the page has too little ink to judge.
@@ -116,28 +117,30 @@ fn profile_skew(ink: &BitImage, max_deg: f32) -> Option<(f32, f64, f64)> {
             })
             .sum()
     };
-    let search = |lo: f32, hi: f32, step: f32| -> (f32, f64) {
-        let mut best = (0.0f32, f64::MIN);
+    // The angles are listed with the same running sum as before and scored in parallel (each
+    // score is independent); the best is then picked in order, first one wins on a tie, so the
+    // result is bit-for-bit what the serial loop gave.
+    let scored = |lo: f32, hi: f32, step: f32| -> Vec<(f32, f64)> {
+        let mut angles = Vec::new();
         let mut a = lo;
         while a <= hi + 1e-6 {
-            let s = score(a);
+            angles.push(a);
+            a += step;
+        }
+        angles.par_iter().map(|&a| (a, score(a))).collect()
+    };
+    let search = |lo: f32, hi: f32, step: f32| -> (f32, f64) {
+        let mut best = (0.0f32, f64::MIN);
+        for (a, s) in scored(lo, hi, step) {
             if s > best.1 {
                 best = (a, s);
             }
-            a += step;
         }
         best
     };
     // The coarse sweep is the same 0.5-degree grid for the median and for the first search:
     // score it once (same angles, same arithmetic, so the same numbers as scoring it twice).
-    let mut coarse: Vec<(f32, f64)> = Vec::new();
-    {
-        let mut a = -max_deg;
-        while a <= max_deg + 1e-6 {
-            coarse.push((a, score(a)));
-            a += 0.5;
-        }
-    }
+    let coarse: Vec<(f32, f64)> = scored(-max_deg, max_deg, 0.5);
     let mut all: Vec<f64> = coarse.iter().map(|c| c.1).collect();
     all.sort_by(|a, b| a.total_cmp(b));
     let med = all[all.len() / 2].max(1.0);
@@ -248,5 +251,24 @@ mod tests {
         }
         let a = detect_skew(&b, 7.0).unwrap().to_degrees();
         assert!((a + 2.0).abs() < 0.4, "got {a}"); // the correction undoes the tilt
+    }
+
+    /// The angle search runs its candidates in parallel; the answer must not depend on how many
+    /// threads there are.
+    #[test]
+    fn skew_is_the_same_on_one_thread_and_on_many() {
+        let img = grid(2.3, 2.3);
+        let run = |n: usize| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(n)
+                .build()
+                .unwrap()
+                .install(|| profile_skew(&img, 10.0))
+        };
+        let one = run(1);
+        assert!(one.is_some());
+        for n in [2, 3, 8] {
+            assert_eq!(run(n), one, "{n} threads");
+        }
     }
 }

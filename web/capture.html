@@ -25,9 +25,12 @@
   <div class="row">
     <button id="start">Pornește camera</button>
     <button id="shoot" disabled>Fotografiază</button>
+    <label>Cronometru <input id="secs" type="number" min="3" max="60" value="15" style="width:4em"> s</label>
+    <button id="auto" disabled>Pornește cronometrul</button>
     <label>Mod <select id="mode"><option value="2">Alb-negru</option><option value="1">Tonuri de gri</option><option value="0">Color</option><option value="3">Mixt</option></select></label>
   </div>
   <h2>Pagini curățate</h2>
+  <div class="row"><span id="timer"></span></div>
   <div class="row" id="shots"></div>
   <div class="row"><button id="save" disabled>Descarcă ultima pagină (PNG)</button></div>
   <p id="status" role="status"></p>
@@ -77,12 +80,62 @@ $("start").onclick = async () => {
     await loadModule();
     const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 2560 } }, audio: false });
     $("cam").srcObject = stream;
-    $("shoot").disabled = false;
+    $("shoot").disabled = false; $("auto").disabled = false;
     setInterval(updateVerdict, 500);
     status("Camera pornită.");
   } catch (e) { status("Nu pot porni camera: " + e.message); }
 };
-$("shoot").onclick = async () => {
+// Timer: shoots every N seconds. A frame the page judges unusable (hand over the lens, dark,
+// flat) is not kept and counts as a retake; after two retakes in the last six shots the interval
+// grows by 2 s, after six clean shots in a row it shrinks by 1 s (never below 5 s).
+let auto = null, left = 0, recent = [], clean = 0, busy = false;
+const secsNow = () => { const n = Math.round(Number($("secs").value)); return Number.isFinite(n) ? Math.min(60, Math.max(3, n)) : 15; };
+async function frameUsable() {
+  const v = $("cam");
+  if (!v.videoWidth || !v.videoHeight) return false; // no picture yet: nothing to keep
+  const c = document.createElement("canvas");
+  c.width = 64; c.height = Math.max(1, Math.round(64 * v.videoHeight / v.videoWidth));
+  const x = c.getContext("2d", { willReadFrequently: true }); x.drawImage(v, 0, 0, c.width, c.height);
+  const d = x.getImageData(0, 0, c.width, c.height).data;
+  let a = 0, b = 0; const n = d.length / 4;
+  for (let i = 0; i < d.length; i += 4) { const l = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]; a += l; b += l * l; }
+  const mean = a / n, std = Math.sqrt(Math.max(0, b / n - mean * mean));
+  return mean >= 30 && std >= 12;
+}
+function adapt(ok) {
+  recent.push(ok); if (recent.length > 6) recent.shift();
+  clean = ok ? clean + 1 : 0;
+  let v = secsNow();
+  if (recent.filter((r) => !r).length >= 2) { v = Math.min(60, v + 2); recent = []; clean = 0; }
+  else if (clean >= 6) { v = Math.max(5, v - 1); clean = 0; }
+  $("secs").value = v;
+}
+async function tick() {
+  if (busy) return; // a slow shot must not overlap the next tick
+  if (--left > 0) { $("timer").textContent = `Următoarea poză în ${left} s – așază cartea`; return; }
+  busy = true;
+  try {
+    const ok = await frameUsable();
+    adapt(ok);
+    left = secsNow();
+    if (!ok) { $("timer").textContent = `Cadru ratat (mână/întuneric) – nu se păstrează; reiau în ${left} s`; return; }
+    await shoot();
+  } catch (e) {
+    left = secsNow(); status("Cronometru: " + e.message);
+  } finally { busy = false; }
+}
+$("auto").onclick = () => {
+  if (auto) { clearInterval(auto); auto = null; $("auto").textContent = "Pornește cronometrul"; $("timer").textContent = ""; return; }
+  left = secsNow(); recent = []; clean = 0;
+  auto = setInterval(tick, 1000); $("auto").textContent = "Oprește cronometrul";
+};
+let shooting = false;
+async function shoot() {
+  if (shooting) return; shooting = true;
+  try { await shootOnce(); } finally { shooting = false; }
+}
+$("shoot").onclick = shoot;
+async function shootOnce() {
   const bytes = await frameBytes($("cam"), "image/png");
   const p = put(bytes);
   const n = wasm.lgr_process(p, bytes.length, Number($("mode").value), 300);
@@ -94,7 +147,7 @@ $("shoot").onclick = async () => {
   $("shots").prepend(img);
   $("save").disabled = false;
   status(`Gata: ${n} pagină(i), ${last.length} octeți.`);
-};
+}
 $("save").onclick = () => {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([last], { type: "image/png" }));

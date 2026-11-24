@@ -324,6 +324,92 @@ pub fn near_duplicates(hashes: &[u64], max_hamming: u32) -> Vec<(usize, usize)> 
     out
 }
 
+/// Why a captured frame cannot be a page: the photographer's hand (or anything else) over the
+/// lens, a dark frame, or a flat one with nothing on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unusable {
+    /// Almost black: lens covered, or the shot taken with the light off.
+    Dark,
+    /// Hardly any contrast anywhere: a wall, a sleeve, a lens cap.
+    Featureless,
+    /// Far less detail than the session's typical page: a hand or finger close to the lens
+    /// (skin is out of focus and smooth). Only decided against the other frames.
+    Covered,
+}
+
+/// Per-frame numbers behind [`unusable_frames`].
+#[derive(Debug, Clone, Copy)]
+pub struct FrameStats {
+    pub mean: f32,
+    pub std: f32,
+    pub sharp: f32,
+}
+
+/// Mean and standard deviation of the luma on a 160-px copy, plus [`sharpness`].
+pub fn frame_stats(img: &GrayImage) -> FrameStats {
+    let sharp = sharpness(img);
+    let s = downscaled(img, 160);
+    let n = (s.width() as f64 * s.height() as f64).max(1.0);
+    let (mut a, mut b) = (0f64, 0f64);
+    for p in s.pixels() {
+        let v = p.0[0] as f64;
+        a += v;
+        b += v * v;
+    }
+    let mean = a / n;
+    FrameStats {
+        mean: mean as f32,
+        std: ((b / n) - mean * mean).max(0.0).sqrt() as f32,
+        sharp,
+    }
+}
+
+/// Frames that cannot be pages. `Dark` is absolute; `Featureless` is a flat frame that is not
+/// paper-bright (a bright flat frame is a blank page of the book, which is a real page and is
+/// never reported); `Covered` compares the frame's detail with the median of the session (needs
+/// at least 5 frames): under 8 % of the median detail, low contrast and clearly darker than the
+/// typical page (a hand or finger shades the lens). When in doubt the frame is kept: dropping a
+/// real page costs more than keeping a bad one. Untuned starting values; callers should print
+/// what they drop. Returns `(index, reason)` in order.
+pub fn unusable_frames(stats: &[FrameStats]) -> Vec<(usize, Unusable)> {
+    let mut sh: Vec<f32> = stats
+        .iter()
+        .map(|s| s.sharp)
+        .filter(|v| v.is_finite())
+        .collect();
+    sh.sort_by(|a, b| a.total_cmp(b));
+    let median = if sh.len() >= 5 { sh[sh.len() / 2] } else { 0.0 };
+    let mut ms: Vec<f32> = stats
+        .iter()
+        .map(|s| s.mean)
+        .filter(|v| v.is_finite())
+        .collect();
+    ms.sort_by(|a, b| a.total_cmp(b));
+    let mean_med = ms.get(ms.len() / 2).copied().unwrap_or(128.0);
+    stats
+        .iter()
+        .enumerate()
+        .filter_map(|(i, s)| {
+            if !s.mean.is_finite() || !s.std.is_finite() {
+                return None; // unreadable file: left to the normal error path
+            }
+            if s.mean < 30.0 {
+                Some((i, Unusable::Dark))
+            } else if s.std < 12.0 && s.mean < 150.0 {
+                Some((i, Unusable::Featureless))
+            } else if median > 0.0
+                && s.sharp < 0.08 * median
+                && s.std < 40.0
+                && s.mean < 0.75 * mean_med
+            {
+                Some((i, Unusable::Covered))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 /// Keep-the-sharpest-of-a-burst, using EXIF times (seconds). Consecutive
 /// frames belong to one group while the time gap is `<= max_gap_s`. A frame
 /// with unknown time (or a missing entry in `times`) starts its own group, so
@@ -836,5 +922,40 @@ mod tests {
         // None in between is skipped, consecutive across it is fine.
         assert!(page_number_gaps(&[Some(7), None, Some(8)]).is_empty());
         assert_eq!(page_number_gaps(&[Some(u32::MAX), Some(1)]).len(), 1);
+    }
+
+    fn flat(v: u8) -> GrayImage {
+        GrayImage::from_pixel(200, 280, image::Luma([v]))
+    }
+    fn texty() -> GrayImage {
+        GrayImage::from_fn(200, 280, |x, y| {
+            image::Luma([if (x / 6 + y / 10) % 2 == 0 { 235 } else { 40 }])
+        })
+    }
+    #[test]
+    fn dark_and_dull_flat_frames_are_unusable_pages_and_blank_pages_are_not() {
+        let mut v: Vec<FrameStats> = (0..6).map(|_| frame_stats(&texty())).collect();
+        v.push(frame_stats(&flat(5))); // lens covered, black
+        v.push(frame_stats(&flat(110))); // dull flat: a sleeve, a lens cap
+        v.push(frame_stats(&flat(215))); // blank paper: a real page of the book
+        let bad = unusable_frames(&v);
+        assert_eq!(bad, vec![(6, Unusable::Dark), (7, Unusable::Featureless)]);
+    }
+    #[test]
+    fn a_shaded_soft_frame_among_sharp_pages_is_covered_but_a_blank_page_is_not() {
+        let hand = GrayImage::from_fn(200, 280, |x, _| image::Luma([40 + (x / 2) as u8]));
+        let mut v: Vec<FrameStats> = (0..8).map(|_| frame_stats(&texty())).collect();
+        v.push(frame_stats(&hand));
+        v.push(frame_stats(&flat(190)));
+        let bad = unusable_frames(&v);
+        assert_eq!(bad, vec![(8, Unusable::Covered)], "{bad:?}");
+    }
+    #[test]
+    fn covered_needs_a_session_to_compare_with() {
+        let soft = GrayImage::from_fn(200, 280, |x, _| image::Luma([70 + (x / 20) as u8 * 3]));
+        let few = vec![frame_stats(&soft); 2];
+        assert!(unusable_frames(&few)
+            .iter()
+            .all(|b| b.1 != Unusable::Covered));
     }
 }

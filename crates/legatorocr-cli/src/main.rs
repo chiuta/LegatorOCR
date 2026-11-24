@@ -482,6 +482,12 @@ struct Cli {
     #[arg(long)]
     burst: bool,
 
+    /// With --burst: also leave out the frames that cannot be pages (a hand over the lens, a
+    /// dark or flat frame, a frame with far less detail than the others). Without this they
+    /// are only listed. Needs --burst.
+    #[arg(long, requires = "burst")]
+    burst_drop_unusable: bool,
+
     /// With --burst: frames closer than this many seconds count as one burst.
     #[arg(long, default_value_t = 3, value_name = "SECONDS")]
     burst_gap: i64,
@@ -3449,7 +3455,35 @@ fn real_main() -> Result<()> {
             .cloned()
             .collect();
         if imgs.len() == inputs.len() && !imgs.is_empty() {
-            let r = legatorocr_engine::burst::ingest(&imgs, cli.burst_gap);
+            let r = legatorocr_engine::burst::ingest_opts(
+                &imgs,
+                cli.burst_gap,
+                cli.burst_drop_unusable,
+            );
+            for (u, why) in &r.unusable {
+                eprintln!(
+                    "--burst: {} {} ({})",
+                    if !r.paths.contains(u) {
+                        "left out"
+                    } else if cli.burst_drop_unusable {
+                        "kept (every frame looks unusable):"
+                    } else {
+                        "looks unusable:"
+                    },
+                    u.display(),
+                    match why {
+                        legatorocr_core::quality::Unusable::Dark => "dark frame",
+                        legatorocr_core::quality::Unusable::Featureless => "no detail",
+                        legatorocr_core::quality::Unusable::Covered => "lens covered?",
+                    }
+                );
+            }
+            if let Some(p) = &r.pace {
+                eprintln!(
+                    "--burst: {} shots, typical {:.0} s between pages (90 % within {:.0} s), {} retake(s); suggested timer: {} s",
+                    p.shots, p.median_s, p.p90_s, p.retakes, p.suggested_s
+                );
+            }
             if r.reordered {
                 eprintln!("--burst: pages put in capture-time order (EXIF)");
             }

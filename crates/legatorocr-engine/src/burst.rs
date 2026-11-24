@@ -128,12 +128,78 @@ pub struct Ingest {
     pub reordered: bool,
     /// Frames left out as weaker copies of a burst: `(dropped, kept instead)`.
     pub dropped: Vec<(PathBuf, PathBuf)>,
+    /// Frames that cannot be pages (hand over the lens, dark, flat), with the reason. They are
+    /// left out of `paths` only when asked (`drop_unusable`); always listed.
+    pub unusable: Vec<(PathBuf, q::Unusable)>,
+    /// Shooting rhythm of the session, when every file has a capture time.
+    pub pace: Option<Pace>,
+}
+
+/// How fast the pages were photographed, from the EXIF times of consecutive frames.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pace {
+    /// Frames in the session (unusable ones included).
+    pub shots: usize,
+    /// Unusable frames followed by a good frame: the "hand over the lens, then retake" pattern.
+    pub retakes: usize,
+    /// Median seconds between a good frame and the next good one (pauses over 120 s ignored).
+    pub median_s: f64,
+    /// 90th percentile of the same gaps.
+    pub p90_s: f64,
+    /// Interval to set on the camera timer: just above what most pages needed, a few seconds
+    /// more when many frames had to be retaken.
+    pub suggested_s: u32,
+}
+
+/// Rhythm of a session. `times` are in shooting order, `bad[i]` marks unusable frames. `None`
+/// with fewer than 4 usable gaps.
+pub fn pace(times: &[i64], bad: &[bool]) -> Option<Pace> {
+    let mut gaps: Vec<f64> = Vec::new();
+    let mut last_good: Option<usize> = None;
+    let mut retakes = 0;
+    for i in 0..times.len() {
+        if bad.get(i).copied().unwrap_or(false) {
+            continue;
+        }
+        if let Some(j) = last_good {
+            if i > j + 1 {
+                retakes += 1;
+            }
+            let g = (times[i] - times[j]) as f64;
+            if (1.0..=120.0).contains(&g) {
+                gaps.push(g);
+            }
+        } else if i > 0 {
+            retakes += 1;
+        }
+        last_good = Some(i);
+    }
+    if gaps.len() < 4 {
+        return None;
+    }
+    gaps.sort_by(|a, b| a.total_cmp(b));
+    let at = |f: f64| gaps[((gaps.len() - 1) as f64 * f).round() as usize];
+    let (median, p90, p75) = (at(0.5), at(0.9), at(0.75));
+    let extra = if retakes * 10 > times.len() { 3.0 } else { 0.0 };
+    Some(Pace {
+        shots: times.len(),
+        retakes,
+        median_s: median,
+        p90_s: p90,
+        suggested_s: ((p75 + extra).ceil() as u32).clamp(3, 60),
+    })
 }
 
 /// Order `paths` by capture time (only when every file has one) and keep the sharpest frame of
 /// each burst: consecutive frames within `max_gap_s` seconds, or, without times, whose
 /// perceptual hashes differ in at most 6 bits.
 pub fn ingest(paths: &[PathBuf], max_gap_s: i64) -> Ingest {
+    ingest_opts(paths, max_gap_s, false)
+}
+
+/// [`ingest`] that can also leave out the frames that cannot be pages (`drop_unusable`). Such
+/// frames are removed before bursts are grouped, so one never stands in for a real page.
+pub fn ingest_opts(paths: &[PathBuf], max_gap_s: i64, drop_unusable: bool) -> Ingest {
     let mut items: Vec<(PathBuf, Option<i64>)> =
         paths.iter().map(|p| (p.clone(), exif_time(p))).collect();
     let all_timed = !items.is_empty() && items.iter().all(|i| i.1.is_some());
@@ -145,19 +211,58 @@ pub fn ingest(paths: &[PathBuf], max_gap_s: i64) -> Ingest {
     }
     let mut sharp = Vec::new();
     let mut hashes = Vec::new();
+    let mut stats = Vec::new();
     for (p, _) in &items {
         match crate::load_image(p) {
             Ok(img) => {
                 let small = img.thumbnail(1000, 1000).to_luma8();
+                stats.push(q::frame_stats(&small));
                 sharp.push(q::sharpness(&small));
                 hashes.push(q::perceptual_hash(&small));
             }
             Err(_) => {
+                stats.push(q::FrameStats {
+                    mean: f32::NAN,
+                    std: f32::NAN,
+                    sharp: f32::NAN,
+                });
                 sharp.push(f32::NAN);
                 hashes.push(0x9E37_79B9_7F4A_7C15u64.wrapping_mul(sharp.len() as u64 + 1));
                 // unlikely to group
             }
         }
+    }
+    let bad_list = q::unusable_frames(&stats);
+    let mut bad = vec![false; items.len()];
+    for (i, _) in &bad_list {
+        bad[*i] = true;
+    }
+    let pace = if all_timed {
+        let t: Vec<i64> = items.iter().filter_map(|i| i.1).collect();
+        pace(&t, &bad)
+    } else {
+        None
+    };
+    let unusable: Vec<(PathBuf, q::Unusable)> = bad_list
+        .iter()
+        .map(|(i, why)| (items[*i].0.clone(), *why))
+        .collect();
+    if drop_unusable && bad.iter().any(|b| *b) && bad.iter().any(|b| !*b) {
+        let mut i = 0;
+        items.retain(|_| {
+            i += 1;
+            !bad[i - 1]
+        });
+        let mut i = 0;
+        sharp.retain(|_| {
+            i += 1;
+            !bad[i - 1]
+        });
+        let mut i = 0;
+        hashes.retain(|_| {
+            i += 1;
+            !bad[i - 1]
+        });
     }
     let keep: Vec<usize> = if all_timed {
         let times: Vec<Option<i64>> = items.iter().map(|i| i.1).collect();
@@ -182,6 +287,8 @@ pub fn ingest(paths: &[PathBuf], max_gap_s: i64) -> Ingest {
         paths: out,
         reordered,
         dropped,
+        unusable,
+        pace,
     }
 }
 
@@ -216,5 +323,29 @@ mod tests {
         assert_eq!(a, 1_793_541_789); // 2026-11-01T14:03:09Z
         assert!(exif_time_of(b"not a jpeg").is_none());
         assert!(exif_time_of(&jpeg_with_time("0000:00:00 00:00:00")).is_none());
+    }
+
+    #[test]
+    fn pace_counts_retakes_and_suggests_above_the_typical_gap() {
+        // 12 s between pages; frame 3 is a hand over the lens, retaken 6 s later
+        let times = [0, 12, 24, 36, 42, 54, 66, 78, 90];
+        let mut bad = [false; 9];
+        bad[3] = true;
+        let p = pace(&times, &bad).unwrap();
+        assert_eq!(p.shots, 9);
+        assert_eq!(p.retakes, 1);
+        assert_eq!(p.median_s, 12.0);
+        assert!(p.suggested_s >= 12 && p.suggested_s <= 18, "{p:?}");
+        assert!(pace(&[0, 10, 20], &[false; 3]).is_none());
+    }
+    #[test]
+    fn many_retakes_raise_the_suggestion() {
+        let times: Vec<i64> = (0..10).map(|i| i * 10).collect();
+        let calm = pace(&times, &[false; 10]).unwrap();
+        let mut bad = [false; 10];
+        bad[2] = true;
+        bad[5] = true;
+        let rushed = pace(&times, &bad).unwrap();
+        assert!(rushed.suggested_s > calm.suggested_s);
     }
 }

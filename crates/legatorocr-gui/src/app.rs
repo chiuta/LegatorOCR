@@ -1112,23 +1112,54 @@ impl App {
     /// next and the previous page in the background, so that turning the page shows it at once
     /// (the wait on large phone photos is the processing, not the display).
     fn read_ahead(&mut self, ctx: &egui::Context, i: usize) {
-        const QUIET: std::time::Duration = std::time::Duration::from_millis(700);
-        if self.sheets.iter().any(|s| s.pending.is_some()) {
+        // short wait: the next page starts rendering as soon as the settings stop moving
+        const QUIET: std::time::Duration = std::time::Duration::from_millis(150);
+        // read-aheads running at once: half the cores, 1 to 3
+        let limit = (thumb_slots() / 2).clamp(1, 3);
+        if self
+            .sheets
+            .iter()
+            .any(|s| s.pending.is_some() && !s.prefetch)
+        {
+            return;
+        }
+        let running = self.sheets.iter().filter(|s| s.pending.is_some()).count();
+        if running >= limit {
+            return;
+        }
+        // a running read-ahead or a big file allows no second one at the same time
+        let big = |p: &Path| {
+            std::fs::metadata(legatorocr_engine::files::split_frame(p).0)
+                .map_or(true, |m| m.len() > 15 << 20)
+        };
+        if running > 0
+            && (self
+                .sheets
+                .iter()
+                .any(|s| s.pending.is_some() && big(&s.path))
+                || big(&self.sheets[i].path))
+        {
             return;
         }
         if self.seen_since.elapsed() < QUIET {
             ctx.request_repaint_after(QUIET);
             return;
         }
-        let next = [i + 1, i.wrapping_sub(1)].into_iter().find(|&j| {
+        // the next two pages and the previous one: turning pages forward is the common case
+        let next = [i + 1, i.wrapping_sub(1), i + 2].into_iter().find(|&j| {
             self.sheets.get(j).is_some_and(|s| {
                 let key = self.key_of(s);
-                s.ready.as_ref().map(|r| r.key) != Some(key)
+                s.pending.is_none()
+                    && s.ready.as_ref().map(|r| r.key) != Some(key)
                     && s.failed.as_ref().map(|f| f.0) != Some(key)
             })
         });
         if let Some(j) = next {
+            if running > 0 && big(&self.sheets[j].path) {
+                return;
+            }
             self.launch_preview(ctx, j, true);
+            ctx.request_repaint();
         }
     }
 
@@ -2332,7 +2363,8 @@ impl App {
                                 }
                                 None => {
                                     ui.painter().rect_filled(r, 2.0, Color32::from_gray(40));
-                                    if self.thumbs_in_flight < 2 {
+                                    if self.thumbs_in_flight < thumb_slots_for(&self.sheets[i].path)
+                                    {
                                         want_thumb.push((tkey, self.sheets[i].path.clone()));
                                         self.thumbs.insert(tkey, Thumb::Loading);
                                         self.thumbs_in_flight += 1;
@@ -4042,25 +4074,71 @@ impl App {
                 adj_changed = true;
             }
         });
-        ui.horizontal_wrapped(|ui| {
-            ui.label(tr("adj.content"))
-                .on_hover_text(tr("adj.content_hint"));
-            let a = &mut self.sheets[i].adj.content_adjust_mm;
-            for (v, k) in a
-                .iter_mut()
-                .zip(["adj.left", "adj.top", "adj.right", "adj.bottom"])
-            {
-                ui.label(tr(k));
-                adj_changed |= ui
-                    .add(
-                        egui::DragValue::new(v)
-                            .range(-100.0..=100.0)
-                            .speed(0.2)
-                            .fixed_decimals(1),
-                    )
-                    .changed();
-            }
-        });
+        // A cut sheet keeps the content box of each page in its own `content_adjust` pair (what
+        // dragging an edge writes, and what wins over the sheet-wide value). The numbers must
+        // show and edit that value, not the sheet-wide one behind it.
+        let two_pages = self.sheets[i]
+            .ready
+            .as_ref()
+            .is_some_and(|r| r.pages.len() > 1)
+            || self.sheets[i]
+                .adj
+                .page_pairs
+                .iter()
+                .any(|p| p.iter().any(|(k, _)| k == "content_adjust"));
+        let slots: Vec<Option<usize>> = if two_pages {
+            vec![Some(0), Some(1)]
+        } else {
+            vec![None]
+        };
+        for slot in slots {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(tr("adj.content"))
+                    .on_hover_text(tr("adj.content_hint"));
+                if let Some(n) = slot {
+                    ui.label(format!("[{}]", n + 1));
+                }
+                let adj = &mut self.sheets[i].adj;
+                let mut vals = match slot {
+                    Some(n) => adj.page_pairs[n]
+                        .iter()
+                        .find(|(k, _)| k == "content_adjust")
+                        .and_then(|(_, v)| {
+                            let p: Vec<f32> =
+                                v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                            <[f32; 4]>::try_from(p).ok()
+                        })
+                        .unwrap_or(adj.content_adjust_mm),
+                    None => adj.content_adjust_mm,
+                };
+                let mut changed = false;
+                for (v, k) in
+                    vals.iter_mut()
+                        .zip(["adj.left", "adj.top", "adj.right", "adj.bottom"])
+                {
+                    ui.label(tr(k));
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(v)
+                                .range(-100.0..=100.0)
+                                .speed(0.2)
+                                .fixed_decimals(1),
+                        )
+                        .changed();
+                }
+                if changed {
+                    match slot {
+                        Some(n) => legatorocr_engine::project::set_page_pair(
+                            &mut adj.page_pairs[n],
+                            "content_adjust",
+                            format!("{},{},{},{}", vals[0], vals[1], vals[2], vals[3]),
+                        ),
+                        None => adj.content_adjust_mm = vals,
+                    }
+                    adj_changed = true;
+                }
+            });
+        }
         if adj_changed {
             self.sheets[i].adj_gen += 1;
         }
@@ -5593,6 +5671,29 @@ fn s_name(s: &Sheet) -> &str {
 }
 
 /// A small picture of the page for the list (decoded off the interface thread).
+/// Thumbnails decoded at the same time: one per core (2 to 6), so a folder of phone photos
+/// fills the list in a fraction of the time instead of two pictures at a time.
+fn thumb_slots() -> usize {
+    static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *N.get_or_init(|| {
+        std::thread::available_parallelism()
+            .map_or(2, |n| n.get())
+            .clamp(2, 6)
+    })
+}
+
+/// Parallel thumbnails for this file: the full count for ordinary photos, two for a big scan
+/// (several 100-megapixel decodes at once would cost gigabytes).
+fn thumb_slots_for(path: &Path) -> usize {
+    let big = std::fs::metadata(legatorocr_engine::files::split_frame(path).0)
+        .map_or(true, |m| m.len() > 25 << 20);
+    if big {
+        2
+    } else {
+        thumb_slots()
+    }
+}
+
 fn make_thumb(path: &Path, quarters: u8) -> Option<egui::ColorImage> {
     let img = legatorocr_engine::load_image(path).ok()?;
     let mut small = img.thumbnail(320, 240).to_rgb8();

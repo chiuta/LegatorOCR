@@ -145,7 +145,7 @@ pub fn blocks_from_words_geo(words: &[legatorocr_core::text::Word]) -> Vec<GeoBl
 /// pixels) turned into tables whatever the page geometry looks like: the words inside a zone
 /// are cut into rows and cells (a contents page with dot leaders becomes title | page), and the
 /// table is placed among the other blocks by its position. Words outside the zones are read as
-/// usual; a zone that holds no table (fewer than two rows or columns) leaves its words as text.
+/// usual; a zone with no words at all produces no table.
 pub fn blocks_with_tables(words: &[legatorocr_core::text::Word], tables: &[Rect]) -> Vec<GeoBlock> {
     if tables.is_empty() {
         return blocks_from_words_geo(words);
@@ -319,7 +319,7 @@ fn starts_entry(t: &str) -> bool {
 fn forced_table(ws: &[legatorocr_core::text::Word]) -> Option<(Vec<Vec<String>>, Rect)> {
     let ws: Vec<&legatorocr_core::text::Word> =
         ws.iter().filter(|w| !w.text.trim().is_empty()).collect();
-    if ws.len() < 2 {
+    if ws.is_empty() {
         return None;
     }
     let x0 = ws.iter().map(|w| w.x).min()?;
@@ -417,7 +417,10 @@ fn forced_table(ws: &[legatorocr_core::text::Word]) -> Option<(Vec<Vec<String>>,
         if let Some(p) = pending {
             rows.push(vec![p, String::new()]);
         }
-        return (rows.len() >= 2).then_some((rows, rect));
+        if rows.len() >= 2 {
+            return Some((rows, rect));
+        }
+        // a single contents line: fall through to the general cutting below
     }
     // any other table: rows are lines whose centres agree, cells are separated by wide gaps
     let mut hs: Vec<f32> = lines.iter().map(|l| l.h).collect();
@@ -448,7 +451,9 @@ fn forced_table(ws: &[legatorocr_core::text::Word]) -> Option<(Vec<Vec<String>>,
         grid.push(row.into_iter().map(|c| c.1).collect());
     }
     let width = grid.iter().map(Vec::len).max().unwrap_or(0);
-    if grid.len() < 2 || width < 2 {
+    // the user marked this zone as a table: it becomes one even when it has a single row or a
+    // single column (a table the user asked for must never come out as plain text)
+    if grid.is_empty() || width == 0 {
         return None;
     }
     for r in grid.iter_mut() {
@@ -1254,10 +1259,27 @@ mod tests {
     }
 
     #[test]
-    fn a_table_zone_with_one_line_stays_text() {
+    fn a_table_zone_with_one_line_is_still_a_table() {
         let ws = line(100, 1, &["doar", "un", "rand"]);
         let g = blocks_with_tables(&ws, &[zone()]);
-        assert!(g.iter().all(|g| !matches!(g.block, Block::Table(_))));
+        let Some(Block::Table(rows)) = g
+            .iter()
+            .map(|g| &g.block)
+            .find(|b| matches!(b, Block::Table(_)))
+        else {
+            panic!("a zone marked #table must give a table");
+        };
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].join(" "), "doar un rand");
+    }
+    #[test]
+    fn a_table_zone_with_one_word_is_a_one_cell_table() {
+        let ws = line(100, 1, &["singur"]);
+        let g = blocks_with_tables(&ws, &[zone()]);
+        assert!(g.iter().any(
+            |g| matches!(&g.block, Block::Table(r) if r == &vec![vec!["singur".to_string()]])
+        ));
+        assert!(blocks_with_tables(&[], &[zone()]).is_empty());
     }
 
     #[test]
