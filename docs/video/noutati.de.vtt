@@ -1,0 +1,13 @@
+WEBVTT
+
+00:00:00.500 --> 00:00:12.500
+Der erkannte Text als Markdown und die Seiten als CBZ-Archiv, in einem Durchgang.
+
+00:00:13.500 --> 00:00:25.500
+Überschriften werden zu ##, jede Seite hat ihre Marke; Text wird nie zu Markdown-Struktur.
+
+00:00:26.500 --> 00:00:32.500
+Mit --burst: der echte 10-s-Rhythmus und die 2 gelöschten Aufnahmen, aus den 20-s-Lücken abgeleitet.
+
+00:00:33.000 --> 00:00:38.600
+Der vorgeschlagene Timer steigt auf 13 s, weil über 10 % der Zeitfenster verloren gingen.

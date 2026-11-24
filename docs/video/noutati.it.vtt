@@ -1,0 +1,13 @@
+WEBVTT
+
+00:00:00.500 --> 00:00:12.500
+Il testo riconosciuto in Markdown e le pagine in archivio CBZ, in un solo passaggio.
+
+00:00:13.500 --> 00:00:25.500
+I titoli diventano ##, ogni pagina ha il suo segno; il testo non diventa mai struttura Markdown.
+
+00:00:26.500 --> 00:00:32.500
+Con --burst: il vero ritmo di 10 s e i 2 scatti cancellati, dedotti dagli intervalli di 20 s.
+
+00:00:33.000 --> 00:00:38.600
+Il timer suggerito sale a 13 s perché oltre il 10 % degli slot è andato perso.

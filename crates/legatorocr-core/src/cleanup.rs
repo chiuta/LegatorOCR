@@ -6,6 +6,7 @@
 
 use crate::BitImage;
 use image::{Rgb, RgbImage};
+use rayon::prelude::*;
 
 /// Colour removed by [`dropout`] (form lines, stamps, review marks).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -189,6 +190,10 @@ fn blur(img: &RgbImage, r: usize) -> RgbImage {
 }
 
 /// Unsharp mask: `out = img + amount·(img − blur(img, ≈0.3 mm))`. `amount` ≤ 0 → unchanged.
+/// Work unit for the per-pixel loops that run on all cores: a multiple of 3 (whole RGB pixels),
+/// large enough that the scheduling costs nothing.
+const PAR_CHUNK: usize = 3 * 65_536;
+
 pub fn sharpen(img: &RgbImage, dpi: u32, amount: f32) -> RgbImage {
     if amount.is_nan() || amount <= 0.0 || img.width() < 3 || img.height() < 3 {
         return img.clone();
@@ -196,11 +201,18 @@ pub fn sharpen(img: &RgbImage, dpi: u32, amount: f32) -> RgbImage {
     let r = ((0.3 / 25.4 * dpi as f32).round() as usize).max(1);
     let b = blur(img, r);
     let mut out = img.clone();
-    for ((o, &s), &bl) in out.as_mut().iter_mut().zip(img.as_raw()).zip(b.as_raw()) {
-        *o = (s as f32 + amount * (s as f32 - bl as f32))
-            .round()
-            .clamp(0.0, 255.0) as u8;
-    }
+    // element by element, so splitting the work over the cores gives the same bytes
+    out.as_mut()
+        .par_chunks_mut(PAR_CHUNK)
+        .zip(img.as_raw().par_chunks(PAR_CHUNK))
+        .zip(b.as_raw().par_chunks(PAR_CHUNK))
+        .for_each(|((o, s), b)| {
+            for ((o, &s), &bl) in o.iter_mut().zip(s).zip(b) {
+                *o = (s as f32 + amount * (s as f32 - bl as f32))
+                    .round()
+                    .clamp(0.0, 255.0) as u8;
+            }
+        });
     out
 }
 
@@ -216,17 +228,27 @@ pub fn denoise(img: &RgbImage, dpi: u32, strength: f32) -> RgbImage {
     let b = blur(img, r);
     let limit = 10.0 + 40.0 * s;
     let mut out = img.clone();
-    for (x, y, o) in out.enumerate_pixels_mut() {
-        let (p, m) = (img.get_pixel(x, y).0, b.get_pixel(x, y).0);
-        // size of the difference over all three channels decides, so a coloured edge is kept
-        let d = (0..3)
-            .map(|c| (p[c] as f32 - m[c] as f32).abs())
-            .fold(0.0, f32::max);
-        let w = (1.0 - d / limit).clamp(0.0, 1.0);
-        for c in 0..3 {
-            o.0[c] = (p[c] as f32 + w * (m[c] as f32 - p[c] as f32)).round() as u8;
-        }
-    }
+    out.as_mut()
+        .par_chunks_mut(PAR_CHUNK)
+        .zip(img.as_raw().par_chunks(PAR_CHUNK))
+        .zip(b.as_raw().par_chunks(PAR_CHUNK))
+        .for_each(|((o, p), m)| {
+            // PAR_CHUNK is a multiple of 3: every chunk holds whole pixels
+            for ((o, p), m) in o
+                .chunks_exact_mut(3)
+                .zip(p.chunks_exact(3))
+                .zip(m.chunks_exact(3))
+            {
+                // size of the difference over all three channels decides, so a coloured edge is kept
+                let d = (0..3)
+                    .map(|c| (p[c] as f32 - m[c] as f32).abs())
+                    .fold(0.0, f32::max);
+                let w = (1.0 - d / limit).clamp(0.0, 1.0);
+                for c in 0..3 {
+                    o[c] = (p[c] as f32 + w * (m[c] as f32 - p[c] as f32)).round() as u8;
+                }
+            }
+        });
     out
 }
 
@@ -243,11 +265,17 @@ pub fn deblur(img: &RgbImage, dpi: u32, amount: f32) -> RgbImage {
     let mut x = img.clone();
     for _ in 0..3 {
         let bx = blur(&x, r);
-        for ((o, &y), &b) in x.as_mut().iter_mut().zip(img.as_raw()).zip(bx.as_raw()) {
-            *o = (*o as f32 + k * (y as f32 - b as f32))
-                .round()
-                .clamp(0.0, 255.0) as u8;
-        }
+        x.as_mut()
+            .par_chunks_mut(PAR_CHUNK)
+            .zip(img.as_raw().par_chunks(PAR_CHUNK))
+            .zip(bx.as_raw().par_chunks(PAR_CHUNK))
+            .for_each(|((o, y), b)| {
+                for ((o, &y), &b) in o.iter_mut().zip(y).zip(b) {
+                    *o = (*o as f32 + k * (y as f32 - b as f32))
+                        .round()
+                        .clamp(0.0, 255.0) as u8;
+                }
+            });
     }
     x
 }
@@ -256,15 +284,17 @@ pub fn deblur(img: &RgbImage, dpi: u32, amount: f32) -> RgbImage {
 /// darkest channel is at least 215 is blended toward 255 (fully at 240), so noise and faint
 /// stains on the paper vanish; darker tones (print, pictures) are left as they are.
 pub fn whiten_paper(img: &mut RgbImage) {
-    for p in img.pixels_mut() {
-        let lo = p.0[0].min(p.0[1]).min(p.0[2]) as f32;
-        let t = ((lo - 215.0) / 25.0).clamp(0.0, 1.0);
-        if t > 0.0 {
-            for c in p.0.iter_mut() {
-                *c = (*c as f32 + t * (255.0 - *c as f32)).round() as u8;
+    img.as_mut().par_chunks_mut(PAR_CHUNK).for_each(|chunk| {
+        for p in chunk.chunks_exact_mut(3) {
+            let lo = p[0].min(p[1]).min(p[2]) as f32;
+            let t = ((lo - 215.0) / 25.0).clamp(0.0, 1.0);
+            if t > 0.0 {
+                for c in p.iter_mut() {
+                    *c = (*c as f32 + t * (255.0 - *c as f32)).round() as u8;
+                }
             }
         }
-    }
+    });
 }
 
 /// `#RRGGBB`, `RRGGBB`, `#RGB` or one of `white`, `black` → colour.

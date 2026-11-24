@@ -355,10 +355,15 @@ mod tests {
 /// 10000, integer arithmetic), written so the compiler can vectorise it.
 pub fn gray_of(img: &image::RgbImage) -> image::GrayImage {
     let mut out = vec![0u8; (img.width() as usize) * (img.height() as usize)];
-    let (px, _) = img.as_raw().as_chunks::<3>();
-    for (o, p) in out.iter_mut().zip(px) {
-        *o = ((2126 * p[0] as u32 + 7152 * p[1] as u32 + 722 * p[2] as u32) / 10000) as u8;
-    }
+    img.as_raw()
+        .par_chunks(3 * 65_536)
+        .zip(out.par_chunks_mut(65_536))
+        .for_each(|(src, dst)| {
+            let (px, _) = src.as_chunks::<3>();
+            for (o, p) in dst.iter_mut().zip(px) {
+                *o = ((2126 * p[0] as u32 + 7152 * p[1] as u32 + 722 * p[2] as u32) / 10000) as u8;
+            }
+        });
     image::GrayImage::from_raw(img.width(), img.height(), out).expect("size matches")
 }
 

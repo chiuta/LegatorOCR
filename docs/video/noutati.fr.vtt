@@ -1,0 +1,13 @@
+WEBVTT
+
+00:00:00.500 --> 00:00:12.500
+Le texte reconnu en Markdown et les pages en archive CBZ, en une seule passe.
+
+00:00:13.500 --> 00:00:25.500
+Les titres deviennent ##, chaque page a son repère ; le texte ne devient jamais structure Markdown.
+
+00:00:26.500 --> 00:00:32.500
+Avec --burst : le vrai rythme de 10 s et les 2 prises supprimées, déduites des écarts de 20 s.
+
+00:00:33.000 --> 00:00:38.600
+Le minuteur suggéré monte à 13 s, car plus de 10 % des créneaux ont été perdus.

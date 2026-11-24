@@ -1,0 +1,13 @@
+WEBVTT
+
+00:00:00.500 --> 00:00:12.500
+Textul recunoscut ca Markdown și paginile ca arhivă CBZ, într-o singură trecere.
+
+00:00:13.500 --> 00:00:25.500
+Titlurile devin ##, fiecare pagină are marcajul ei; textul nu devine structură Markdown.
+
+00:00:26.500 --> 00:00:32.500
+Cu --burst: ritmul real de 10 s și cele 2 cadre șterse, deduse din golurile de 20 s.
+
+00:00:33.000 --> 00:00:38.600
+Timerul sugerat urcă la 13 s, pentru că peste 10 % din sloturi s-au irosit.

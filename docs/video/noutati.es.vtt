@@ -1,0 +1,13 @@
+WEBVTT
+
+00:00:00.500 --> 00:00:12.500
+El texto reconocido como Markdown y las páginas como archivo CBZ, en una sola pasada.
+
+00:00:13.500 --> 00:00:25.500
+Los títulos pasan a ##, cada página lleva su marca; el texto nunca se convierte en estructura Markdown.
+
+00:00:26.500 --> 00:00:32.500
+Con --burst: el ritmo real de 10 s y las 2 tomas borradas, deducidas de los huecos de 20 s.
+
+00:00:33.000 --> 00:00:38.600
+El temporizador sugerido sube a 13 s porque más del 10 % de los turnos se perdió.

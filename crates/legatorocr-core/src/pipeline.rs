@@ -1134,7 +1134,10 @@ pub fn process_page(src: &DynamicImage, s: &Settings) -> Vec<Page> {
         .into_iter()
         .map(|(img, idx, zones, guides)| {
             let sp = for_part(s, idx);
-            render(prepare(img, sp, zones, guides), idx, sp)
+            {
+                let pr = crate::stage("page/prepare", || prepare(img, sp, zones, guides));
+                crate::stage("page/render", || render(pr, idx, sp))
+            }
         })
         .collect()
 }
@@ -1717,47 +1720,49 @@ fn render(p: Prepared, split_index: Option<u8>, s: &Settings) -> Page {
     // Colour/gray window (also the source of picture patches and the hybrid background).
     let wants_colour = !matches!(s.mode, OutputMode::BlackWhite);
     let canvas_rgb: Option<RgbImage> = wants_colour.then(|| {
-        if blank_canvas {
-            return RgbImage::from_pixel(cw, ch, paper);
-        }
-        // the strip beyond the scan's edge is paper, not (possibly tinted) page colour
-        let mut window = transform::crop_pad(&img, win.0, win.1, win.2, win.3, paper);
-        if (s.normalize_bg || s.remove_bg) && window.width() > 8 && window.height() > 8 {
-            let target = if s.mode == OutputMode::Gray || s.remove_bg {
-                Rgb([255, 255, 255])
-            } else {
-                bg
-            };
-            window = crate::stage("output/normalize", || {
-                transform::normalize_background(&window, s.dpi, target)
-            });
-            if s.remove_bg {
-                cleanup::whiten_paper(&mut window);
+        crate::stage("output/colour-window", || {
+            if blank_canvas {
+                return RgbImage::from_pixel(cw, ch, paper);
             }
-        }
-        if s.denoise > 0.0 {
-            window = crate::stage("output/denoise", || {
-                cleanup::denoise(&window, s.dpi, s.denoise)
-            });
-        }
-        if s.deblur > 0.0 {
-            window = crate::stage("output/deblur", || {
-                cleanup::deblur(&window, s.dpi, s.deblur)
-            });
-        }
-        if s.sharpen > 0.0 {
-            window = crate::stage("output/sharpen", || {
-                cleanup::sharpen(&window, s.dpi, s.sharpen)
-            });
-        }
-        if f != 1.0 {
-            window = crate::stage("output/resize", || {
-                transform::resize_triangle(&window, ww_out, wh_out)
-            });
-        }
-        let mut canvas = RgbImage::from_pixel(cw, ch, paper);
-        imageops::replace(&mut canvas, &window, wx_out, wy_out);
-        canvas
+            // the strip beyond the scan's edge is paper, not (possibly tinted) page colour
+            let mut window = transform::crop_pad(&img, win.0, win.1, win.2, win.3, paper);
+            if (s.normalize_bg || s.remove_bg) && window.width() > 8 && window.height() > 8 {
+                let target = if s.mode == OutputMode::Gray || s.remove_bg {
+                    Rgb([255, 255, 255])
+                } else {
+                    bg
+                };
+                window = crate::stage("output/normalize", || {
+                    transform::normalize_background(&window, s.dpi, target)
+                });
+                if s.remove_bg {
+                    cleanup::whiten_paper(&mut window);
+                }
+            }
+            if s.denoise > 0.0 {
+                window = crate::stage("output/denoise", || {
+                    cleanup::denoise(&window, s.dpi, s.denoise)
+                });
+            }
+            if s.deblur > 0.0 {
+                window = crate::stage("output/deblur", || {
+                    cleanup::deblur(&window, s.dpi, s.deblur)
+                });
+            }
+            if s.sharpen > 0.0 {
+                window = crate::stage("output/sharpen", || {
+                    cleanup::sharpen(&window, s.dpi, s.sharpen)
+                });
+            }
+            if f != 1.0 {
+                window = crate::stage("output/resize", || {
+                    transform::resize_triangle(&window, ww_out, wh_out)
+                });
+            }
+            let mut canvas = RgbImage::from_pixel(cw, ch, paper);
+            imageops::replace(&mut canvas, &window, wx_out, wy_out);
+            canvas
+        })
     });
 
     let (image, layers) = match s.mode {
