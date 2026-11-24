@@ -6,10 +6,10 @@ out = pathlib.Path(sys.argv[1]); out.mkdir(parents=True, exist_ok=True)
 DJ = "/usr/share/fonts/truetype/dejavu/"
 f = ImageFont.truetype(DJ + "DejaVuSerif.ttf", 30); fb = ImageFont.truetype(DJ + "DejaVuSerif-Bold.ttf", 44)
 TXT = ["Satul se întindea de-a lungul apei, între dealuri joase,", "iar oamenii știau drumurile după mirosul fânului.", "Primăvara aducea ceață dimineața și clopote seara,", "iar bătrânii povesteau ce se petrecuse înainte de ei.", "Cine pornea la drum lua pâine, sare și o veste bună.", "Nimeni nu se grăbea, fiindcă timpul avea răbdare."]
-def page(w, h, title, n, angle=0, paper=238):
+def page(w, h, title, n, angle=0, paper=238, upper=False):
     im = Image.new("L", (w, h), paper); d = ImageDraw.Draw(im)
     d.text((90, 110), title, font=fb, fill=35)
-    for i in range(n): d.text((90, 210 + i * 56), TXT[i % len(TXT)], font=f, fill=45)
+    for i in range(n): d.text((90, 210 + i * 56), TXT[i % len(TXT)].upper() if upper else TXT[i % len(TXT)], font=f, fill=45)
     return im
 # crooked double sheet: two pages side by side, dark gutter, turned 3 degrees
 L, R = page(760, 1100, "Capitolul întâi", 17), page(760, 1100, "Capitolul al doilea", 17)

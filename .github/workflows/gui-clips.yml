@@ -48,7 +48,8 @@ jobs:
           GUI: ${{ github.workspace }}/target/release/legatorocr-gui
         run: |
           export SCANS="$RUNNER_TEMP/film/scans" CLIPS_OUT="$RUNNER_TEMP/film/out" DISPLAY=:99
-          mkdir -p "$CLIPS_OUT" /tmp/gui
+          mkdir -p "$CLIPS_OUT" /tmp/gui "$RUNNER_TEMP/film/export"
+          ln -sfn "$SCANS" /tmp/s; ln -sfn "$RUNNER_TEMP/film/export" /tmp/o
           Xvfb :99 -screen 0 1360x860x24 >/dev/null 2>&1 &
           sleep 2
           cat > "$RUNNER_TEMP/film/run.sh" <<'SH'
