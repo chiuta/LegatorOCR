@@ -219,6 +219,7 @@ pub fn sharpen(img: &RgbImage, dpi: u32, amount: f32) -> RgbImage {
 /// Edge-preserving smoothing: where a pixel differs little from its local mean (grain, sensor
 /// noise) it moves toward the mean; where it differs a lot (a stroke, an edge) it is kept.
 /// `strength` 0–1 sets both the radius (0.2–0.5 mm) and how large a difference still counts as noise.
+#[allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
 pub fn denoise(img: &RgbImage, dpi: u32, strength: f32) -> RgbImage {
     if strength.is_nan() || strength <= 0.0 || img.width() < 3 || img.height() < 3 {
         return img.clone();
@@ -283,6 +284,7 @@ pub fn deblur(img: &RgbImage, dpi: u32, amount: f32) -> RgbImage {
 /// Push the paper tone to pure white after the lighting has been evened out: a pixel whose
 /// darkest channel is at least 215 is blended toward 255 (fully at 240), so noise and faint
 /// stains on the paper vanish; darker tones (print, pictures) are left as they are.
+#[allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
 pub fn whiten_paper(img: &mut RgbImage) {
     img.as_mut().par_chunks_mut(PAR_CHUNK).for_each(|chunk| {
         for p in chunk.chunks_exact_mut(3) {
