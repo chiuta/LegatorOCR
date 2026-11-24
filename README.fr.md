@@ -260,6 +260,14 @@ Signaux (`--integrity-signals LIST` ; `all`, `default`, ou des noms) :
 
 Mesuré sur des modifications **synthétiques** seulement (12 vraies pages du jeu de test OCR, JPEG q85 ; modifications : une suite de chiffres dessinée sur un mot, une pièce de 220x140 copiée ailleurs, une pièce de 260x180 issue d’une copie q45 collée à un décalage impair, du bruit gaussien en 240x160 ; chaque page modifiée réenregistrée en q85 ; et les pages intactes enregistrées une fois, réenregistrées une fois en q85, réenregistrées encore en q75 ; `docs/experiments/integrity_eval.py`, ROADMAP 7.5c). `copy_move` : a trouvé 10 pièces copiées sur 12, 0 page non modifiée/réenregistrée sur 36 signalée ; il ne trouve **pas** un chiffre ou un mot retapé, et il manque les pièces de moins de 64 px. La limite de taille a été fixée après avoir vu des fausses alertes sur les mêmes pages, ce chiffre est donc optimiste. Ces nombres ne disent rien des vrais faux, qui sont faits avec d’autres outils, d’autres polices et une autre compression ; les vrais tampons, logos répétés et en-têtes de lettre n’étaient pas dans le test et sont la source attendue de fausses alertes. Les autres signaux sont disponibles avec `--integrity-signals all` pour la recherche seulement.
 
+## Nouveautés (pre.73 – pre.74)
+
+- `--markdown FICHIER.md` (avec `--ocr`) : le texte en Markdown, titres `##`, tableaux à barres, `<!-- page N -->` avant chaque page.
+- `--cbz FICHIER.cbz` (avec `--format png` ou `jpeg`) : les pages traitées réunies en archive de bande dessinée pour liseuses.
+- `--user-words FICHIER`, `--user-patterns FICHIER` (Tesseract) : noms, termes et formes de codes du livre ; le cache OCR suit le contenu des listes.
+- `--burst` : les images inutilisables (main devant l'objectif) sont signalées, le rythme de prise de vue est affiché avec un minuteur suggéré, et les prises manquant dans un rythme régulier comptent comme reprises supprimées ; `web/capture.html` adapte son minuteur.
+- Word, EPUB et Excel ne transforment plus le bruit OCR à côté d'une image en tableaux.
+
 ## Limites connues
 
 Voir `COMPARISON.md` pour ce que font d’autres outils et que celui-ci ne fait pas. En bref :

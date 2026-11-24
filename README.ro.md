@@ -260,6 +260,14 @@ Semnale (`--integrity-signals LIST`; `all`, `default` sau nume):
 
 Măsurat doar pe editări **sintetice** (12 pagini reale din setul de test OCR, JPEG q85; editări: un șir de cifre desenat peste un cuvânt, un petic de 220x140 copiat în altă parte, un petic de 260x180 dintr-o copie q45 lipit la un decalaj ciudat, zgomot gaussian în 240x160; fiecare pagină editată re-salvată la q85; iar paginile curate salvate o dată, re-salvate o dată la q85, re-salvate din nou la q75; `docs/experiments/integrity_eval.py`, ROADMAP 7.5c). `copy_move`: a găsit 10 din 12 petice copiate, 0 din 36 de pagini needitate/re-salvate semnalate; **nu** găsește o cifră sau un cuvânt retipărit și ratează peticele mai mici de 64 px. Limita de dimensiune a fost stabilită după ce s-au văzut alarme false pe aceleași pagini, deci cifra este optimistă. Aceste numere nu spun nimic despre falsurile reale, care sunt făcute cu alte instrumente, alte fonturi și altă compresie; ștampilele reale, siglele repetate și antetele de scrisoare nu au fost în test și sunt sursa așteptată de alarme false. Celelalte semnale sunt disponibile cu `--integrity-signals all`, doar pentru cercetare.
 
+## Noutăți (pre.73 – pre.74)
+
+- `--markdown FILE.md` (cu `--ocr`): textul ca Markdown, titluri `##`, tabele cu bare, `<!-- page N -->` înaintea fiecărei pagini.
+- `--cbz FILE.cbz` (cu `--format png` sau `jpeg`): paginile prelucrate împachetate ca arhivă de benzi desenate, pentru e-readere.
+- `--user-words FILE`, `--user-patterns FILE` (Tesseract): nume, termeni și forme de coduri ale cărții; cache-ul OCR urmărește conținutul listelor.
+- `--burst`: cadrele inutilizabile (mâna peste obiectiv) sunt semnalate, ritmul de fotografiere se afișează cu un timer sugerat, iar cadrele lipsă dintr-un ritm regulat de timer contează ca reluări șterse; `web/capture.html` își adaptează timerul.
+- Word, EPUB și Excel nu mai transformă zgomotul OCR de lângă o imagine în tabele.
+
 ## Limite cunoscute
 
 Vedeți `COMPARISON.md` pentru ce fac alte instrumente și acesta nu. Pe scurt:

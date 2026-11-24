@@ -260,6 +260,14 @@ Señales (`--integrity-signals LIST`; `all`, `default` o nombres):
 
 Medido solo con ediciones **sintéticas** (12 páginas reales del conjunto de prueba del OCR, JPEG q85; ediciones: una cadena de dígitos dibujada sobre una palabra, un parche de 220x140 copiado a otro sitio, un parche de 260x180 de una copia q45 pegado con un desplazamiento extraño, ruido gaussiano en 240x160; cada página editada vuelta a guardar a q85; y las páginas limpias guardadas una vez, vueltas a guardar una vez a q85, vueltas a guardar de nuevo a q75; `docs/experiments/integrity_eval.py`, ROADMAP 7.5c). `copy_move`: encontró 10 de 12 parches copiados, 0 de 36 páginas sin editar/vueltas a guardar marcadas; **no** encuentra un dígito o una palabra reescritos, y no detecta parches menores de 64 px. El límite de tamaño se fijó después de ver falsas alarmas en las mismas páginas, así que esa cifra es optimista. Estos números no dicen nada sobre falsificaciones reales, que se hacen con otras herramientas, otras fuentes y otra compresión; los sellos reales, los logotipos repetidos y los membretes no estaban en la prueba y son la fuente esperada de falsas alarmas. Las demás señales están disponibles con `--integrity-signals all` solo para investigación.
 
+## Novedades (pre.73 – pre.74)
+
+- `--markdown ARCHIVO.md` (con `--ocr`): el texto como Markdown, títulos `##`, tablas con barras, `<!-- page N -->` antes de cada página.
+- `--cbz ARCHIVO.cbz` (con `--format png` o `jpeg`): las páginas procesadas empaquetadas como archivo de cómic para lectores electrónicos.
+- `--user-words ARCHIVO`, `--user-patterns ARCHIVO` (Tesseract): nombres, términos y formas de códigos del libro; la caché OCR sigue el contenido de las listas.
+- `--burst`: se señalan los fotogramas inutilizables (mano ante el objetivo), se muestra el ritmo de disparo con un temporizador sugerido y los disparos que faltan en un ritmo regular cuentan como repeticiones borradas; `web/capture.html` adapta su temporizador.
+- Word, EPUB y Excel ya no convierten el ruido OCR junto a una imagen en tablas.
+
 ## Límites conocidos
 
 Véase `COMPARISON.md` para lo que hacen otras herramientas y esta no. En resumen:

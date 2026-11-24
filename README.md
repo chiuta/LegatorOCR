@@ -266,6 +266,14 @@ Signals (`--integrity-signals LIST`; `all`, `default`, or names):
 
 Measured on **synthetic** edits only (12 real pages from the OCR test set, JPEG q85; edits: a digit string drawn over a word, a 220x140 patch copied elsewhere, a 260x180 patch from a q45 copy pasted at an odd offset, gaussian noise in 240x160; each edited page re-saved at q85; and the clean pages saved once, re-saved once at q85, re-saved again at q75; `docs/experiments/integrity_eval.py`, ROADMAP 7.5c). `copy_move`: found 10 of 12 copied patches, 0 of 36 unedited/re-saved pages flagged; it does **not** find a digit or a word re-typed, and it misses patches smaller than 64 px. The size limit was set after seeing false alarms on the same pages, so that figure is optimistic. These numbers say nothing about real forgeries, which are made with other tools, other fonts and other compression; real stamps, repeated logos and letterheads were not in the test and are the expected source of false alarms. The other signals are available with `--integrity-signals all` for research only.
 
+## What's new (pre.73 – pre.74)
+
+- `--markdown FILE.md` (with `--ocr`): the text as Markdown, headings as `##`, tables as pipe tables, `<!-- page N -->` before each page.
+- `--cbz FILE.cbz` (with `--format png` or `jpeg`): the processed pages packed as a comic-book archive for e-readers.
+- `--user-words FILE`, `--user-patterns FILE` (Tesseract): names, terms and code shapes of the book; the OCR cache follows the content of the lists.
+- `--burst`: unusable frames (hand over the lens) are flagged, the shooting rhythm is printed with a suggested timer, and shots missing from a regular timer rhythm count as deleted retakes; `web/capture.html` adapts its timer.
+- Word, EPUB and Excel no longer turn OCR noise beside a picture into tables.
+
 ## Known limits
 
 See `COMPARISON.md` for what other tools do that this one does not. In short:

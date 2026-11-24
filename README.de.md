@@ -259,6 +259,14 @@ Signale (`--integrity-signals LIST`; `all`, `default` oder Namen):
 
 Nur an **synthetischen** Bearbeitungen gemessen (12 echte Seiten aus dem OCR-Testsatz, JPEG q85; Bearbeitungen: eine über ein Wort gezeichnete Ziffernfolge, ein anderswohin kopierter Ausschnitt von 220x140, ein Ausschnitt von 260x180 aus einer q45-Kopie, an einem ungeraden Versatz eingefügt, gaußsches Rauschen in 240x160; jede bearbeitete Seite mit q85 neu gespeichert; und die sauberen Seiten einmal gespeichert, einmal mit q85 neu gespeichert, nochmals mit q75 neu gespeichert; `docs/experiments/integrity_eval.py`, ROADMAP 7.5c). `copy_move`: fand 10 von 12 kopierten Ausschnitten, 0 von 36 unbearbeiteten/neu gespeicherten Seiten markiert; es findet **keine** neu getippte Ziffer oder ein neu getipptes Wort, und es verfehlt Ausschnitte unter 64 px. Die Größengrenze wurde festgelegt, nachdem an denselben Seiten Fehlalarme aufgefallen waren, daher ist diese Zahl optimistisch. Diese Zahlen sagen nichts über echte Fälschungen, die mit anderen Werkzeugen, anderen Schriften und anderer Kompression angefertigt werden; echte Stempel, wiederholte Logos und Briefköpfe waren nicht im Test und sind die erwartete Quelle von Fehlalarmen. Die anderen Signale sind mit `--integrity-signals all` nur für die Forschung verfügbar.
 
+## Neu (pre.73 – pre.74)
+
+- `--markdown DATEI.md` (mit `--ocr`): der Text als Markdown, Überschriften `##`, Tabellen mit Strichen, `<!-- page N -->` vor jeder Seite.
+- `--cbz DATEI.cbz` (mit `--format png` oder `jpeg`): die bearbeiteten Seiten als Comic-Archiv für E-Reader.
+- `--user-words DATEI`, `--user-patterns DATEI` (Tesseract): Namen, Begriffe und Codeformen des Buches; der OCR-Cache folgt dem Inhalt der Listen.
+- `--burst`: unbrauchbare Bilder (Hand vor dem Objektiv) werden gemeldet, der Aufnahmerhythmus wird mit einem Timer-Vorschlag ausgegeben, und im regelmäßigen Rhythmus fehlende Aufnahmen zählen als gelöschte Wiederholungen; `web/capture.html` passt seinen Timer an.
+- Word, EPUB und Excel machen aus OCR-Rauschen neben einem Bild keine Tabellen mehr.
+
 ## Bekannte Grenzen
 
 Siehe `COMPARISON.md` dazu, was andere Werkzeuge können und dieses nicht. Kurz gesagt:

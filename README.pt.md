@@ -260,6 +260,14 @@ Sinais (`--integrity-signals LIST`; `all`, `default`, ou nomes):
 
 Medido apenas em edições **sintéticas** (12 páginas reais do conjunto de teste de OCR, JPEG q85; edições: uma cadeia de dígitos desenhada sobre uma palavra, um bloco de 220x140 copiado para outro sítio, um bloco de 260x180 de uma cópia q45 colado num deslocamento estranho, ruído gaussiano em 240x160; cada página editada gravada de novo a q85; e as páginas limpas gravadas uma vez, regravadas uma vez a q85, regravadas outra vez a q75; `docs/experiments/integrity_eval.py`, ROADMAP 7.5c). `copy_move`: encontrou 10 de 12 blocos copiados, 0 de 36 páginas não editadas/regravadas assinaladas; **não** encontra um dígito ou uma palavra redigitados, e falha blocos menores que 64 px. O limite de tamanho foi fixado depois de ver falsos alarmes nas mesmas páginas, pelo que esse valor é otimista. Estes números nada dizem sobre falsificações reais, que são feitas com outras ferramentas, outros tipos de letra e outra compressão; carimbos reais, logótipos repetidos e papéis timbrados não estavam no teste e são a fonte esperada de falsos alarmes. Os outros sinais estão disponíveis com `--integrity-signals all` apenas para investigação.
 
+## Novidades (pre.73 – pre.74)
+
+- `--markdown ARQUIVO.md` (com `--ocr`): o texto em Markdown, títulos `##`, tabelas com barras, `<!-- page N -->` antes de cada página.
+- `--cbz ARQUIVO.cbz` (com `--format png` ou `jpeg`): as páginas processadas reunidas num arquivo de banda desenhada para e-readers.
+- `--user-words ARQUIVO`, `--user-patterns ARQUIVO` (Tesseract): nomes, termos e formas de códigos do livro; a cache de OCR segue o conteúdo das listas.
+- `--burst`: quadros inutilizáveis (mão sobre a lente) são assinalados, o ritmo de fotografia é mostrado com um temporizador sugerido e os disparos em falta num ritmo regular contam como repetições apagadas; `web/capture.html` adapta o temporizador.
+- Word, EPUB e Excel já não transformam ruído de OCR junto a uma imagem em tabelas.
+
 ## Limites conhecidos
 
 Veja `COMPARISON.md` para o que outras ferramentas fazem e esta não. Em resumo:

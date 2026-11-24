@@ -261,6 +261,14 @@ Segnali (`--integrity-signals LIST`; `all`, `default`, o nomi):
 
 Misurato solo su modifiche **sintetiche** (12 pagine reali dal set di prova OCR, JPEG q85; modifiche: una stringa di cifre disegnata sopra una parola, una toppa 220x140 copiata altrove, una toppa 260x180 da una copia q45 incollata a uno scostamento dispari, rumore gaussiano in 240x160; ogni pagina modificata risalvata a q85; e le pagine pulite salvate una volta, risalvate una volta a q85, risalvate ancora a q75; `docs/experiments/integrity_eval.py`, ROADMAP 7.5c). `copy_move`: ha trovato 10 toppe copiate su 12, 0 pagine non modificate/risalvate su 36 segnalate; **non** trova una cifra o una parola ribattuta, e perde le toppe più piccole di 64 px. Il limite di dimensione è stato fissato dopo aver visto falsi allarmi sulle stesse pagine, quindi quella cifra è ottimistica. Questi numeri non dicono nulla sulle falsificazioni reali, che sono fatte con altri strumenti, altri caratteri e altra compressione; timbri reali, loghi ripetuti e carte intestate non facevano parte del test e sono la fonte prevista dei falsi allarmi. Gli altri segnali sono disponibili con `--integrity-signals all` solo per la ricerca.
 
+## Novità (pre.73 – pre.74)
+
+- `--markdown FILE.md` (con `--ocr`): il testo in Markdown, titoli `##`, tabelle con barre, `<!-- page N -->` prima di ogni pagina.
+- `--cbz FILE.cbz` (con `--format png` o `jpeg`): le pagine elaborate raccolte in un archivio fumetti per e-reader.
+- `--user-words FILE`, `--user-patterns FILE` (Tesseract): nomi, termini e forme di codici del libro; la cache OCR segue il contenuto degli elenchi.
+- `--burst`: i fotogrammi inutilizzabili (mano sull'obiettivo) sono segnalati, il ritmo di scatto è mostrato con un timer suggerito e gli scatti mancanti in un ritmo regolare contano come riprese cancellate; `web/capture.html` adatta il timer.
+- Word, EPUB ed Excel non trasformano più il rumore OCR accanto a un'immagine in tabelle.
+
 ## Limiti noti
 
 Vedere `COMPARISON.md` per ciò che fanno altri strumenti e questo no. In breve:

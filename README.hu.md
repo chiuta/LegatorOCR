@@ -257,6 +257,14 @@ Jelek (`--integrity-signals LIST`; `all`, `default` vagy nevek):
 
 Csak **szintetikus** szerkesztéseken mérve (12 valódi oldal az OCR-tesztkészletből, JPEG q85; szerkesztések: egy szóra rárajzolt számjegysor, máshová másolt 220x140-es folt, páratlan eltolással beillesztett, q45-ös másolatból származó 260x180-as folt, gauss-zaj egy 240x160-as területen; minden szerkesztett oldal újra elmentve q85-tel; és a tiszta oldalak egyszer mentve, egyszer újra mentve q85-tel, majd megint újra mentve q75-tel; `docs/experiments/integrity_eval.py`, ROADMAP 7.5c). `copy_move`: a 12 másolt foltból 10-et talált meg, a 36 nem szerkesztett/újra mentett oldalból 0-t jelölt meg; **nem** találja meg az újra begépelt számjegyet vagy szót, és kihagyja a 64 px-nél kisebb foltokat. A méretkorlátot azután állítottuk be, hogy ugyanezeken az oldalakon téves riasztásokat láttunk, így ez az adat optimista. Ezek a számok semmit nem mondanak a valódi hamisításokról, amelyeket más eszközökkel, más betűtípusokkal és más tömörítéssel készítenek; a valódi bélyegzők, ismétlődő logók és fejlécek nem szerepeltek a tesztben, és a téves riasztások várható forrásai. A többi jel az `--integrity-signals all`-lal elérhető, kizárólag kutatási célra.
 
+## Újdonságok (pre.73 – pre.74)
+
+- `--markdown FÁJL.md` (`--ocr`-rel): a szöveg Markdownként, `##` címsorok, csöves táblázatok, minden oldal előtt `<!-- page N -->`.
+- `--cbz FÁJL.cbz` (`--format png` vagy `jpeg` mellett): a feldolgozott oldalak képregényarchívumként e-olvasókhoz.
+- `--user-words FÁJL`, `--user-patterns FÁJL` (Tesseract): a könyv nevei, kifejezései és kódmintái; az OCR-gyorsítótár követi a listák tartalmát.
+- `--burst`: a használhatatlan képkockákat (kéz az objektíven) jelzi, kiírja a fényképezési ritmust javasolt időzítővel, a szabályos ritmusból hiányzó felvételek törölt ismétlésnek számítanak; a `web/capture.html` igazítja az időzítőt.
+- A Word, az EPUB és az Excel a kép melletti OCR-zajból már nem csinál táblázatot.
+
 ## Ismert korlátok
 
 Lásd a `COMPARISON.md` fájlt arról, mit tesznek más eszközök, amit ez nem. Röviden:

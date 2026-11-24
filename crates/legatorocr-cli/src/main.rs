@@ -261,6 +261,11 @@ struct Cli {
     #[arg(long)]
     markdown: Option<PathBuf>,
 
+    /// Also pack the processed page images into a comic-book archive (CBZ, a ZIP of the pages in
+    /// reading order) that e-readers and comic viewers open. Needs --format png or jpeg.
+    #[arg(long, value_name = "FILE.cbz")]
+    cbz: Option<PathBuf>,
+
     /// With --tei: also write a TEI facsimile. Each page image (the processed page, PNG) is
     /// written into DIR, and the TEI file gets a facsimile element with one surface per page
     /// (pixel extent) and one rectangular zone per paragraph, heading and table; page breaks
@@ -2112,6 +2117,7 @@ fn real_main() -> Result<()> {
             &mut cli.docx,
             &mut cli.epub,
             &mut cli.markdown,
+            &mut cli.cbz,
             &mut cli.tei,
             &mut cli.package,
         ] {
@@ -2179,6 +2185,7 @@ fn real_main() -> Result<()> {
             &cli.docx,
             &cli.epub,
             &cli.markdown,
+            &cli.cbz,
             &cli.package,
         ]
         .iter()
@@ -3405,6 +3412,7 @@ fn real_main() -> Result<()> {
         .chain(cli.docx.iter())
         .chain(cli.epub.iter())
         .chain(cli.markdown.iter())
+        .chain(cli.cbz.iter())
         .chain(cli.tei.iter())
         .chain(cli.passages_jsonl.iter())
     {
@@ -3424,6 +3432,7 @@ fn real_main() -> Result<()> {
         && cli.docx.is_none()
         && cli.epub.is_none()
         && cli.markdown.is_none()
+        && cli.cbz.is_none()
         && cli.tei.is_none()
         && cli.passages_jsonl.is_none()
         && cli.article_crops.is_none()
@@ -3735,6 +3744,9 @@ fn real_main() -> Result<()> {
         return Ok(());
     }
     let save_images = !matches!(cli.format, Fmt::None);
+    if cli.cbz.is_some() && !matches!(cli.format, Fmt::Png | Fmt::Jpeg) {
+        bail!("--cbz needs --format png or --format jpeg (the pages of the archive)");
+    }
     if save_images {
         std::fs::create_dir_all(&cli.out_dir)?;
     }
@@ -3763,6 +3775,7 @@ fn real_main() -> Result<()> {
             &cli.docx,
             &cli.epub,
             &cli.markdown,
+            &cli.cbz,
             &cli.multitiff,
             &cli.package,
             &cli.report,
@@ -4159,6 +4172,7 @@ fn real_main() -> Result<()> {
             &mut cli.docx,
             &mut cli.epub,
             &mut cli.markdown,
+            &mut cli.cbz,
             &mut cli.tei,
             &mut cli.package,
         ] {
@@ -4444,6 +4458,25 @@ fn real_main() -> Result<()> {
             res.page_xml.len(),
             dir.display()
         );
+    }
+    if let Some(p) = &cli.cbz {
+        let mut files = saved_images.clone();
+        files.sort();
+        let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
+        for f in &files {
+            let name = f.file_name().and_then(|n| n.to_str()).unwrap_or("page");
+            entries.push((name.to_string(), std::fs::read(f)?));
+        }
+        if entries.is_empty() {
+            bail!("--cbz: no page image was written");
+        }
+        let refs: Vec<(&str, &[u8])> = entries
+            .iter()
+            .map(|(n, d)| (n.as_str(), d.as_slice()))
+            .collect();
+        write_atomic(p, &legatorocr_engine::zipmini::write(&refs))?;
+        eprintln!("wrote {} ({} page(s))", p.display(), entries.len());
+        written.push(p.clone());
     }
     if let (Some(p), Some(b)) = (&cli.markdown, &res.docx_blocks) {
         write_atomic(p, legatorocr_engine::markdown::from_blocks(b).as_bytes())?;
