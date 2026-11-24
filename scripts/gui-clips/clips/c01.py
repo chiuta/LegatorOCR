@@ -11,7 +11,7 @@ def pick(d, path):
     d.key("l", ["Control_L"]); d.type_text(str(path), 0.02); d.key("Return")
 
 def pick_folder(d):
-    d.click(339, 112); d.click(1170, 832)      # the first folder of the dialog's list, then "Select"
+    d.click(339, 112, double=True); import time; time.sleep(1.5); d.click(1170, 832)      # the first folder of the dialog's list, then "Select"
 
 def act(tl, d, sc):
     tl.at(0.5); d.shot("/tmp/gui/c01_welcome.png")

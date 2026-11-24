@@ -10,7 +10,7 @@ def name(d, path):
     d.type_text(str(path), 0.02); d.key("Return")
 
 def pick_folder(d):
-    d.click(339, 112); d.click(1170, 832)
+    d.click(339, 112, double=True); import time; time.sleep(1.5); d.click(1170, 832)
 
 def act(tl, d, sc):
     out = O
