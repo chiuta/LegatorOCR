@@ -2216,7 +2216,7 @@ fn flag(p: &crate::project::Project, k: &str) -> bool {
 /// The real processing of one item: the sources become sheets (a `.lgr` project brings its
 /// own page list and per-page adjustments), [`crate::run_export`] cleans, recognises and
 /// builds the PDF. The profile's settings and extras (`pdf_quality`, `skip_blank`, `ocr_langs`,
-/// `psm`, `min_conf`, `tesseract` …) apply.
+/// `psm`, `min_conf` …) apply; the Tesseract program never comes from a project or profile.
 pub fn run_item_with_engine(run: &ItemRun, cancel: &AtomicBool) -> Result<ItemOutput> {
     use crate::{ExportJob, PdfExport, SheetInput};
     let mut profile = run.profile.clone().unwrap_or_default();
@@ -2266,16 +2266,11 @@ pub fn run_item_with_engine(run: &ItemRun, cancel: &AtomicBool) -> Result<ItemOu
                 .get("min_conf")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0.0),
-            tesseract: run
-                .tesseract
-                .clone()
-                .or_else(|| {
-                    profile
-                        .get("tesseract")
-                        .filter(|t| !t.is_empty())
-                        .map(PathBuf::from)
-                })
-                .unwrap_or_else(|| "tesseract".into()),
+            // The OCR program is a per-machine choice: it comes only from the caller (the window's
+            // settings or `--tesseract`), never from a `.lgr` project or a profile file, which can
+            // arrive from someone else and would be executed (`tesseract --version`) at the next
+            // run. The window already refuses this (`settings.rs`, `apply_machine`).
+            tesseract: run.tesseract.clone().unwrap_or_else(|| "tesseract".into()),
             ..Default::default()
         };
         crate::check_ocr(&o)?;
@@ -3506,5 +3501,58 @@ mod tests {
             println!("search {name}: {:?}, {} hits", t.elapsed(), h.len());
         }
         println!("RSS after searches: {} MB", rss_kb("VmRSS:") >> 10);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tesseract_from_project_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A `.lgr` project that names `tesseract = <program>` must not decide which program the batch
+    /// runs (it was executed as `<program> --version` on the next OCR run).
+    #[test]
+    fn a_project_file_cannot_choose_the_program_that_is_run() {
+        let d = std::env::temp_dir().join(format!("lgr_tessproj_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let marker = d.join("PWNED");
+        let prog = d.join("evil.sh");
+        std::fs::write(
+            &prog,
+            format!("#!/bin/sh\necho x >> '{}'\nexit 1\n", marker.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&prog, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let img = d.join("a.png");
+        image::GrayImage::from_pixel(40, 40, image::Luma([255]))
+            .save(&img)
+            .unwrap();
+        let lgr = d.join("p.lgr");
+        std::fs::write(
+            &lgr,
+            format!(
+                "legatorocr-project 1\ntesseract = {}\n\n[sheet]\npath = {}\n",
+                prog.display(),
+                img.display()
+            ),
+        )
+        .unwrap();
+        let run = ItemRun {
+            title: "t".into(),
+            sources: vec![lgr],
+            profile: None,
+            languages: vec!["en".into()],
+            ocr: true,
+            tesseract: None,
+            keywords: String::new(),
+            subject: String::new(),
+        };
+        let _ = run_item_with_engine(&run, &AtomicBool::new(false));
+        assert!(
+            !marker.exists(),
+            "the program named in the project was executed"
+        );
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

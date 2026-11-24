@@ -375,9 +375,11 @@ pub fn cli_path() -> PathBuf {
 
 /// Open a web address or a file with the system's default program.
 pub fn open_target(target: &str) {
+    // Not `cmd /C start`: cmd.exe parses `&`, `|`, `^` and `%VAR%` in the argument, so a file named
+    // `a&calc&.pdf` (no spaces, hence not quoted by Rust) would run a second command.
     #[cfg(windows)]
-    let r = Command::new("cmd")
-        .args(["/C", "start", "", target])
+    let r = Command::new("rundll32.exe")
+        .args(["url.dll,FileProtocolHandler", target])
         .spawn();
     #[cfg(target_os = "macos")]
     let r = Command::new("open").arg(target).spawn();

@@ -9,7 +9,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use image::{DynamicImage, RgbImage};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use wasmi::{Config, Engine, Linker, Module, Store};
+use wasmi::{Config, Engine, Linker, Module, Store, StoreLimits, StoreLimitsBuilder};
 
 /// Instructions a plugin may execute per page before it is stopped.
 const FUEL: u64 = 20_000_000_000;
@@ -53,9 +53,18 @@ pub fn run_with_fuel(wasm: &[u8], img: &DynamicImage, fuel: u64) -> Result<Dynam
     if module.imports().next().is_some() {
         bail!("plugin imports functions; plugins get no host functions");
     }
-    let mut store = Store::new(&engine, ());
+    // MAX_MEMORY was documented as a cap but never enforced: `memory.grow` took whatever the
+    // plugin asked for (a 2.6 GB request ran to completion, peak RSS 2.5 GB).
+    let limits: StoreLimits = StoreLimitsBuilder::new()
+        .memory_size(MAX_MEMORY)
+        .instances(1)
+        .tables(4)
+        .table_elements(100_000)
+        .build();
+    let mut store = Store::new(&engine, limits);
+    store.limiter(|l| l);
     store.set_fuel(fuel).map_err(|e| anyhow!("{e}"))?;
-    let linker = <Linker<()>>::new(&engine);
+    let linker = <Linker<StoreLimits>>::new(&engine);
     let inst = linker
         .instantiate_and_start(&mut store, &module)
         .map_err(|e| anyhow!("plugin start: {e}"))?;
@@ -132,6 +141,34 @@ mod tests {
                 assert_eq!(a[c] ^ 255, b[c]);
             }
         }
+    }
+
+    /// MAX_MEMORY is enforced: a plugin cannot grow its memory past it (it used to, up to 4 GiB).
+    #[test]
+    fn a_plugin_cannot_grow_its_memory_past_the_cap() {
+        let wasm = wat::parse_str(
+            r#"(module
+              (memory (export "memory") 1)
+              (func (export "lgr_alloc") (param i32) (result i32)
+                ;; 40 000 pages = 2.6 GB, more than MAX_MEMORY (2 GiB): the grow must fail
+                (if (i32.ne (memory.grow (i32.const 40000)) (i32.const -1)) (then (unreachable)))
+                (i32.const 16))
+              (func (export "lgr_filter") (param i32 i32 i32) (result i32) (i32.const 0)))"#,
+        )
+        .unwrap();
+        // the grow fails (returns -1), the plugin carries on, so the run succeeds without 2.6 GB
+        assert!(run_bytes(&wasm, &img()).is_ok());
+        // and a plugin that insists on the grow succeeding is stopped, not served
+        let wasm = wat::parse_str(
+            r#"(module
+              (memory (export "memory") 1)
+              (func (export "lgr_alloc") (param i32) (result i32)
+                (if (i32.eq (memory.grow (i32.const 40000)) (i32.const -1)) (then (unreachable)))
+                (i32.const 16))
+              (func (export "lgr_filter") (param i32 i32 i32) (result i32) (i32.const 0)))"#,
+        )
+        .unwrap();
+        assert!(run_bytes(&wasm, &img()).is_err());
     }
 
     #[test]

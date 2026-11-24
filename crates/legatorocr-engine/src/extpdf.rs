@@ -137,17 +137,28 @@ pub fn rasterize(path: &Path, page: u32) -> Result<DynamicImage> {
     let path = safe.as_path();
     // unique per call (pid + counter + time): two PDFs rasterised at once must never share a folder
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    // Unpredictable name and owner-only permissions (as `archive::work_dir` does): in a shared
+    // temp folder another local user could pre-create a predictable name and plant a symlink at
+    // `page.png`, which the renderer would then write through.
+    let mut salt = [0u8; 8];
+    getrandom::fill(&mut salt).map_err(|e| anyhow::anyhow!("no random numbers: {e}"))?;
     let dir = std::env::temp_dir().join(format!(
-        "legatorocr-ext-{}-{page}-{}-{:x}",
+        "legatorocr-ext-{}-{page}-{}-{:016x}",
         std::process::id(),
         SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-        crate::now_unix()
+        u64::from_le_bytes(salt)
     ));
-    std::fs::create_dir(&dir).or_else(|_| {
-        // a stale folder of a crashed run with the same name: start clean
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir(&dir)
-    })?;
+    {
+        let mut b = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            b.mode(0o700);
+        }
+        // never remove and re-create: an existing name is somebody else's, so stop
+        b.create(&dir)
+            .with_context(|| format!("cannot create {}", dir.display()))?;
+    }
     let result = (|| -> Result<DynamicImage> {
         let out = dir.join("page.png");
         let dpi = DPI.to_string();
