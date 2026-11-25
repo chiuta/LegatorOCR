@@ -1,16 +1,20 @@
 # Refilmarea clipurilor GUI LegatorOCR (c01–c11)
 
-Clipurile actuale au fost filmate la 0.2.0-pre.30; versiunea curentă este 0.2.0-pre.72. Fiecare clip are mai jos lista de cadre: ora din clipul actual (când apare subtitrarea) și textul englezesc. Rulezi programul, faci acțiunea descrisă și compari cu clipul vechi; dacă interfața e diferită, refilmezi clipul.
+Clipurile au fost refilmate la 0.2.0-pre.74 cu scenarii scrise în cod, deci pot fi refăcute oricând, identic: `scripts/gui-clips/` (șoferul X11 `drv.py`, paginile de probă `make_samples.py`, câte un scenariu `clips/cNN.py` cu momentele din listele de mai jos). Subtitrările `cNN.<limbă>.vtt` rămân valabile: durata fiecărui clip este cea veche.
 
-## Cum filmezi (Linux, X11)
+## Cum refilmezi
 
 ```sh
-scripts/record-gui-clip.sh c03   # 1360x860, 25 fps, fereastra LegatorOCR cu colțul în 0,0; oprești cu q
+# clipurile fără dialog de fișiere (Xvfb 1360x860, Linux): c02–c08, c10, c11
+Xvfb :99 -screen 0 1360x860x24 &
+python3 scripts/gui-clips/make_samples.py /tmp/gui/scans
+cd scripts/gui-clips && python3 runclip.py c05          # scrie /tmp/gui/out/c05.mp4
+scripts/gui-clips/install.sh /tmp/gui/out c05           # copiază în docs/video/gui și face afișul .jpg
 ```
 
-Subtitrările `cNN.<limbă>.vtt` rămân valabile dacă ordinea și durata pașilor se păstrează; altfel se reajustează orele (textele se traduc deja în 8 limbi).
+`c01` și `c09` au nevoie de o fereastră reală de fișiere (xdg-desktop-portal-gtk și un manager de ferestre): rulează fluxul de lucru GitHub „GUI clips (dialog scenes)” (Actions › Run workflow); rezultatele ajung pe ramura `gui-clips-out`.
 
-Apoi: `ffmpeg -i cNN.raw.mkv -c:v libx264 -preset veryfast -crf 26 -pix_fmt yuv420p -movflags +faststart cNN.mp4` și o captură pentru `cNN.jpg`. În docs/index.html textul „versiunea 0.2.0-pre.30” se schimbă în pre.72 (rândurile 114 și 245) abia după refilmare.
+Momentele de mai jos sunt ale subtitrărilor; scenariile le urmăresc cât permite viteza ferestrei (randare software, câteva secunde de întârziere la unele schimbări).
 
 ## c01 — 81 s
 
