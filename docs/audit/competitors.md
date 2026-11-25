@@ -62,3 +62,15 @@ Measured on 2026-11-05 on the 12 evaluation pages: OCRmyPDF 17.13.0 (Tesseract `
 | page-dewarp | MIT library; hosted service with credits (from GBP 2 per pack) | page-dewarp-web.pages.dev |
 | Not reachable | GitHub release pages, pdf.abbyy.com buy page, Book Restorer (i2S) | - |
 
+
+## Re-checked 2026-11-25 (web search results; GitHub pages are not reachable from this environment)
+
+| Item | Result | Source |
+|---|---|---|
+| NEW: ScanTailor Spectre (abandoned-industries/scantailor-spectre) | "Version 2.0b7", macOS (Apple Silicon, macOS 15+); README: "turns scanned books into cleaned-up, searchable PDFs"; stages include Select Content, Margins, Finalize, Output and OCR; not intended for copyrighted works. Another ScanTailor-based chain with OCR and searchable PDF, macOS only. Licence and release date not read. | raw README on raw.githubusercontent.com |
+| ScanTailor Universal | Gitea mirror: latest 2023-08-19 (0.2.14); not active | gitea.com/ImageProcessing-ElectronicPublications/scantailor-universal |
+| ScanTailor Deviant (Gitea) | beta-3, 2025-04-02 | gitea.com/.../scantailor-deviant |
+| Tesseract | Wikipedia and Arch: **5.5.3, 2026-07-24**. The 5.5.4 (2026-10-28) of the 4 Nov reading was not confirmed today. | en.wikipedia.org/wiki/Tesseract_(software); archlinux.org package page |
+| OCRmyPDF | release notes of 17.12.0 / 17.12.1 seen; the 17.13 / 17.14 entries above not re-read | newreleases.io; ocrmypdf.readthedocs.io |
+| ABBYY FineReader PDF | Capterra: Windows Standard from US$16 per month, Mac US$69 per year; reviewers' main complaint is uneven text-conversion accuracy | capterra.com/p/65868 |
+| EVB Viewer | docs: PDFs and DjVu workspace with OCR, annotations, page operations; installers unsigned. Languages of OCR not listed (the 5 Nov "31 languages" reading is not repeated). | evb-viewer.vercel.app/docs |
