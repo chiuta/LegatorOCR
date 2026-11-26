@@ -2022,10 +2022,28 @@ fn real_main() -> Result<()> {
         _ => {}
     }
     if let Some(n) = cli.jobs.filter(|&n| n > 0) {
-        // the global pool is built once, before any parallel work
+        // The global pool is built once, before any parallel work. A silly value (`--jobs 99999999999`)
+        // used to keep the program busy spawning threads for good; no machine has use for more threads
+        // than a few times its cores.
+        const MAX_JOBS: usize = 256;
+        if n > MAX_JOBS {
+            eprintln!("--jobs {n} is more than any machine can use: {MAX_JOBS} threads");
+        }
         let _ = rayon::ThreadPoolBuilder::new()
-            .num_threads(n)
+            .num_threads(n.min(MAX_JOBS))
             .build_global();
+    }
+    // Tesseract passes over a word or pattern file it cannot open without a word, so a typo in the
+    // path would silently give the page no help at all: say so here.
+    for (flag, path) in [
+        ("--user-words", &cli.user_words),
+        ("--user-patterns", &cli.user_patterns),
+    ] {
+        if let Some(p) = path {
+            if std::fs::File::open(p).is_err() || !p.is_file() {
+                bail!("{flag}: {} is not a file that can be read", p.display());
+            }
+        }
     }
     let pdfa_level = cli.pdfa_level.to_ascii_uppercase();
     if pdfa_level != "B" {

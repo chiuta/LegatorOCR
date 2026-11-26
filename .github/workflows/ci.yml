@@ -65,6 +65,7 @@ jobs:
           python3 scripts/check-options.py target/debug/legatorocr
           python3 scripts/check-readme-options.py target/debug/legatorocr
           python3 scripts/smoke-options.py target/debug/legatorocr
+          python3 scripts/fuzz_all_options.py target/debug/legatorocr --per-option 2 --timeout 150
       - name: Whole chain with the network cut off
         if: matrix.os == 'ubuntu-26.04'
         shell: bash
