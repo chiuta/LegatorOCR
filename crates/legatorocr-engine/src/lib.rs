@@ -1461,6 +1461,20 @@ fn part_name(path: &Path) -> PathBuf {
 
 /// Write via a temporary sibling file, then rename (no half-written outputs).
 pub fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
+    // A target that already exists but is not a plain file (`/dev/stdout`, a
+    // pipe, a device) is written to directly: renaming over it would destroy
+    // it. A symlink to a plain file keeps the link and replaces what it
+    // points at.
+    if let Ok(meta) = std::fs::metadata(path) {
+        if !meta.is_file() {
+            return std::fs::write(path, data).with_context(|| format!("writing {}", path.display()));
+        }
+        if std::fs::symlink_metadata(path).map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+            if let Ok(real) = std::fs::canonicalize(path) {
+                return write_atomic(&real, data);
+            }
+        }
+    }
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir)?;
     }
@@ -1734,6 +1748,25 @@ mod tests {
         let e = run_export(&job, &AtomicBool::new(true), &|_, _| {}, &|_, _| {}).unwrap_err();
         assert!(e.to_string().contains("cancelled"));
         let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_keeps_symlinks_and_special_files() {
+        let d = std::env::temp_dir().join(format!("lgr-aw-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let real = d.join("real.txt");
+        std::fs::write(&real, b"old").unwrap();
+        let link = d.join("link.txt");
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        write_atomic(&link, b"new").unwrap();
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read(&real).unwrap(), b"new");
+        write_atomic(Path::new("/dev/null"), b"x").unwrap();
+        use std::os::unix::fs::FileTypeExt;
+        assert!(std::fs::metadata("/dev/null").unwrap().file_type().is_char_device());
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

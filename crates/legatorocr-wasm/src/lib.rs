@@ -14,7 +14,11 @@ static OUT: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 /// Allocate `n` bytes inside the module for the caller to fill.
 #[no_mangle]
 pub extern "C" fn lgr_alloc(n: usize) -> *mut u8 {
-    let mut v = Vec::<u8>::with_capacity(n.max(1));
+    let mut v = Vec::<u8>::new();
+    // a request the module cannot satisfy gives a null pointer instead of aborting the module
+    if v.try_reserve_exact(n.max(1)).is_err() {
+        return std::ptr::null_mut();
+    }
     let p = v.as_mut_ptr();
     std::mem::forget(v);
     p
@@ -24,6 +28,9 @@ pub extern "C" fn lgr_alloc(n: usize) -> *mut u8 {
 /// `ptr` must come from `lgr_alloc(n)` with the same `n`, and not be used afterwards.
 #[no_mangle]
 pub unsafe extern "C" fn lgr_free(ptr: *mut u8, n: usize) {
+    if ptr.is_null() {
+        return;
+    }
     drop(Vec::from_raw_parts(ptr, 0, n.max(1)));
 }
 
@@ -66,6 +73,9 @@ fn settings(mode: u32, dpi: u32) -> Settings {
 /// `ptr` must point to `len` readable bytes inside this module.
 #[no_mangle]
 pub unsafe extern "C" fn lgr_process(ptr: *const u8, len: usize, mode: u32, dpi: u32) -> i32 {
+    if ptr.is_null() || len == 0 {
+        return -1;
+    }
     let bytes = std::slice::from_raw_parts(ptr, len);
     let Ok(img) = decode(bytes) else { return -1 };
     let pages = process_page(&img, &settings(mode, dpi));
@@ -92,6 +102,9 @@ pub unsafe extern "C" fn lgr_process(ptr: *const u8, len: usize, mode: u32, dpi:
 /// `ptr` must point to `len` readable bytes inside this module.
 #[no_mangle]
 pub unsafe extern "C" fn lgr_sharpness(ptr: *const u8, len: usize) -> i32 {
+    if ptr.is_null() || len == 0 {
+        return -1;
+    }
     let Ok(img) = decode(std::slice::from_raw_parts(ptr, len)) else {
         return -1;
     };
@@ -134,5 +147,35 @@ mod tests {
         }
         let out = unsafe { std::slice::from_raw_parts(lgr_out_ptr(), lgr_out_len()) }.to_vec();
         assert_eq!(&out[..4], b"\x89PNG");
+    }
+
+    #[test]
+    fn null_empty_and_absurd_requests_are_refused_not_fatal() {
+        unsafe {
+            assert_eq!(lgr_process(std::ptr::null(), 10, 2, 300), -1);
+            assert_eq!(lgr_sharpness(std::ptr::null(), 10), -1);
+            let p = lgr_alloc(4);
+            assert_eq!(lgr_process(p, 0, 2, 300), -1);
+            lgr_free(p, 4);
+            lgr_free(std::ptr::null_mut(), 0);
+        }
+        assert!(lgr_alloc(usize::MAX / 2).is_null());
+        // bytes that are no picture at all
+        let junk = [0x42u8; 64];
+        assert_eq!(unsafe { lgr_process(junk.as_ptr(), junk.len(), 2, 300) }, -1);
+    }
+
+    #[test]
+    fn hostile_dpi_and_tiny_pictures_do_not_panic() {
+        for (w, h) in [(1u32, 1u32), (2, 700), (700, 2)] {
+            let img = image::DynamicImage::ImageLuma8(image::GrayImage::from_pixel(w, h, image::Luma([200])));
+            let mut png = Vec::new();
+            img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+            for dpi in [1u32, 72, 100_000, u32::MAX] {
+                for mode in 0..6u32 {
+                    let _ = unsafe { lgr_process(png.as_ptr(), png.len(), mode, dpi) };
+                }
+            }
+        }
     }
 }

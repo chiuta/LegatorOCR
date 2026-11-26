@@ -87,14 +87,19 @@ impl OptDef {
         let h = self.help.to_ascii_lowercase();
         let pathy = [
             "FILE", "PATH", "PDF", "TXT", "HOCR", "JSON", "DOCX", "EPUB", "TEI", "ALTO", "CA",
-            "XML", "REPORT", "TIFF", "HTML", "DJVU", "KEY", "P12", "XLSX", "CSV", "LIST",
+            "XML", "REPORT", "TIFF", "HTML", "DJVU", "KEY", "P12", "XLSX", "CSV", "LIST", "MARKDOWN", "CBZ",
+            "PEM",
         ]
         .iter()
         .any(|p| v.contains(p));
         if !pathy {
             return None;
         }
-        if h.starts_with("write") || h.starts_with("also write") || h.starts_with("save") {
+        if h.starts_with("write")
+            || h.starts_with("also write")
+            || h.starts_with("also pack")
+            || h.starts_with("save")
+        {
             Some(PathKind::Save)
         } else {
             Some(PathKind::Open)
@@ -693,6 +698,20 @@ bogus line\n";
         assert_eq!(d[0].path_kind(), None);
         assert_eq!(d[5].cat, Cat::Archive);
         assert_eq!(d[4].short_help(), "Write all processed pages into one PDF");
+    }
+
+    #[test]
+    fn new_output_options_get_a_save_dialog_and_word_lists_an_open_one() {
+        let d = parse_dump(
+            "markdown\t\tvalue\tMARKDOWN\t\t\tAlso write the recognised text as Markdown (needs --ocr)\n\
+cbz\t\tvalue\tFILE.cbz\t\t\tAlso pack the processed page images into a comic-book archive\n\
+user-words\t\tvalue\tFILE\t\t\tA word list for the recognition\n\
+tsa-ca\t\tvalue\tPEM\t\t\tCA / TSA certificate file (PEM)\n",
+        );
+        assert_eq!(d[0].path_kind(), Some(PathKind::Save));
+        assert_eq!(d[1].path_kind(), Some(PathKind::Save));
+        assert_eq!(d[2].path_kind(), Some(PathKind::Open));
+        assert_eq!(d[3].path_kind(), Some(PathKind::Open));
     }
 
     #[test]

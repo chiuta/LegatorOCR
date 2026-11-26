@@ -109,3 +109,8 @@ Method: `scripts/hostile.py` (corrupt and bomb inputs under memory/time limits, 
 
 Found and repaired (each with a test): forbidden XML characters in EPUB/TEI/XLSX; page-size overflow in the memory cap; signing temp dir permissions; curl scheme/option injection through the time-stamp URL; file names starting with `-` passed to pdftoppm and veraPDF.
 Not found: panics, hangs, command injection through option values. Slow but bounded: 400 MP PNG (31 s, 3.8 GB), 3,000-page PDF (~0.5 s/page).
+
+## 10. Update, 26 November 2026 (pre.76)
+
+- Row 13 ("Production ready"): version 0.2.0-pre.76, 554 commits, 963 tests (`cargo test --workspace -- --list`), about 101,700 lines of Rust, 291 command-line options, all 291 documented in the 8 READMEs and each covered by a test or script. Still **refuted**: one human author, GUI on Windows/macOS exercised by hand only.
+- New adversarial tool: `scripts/fuzz_all_options.py` feeds hostile values (huge numbers, empty, UTF-16, bad UTF-8, folders, `/dev/null`, `/proc/self/mem`) to every option read from `--help`. It found two real defects, both repaired in pre.76: `--jobs 99999999999` hung for over 20 s (now capped at 256), and a missing `--user-words` / `--user-patterns` file was silently ignored (now an error). After the repairs: 0 failures; the script runs in CI.
