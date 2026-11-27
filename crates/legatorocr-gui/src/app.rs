@@ -598,6 +598,111 @@ impl App {
         }
     }
 
+    /// Save the project (`project.lgr` + copies of the scans) as a new folder inside the CartaColibri
+    /// library folder, so it joins the library at the next index.
+    fn save_project_to_library(&mut self) {
+        let Some(dir) = Self::library_inbox() else {
+            return;
+        };
+        let stem = self.library_stem();
+        let mut folder = dir.join(format!("project-{stem}"));
+        let mut n = 2;
+        while folder.exists() {
+            folder = dir.join(format!("project-{stem}-{n}"));
+            n += 1;
+        }
+        if let Err(e) = std::fs::create_dir_all(&folder) {
+            self.say(format!("{}: {e}", self.tr("status.error")), true);
+            return;
+        }
+        let sheets = self.project_sheets();
+        match self.s.to_project(sheets).save_to_folder(&folder) {
+            Ok((file, n)) => self.say(
+                format!(
+                    "{}: {} — {n} {}",
+                    self.tr("status.project_folder_saved"),
+                    file.display(),
+                    self.tr("status.files_copied"),
+                ),
+                false,
+            ),
+            Err(e) => self.say(format!("{}: {e:#}", self.tr("status.error")), true),
+        }
+    }
+
+    /// A file-name-safe name for what is open: the first sheet's name without extension.
+    fn library_stem(&self) -> String {
+        let stem: String = self
+            .sheets
+            .first()
+            .and_then(|s| {
+                Path::new(&s.name)
+                    .file_stem()
+                    .map(|x| x.to_string_lossy().into_owned())
+            })
+            .unwrap_or_default()
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ') {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        if stem.trim().is_empty() {
+            "LegatorOCR".to_string()
+        } else {
+            stem
+        }
+    }
+
+    /// Repair broken links: choose the folder with the original images; every page whose file is
+    /// missing is pointed at the file of the same name found in that folder (or below it).
+    fn repair_paths(&mut self) {
+        let Some(root) = self.pick(|| rfd::FileDialog::new().pick_folder()) else {
+            return;
+        };
+        let index = index_folder(&root);
+        let (mut fixed, mut missing) = (0usize, 0usize);
+        for sh in &mut self.sheets {
+            let Some((file, frame)) = missing_file(&sh.path) else {
+                continue;
+            };
+            missing += 1;
+            let Some(found) = index.get(&file.to_lowercase()) else {
+                continue;
+            };
+            let mut p = found.clone();
+            if let Some(n) = frame {
+                let mut name = p.file_name().map(|x| x.to_os_string()).unwrap_or_default();
+                name.push(format!("#{n}"));
+                p.set_file_name(name);
+            }
+            sh.path = p;
+            sh.ready = None;
+            sh.pending = None;
+            sh.failed = None;
+            sh.adj_gen = sh.adj_gen.wrapping_add(1);
+            fixed += 1;
+        }
+        if fixed > 0 {
+            self.thumbs.clear();
+            self.settings_gen += 1;
+        }
+        let left = missing - fixed;
+        let text = if missing == 0 {
+            self.tr("status.repair_none").to_string()
+        } else {
+            format!(
+                "{}: {fixed}/{missing} — {left} {}",
+                self.tr("status.repair_done"),
+                self.tr("status.repair_left")
+            )
+        };
+        self.say(text, left > 0);
+    }
+
     fn open_project(&mut self) {
         let Some(path) = self.pick(|| {
             rfd::FileDialog::new()
@@ -1238,29 +1343,7 @@ impl App {
         let Some(dir) = Self::library_inbox() else {
             return;
         };
-        let stem: String = self
-            .sheets
-            .first()
-            .and_then(|s| {
-                Path::new(&s.name)
-                    .file_stem()
-                    .map(|x| x.to_string_lossy().into_owned())
-            })
-            .unwrap_or_default()
-            .chars()
-            .map(|c| {
-                if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ') {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        let stem = if stem.trim().is_empty() {
-            "LegatorOCR".to_string()
-        } else {
-            stem
-        };
+        let stem = self.library_stem();
         // never replace something already in the library: add -2, -3, ... to the name
         let mut target = dir.join(format!("{stem}.pdf"));
         let mut n = 2;
@@ -1546,6 +1629,28 @@ impl App {
                     .clicked()
                 {
                     self.save_project();
+                    ui.close();
+                }
+                if Self::library_inbox().is_some()
+                    && ui
+                        .add_enabled(
+                            !self.sheets.is_empty(),
+                            egui::Button::new(self.tr("menu.save_project_library")),
+                        )
+                        .clicked()
+                {
+                    self.save_project_to_library();
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(
+                        !self.sheets.is_empty(),
+                        egui::Button::new(self.tr("menu.repair_paths")),
+                    )
+                    .on_hover_text(self.tr("menu.repair_paths_tip"))
+                    .clicked()
+                {
+                    self.repair_paths();
                     ui.close();
                 }
                 ui.separator();
@@ -2281,6 +2386,14 @@ impl App {
                 let i = self.selected.unwrap();
                 self.sheets.swap(i, i + 1);
                 self.selected = Some(i + 1);
+            }
+            if self.sheets.iter().any(|s| s.failed.is_some())
+                && ui
+                    .button(self.tr("menu.repair_paths"))
+                    .on_hover_text(self.tr("menu.repair_paths_tip"))
+                    .clicked()
+            {
+                self.repair_paths();
             }
         });
         ui.separator();
@@ -6084,6 +6197,82 @@ mod fresh_folder_tests {
         assert_eq!(fresh_folder(&pdf), d.join("book-project"));
         std::fs::create_dir(d.join("book-project")).unwrap();
         assert_eq!(fresh_folder(&pdf), d.join("book-project-2"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+/// The file name (and TIFF/PDF frame, from a `name#3` suffix) of a page whose file does not exist;
+/// `None` when the file is there.
+fn missing_file(path: &Path) -> Option<(String, Option<u32>)> {
+    if path.exists() || legatorocr_engine::files::split_frame(path).1.is_some() {
+        return None;
+    }
+    let name = path.file_name()?.to_string_lossy().into_owned();
+    if let Some((base, n)) = name.rsplit_once('#') {
+        if let Ok(n) = n.parse::<u32>() {
+            if n >= 1 {
+                return Some((base.to_string(), Some(n)));
+            }
+        }
+    }
+    Some((name, None))
+}
+
+/// Lower-case file name -> path for the files in a folder and below it (nearest wins; bounded).
+fn index_folder(root: &Path) -> HashMap<String, PathBuf> {
+    let mut out: HashMap<String, PathBuf> = HashMap::new();
+    let mut level = vec![root.to_path_buf()];
+    let mut seen = 0usize;
+    for _depth in 0..8 {
+        let mut next = Vec::new();
+        for d in level {
+            let Ok(rd) = std::fs::read_dir(&d) else {
+                continue;
+            };
+            for e in rd.flatten() {
+                seen += 1;
+                if seen > 200_000 {
+                    return out;
+                }
+                let p = e.path();
+                match e.file_type() {
+                    Ok(t) if t.is_dir() => next.push(p),
+                    Ok(t) if t.is_file() => {
+                        if let Some(n) = p.file_name() {
+                            out.entry(n.to_string_lossy().to_lowercase()).or_insert(p);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        level = next;
+    }
+    out
+}
+
+#[cfg(test)]
+mod repair_tests {
+    use super::*;
+
+    #[test]
+    fn finds_missing_files_by_name_below_a_folder() {
+        let d = std::env::temp_dir().join(format!("lgr-repair-{}", std::process::id()));
+        let sub = d.join("a").join("b");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("IMG_1.JPG"), b"x").unwrap();
+        let idx = index_folder(&d);
+        assert_eq!(idx.get("img_1.jpg"), Some(&sub.join("IMG_1.JPG")));
+        // a page that is there is not "missing"; a gone one gives its name and frame
+        assert!(missing_file(&sub.join("IMG_1.JPG")).is_none());
+        assert_eq!(
+            missing_file(Path::new("/nope/x.tif#3")),
+            Some(("x.tif".into(), Some(3)))
+        );
+        assert_eq!(
+            missing_file(Path::new("/nope/IMG_2.jpg")),
+            Some(("IMG_2.jpg".into(), None))
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 }
