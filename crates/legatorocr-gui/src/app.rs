@@ -1223,6 +1223,54 @@ impl App {
         self.launch_export(ctx, kind, target);
     }
 
+    /// The folder CartaColibri hands over (env CARTACOLIBRI_INBOX) when it opens this program: a PDF saved
+    /// there joins its library. `None` when this program was not opened from CartaColibri.
+    fn library_inbox() -> Option<PathBuf> {
+        let d = PathBuf::from(std::env::var_os("CARTACOLIBRI_INBOX")?);
+        d.is_dir().then_some(d)
+    }
+
+    /// Export the PDF straight into the CartaColibri library folder, without a file dialog.
+    fn export_to_library(&mut self, ctx: &egui::Context) {
+        if self.job.is_some() || self.sheets.is_empty() {
+            return;
+        }
+        let Some(dir) = Self::library_inbox() else {
+            return;
+        };
+        let stem: String = self
+            .sheets
+            .first()
+            .and_then(|s| {
+                Path::new(&s.name)
+                    .file_stem()
+                    .map(|x| x.to_string_lossy().into_owned())
+            })
+            .unwrap_or_default()
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ') {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let stem = if stem.trim().is_empty() {
+            "LegatorOCR".to_string()
+        } else {
+            stem
+        };
+        // never replace something already in the library: add -2, -3, ... to the name
+        let mut target = dir.join(format!("{stem}.pdf"));
+        let mut n = 2;
+        while target.exists() {
+            target = dir.join(format!("{stem}-{n}.pdf"));
+            n += 1;
+        }
+        self.launch_export(ctx, JobKind::Pdf, target);
+    }
+
     fn launch_export(&mut self, ctx: &egui::Context, kind: JobKind, target: PathBuf) {
         if self.job.is_some() || self.sheets.is_empty() {
             return;
@@ -1510,6 +1558,14 @@ impl App {
                     .clicked()
                 {
                     self.start_export(&ctx, JobKind::Pdf);
+                    ui.close();
+                }
+                if Self::library_inbox().is_some()
+                    && ui
+                        .add_enabled(idle, egui::Button::new(self.tr("menu.export_library")))
+                        .clicked()
+                {
+                    self.export_to_library(&ctx);
                     ui.close();
                 }
                 if ui
