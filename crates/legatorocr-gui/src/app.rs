@@ -237,6 +237,8 @@ pub struct App {
     /// Password for encrypted PDFs; kept for this session only, never written to the settings.
     pdf_password: String,
     settings_gen: u32,
+    /// Asking for the name to save under in the CartaColibri library: (is it the project?, the name).
+    library_ask: Option<(bool, String)>,
     /// Which page the Output and Clean-up sections edit: `None` = all pages, `Some(0)` / `Some(1)` =
     /// the left (or only) / right page of the selected sheet only.
     page_scope: Option<u8>,
@@ -366,6 +368,7 @@ impl App {
             s: UiSettings::default(),
             pdf_password: String::new(),
             settings_gen: 1,
+            library_ask: None,
             page_scope: None,
             sheets: Vec::new(),
             selected: None,
@@ -600,11 +603,11 @@ impl App {
 
     /// Save the project (`project.lgr` + copies of the scans) as a new folder inside the CartaColibri
     /// library folder, so it joins the library at the next index.
-    fn save_project_to_library(&mut self) {
+    fn save_project_to_library(&mut self, name: &str) {
         let Some(dir) = Self::library_inbox() else {
             return;
         };
-        let stem = self.library_stem();
+        let stem = safe_name(name);
         let mut folder = dir.join(format!("project-{stem}"));
         let mut n = 2;
         while folder.exists() {
@@ -630,9 +633,9 @@ impl App {
         }
     }
 
-    /// A file-name-safe name for what is open: the first sheet's name without extension.
+    /// The name proposed for what is open: the first sheet's name without extension.
     fn library_stem(&self) -> String {
-        let stem: String = self
+        let stem = self
             .sheets
             .first()
             .and_then(|s| {
@@ -640,20 +643,54 @@ impl App {
                     .file_stem()
                     .map(|x| x.to_string_lossy().into_owned())
             })
-            .unwrap_or_default()
-            .chars()
-            .map(|c| {
-                if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ') {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        if stem.trim().is_empty() {
-            "LegatorOCR".to_string()
+            .unwrap_or_default();
+        safe_name(&stem)
+    }
+
+    /// The small window that asks for the name before saving into the CartaColibri library.
+    fn library_name_window(&mut self, ctx: &egui::Context) {
+        let Some((project, mut name)) = self.library_ask.take() else {
+            return;
+        };
+        let title = self.tr(if project {
+            "menu.save_project_library"
         } else {
-            stem
+            "menu.export_library"
+        });
+        let (mut save, mut cancel) = (false, false);
+        egui::Window::new(title)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label(self.tr("dialog.library_name"));
+                let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(360.0));
+                if !r.has_focus() && !r.lost_focus() {
+                    r.request_focus();
+                }
+                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    save = true;
+                }
+                ui.horizontal(|ui| {
+                    if ui.button(self.tr("dialog.library_save")).clicked() {
+                        save = true;
+                    }
+                    if ui.button(self.tr("btn.cancel")).clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            cancel = true;
+        }
+        if save && !name.trim().is_empty() {
+            if project {
+                self.save_project_to_library(&name);
+            } else {
+                self.export_to_library(ctx, &name);
+            }
+        } else if !cancel {
+            self.library_ask = Some((project, name));
         }
     }
 
@@ -1336,14 +1373,14 @@ impl App {
     }
 
     /// Export the PDF straight into the CartaColibri library folder, without a file dialog.
-    fn export_to_library(&mut self, ctx: &egui::Context) {
+    fn export_to_library(&mut self, ctx: &egui::Context, name: &str) {
         if self.job.is_some() || self.sheets.is_empty() {
             return;
         }
         let Some(dir) = Self::library_inbox() else {
             return;
         };
-        let stem = self.library_stem();
+        let stem = safe_name(name);
         // never replace something already in the library: add -2, -3, ... to the name
         let mut target = dir.join(format!("{stem}.pdf"));
         let mut n = 2;
@@ -1639,7 +1676,7 @@ impl App {
                         )
                         .clicked()
                 {
-                    self.save_project_to_library();
+                    self.library_ask = Some((true, self.library_stem()));
                     ui.close();
                 }
                 if ui
@@ -1670,7 +1707,7 @@ impl App {
                         .add_enabled(idle, egui::Button::new(self.tr("menu.export_library")))
                         .clicked()
                 {
-                    self.export_to_library(&ctx);
+                    self.library_ask = Some((false, self.library_stem()));
                     ui.close();
                 }
                 if ui
@@ -6012,6 +6049,7 @@ impl eframe::App for App {
             self.say(m, differ);
         }
         self.all_options_window(&ctx);
+        self.library_name_window(&ctx);
         if self.show_about {
             let mut open = true;
             egui::Window::new(self.tr("menu.about"))
@@ -6274,5 +6312,43 @@ mod repair_tests {
             Some(("IMG_2.jpg".into(), None))
         );
         let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+/// A name that is safe as a file or folder name on every system (anything else becomes `_`).
+fn safe_name(s: &str) -> String {
+    let n: String = s
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ' | '.' | '(' | ')') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let n = n.trim_matches(|c| c == '.' || c == ' ').to_string();
+    let n: String = n.chars().take(120).collect();
+    if n.is_empty() {
+        "LegatorOCR".to_string()
+    } else {
+        n
+    }
+}
+
+#[cfg(test)]
+mod safe_name_tests {
+    use super::safe_name;
+    #[test]
+    fn names_are_safe_for_every_file_system() {
+        assert_eq!(
+            safe_name("  Plante medicinale (1) "),
+            "Plante medicinale (1)"
+        );
+        assert_eq!(safe_name("a/b\\c:d*e?"), "a_b_c_d_e_");
+        assert_eq!(safe_name("..."), "LegatorOCR");
+        assert_eq!(safe_name("   "), "LegatorOCR");
+        assert_eq!(safe_name(&"x".repeat(500)).chars().count(), 120);
     }
 }
